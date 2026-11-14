@@ -4,6 +4,10 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
+### Added
+
+- A cluster whose disks do not fit its thick storage gets a `StorageLacksSpace` condition, also when made with kubectl or GitOps.
+
 ## [0.5.0] - 2026-11-12
 
 ### Before you upgrade

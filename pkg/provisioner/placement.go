@@ -146,6 +146,9 @@ func (p *Placer) placeAll(ctx context.Context) {
 			return fitMemory(ctx, p.Client, p.ClassNamespace, c, usable, h)
 		})
 		p.markShort(ctx, c, short)
+		if sites != nil {
+			p.markDisks(ctx, c, sites.Space, nodeNames(usable, chosen))
+		}
 		if newer {
 			p.sayNewer(c, online)
 		} else {
@@ -153,6 +156,17 @@ func (p *Placer) placeAll(ctx context.Context) {
 		}
 		p.record(ctx, c, hosts, refusedForFaults(blocked, hosts, skipped))
 	}
+}
+
+// nodeNames are the names of the nodes, kept to chosen where the cluster chose any.
+func nodeNames(nodes []Node, chosen []string) []string {
+	var names []string
+	for _, n := range nodes {
+		if len(chosen) == 0 || slices.Contains(chosen, n.Name) {
+			names = append(names, n.Name)
+		}
+	}
+	return names
 }
 
 // refusedForFaults is the reason no VM can be placed: blocked where it is already set, else that the

@@ -893,6 +893,12 @@ New machines of an upgrade or replacement wait at "Cloning", and the cluster has
 
 Kubehenge judges a node by the memory Proxmox VE reports free, not by what the guests on it are configured with. Free memory, or stop guests. Allow more nodes under **Placement**, or give the machines less memory. The placement stays as it was meanwhile. The condition clears once a node has room.
 
+### Not enough space on thick storage
+
+New machines wait at "Cloning", and the cluster has a `StorageLacksSpace` condition. Its message names the storage, its nodes, the free space and the space the machines still to be made need. Thick LVM, ZFS without sparse volumes and file storages with `falloc` or `full` preallocation reserve each disk's whole size. Disks of machines already running count as used.
+
+Free space on the storage, lower the disk size or the node count, or move the cluster to thin storage. The condition clears once the disks fit.
+
 ### Pods Pending with "volume node affinity conflict"
 
 The pod's volume is on storage local to one node. No worker runs there. It happens after an upgrade, a node image refresh or a repair replaced the worker that stood on that node.

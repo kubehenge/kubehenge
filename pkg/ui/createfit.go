@@ -51,7 +51,11 @@ func (s *Server) machinesFit(w http.ResponseWriter, r *http.Request, u user, cla
 		s.proxmoxError(w, r, err)
 		return false
 	}
-	free, thick := freeOn(storages, fit.Storage, usable)
+	names := make([]string, len(usable))
+	for i := range usable {
+		names[i] = usable[i].Node
+	}
+	free, thick := pve.FreeOn(storages, fit.Storage, names)
 	if need := fit.DiskGiB * bytesPerGiB; thick && free >= 0 && need > free {
 		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(
 			"machines: the disks need %d GiB and storage %s has %d GiB free. Lower a disk size or the node count",
@@ -59,28 +63,4 @@ func (s *Server) machinesFit(w http.ResponseWriter, r *http.Request, u user, cla
 		return false
 	}
 	return true
-}
-
-// freeOn is the free space of a storage on the usable nodes, once where it is shared, and whether
-// it reserves a disk's whole size. The space is -1 where no node reports it.
-func freeOn(storages []pve.Storage, name string, usable []pve.Node) (int64, bool) {
-	free, thick, seen := int64(0), true, false
-	for i := range storages {
-		st := &storages[i]
-		if st.Storage != name || st.Total == 0 ||
-			!st.Shared && !slices.ContainsFunc(usable, func(n pve.Node) bool { return n.Node == st.Node }) {
-			continue
-		}
-		onWrite, known := st.AllocatesOnWrite()
-		thick = thick && known && !onWrite
-		if st.Shared {
-			return st.Avail, thick
-		}
-		free += st.Avail
-		seen = true
-	}
-	if !seen {
-		return -1, false
-	}
-	return free, thick
 }
