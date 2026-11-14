@@ -80,25 +80,74 @@ func TestEtcdSnapshotsWaitForAKey(t *testing.T) {
 	}
 }
 
-// A credential stored ahead of its cluster gets the cluster as its owner once it exists, and goes
-// when the cluster does not come.
+// The wait ends as soon as a key is stored, while the control plane is still coming up.
+func TestEtcdSnapshotWaitEndsWithTheKey(t *testing.T) {
+	t.Parallel()
+	c := etcdCluster(`{"enabled":true,"target":"store"}`)
+	c.Namespace = "team-a"
+	meta.RemoveStatusCondition(&c.Status.Conditions, clusterv1.ClusterControlPlaneInitializedCondition)
+	kube := fake.NewClientBuilder().WithScheme(credentialScheme(t)).WithObjects(c).WithStatusSubresource(&clusterv1.Cluster{}).Build()
+	s := &EtcdSnapshotter{Client: kube, Reader: kube, ClassNamespace: "kubehenge-system"}
+	req := ctrl.Request{Namespace: "team-a", Name: "web"}
+	if _, err := s.Reconcile(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	key := storeKeys("web.backup", "web", backupKeysData)
+	key.Namespace = "team-a"
+	if err := kube.Create(context.Background(), key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Reconcile(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	got := &clusterv1.Cluster{}
+	if err := kube.Get(context.Background(), client.ObjectKeyFromObject(c), got); err != nil {
+		t.Fatal(err)
+	}
+	if meta.IsStatusConditionTrue(got.Status.Conditions, clusterv1.ClusterControlPlaneInitializedCondition) {
+		t.Fatal("the control plane is up, so this tests nothing")
+	}
+	if cond := meta.FindStatusCondition(got.Status.Conditions, EtcdSnapshotCondition); cond != nil && cond.Reason == EtcdSnapshotWaitingForKey {
+		t.Errorf("after the key is stored: %+v", cond)
+	}
+}
+
+// A credential a create request stored ahead of its cluster gets that request's cluster as its
+// owner once it exists, and goes when the cluster does not come. A credential made with kubectl,
+// without the request's mark, is never adopted or deleted.
 func TestCredentialOrphans(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
-	ahead := func(cluster string, age time.Duration) *corev1.Secret {
+	kubectl := func(cluster string, age time.Duration) *corev1.Secret {
 		s := storeKeys(cluster+".backup", cluster, backupKeysData)
 		s.Namespace = "team-a"
 		s.Type = CredentialType
 		s.CreationTimestamp = metav1.NewTime(now.Add(-age))
 		return s
 	}
+	ahead := func(cluster string, age time.Duration) *corev1.Secret {
+		s := kubectl(cluster, age)
+		s.Labels[CreateRequestKey] = "r1"
+		return s
+	}
 	web := etcdCluster(`{"enabled":false}`)
 	web.Namespace = "team-a"
+	web.Annotations = map[string]string{CreateRequestKey: "r1"}
+	// Another request's cluster of this name won: the loser's key is not its.
+	db := etcdCluster(`{"enabled":false}`)
+	db.Namespace, db.Name, db.UID = "team-a", "db", "db-uid"
+	db.Annotations = map[string]string{CreateRequestKey: "r2"}
+	// A cluster made with kubectl beside its kubectl-made key.
+	ops := etcdCluster(`{"enabled":false}`)
+	ops.Namespace, ops.Name, ops.UID = "team-a", "ops", "ops-uid"
 	owned := ahead("web", time.Hour)
 	owned.Name = "owned.backup"
 	owned.OwnerReferences = []metav1.OwnerReference{{APIVersion: "v1", Kind: "ConfigMap", Name: "x", UID: "u"}}
+	alerts := kubectl("lone", time.Hour)
+	alerts.Name = "lone.alerts-slack"
 	kube := fake.NewClientBuilder().WithScheme(credentialScheme(t)).WithObjects(
-		web, ahead("web", time.Minute), ahead("gone", time.Hour), ahead("late", time.Minute), owned,
+		web, db, ops, ahead("web", time.Minute), ahead("gone", time.Hour), ahead("late", time.Minute), owned,
+		ahead("db", time.Hour), kubectl("ops", time.Hour), alerts,
 	).Build()
 	o := &CredentialOrphans{Client: kube, Grace: 10 * time.Minute, Now: func() time.Time { return now }}
 	if err := o.RunOnce(context.Background()); err != nil {
@@ -119,5 +168,13 @@ func TestCredentialOrphans(t *testing.T) {
 	}
 	if s, err := read("owned.backup"); err != nil || s.OwnerReferences[0].Name != "x" {
 		t.Errorf("an owned key: %+v, %v", s, err)
+	}
+	if _, err := read("db.backup"); err == nil {
+		t.Error("the losing request's key was kept beside another request's cluster")
+	}
+	for _, name := range []string{"ops.backup", "lone.alerts-slack"} {
+		if s, err := read(name); err != nil || len(s.OwnerReferences) > 0 {
+			t.Errorf("a kubectl-made key %s: %+v, %v", name, s, err)
+		}
 	}
 }

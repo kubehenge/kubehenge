@@ -165,11 +165,18 @@ func etcdCredentialMissing(ctx context.Context, c client.Reader, cluster *cluste
 const EtcdSnapshotWaitingForKey = "WaitingForKey"
 
 // snapshotsWaitForKey sets the snapshot condition to waiting while the cluster has no keys for its
-// target, and says whether it did.
+// target, and says whether it did. Once a key is there it clears the wait at once: the control
+// plane may still be coming up, and no snapshot would set the condition for a while.
 func (s *EtcdSnapshotter) snapshotsWaitForKey(ctx context.Context, cluster *clusterv1.Cluster) (bool, error) {
 	missing, err := etcdCredentialMissing(ctx, s.Client, cluster)
-	if err != nil || missing == "" {
+	if err != nil {
 		return false, err
+	}
+	if missing == "" {
+		if have := meta.FindStatusCondition(cluster.Status.Conditions, EtcdSnapshotCondition); have != nil && have.Reason == EtcdSnapshotWaitingForKey {
+			return false, s.condition(ctx, cluster, nil)
+		}
+		return false, nil
 	}
 	return true, s.condition(ctx, cluster, &metav1.Condition{
 		Type: EtcdSnapshotCondition, Status: metav1.ConditionFalse, Reason: EtcdSnapshotWaitingForKey, Message: missing,

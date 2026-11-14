@@ -13,9 +13,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// CredentialOrphans looks after the credentials of a cluster that were stored ahead of it, which
-// have no owner until the Cluster exists. It makes the Cluster their owner once it does, and deletes
-// those whose Cluster has not appeared within Grace, such as when its creation failed.
+// CredentialOrphans looks after the credentials a create request stored ahead of its cluster, which
+// have no owner until the Cluster exists. It makes the Cluster the request made their owner once it
+// does, and deletes those whose Cluster has not appeared within Grace, such as when its creation
+// failed. Credentials without the request's mark (CreateRequestKey) are never touched.
 type CredentialOrphans struct {
 	Client   client.Client
 	Interval time.Duration
@@ -31,7 +32,10 @@ func (o *CredentialOrphans) Start(ctx context.Context) error {
 	tick := time.NewTicker(o.Interval)
 	defer tick.Stop()
 	for {
-		if err := o.RunOnce(ctx); err != nil && ctx.Err() == nil {
+		run, cancel := context.WithTimeout(ctx, o.Interval)
+		err := o.RunOnce(run)
+		cancel()
+		if err != nil && ctx.Err() == nil {
 			ctrl.LoggerFrom(ctx).WithName("credential-orphans").Error(err, "looking after the credentials stored ahead of their clusters")
 		}
 		select {
@@ -42,10 +46,10 @@ func (o *CredentialOrphans) Start(ctx context.Context) error {
 	}
 }
 
-// RunOnce adopts or deletes every credential of a cluster that has no owner.
+// RunOnce adopts or deletes every credential stored ahead of a cluster that has no owner.
 func (o *CredentialOrphans) RunOnce(ctx context.Context) error {
 	secrets := &corev1.SecretList{}
-	if err := o.Client.List(ctx, secrets, client.HasLabels{CredentialClusterLabel}); err != nil {
+	if err := o.Client.List(ctx, secrets, client.HasLabels{CredentialClusterLabel, CreateRequestKey}); err != nil {
 		return fmt.Errorf("listing the clusters' credentials: %w", err)
 	}
 	now := time.Now
@@ -59,6 +63,10 @@ func (o *CredentialOrphans) RunOnce(ctx context.Context) error {
 		}
 		cluster := &clusterv1.Cluster{}
 		err := o.Client.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: s.Labels[CredentialClusterLabel]}, cluster)
+		// A Cluster of that name made by another request, or with kubectl, is not this key's.
+		if err == nil && cluster.Annotations[CreateRequestKey] != s.Labels[CreateRequestKey] {
+			err = apierrors.NewNotFound(clusterv1.GroupVersion.WithResource("clusters").GroupResource(), cluster.Name)
+		}
 		switch {
 		case err == nil:
 			s.OwnerReferences = []metav1.OwnerReference{CredentialOwner(cluster)}

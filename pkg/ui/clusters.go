@@ -810,6 +810,9 @@ type createRequest struct {
 }
 
 func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
+	ctx, cancel := context.WithTimeout(r.Context(), createTimeout)
+	defer cancel()
+	r = r.WithContext(ctx)
 	var req createRequest
 	if !readJSON(w, r, &req) {
 		return
@@ -840,7 +843,10 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	c := s.newCluster(u, &req)
-	key, ok := s.storeKeyAhead(w, r, u, &req)
+	if !s.machinesFit(w, r, u, class, c) {
+		return
+	}
+	key, ok := s.storeKeyAhead(w, r, u, &req, pool, c)
 	if !ok {
 		return
 	}

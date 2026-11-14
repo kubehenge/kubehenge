@@ -25,6 +25,7 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
@@ -984,34 +985,195 @@ func TestCreate(t *testing.T) {
 	expect(t, b.do("POST", "/api/clusters", tagged), http.StatusCreated)
 }
 
-// A key sent with a create request is stored before the cluster, which then owns it. One that does
-// not read, or a cluster that exists already, leaves nothing behind and the live cluster's key alone.
+func withKey(body, values string) string {
+	return strings.Replace(body, `"variables":`, `"backupKey":`+values+`,"variables":`, 1)
+}
+
+const bothKeys = `{"accessKeyID":"AK","secretAccessKey":"SK"}`
+
+func readSecret(h *harness, name string) (*corev1.Secret, error) {
+	s := &corev1.Secret{}
+	return s, h.kube.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: name}, s)
+}
+
+// A key sent with a create request is stored before the cluster, which then owns it. Storing it
+// takes Sys.Modify on the cluster's pool, as the credential endpoint does. One that does not read,
+// or a cluster that exists already, leaves nothing behind and the live cluster's key alone.
 func TestCreateStoresTheKeyAhead(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	b := h.browser()
 	b.signIn("dev@pve")
-	read := func(name string) (*corev1.Secret, error) {
-		s := &corev1.Secret{}
-		return s, h.kube.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: name}, s)
+	read := func(name string) (*corev1.Secret, error) { return readSecret(h, name) }
+	rec := b.do("POST", "/api/clusters", withKey(createBody, bothKeys))
+	expect(t, rec, http.StatusForbidden)
+	if !strings.Contains(rec.Body.String(), "Sys.Modify on /pool/kubehenge/default.web") {
+		t.Errorf("refused with %s", rec.Body)
 	}
-	withKey := func(body, values string) string {
-		return strings.Replace(body, `"variables":`, `"backupKey":`+values+`,"variables":`, 1)
+	if _, err := read("web.backup"); err == nil {
+		t.Fatal("a key was stored without Sys.Modify")
 	}
+	h.accounts.mu.Lock()
+	h.accounts.grants["dev@pve"]["/pool/kubehenge/default.web"] = []string{"Sys.Modify"}
+	h.accounts.mu.Unlock()
 	expect(t, b.do("POST", "/api/clusters", withKey(createBody, `{"accessKeyID":"AK"}`)), http.StatusUnprocessableEntity)
 	if _, err := read("web.backup"); err == nil {
 		t.Fatal("a key that did not read was stored")
 	}
-	both := `{"accessKeyID":"AK","secretAccessKey":"SK"}`
-	expect(t, b.do("POST", "/api/clusters", withKey(createBody, both)), http.StatusCreated)
+	expect(t, b.do("POST", "/api/clusters", withKey(createBody, bothKeys)), http.StatusCreated)
 	s, err := read("web.backup")
 	if err != nil || string(s.Data["accessKeyID"]) != "AK" || len(s.OwnerReferences) != 1 || s.OwnerReferences[0].Name != "web" {
 		t.Fatalf("the key after the create: %+v, %v", s, err)
+	}
+	c := &clusterv1.Cluster{}
+	if err = h.kube.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "web"}, c); err != nil ||
+		s.Labels[provisioner.CreateRequestKey] == "" || c.Annotations[provisioner.CreateRequestKey] != s.Labels[provisioner.CreateRequestKey] {
+		t.Errorf("the request's mark: key %v, cluster %v, %v", s.Labels, c.Annotations, err)
 	}
 	other := `{"accessKeyID":"XX","secretAccessKey":"YY"}`
 	expect(t, b.do("POST", "/api/clusters", withKey(createBody, other)), http.StatusConflict)
 	if s, err = read("web.backup"); err != nil || string(s.Data["accessKeyID"]) != "AK" {
 		t.Errorf("the live cluster's key after a clash: %+v, %v", s, err)
+	}
+}
+
+// A credential made with kubectl ahead of its cluster is the user's: a create with a key of its own
+// is refused and leaves it as it is.
+func TestCreateLeavesAKubectlKeyAlone(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.accounts.grants["dev@pve"]["/pool/kubehenge/default.web"] = []string{"Sys.Modify"}
+	mine := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web.backup", Labels: map[string]string{
+			provisioner.CredentialLabel: "backup", provisioner.CredentialClusterLabel: "web",
+		}},
+		Type: provisioner.CredentialType, Data: map[string][]byte{"accessKeyID": []byte("MINE"), "secretAccessKey": []byte("S")},
+	}
+	if err := h.kube.Create(context.Background(), mine); err != nil {
+		t.Fatal(err)
+	}
+	b := h.browser()
+	b.signIn("dev@pve")
+	expect(t, b.do("POST", "/api/clusters", withKey(createBody, bothKeys)), http.StatusConflict)
+	s, err := readSecret(h, "web.backup")
+	if err != nil || string(s.Data["accessKeyID"]) != "MINE" || len(s.OwnerReferences) > 0 || s.Labels[provisioner.CreateRequestKey] != "" {
+		t.Errorf("the kubectl-made key: %+v, %v", s, err)
+	}
+}
+
+// Two creates of one name: the one that loses keeps its hands off the winner's key, whichever
+// step it loses at.
+func TestCreateRaceLeavesTheWinnersKey(t *testing.T) {
+	t.Parallel()
+	for _, step := range []string{"key", "cluster"} {
+		h := newHarness(t)
+		h.accounts.grants["dev@pve"]["/pool/kubehenge/default.web"] = []string{"Sys.Modify"}
+		kube, ok := h.kube.(client.WithWatch)
+		if !ok {
+			t.Fatal("the harness's client cannot be wrapped")
+		}
+		winner := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web.backup", Labels: map[string]string{
+				provisioner.CredentialLabel: "backup", provisioner.CredentialClusterLabel: "web", provisioner.CreateRequestKey: "winner",
+			}},
+			Type: provisioner.CredentialType, Data: map[string][]byte{"accessKeyID": []byte("WIN"), "secretAccessKey": []byte("S")},
+		}
+		landed := false
+		// The winner's key and Cluster land between the loser's look for the name and its writes.
+		land := func(ctx context.Context) {
+			if landed {
+				return
+			}
+			landed = true
+			c := &clusterv1.Cluster{}
+			if err := json.Unmarshal([]byte(`{"metadata":{"namespace":"default","name":"web","annotations":{"kubehenge.dev/create-request":"winner"}},
+				"spec":{"topology":{"classRef":{"name":"kubehenge-rke2"},"version":"v1.36.5+rke2r1"}}}`), c); err != nil {
+				t.Fatal(err)
+			}
+			if step == "key" {
+				if err := kube.Create(ctx, winner.DeepCopy()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := kube.Create(ctx, c); err != nil {
+				t.Fatal(err)
+			}
+		}
+		h.server.setKube(interceptor.NewClient(kube, interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				_, secret := obj.(*corev1.Secret)
+				_, cluster := obj.(*clusterv1.Cluster)
+				if step == "key" && secret || step == "cluster" && cluster {
+					land(ctx)
+				}
+				return c.Create(ctx, obj, opts...)
+			},
+		}))
+		b := h.browser()
+		b.signIn("dev@pve")
+		expect(t, b.do("POST", "/api/clusters", withKey(createBody, bothKeys)), http.StatusConflict)
+		s, err := readSecret(h, "web.backup")
+		switch step {
+		case "key":
+			if err != nil || string(s.Data["accessKeyID"]) != "WIN" || s.Labels[provisioner.CreateRequestKey] != "winner" {
+				t.Errorf("lost at the key: the winner's key %+v, %v", s, err)
+			}
+		case "cluster":
+			// The winner made its cluster without a key: the loser's own is gone, nothing else is.
+			if err == nil {
+				t.Errorf("lost at the cluster: the loser's key stayed: %+v", s)
+			}
+		}
+	}
+}
+
+// A machine no node it may use could hold, or disks beyond a thick storage, are refused as
+// admission's own figures say, for the interface and any client of the endpoint alike.
+func TestCreateRefusesMachinesThatNeverFit(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	class := &clusterv1.ClusterClass{}
+	if err := h.kube.Get(t.Context(), client.ObjectKey{Namespace: "kubehenge-system", Name: "kubehenge-rke2"}, class); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"controlPlaneMachine", "workerMachine"} {
+		class.Spec.Variables = append(class.Spec.Variables, clusterv1.ClusterClassVariable{
+			Name: name, Schema: clusterv1.VariableSchema{OpenAPIV3Schema: clusterv1.JSONSchemaProps{
+				Type: "object", Default: &apiextensionsv1.JSON{Raw: []byte(`{"cores":2,"memoryMiB":4096,"diskGiB":40}`)},
+			}},
+		})
+	}
+	if err := h.kube.Update(t.Context(), class); err != nil {
+		t.Fatal(err)
+	}
+	b := h.browser()
+	b.signIn("dev@pve")
+	huge := strings.Replace(createBody, `"variables":{`, `"variables":{"workerMachine":{"cores":4,"memoryMiB":131072,"diskGiB":40},`, 1)
+	rec := b.do("POST", "/api/clusters?dryRun=All", huge)
+	expect(t, rec, http.StatusUnprocessableEntity)
+	if !strings.Contains(rec.Body.String(), "128 GiB of memory") {
+		t.Errorf("refused with %s", rec.Body)
+	}
+	big := strings.Replace(createBody, `"variables":{`, `"variables":{"workerMachine":{"cores":4,"memoryMiB":8192,"diskGiB":500},`, 1)
+	for _, tc := range []struct {
+		name    string
+		st      pve.Storage
+		refused bool
+	}{
+		{"thick LVM", pve.Storage{Type: "lvm"}, true},
+		{"dir with full preallocation", pve.Storage{Type: "dir", Preallocation: "full"}, true},
+		{"thin LVM", pve.Storage{Type: "lvmthin"}, false},
+		{"unknown", pve.Storage{}, false},
+	} {
+		st := tc.st
+		st.Storage, st.Node, st.Content, st.Active, st.Avail, st.Total = "local-lvm", "pve1", []string{"images"}, true, 100<<30, 200<<30
+		h.accounts.mu.Lock()
+		h.accounts.storages = []pve.Storage{st}
+		h.accounts.mu.Unlock()
+		rec = b.do("POST", "/api/clusters?dryRun=All", big)
+		if refused := rec.Code == http.StatusUnprocessableEntity && strings.Contains(rec.Body.String(), "disks need"); refused != tc.refused {
+			t.Errorf("%s: %d %s", tc.name, rec.Code, rec.Body)
+		}
 	}
 }
 
