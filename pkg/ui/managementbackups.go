@@ -94,7 +94,7 @@ func checkPassphrase(w http.ResponseWriter, done func(failed bool), err error) b
 func (s *Server) reservePassphrase(w http.ResponseWriter, u user) (func(failed bool), bool) {
 	done, ok := s.limiter.reserve(passphraseCount(u))
 	if !ok {
-		writeError(w, http.StatusTooManyRequests, "too many wrong passphrases; try again later")
+		writeError(w, http.StatusTooManyRequests, "too many wrong passphrases. Try again later")
 	}
 	return done, ok
 }

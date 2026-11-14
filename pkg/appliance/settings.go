@@ -876,7 +876,7 @@ func (s *Settings) ranges() (subnets, error) {
 					continue families
 				}
 			}
-			return nil, fmt.Errorf("every %s range Kubehenge tries overlaps the nodes' network; set the %s ranges under Advanced", what, what)
+			return nil, fmt.Errorf("every %s range Kubehenge tries overlaps the nodes' network. Set the %s ranges under Advanced", what, what)
 		}
 		return out, nil
 	}

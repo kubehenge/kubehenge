@@ -532,7 +532,7 @@ func (sw *swap) rollBack(ctx context.Context, cause error) error {
 		}
 	}
 	if err != nil {
-		return fmt.Errorf("%w; rolling back to %s failed too: %w", cause, u.Current, err)
+		return fmt.Errorf("%w. Rolling back to %s failed too: %w", cause, u.Current, err)
 	}
 	return fmt.Errorf("%w; %w to %s", cause, ErrRolledBack, u.Current)
 }

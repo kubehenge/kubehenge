@@ -445,7 +445,7 @@ func (r *Reconciler) releaseAbandoned(ctx context.Context, cluster *clusterv1.Cl
 		left = strings.Join(st.LeftBehind, ", ")
 	}
 	log.Info("abandoned the deletion", "leftBehind", st.LeftBehind)
-	r.event(cluster, corev1.EventTypeWarning, "DeletionAbandoned", "deletion abandoned; left behind: %s", left)
+	r.event(cluster, corev1.EventTypeWarning, "DeletionAbandoned", "deletion abandoned. Left behind: %s", left)
 	if err := r.Client.Patch(ctx, cluster, client.RawPatch(types.MergePatchType, []byte(`{"metadata":{"finalizers":null}}`))); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("taking the finalizers off the cluster: %w", err)
 	}

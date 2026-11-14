@@ -178,7 +178,7 @@ func (h *Hooks) talosImageReady(ctx context.Context, c *clusterv1.Cluster, class
 	}
 	if !slices.Contains(ClassTalosTemplates(class), image) {
 		const templateWait = 10
-		return fmt.Sprintf("waiting for a Talos %s template in the template pool; build it on the Administration page or with kubehenge template create talos --talos-version %s", image, image), templateWait, nil
+		return fmt.Sprintf("waiting for a Talos %s template in the template pool. Build it on the Administration page or with kubehenge template create talos --talos-version %s", image, image), templateWait, nil
 	}
 	return "", 0, nil
 }

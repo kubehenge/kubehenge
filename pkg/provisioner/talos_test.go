@@ -46,7 +46,7 @@ func TestCheckTalosHoldsTheReleaseToTalosRules(t *testing.T) {
 	}
 	both := sharedKubernetes(t, "v1.13.5", "v1.14.4")
 	// The refusal names the release and the pins' newest of each minor.
-	unpinned := "v1.14.99: its nodes install only the releases it carries the checksums or digests of; the newest it pins of each minor version: " +
+	unpinned := "v1.14.99. Its nodes install only releases whose checksums or digests it carries. The newest it pins of each minor version: " +
 		strings.Join(DefaultReleasePins().offered(talosRelease), ", ")
 	for _, tc := range []struct {
 		name    string

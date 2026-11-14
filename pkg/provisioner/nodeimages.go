@@ -307,7 +307,7 @@ func (n *nodeImages) patch(ctx context.Context, item *runtimehooksv1.GeneratePat
 	}
 	at, ok := n.builds.Pick(line, n.t, n.hooks.Soak)
 	if !ok {
-		return nil, fmt.Errorf("the template pool holds no template %s; build it on the Administration page or with kubehenge template create", strings.Join(line, ";"))
+		return nil, fmt.Errorf("the template pool holds no template %s. Build it on the Administration page or with kubehenge template create", strings.Join(line, ";"))
 	}
 	return selectTags(templates.NormaliseTags(append(slices.Clone(line), templates.BuildTag(at))))
 }
