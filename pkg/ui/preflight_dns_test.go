@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"golang.org/x/net/dns/dnsmessage"
+
+	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
 // serveLocalhostAt answers every A query with 10.9.9.9 and every other query with no records, on a
@@ -46,10 +48,12 @@ func serveLocalhostAt(t *testing.T) string {
 }
 
 // The appliance's own resolution of the URL's host is read whether or not the user may read the
-// firewall, so the check can tell that the cluster's DNS servers disagree with it.
+// firewall, so the check can tell that the cluster's DNS servers disagree with it. The user here
+// may not read it.
 func TestSetupCheckComparesTheServersAnswerWithTheAppliancesOwn(t *testing.T) {
 	t.Parallel()
 	h, b := preflightHarness(t)
+	h.accounts.reachErr = pve.ErrForbidden
 	h.server.Appliance.ProxmoxURL = "https://localhost:8006"
 	h.server.DNSPort = serveLocalhostAt(t)
 	f := checkSettings(t, b, strings.Replace(preflightSettings, `"dnsServers":["10.0.0.1"]`, `"dnsServers":["127.0.0.1"]`, 1))

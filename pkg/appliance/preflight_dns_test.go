@@ -7,7 +7,10 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
+	"runtime"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,6 +30,8 @@ type fakeDNS struct {
 	// truncate has UDP replies carry no answers and the truncation flag, so that a client asks again
 	// over TCP.
 	truncate bool
+	// strays has each answer preceded by a reply with another ID and one to another question.
+	strays bool
 	// asked counts the queries, when set.
 	asked *atomic.Int32
 }
@@ -123,6 +128,27 @@ func listenUDP(t *testing.T, address string) net.PacketConn {
 	return c
 }
 
+// sendStrays sends two replies that are not the answer, each with 10.9.9.9: one with another ID and
+// one to another question.
+func sendStrays(c net.PacketConn, to net.Addr, q *dnsmessage.Message) {
+	for _, other := range []bool{false, true} {
+		var stray dnsmessage.Message
+		stray.ID, stray.Response, stray.RCode = q.ID, true, dnsmessage.RCodeSuccess
+		stray.Questions = slices.Clone(q.Questions)
+		name := q.Questions[0].Name
+		if other {
+			stray.Questions[0].Name = dnsmessage.MustNewName("other.example.")
+		} else {
+			stray.ID++
+		}
+		h := dnsmessage.ResourceHeader{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET, TTL: 60}
+		stray.Answers = []dnsmessage.Resource{{Header: h, Body: &dnsmessage.AResource{A: [4]byte{10, 9, 9, 9}}}}
+		if out, err := stray.Pack(); err == nil {
+			_, _ = c.WriteTo(out, to)
+		}
+	}
+}
+
 func (d fakeDNS) serve(c net.PacketConn) {
 	buf := make([]byte, 512)
 	for {
@@ -137,6 +163,9 @@ func (d fakeDNS) serve(c net.PacketConn) {
 		reply := d.answer(&q)
 		if d.truncate {
 			reply.Answers, reply.Truncated, reply.RCode = nil, true, dnsmessage.RCodeSuccess
+		}
+		if d.strays {
+			sendStrays(c, from, &q)
 		}
 		if out, err := reply.Pack(); err == nil {
 			_, _ = c.WriteTo(out, from)
@@ -237,15 +266,52 @@ func TestPreflightDNSShortNameResolvingNowhereIsRefused(t *testing.T) {
 	mentions(t, f.Errors, "pvevip does not resolve", "127.0.0.1 does not know it")
 }
 
+// hostsFileName is a dotted name this machine's hosts file holds, or empty.
+func hostsFileName() string {
+	path := "/etc/hosts"
+	if runtime.GOOS == "windows" {
+		path = os.Getenv("SystemRoot") + `\System32\drivers\etc\hosts`
+	}
+	text, err := os.ReadFile(path) //nolint:gosec // the machine's own hosts file
+	if err != nil {
+		return ""
+	}
+	for line := range strings.SplitSeq(string(text), "\n") {
+		line, _, _ = strings.Cut(line, "#")
+		fields := strings.Fields(line)
+		for _, name := range fields[min(1, len(fields)):] {
+			if strings.Contains(name, ".") && !strings.HasSuffix(name, ".") {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
 func TestPreflightDNSIgnoresTheAppliancesHostsFile(t *testing.T) {
 	t.Parallel()
-	// localhost is in every hosts file or special-cased by the system resolver, and no server here
-	// knows it.
+	name := hostsFileName()
+	if name == "" {
+		t.Skip("the hosts file holds no dotted name")
+	}
 	var asked atomic.Int32
-	f := dnsCase(t, "https://localhost:8006", fakeDNS{asked: &asked})
-	mentions(t, f.Errors, "localhost does not resolve", "127.0.0.1 does not know it")
+	f := dnsCase(t, "https://"+name+":8006", fakeDNS{asked: &asked})
+	mentions(t, f.Errors, name+" does not resolve", "127.0.0.1 does not know it")
 	if asked.Load() == 0 {
 		t.Error("the server was never asked")
+	}
+}
+
+func TestPreflightDNSSkipsRepliesThatAreNotTheAnswer(t *testing.T) {
+	t.Parallel()
+	port, servers := serveDNS(t, fakeDNS{strays: true, records: map[string][]netip.Addr{pveName: {netip.MustParseAddr("10.0.0.5")}}})
+	s := settings("pve1")
+	s.DNSServers = servers
+	inv := healthy()
+	inv.ProxmoxURL, inv.DNSPort, inv.DNSTimeout = nameURL, port, 500*time.Millisecond
+	inv.Route = APIRoute{Endpoints: []netip.Addr{netip.MustParseAddr("10.0.0.5")}}
+	if f := s.Preflight(inv, false); len(f.Errors) != 0 || len(f.Warnings) != 0 {
+		t.Errorf("findings = %+v", f)
 	}
 }
 
@@ -389,6 +455,15 @@ func TestPreflightISOStorageCountsTheProxmoxVENodesNotTheManagementNodes(t *test
 	t.Parallel()
 	s := settings("pve1")
 	s.ProxmoxHA = true
+	inv := healthy()
+	inv.Nodes = append(inv.Nodes, pve.Node{Node: "pve3", Online: true, MaxMemory: 64 * gib})
+	inv.Storages[0].Shared = true
+	mentions(t, s.Preflight(inv, false).Warnings, "local to a node")
+}
+
+func TestPreflightISOStorageOneManagementNodeWithoutHAStillMovesAcrossProxmoxVENodes(t *testing.T) {
+	t.Parallel()
+	s := settings("pve1")
 	inv := healthy()
 	inv.Nodes = append(inv.Nodes, pve.Node{Node: "pve3", Online: true, MaxMemory: 64 * gib})
 	inv.Storages[0].Shared = true

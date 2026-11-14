@@ -185,11 +185,11 @@ func (inv *Inventory) queryDNS(server, name string, qtype dnsmessage.Type) ([]ne
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	address := net.JoinHostPort(server, port)
-	reply, ok := exchange(ctx, "udp", address, packet)
+	reply, ok := exchange(ctx, "udp", address, packet, &query)
 	if ok && reply.Truncated {
-		reply, ok = exchange(ctx, "tcp", address, packet)
+		reply, ok = exchange(ctx, "tcp", address, packet, &query)
 	}
-	if !ok || reply.ID != query.ID || !reply.Response {
+	if !ok {
 		return nil, failed
 	}
 	if reply.RCode == dnsmessage.RCodeNameError {
@@ -216,7 +216,7 @@ func (inv *Inventory) queryDNS(server, name string, qtype dnsmessage.Type) ([]ne
 // exchange sends a packet and reads the reply, over TCP with the two-byte length that stream
 // transport adds.
 // ok is false for any failure, which the check files as a server that did not answer.
-func exchange(ctx context.Context, network, address string, packet []byte) (dnsmessage.Message, bool) {
+func exchange(ctx context.Context, network, address string, packet []byte, query *dnsmessage.Message) (dnsmessage.Message, bool) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, network, address)
 	if err != nil {
@@ -226,29 +226,44 @@ func exchange(ctx context.Context, network, address string, packet []byte) (dnsm
 	if deadline, has := ctx.Deadline(); has && conn.SetDeadline(deadline) != nil {
 		return dnsmessage.Message{}, false
 	}
-	var raw []byte
-	if network == "tcp" {
-		raw = exchangeStream(conn, packet)
-	} else {
-		raw = exchangeDatagram(conn, packet)
+	if network != "tcp" {
+		return exchangeDatagram(conn, packet, query)
 	}
 	var m dnsmessage.Message
-	if raw == nil || m.Unpack(raw) != nil {
+	raw := exchangeStream(conn, packet)
+	if raw == nil || m.Unpack(raw) != nil || !repliesTo(&m, query) {
 		return dnsmessage.Message{}, false
 	}
 	return m, true
 }
 
-func exchangeDatagram(conn net.Conn, packet []byte) []byte {
+// repliesTo tells whether a reply is to the query: the same ID and question. The question's name is
+// compared without regard to case, as a server may change it.
+func repliesTo(reply, query *dnsmessage.Message) bool {
+	if !reply.Response || reply.ID != query.ID || len(reply.Questions) != 1 {
+		return false
+	}
+	got, want := reply.Questions[0], query.Questions[0]
+	return got.Type == want.Type && got.Class == want.Class && strings.EqualFold(got.Name.String(), want.Name.String())
+}
+
+// exchangeDatagram keeps reading until the reply to the query arrives or the deadline passes, since a
+// stray datagram on the socket is not the server's answer.
+func exchangeDatagram(conn net.Conn, packet []byte, query *dnsmessage.Message) (dnsmessage.Message, bool) {
 	if _, err := conn.Write(packet); err != nil {
-		return nil
+		return dnsmessage.Message{}, false
 	}
 	buf := make([]byte, maxUDPReply)
-	n, err := conn.Read(buf)
-	if err != nil {
-		return nil
+	for {
+		n, err := conn.Read(buf)
+		if err != nil {
+			return dnsmessage.Message{}, false
+		}
+		var m dnsmessage.Message
+		if m.Unpack(buf[:n]) == nil && repliesTo(&m, query) {
+			return m, true
+		}
 	}
-	return buf[:n]
 }
 
 func exchangeStream(conn net.Conn, packet []byte) []byte {
