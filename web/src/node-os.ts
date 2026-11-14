@@ -53,10 +53,10 @@ export function cpuNote(o: NodeOS | undefined, oses: NodeOS[] | undefined): stri
   return `Needs Proxmox VE nodes with ${o.cpuType} CPUs`;
 }
 
-/** nodeOSLabel names a node OS among the choices, with why it cannot be chosen or built on yet. */
+/** nodeOSLabel names a node OS among the choices, with a short state where it cannot be chosen or built on yet. */
 export function nodeOSLabel(o: NodeOSChoice): string {
   if (filled(o.unreleased)) {
-    return `${o.title}: ${o.unreleased}`;
+    return `${o.title} (not released)`;
   }
-  return filled(o.noTemplate) ? `${o.title}, no template yet` : o.title;
+  return filled(o.noTemplate) ? `${o.title} (no template yet)` : o.title;
 }
