@@ -122,6 +122,7 @@ const activity = { since: when, entries: [], events: section() };
 const nodes = { "GET /api/proxmox/nodes": { body: [{ node: "pve1", online: true }] } };
 
 const signedIn: Record<string, Route> = {
+  ...nodes,
   "GET /api/session": { body: { user: "root@pam", csrf: "c1", canCreate: true, canTrust: true } },
   "GET /api/setup": { body: { appliance: true, ready: true, allowed: true, backup: true } },
   "GET /api/clusters": { body: [cluster("web")] },
