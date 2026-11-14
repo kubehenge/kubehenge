@@ -419,7 +419,7 @@ The webhook refuses `nodeCustomisation` with one message per problem, and kubect
 | `Talos writes machine files under /var and /etc/cri/conf.d only` | Move the file there. |
 | `Secret <name> is not in namespace <ns>` | Create the Secret beside the Cluster. A Secret in another namespace is not read. |
 | `Secret <name> has no key <key>` and `ConfigMap <name> has no key policy.yaml` | Add the key, or name the one that exists. |
-| `the audit policy has no rules` or `has to be a Policy of audit.k8s.io/v1` | The API server would not start with it. |
+| `the audit policy has no rules` or `has to be a Policy of audit.k8s.io/v1` | The API server would not start with it. Give a Policy of `audit.k8s.io/v1` with at least one rule. |
 
 The class schema refuses a bad `permissions`, a path with `..` or a double slash, or both `content` and `secret`.
 
@@ -615,7 +615,7 @@ The proxy's errors:
 
 | Error | Cause and fix |
 | --- | --- |
-| `is not one of the cluster's own` or `is not named after the cluster's volume owner VM` | Something in the cluster asked to copy a volume that is not the cluster's. The proxy copies only the volumes the CSI plugin made for the cluster. |
+| `is not one of the cluster's own` or `is not named after the cluster's volume owner VM` | Something in the cluster asked to copy a volume that is not the cluster's. The proxy copies only the volumes the CSI plugin made for the cluster. Snapshot or clone a volume of this cluster. |
 | `cannot land on node` | The plugin asked for a copy on another node than its volume's. A copy stays on its volume's node. Schedule the pod that uses it there. |
 | `no holder VM on node … has room for another copy yet` | This is temporary. Kubehenge's controller adds a holder VM on that node within a reconcile. The sidecar asks again. |
 | `Permission check failed` naming `VM.Clone` | The cluster's role lacks it. Apply the management cluster's module again. |
@@ -1017,7 +1017,7 @@ kubectl -n <namespace> get events --field-selector reason=LeftBehind
 
 | Problem | Cause and fix |
 | --- | --- |
-| Newer releases shows "Couldn't check" | The reason follows it. The appliance could not fetch the release index from kubehenge.dev, its signature did not check out, or it has expired. |
+| Newer releases shows "Couldn't check" | The reason follows it. The appliance could not fetch the release index from kubehenge.dev, its signature did not check out, or it has expired. Check that the container reaches kubehenge.dev. |
 | "the release index has expired" | The index it reached was not signed again within two weeks. With a mirror (`KUBEHENGE_RELEASE_INDEX`), copy the index and its signatures to it again. A clock far ahead makes a fresh index look expired too. `timedatectl` in the container shows it. |
 | The last upgrade failed | The reason is on the Administration page, and in `journalctl -u kubehenge-update` inside the appliance. The release installed before runs again in every case but one, below. |
 | `"release … did not start: …; rolled back to …"` | The new release was installed, but its interface did not answer within 2 minutes, or stopped and was restarted soon after. The updater, or `install.sh --upgrade`, put the old release back. `journalctl -u kubehenge` shows why the new one did not start. Report it with that log ([below](#reporting-a-problem)). |
@@ -1029,7 +1029,7 @@ kubectl -n <namespace> get events --field-selector reason=LeftBehind
 
 **Administration, Backups** shows the last snapshot's error, as does `kubehenge appliance etcd-backups` in the appliance's shell. The appliance tries again 15 minutes later. `journalctl -u kubehenge` inside the appliance logs each one.
 
-- **"reaching etcd: … etcd snapshot: …"** or **"reaching the Talos API of …"** means no control-plane node's Talos API (port 50000), or etcd behind it, answered.
+- **"reaching etcd: … etcd snapshot: …"** or **"reaching the Talos API of …"** means no control-plane node's Talos API (port 50000), or etcd behind it, answered. Check that the VMs run and that port 50000 is open from the appliance.
 - **"the snapshots' talosconfig: …"** or a refusal by the Talos API means the talosconfig kept for snapshots expired or no longer matches the management cluster's CA. Apply the management cluster again, which makes a new one, or **Change…** the backups.
 - **"target …: …"** or **"deleting older snapshots: …"** means the target refused the access key, or the key may not delete there. In the second case the snapshot was taken and only the removal of the oldest failed.
 - **"the passphrase does not open the target's key for the management cluster's snapshots"** means the target holds a key stored under another state's passphrase. See [details](install-settings.md#management-cluster-etcd-backups).
