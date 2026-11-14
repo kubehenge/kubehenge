@@ -50,4 +50,6 @@ What each release changed is in the [changelog](changelog.md).
 
 ## Later
 
+- An optional services cluster that Kubehenge creates for the others: backups, metrics and logs from every cluster in one place. The management cluster stays small.
+
 Driven by what users ask for, such as clusters across several Proxmox VE clusters and more add-ons. OKD clusters may follow once Cluster API's OpenShift Assisted providers support ClusterClass and work with the Proxmox VE provider.
