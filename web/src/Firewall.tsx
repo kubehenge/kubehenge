@@ -2,7 +2,7 @@ import { useState, type JSX } from "react";
 
 import { isSecurityGroup, list } from "./network";
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, Field, useChange } from "./ui";
+import { Dialog, ErrorBox, Field, stageLabel, useChange } from "./ui";
 import { texts } from "./values";
 
 /** securityGroupsOf reads the securityGroups variable into the text its field edits. */
@@ -70,13 +70,13 @@ export function FirewallDialog({ cluster: c, onClose }: { cluster: Cluster; onCl
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed}>
-            Save
+            {stageLabel}
           </button>
         </>
       }
     >
       <SecurityGroupsField value={value} onChange={setValue} error={attempted ? found : undefined} />
-      <p className="muted">Saving replaces every node, one at a time.</p>
+      <p className="muted">Replaces every node, one at a time.</p>
       <ErrorBox message={error} />
     </Dialog>
   );

@@ -56,6 +56,21 @@ func poolMachine(cluster, name string) *clusterv1.Machine {
 	}
 }
 
+// refusedWithin tries a request until the API server refuses it as invalid or wait is over, and
+// returns the last answer. A request that fails otherwise ends the test.
+func refusedWithin(t *testing.T, wait time.Duration, try func() error) error {
+	t.Helper()
+	for deadline := time.Now().Add(wait); ; time.Sleep(200 * time.Millisecond) {
+		err := try()
+		if apierrors.IsInvalid(err) || time.Now().After(deadline) {
+			return err
+		}
+		if err != nil {
+			t.Fatalf("a request the policy should refuse failed otherwise: %v", err)
+		}
+	}
+}
+
 // TestIntegrationAutoscalerPolicy holds each cluster's autoscaler to its own cluster's pools and
 // machines, though the role it is bound to covers the namespace every interface cluster shares: the
 // autoscaler of prod reaches neither the pool of prod-md, whose MachineDeployment's name starts like
@@ -178,11 +193,12 @@ func TestIntegrationAutoscalerPolicy(t *testing.T) { //nolint:paralleltest // st
 	refused("changing its machine's spec", autoscaler.Update(ctx, mine), "changes nothing else of them")
 	refused("an autoscaler the policy has no entry for", scale(as("stray"), prod, "1"), "serves no cluster")
 
-	// An entry removed, the autoscaler can do nothing more.
+	// An entry removed, the autoscaler can do nothing more. The policy reads its entries through the
+	// API server's watch of the ConfigMap, so the removal counts a moment later.
 	if err := a.setPolicyEntry(ctx, accounts["prod"], nil); err != nil {
 		t.Fatal(err)
 	}
-	refused("an autoscaler switched off", scale(autoscaler, prod, "1"), "serves no cluster")
+	refused("an autoscaler switched off", refusedWithin(t, 30*time.Second, func() error { return scale(autoscaler, prod, "1") }), "serves no cluster")
 
 	// Anyone else, the controller or kubectl, is the policy's no concern.
 	if err := scale(admin, other, "3"); err != nil {

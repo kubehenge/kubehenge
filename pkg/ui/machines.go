@@ -247,7 +247,7 @@ func deletablePool(c *clusterv1.Cluster, pool string) (int, string) {
 	case pool == "" || i < 0:
 		return i, "Only a worker pool's machine can be deleted. Replace a control-plane node instead."
 	case isAutoscaled(c, pool):
-		return i, "Pool " + pool + " is autoscaled. Switch autoscaling off to delete a worker."
+		return i, "Pool " + provisioner.PoolLabel(pool, provisioner.TopologyPools(c)) + " is autoscaled. Switch autoscaling off to delete a worker."
 	}
 	return i, ""
 }

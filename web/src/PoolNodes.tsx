@@ -11,8 +11,9 @@ import {
   type NodeSettings,
 } from "./node-settings";
 import { NodeSettingsFields } from "./NodeSettings";
+import { poolLabel } from "./pool-machine";
 import type { Cluster, WorkerPool } from "./types";
-import { BreakableText, Dialog, ErrorBox, useChange } from "./ui";
+import { BreakableText, Dialog, ErrorBox, stageLabel, useChange } from "./ui";
 
 /** poolNodes are the labels and taints a pool's workers get: its own, or the cluster's for its workers. */
 export const poolNodes = (c: Cluster, p: WorkerPool): NodeSettings => nodesOf(p.nodes ?? c.variables["workerNodes"]);
@@ -57,7 +58,7 @@ export function NodesDialog({
   const changed = inherit ? pool.nodes !== undefined : !sameNodeSettings(value, was);
   return (
     <Dialog
-      title={`Edit pool ${pool.name} nodes`}
+      title={`Edit pool ${poolLabel(pool.name, c.workerPools)} nodes`}
       onClose={onClose}
       onSubmit={() => {
         void send({ pools: { [pool.name]: { nodes: inherit ? null : nodesVariable(value) } } });
@@ -68,7 +69,7 @@ export function NodesDialog({
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed || problem !== undefined}>
-            Save
+            {stageLabel}
           </button>
         </>
       }

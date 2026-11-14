@@ -101,7 +101,7 @@ decide what it may do, as they do for a user signed in to the interface.`,
 		},
 	}
 	scale.Flags().Int32Var(&controlPlanes, "control-planes", 0, "control-plane nodes: 1, 3, 5 or 7")
-	scale.Flags().StringArrayVar(&workers, "workers", nil, "a pool's workers as POOL=N, such as md-0=3, repeated for more pools")
+	scale.Flags().StringArrayVar(&workers, "workers", nil, "a pool's workers as POOL=N, such as workers=3 for the default pool, repeated for more pools")
 	o.namespaceFlag(scale.Flags())
 
 	var yes bool
@@ -138,7 +138,7 @@ A value is drain, detach or deletion, set to a duration such as 30m, or to 0 for
 drain is the eviction of the node's pods, and a pod it cannot evict is deleted with the machine. The
 detach is the wait for the node's volumes. The deletion is the removal of the node's Node object.
 A value left out is the cluster class's.`,
-		Example: `  kubehenge cluster timeouts web --control-planes drain=30m,detach=10m --pool md-0=drain=1h`,
+		Example: `  kubehenge cluster timeouts web --control-planes drain=30m,detach=10m --pool workers=drain=1h`,
 		Args:    argsSay(cobra.ExactArgs(1), clusterNameArg),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req, err := timeoutsRequest(controlPlanes, pools)
@@ -596,7 +596,7 @@ func scaleRequest(controlPlanes *int32, workers []string) (map[string]any, error
 			pool, n, ok := strings.Cut(w, "=")
 			count, err := strconv.ParseInt(n, 10, 32)
 			if !ok || pool == "" || err != nil {
-				return nil, fmt.Errorf("--workers %q: give POOL=N, such as md-0=3", w)
+				return nil, fmt.Errorf("--workers %q: give POOL=N, such as workers=3", w)
 			}
 			pools[pool] = int32(count)
 		}
@@ -696,7 +696,7 @@ func timeoutsRequest(controlPlanes string, pools []string) (map[string]any, erro
 		for _, p := range pools {
 			pool, spec, ok := strings.Cut(p, "=")
 			if !ok || pool == "" {
-				return nil, fmt.Errorf("--pool %q: give POOL=drain=30m, such as md-0=drain=30m,detach=10m", p)
+				return nil, fmt.Errorf("--pool %q: give POOL=drain=30m, such as workers=drain=30m,detach=10m for the default pool", p)
 			}
 			t, err := timeoutValues(spec)
 			if err != nil {

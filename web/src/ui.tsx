@@ -908,6 +908,9 @@ export function Dialog({
   );
 }
 
+/** stageLabel is the confirm button of every dialog that only adds its change to the page's plan. */
+export const stageLabel = "Add to plan";
+
 // useChange stages one change on a page that stages them, or else makes it, and closes the dialog
 // once the server accepts it.
 export function useChange(

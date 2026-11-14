@@ -25,6 +25,7 @@ import {
   sentence,
   sole,
   timeZones,
+  stageLabel,
   useChange,
   usePoll,
   Skeleton,
@@ -578,7 +579,7 @@ export function BackupsDialog({ cluster: c, onClose }: { cluster: Cluster; onClo
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed || Object.keys(problems).length > 0}>
-            Save
+            {stageLabel}
           </button>
         </>
       }

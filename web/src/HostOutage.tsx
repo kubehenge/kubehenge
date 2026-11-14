@@ -1,7 +1,7 @@
 import { useState, type JSX } from "react";
 
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, Field, useChange } from "./ui";
+import { Dialog, ErrorBox, Field, stageLabel, useChange } from "./ui";
 import { quantity } from "./values";
 
 /** The ClusterClass variable giving the minutes machines of an away host wait before replacement. */
@@ -69,7 +69,7 @@ export function HostOutageDialog({ cluster: c, onClose }: { cluster: Cluster; on
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || value === initial || problem !== undefined}>
-            Save
+            {stageLabel}
           </button>
         </>
       }
