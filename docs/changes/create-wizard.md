@@ -2,6 +2,7 @@
 
 - **Create cluster** starts from **Defaults**, and says **Copied from** the cluster you chose on the later steps. Etcd snapshots stay on with the first backup target, and their access key is optional.
 - The wizard has a **Policies** step for the egress proxy, CIS hardening, Pod security and automatic upgrades.
+- Etcd snapshots ask for the cluster's own access key when no key for every cluster is stored. Turning them on without any key is refused, and a new cluster waits for one.
 - **Update node images** can be switched off when a cluster is created.
 - The egress proxy offers **Management proxy** only when the management cluster has one, and Rancher registration only when a cluster runs Rancher.
 
