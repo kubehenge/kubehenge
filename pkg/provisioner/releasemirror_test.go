@@ -176,7 +176,7 @@ func TestAClustersReleaseMirrorIsHeldLikeTheManagementOne(t *testing.T) {
 		if tc.value != "" {
 			c = withAddons(c, map[string]string{releaseMirrorVariable: tc.value})
 		}
-		errs := validateNodeSite(c, now)
+		errs := validateNodeSite(nil, c, now)
 		switch {
 		case tc.want == "" && len(errs) > 0:
 			t.Errorf("%s: %v", name, errs)

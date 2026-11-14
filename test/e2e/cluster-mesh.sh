@@ -41,7 +41,7 @@ cleanup() {
     [ -z "${s3_pid}" ] || seaweedfs_stop "${s3_pid}"
     if [ "${status}" -ne 0 ]; then
         seaweedfs_errors "${work}"
-        printf '\nleaving the clusters in %s for inspection; delete them with: kubectl delete namespace %s\n' "${ns}" "${ns}"
+        printf '\nleaving the clusters in %s for inspection; delete them with: kubectl -n %s annotate clusters --all kubehenge.dev/allow-deletion=true && kubectl delete namespace %s\n' "${ns}" "${ns}" "${ns}"
     fi
     rm -rf "${work}"
 }

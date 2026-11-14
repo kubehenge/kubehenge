@@ -40,7 +40,7 @@ ns=e2e-nodes-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')
 cleanup() {
     status=$?
     if [ "${status}" -ne 0 ]; then
-        printf '\nleaving the cluster in %s for inspection; delete it with: kubectl delete namespace %s\n' "${ns}" "${ns}"
+        printf '\nleaving the cluster in %s for inspection; delete it with: kubectl -n %s annotate clusters --all kubehenge.dev/allow-deletion=true && kubectl delete namespace %s\n' "${ns}" "${ns}" "${ns}"
     fi
     rm -rf "${work}"
 }

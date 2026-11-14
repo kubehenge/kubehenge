@@ -186,13 +186,15 @@ spec:
         apiVersions: ["*"]
         operations: [DELETE]
         resources: [clusters]
-  # By the class's name alone: CEL reads a field called namespace by an escaped name, which would tie
-  # the guard to how the API server types the object.
+  # A class of Kubehenge's name in this namespace, the cluster's own when classRef names none, as the
+  # controller tells its clusters apart. A user's own class named kubehenge-* elsewhere is not guarded.
   matchConditions:
     - name: kubehenge-class
       expression: >-
         has(oldObject.spec.topology) && has(oldObject.spec.topology.classRef) &&
-        oldObject.spec.topology.classRef.name.startsWith('kubehenge-')
+        oldObject.spec.topology.classRef.name.startsWith('kubehenge-') &&
+        (has(oldObject.spec.topology.classRef.namespace) && oldObject.spec.topology.classRef.namespace != '' ?
+        oldObject.spec.topology.classRef.namespace : request.namespace) == '{{ .Release.Namespace }}'
   validations:
     - expression: >-
         has(oldObject.metadata.deletionTimestamp) ||

@@ -34,7 +34,7 @@ cleanup() {
     status=$?
     [ -z "${watcher}" ] || kill "${watcher}" 2> /dev/null || true
     if [ "${status}" -ne 0 ]; then
-        printf '\nleaving the cluster in %s for inspection; delete it with: kubectl delete namespace %s\n' "${ns}" "${ns}"
+        printf '\nleaving the cluster in %s for inspection; delete it with: kubectl -n %s annotate clusters --all kubehenge.dev/allow-deletion=true && kubectl delete namespace %s\n' "${ns}" "${ns}" "${ns}"
     fi
     rm -rf "${work}"
 }

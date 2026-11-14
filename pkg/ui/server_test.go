@@ -1709,6 +1709,8 @@ func TestDeleteAndKubeconfig(t *testing.T) {
 	one := cluster("default", "one")
 	one.Finalizers = []string{clusterv1.ClusterFinalizer}
 	h := newHarness(t, one, cluster("default", "two"), secret)
+	// The deletion policy refuses a delete before the annotation, as the API server does.
+	h.admitClusters()
 	b := h.browser()
 	b.signIn("dev@pve")
 	rec := b.do("GET", "/api/clusters/default/one/kubeconfig", "")

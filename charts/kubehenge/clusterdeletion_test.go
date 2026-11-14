@@ -76,7 +76,8 @@ func eval(t *testing.T, expression string, old map[string]any) any {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, _, err := program.Eval(map[string]any{"oldObject": old, "request": map[string]any{}})
+	meta, _ := old["metadata"].(map[string]any)
+	got, _, err := program.Eval(map[string]any{"oldObject": old, "request": map[string]any{"namespace": meta["namespace"]}})
 	if err != nil {
 		t.Fatalf("%s: %v", expression, err)
 	}
@@ -84,13 +85,24 @@ func eval(t *testing.T, expression string, old map[string]any) any {
 }
 
 // A Kubehenge cluster is deleted only once it carries the annotation that lifts the guard, or while
-// its deletion already runs. Clusters of other classes are left alone.
+// its deletion already runs. Clusters of other classes, those of a class named like Kubehenge's in
+// another namespace included, are left alone.
 func TestDeletingAKubehengeClusterNeedsTheAnnotation(t *testing.T) {
 	t.Parallel()
 	p := deletionPolicy(t)
+	in := func(c map[string]any, namespace, classNamespace string) map[string]any {
+		c["metadata"].(map[string]any)["namespace"] = namespace
+		ref := c["spec"].(map[string]any)["topology"].(map[string]any)["classRef"].(map[string]any)
+		if classNamespace == "" {
+			delete(ref, "namespace")
+		} else {
+			ref["namespace"] = classNamespace
+		}
+		return c
+	}
 	cluster := func(class string, annotations map[string]any, deleting bool) map[string]any {
-		ref := map[string]any{"name": class}
-		meta := map[string]any{"name": "web"}
+		ref := map[string]any{"name": class, "namespace": "kubehenge-system"}
+		meta := map[string]any{"name": "web", "namespace": "clusters"}
 		if annotations != nil {
 			meta["annotations"] = annotations
 		}
@@ -125,6 +137,9 @@ func TestDeletingAKubehengeClusterNeedsTheAnnotation(t *testing.T) {
 		"already deleting":  {cluster("kubehenge-k3s", nil, true), true, true},
 		"another class":     {cluster("mine", nil, false), false, false},
 		"no topology":       {map[string]any{"metadata": map[string]any{"name": "web"}, "spec": map[string]any{}}, false, false},
+		"a class named like Kubehenge's in another namespace":           {in(cluster("kubehenge-mine", nil, false), "team-a", "team-a"), false, false},
+		"a class named like Kubehenge's in the cluster's own namespace": {in(cluster("kubehenge-mine", nil, false), "team-a", ""), false, false},
+		"no class namespace, the cluster beside Kubehenge's classes":    {in(cluster("kubehenge-rke2", nil, false), "kubehenge-system", ""), true, false},
 	} {
 		if got := matches(tc.cluster); got != tc.guarded {
 			t.Errorf("%s: guarded %v, want %v", name, got, tc.guarded)

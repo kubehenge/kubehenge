@@ -76,7 +76,7 @@ onBeforeUnmount(() => stop());
                   <span class="lb">connect two</span><code>cluster mesh: prod ↔ staging</code>
                 </button>
                 <button class="btn act" type="button" data-act="topple" disabled>
-                  <span class="lb">topple one</span><code>kubectl -n clusters delete cluster edge</code>
+                  <span class="lb">topple one</span><code>kubehenge cluster delete edge --yes</code>
                 </button>
               </div>
               <output class="said" data-said aria-live="polite"></output>

@@ -1732,7 +1732,16 @@ kubectl -n clusters annotate cluster prod kubehenge.dev/allow-deletion=true
 kubectl -n clusters delete cluster prod
 ```
 
+A deleted namespace stays `Terminating` until each cluster in it carries the annotation:
+
+```sh
+kubectl -n clusters annotate clusters --all kubehenge.dev/allow-deletion=true
+kubectl delete namespace clusters
+```
+
 With GitOps, add the annotation to the cluster's manifest and let it sync. Then remove the manifest.
+
+The annotation goes through even on a cluster that no longer meets a rule, such as one whose trusted authority expired. An update is checked only on the settings it changes.
 
 ### A deletion that waits
 
