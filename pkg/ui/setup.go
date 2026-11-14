@@ -417,7 +417,7 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request, u user) {
 		s.proxmoxError(w, r, err)
 		return
 	}
-	err = a.Remove(req.Passphrase, req.RemoveBackups, ticket,s.beforeRemoval(ticket), func() { s.activeKube.Store(nil) }) //nolint:contextcheck // the job outlives the request on purpose
+	err = a.Remove(req.Passphrase, req.RemoveBackups, ticket, s.beforeRemoval(ticket), func() { s.activeKube.Store(nil) }) //nolint:contextcheck // the job outlives the request on purpose
 	switch {
 	case jobConflict(err):
 		writeError(w, http.StatusConflict, err.Error())

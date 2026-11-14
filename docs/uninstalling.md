@@ -29,6 +29,7 @@ On the Administration page, **Remove Kubehenge** takes the state passphrase and 
 - switches automatic upgrades of the management cluster off ([upgrading.md](upgrading.md#automatically-after-kubehenge)). It deletes what the appliance kept for them and the user `kubehenge-upgrader@pve` with its token.
 - destroys the management cluster with OpenTofu, with every Proxmox VE object its module made ([below](#what-the-module-made)).
 - switches the [backups of its etcd](install.md#back-up-the-management-clusters-etcd) off and deletes the access key and talosconfig the appliance kept for them. The snapshots stay in the target.
+- keeps the backup volume: the VM `kubehenge-backups`, tagged `backups`, with its one disk. It is protected and sits in no pool. Ask for everything to go (`removeBackups`) and the removal lifts its protection and deletes it too.
 
 A removal that stopped part way can be run again. When the management cluster no longer answers, the removal goes on if Proxmox VE holds none of its VMs (the pool `kubehenge-management`). Otherwise it names the VMs and refuses. Start them, or remove them in Proxmox VE.
 
@@ -45,6 +46,20 @@ tofu destroy
 ```
 
 Destroy removes every Proxmox VE object the module made ([below](#what-the-module-made)). The `proxmox_objects` output lists them, to check against afterwards.
+
+The backup volume's VM is protected, so Proxmox VE refuses to destroy it. To keep the backups, take it out of the state first:
+
+```sh
+tofu state rm proxmox_virtual_environment_vm.backups
+tofu destroy
+```
+
+To delete them too, set `backup_volume = { protection = false }`, run `tofu apply`, then `tofu destroy`. To delete a kept volume later, in the shell of its node as root:
+
+```sh
+qm set <vmid> --protection 0
+qm destroy <vmid>
+```
 
 ### What the module made
 
