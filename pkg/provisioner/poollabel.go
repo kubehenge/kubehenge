@@ -25,9 +25,10 @@ func PoolLabel(name string, pools []string) string {
 
 // TopologyPools are the names of the cluster's worker pools.
 func TopologyPools(c *clusterv1.Cluster) []string {
-	names := make([]string, len(c.Spec.Topology.Workers.MachineDeployments))
-	for i, md := range c.Spec.Topology.Workers.MachineDeployments {
-		names[i] = md.Name
+	pools := c.Spec.Topology.Workers.MachineDeployments
+	names := make([]string, len(pools))
+	for i := range pools {
+		names[i] = pools[i].Name
 	}
 	return names
 }

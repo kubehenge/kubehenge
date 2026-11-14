@@ -153,8 +153,11 @@ func TestTheDeletionGuardsRefusalReachesTheUser(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, cluster("default", "one"))
 	h.admitClusters()
-	admitted := h.server.currentKube()
-	h.server.setKube(interceptor.NewClient(admitted.(client.WithWatch), interceptor.Funcs{
+	admitted, ok := h.server.currentKube().(client.WithWatch)
+	if !ok {
+		t.Fatal("the admitting client does not watch")
+	}
+	h.server.setKube(interceptor.NewClient(admitted, interceptor.Funcs{
 		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
 			if err := c.Patch(ctx, obj, patch, opts...); err != nil {
 				return err

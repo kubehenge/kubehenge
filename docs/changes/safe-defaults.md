@@ -1,6 +1,6 @@
 ### Changed
 
-- A Kubehenge cluster is deleted only once it carries `kubehenge.dev/allow-deletion`. kubectl, GitOps prunes and deleted namespaces meet the guard. The interface and the CLI set it.
+- A Kubehenge cluster is deleted only once it carries `kubehenge.dev/allow-deletion`, which the interface and the CLI set. kubectl, GitOps prunes and deleted namespaces meet the same guard.
 
 ### Fixed
 

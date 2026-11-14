@@ -206,7 +206,7 @@ func TestDemoAnswersEveryRead(t *testing.T) { //nolint:paralleltest // swaps Go'
 // event in its activity, and no other cluster has either.
 func TestDemoHoldsTheTalosUpgradeOfPlatform(t *testing.T) {
 	t.Parallel()
-	_, b := newDemoWith(t, map[string]func(*demoCluster){"platform": platformDrainHeld})
+	b := newDemoWith(t, map[string]func(*demoCluster){"platform": platformDrainHeld})
 	b.signIn()
 	var clusters []clusterView
 	decodeDemo(t, b.do("GET", "/api/clusters", ""), &clusters)
@@ -373,7 +373,7 @@ func readsEveryClustersHealth(t *testing.T, edits map[string]func(*demoCluster))
 		Log:    slog.New(slog.NewTextHandler(logged, nil)),
 	}
 	raw := demoFleetEdited(t, edits)
-	cleanup, err := setUpDemo(s, func() time.Time { return demoAt }, raw)
+	cleanup, err := demoOver(s, func() time.Time { return demoAt }, raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -506,7 +506,7 @@ func TestDemoShowsTheTalosReleaseOfTalosMachines(t *testing.T) {
 
 func TestDemoHoldsOneMachinesReplacement(t *testing.T) {
 	t.Parallel()
-	_, b := newDemoWith(t, map[string]func(*demoCluster){"platform": platformDrainHeld})
+	b := newDemoWith(t, map[string]func(*demoCluster){"platform": platformDrainHeld})
 	b.signIn()
 	var detail struct {
 		Machines []machineView `json:"machines"`

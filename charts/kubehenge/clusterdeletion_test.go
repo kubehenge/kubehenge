@@ -2,9 +2,10 @@ package kubehenge_test
 
 import (
 	"bytes"
+	"io/fs"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"path"
 	"regexp"
 	"strings"
 	"testing"
@@ -13,26 +14,29 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
+type resourceRule struct {
+	Operations []string `json:"operations"`
+	Resources  []string `json:"resources"`
+}
+
+type matchConstraints struct {
+	ResourceRules []resourceRule `json:"resourceRules"`
+}
+
+type policyExpression struct {
+	Expression        string `json:"expression"`
+	MessageExpression string `json:"messageExpression"`
+}
+
+type policySpec struct {
+	MatchConstraints matchConstraints   `json:"matchConstraints"`
+	MatchConditions  []policyExpression `json:"matchConditions"`
+	Validations      []policyExpression `json:"validations"`
+}
+
 type admissionPolicy struct {
-	Kind     string `json:"kind"`
-	Metadata struct {
-		Name string `json:"name"`
-	} `json:"metadata"`
-	Spec struct {
-		MatchConstraints struct {
-			ResourceRules []struct {
-				Operations []string `json:"operations"`
-				Resources  []string `json:"resources"`
-			} `json:"resourceRules"`
-		} `json:"matchConstraints"`
-		MatchConditions []struct {
-			Expression string `json:"expression"`
-		} `json:"matchConditions"`
-		Validations []struct {
-			Expression        string `json:"expression"`
-			MessageExpression string `json:"messageExpression"`
-		} `json:"validations"`
-	} `json:"spec"`
+	Kind string     `json:"kind"`
+	Spec policySpec `json:"spec"`
 }
 
 // deletionPolicy renders the chart and finds its policy on deleting clusters.
@@ -64,8 +68,48 @@ func deletionPolicy(t *testing.T) admissionPolicy {
 	return admissionPolicy{}
 }
 
+// deletedCluster is the cluster a delete request is for. Unset, it is in the clusters namespace and
+// its class in kubehenge-system.
+type deletedCluster struct {
+	namespace, class, classNamespace string
+	// noClassNamespace leaves classRef without a namespace, and noTopology the spec without topology.
+	noClassNamespace, noTopology bool
+	annotations                  map[string]any
+	deleting                     bool
+}
+
+func (d *deletedCluster) ns() string {
+	if d.namespace == "" {
+		return "clusters"
+	}
+	return d.namespace
+}
+
+// object is the cluster as the policy reads it in oldObject.
+func (d *deletedCluster) object() map[string]any {
+	meta := map[string]any{"name": "web", "namespace": d.ns()}
+	if d.annotations != nil {
+		meta["annotations"] = d.annotations
+	}
+	if d.deleting {
+		meta["deletionTimestamp"] = "2026-11-14T10:00:00Z"
+	}
+	if d.noTopology {
+		return map[string]any{"metadata": meta, "spec": map[string]any{}}
+	}
+	ref := map[string]any{"name": d.class}
+	switch {
+	case d.noClassNamespace:
+	case d.classNamespace != "":
+		ref["namespace"] = d.classNamespace
+	default:
+		ref["namespace"] = "kubehenge-system"
+	}
+	return map[string]any{"metadata": meta, "spec": map[string]any{"topology": map[string]any{"classRef": ref}}}
+}
+
 // eval runs one of the policy's expressions against the cluster being deleted.
-func eval(t *testing.T, expression string, old map[string]any) any {
+func eval(t *testing.T, expression string, d *deletedCluster) any {
 	t.Helper()
 	env, err := cel.NewEnv(cel.Variable("oldObject", cel.DynType), cel.Variable("request", cel.DynType))
 	if err != nil {
@@ -79,12 +123,26 @@ func eval(t *testing.T, expression string, old map[string]any) any {
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta, _ := old["metadata"].(map[string]any)
-	got, _, err := program.Eval(map[string]any{"oldObject": old, "request": map[string]any{"namespace": meta["namespace"]}})
+	got, _, err := program.Eval(map[string]any{"oldObject": d.object(), "request": map[string]any{"namespace": d.ns()}})
 	if err != nil {
 		t.Fatalf("%s: %v", expression, err)
 	}
 	return got.Value()
+}
+
+// holds tells whether every expression is true for the cluster.
+func holds(t *testing.T, expressions []policyExpression, d *deletedCluster) bool {
+	t.Helper()
+	for _, e := range expressions {
+		got, ok := eval(t, e.Expression, d).(bool)
+		if !ok {
+			t.Fatalf("%s gives no bool", e.Expression)
+		}
+		if !got {
+			return false
+		}
+	}
+	return true
 }
 
 // A Kubehenge cluster is deleted only once it carries the annotation that lifts the guard, or while
@@ -93,67 +151,36 @@ func eval(t *testing.T, expression string, old map[string]any) any {
 func TestDeletingAKubehengeClusterNeedsTheAnnotation(t *testing.T) {
 	t.Parallel()
 	p := deletionPolicy(t)
-	in := func(c map[string]any, namespace, classNamespace string) map[string]any {
-		c["metadata"].(map[string]any)["namespace"] = namespace
-		ref := c["spec"].(map[string]any)["topology"].(map[string]any)["classRef"].(map[string]any)
-		if classNamespace == "" {
-			delete(ref, "namespace")
-		} else {
-			ref["namespace"] = classNamespace
-		}
-		return c
-	}
-	cluster := func(class string, annotations map[string]any, deleting bool) map[string]any {
-		ref := map[string]any{"name": class, "namespace": "kubehenge-system"}
-		meta := map[string]any{"name": "web", "namespace": "clusters"}
-		if annotations != nil {
-			meta["annotations"] = annotations
-		}
-		if deleting {
-			meta["deletionTimestamp"] = "2026-11-14T10:00:00Z"
-		}
-		return map[string]any{"metadata": meta, "spec": map[string]any{"topology": map[string]any{"classRef": ref}}}
-	}
-	matches := func(c map[string]any) bool {
-		for _, m := range p.Spec.MatchConditions {
-			if eval(t, m.Expression, c) != true {
-				return false
-			}
-		}
-		return true
-	}
-	allowed := func(c map[string]any) bool {
-		for _, v := range p.Spec.Validations {
-			if eval(t, v.Expression, c) != true {
-				return false
-			}
-		}
-		return true
-	}
 	for name, tc := range map[string]struct {
-		cluster        map[string]any
+		cluster        deletedCluster
 		guarded, allow bool
 	}{
-		"bare":              {cluster("kubehenge-talos", nil, false), true, false},
-		"other annotations": {cluster("kubehenge-kubeadm", map[string]any{"a": "b"}, false), true, false},
-		"annotated":         {cluster("kubehenge-rke2", map[string]any{"kubehenge.dev/allow-deletion": "true"}, false), true, true},
-		"already deleting":  {cluster("kubehenge-k3s", nil, true), true, true},
-		"another class":     {cluster("mine", nil, false), false, false},
-		"no topology":       {map[string]any{"metadata": map[string]any{"name": "web"}, "spec": map[string]any{}}, false, false},
-		"a class named like Kubehenge's in another namespace":           {in(cluster("kubehenge-mine", nil, false), "team-a", "team-a"), false, false},
-		"a class named like Kubehenge's in the cluster's own namespace": {in(cluster("kubehenge-mine", nil, false), "team-a", ""), false, false},
-		"no class namespace, the cluster beside Kubehenge's classes":    {in(cluster("kubehenge-rke2", nil, false), "kubehenge-system", ""), true, false},
+		"bare":              {deletedCluster{class: "kubehenge-talos"}, true, false},
+		"other annotations": {deletedCluster{class: "kubehenge-kubeadm", annotations: map[string]any{"a": "b"}}, true, false},
+		"annotated":         {deletedCluster{class: "kubehenge-rke2", annotations: map[string]any{"kubehenge.dev/allow-deletion": "true"}}, true, true},
+		"already deleting":  {deletedCluster{class: "kubehenge-k3s", deleting: true}, true, true},
+		"another class":     {deletedCluster{class: "mine"}, false, false},
+		"no topology":       {deletedCluster{noTopology: true}, false, false},
+		"a class named like Kubehenge's in another namespace": {
+			deletedCluster{namespace: "team-a", class: "kubehenge-mine", classNamespace: "team-a"}, false, false,
+		},
+		"a class named like Kubehenge's in the cluster's own namespace": {
+			deletedCluster{namespace: "team-a", class: "kubehenge-mine", noClassNamespace: true}, false, false,
+		},
+		"no class namespace, the cluster beside Kubehenge's classes": {
+			deletedCluster{namespace: "kubehenge-system", class: "kubehenge-rke2", noClassNamespace: true}, true, false,
+		},
 	} {
-		if got := matches(tc.cluster); got != tc.guarded {
+		if got := holds(t, p.Spec.MatchConditions, &tc.cluster); got != tc.guarded {
 			t.Errorf("%s: guarded %v, want %v", name, got, tc.guarded)
 			continue
 		}
-		if tc.guarded && allowed(tc.cluster) != tc.allow {
+		if tc.guarded && holds(t, p.Spec.Validations, &tc.cluster) != tc.allow {
 			t.Errorf("%s: deletion allowed %v, want %v", name, !tc.allow, tc.allow)
 		}
 	}
-	msg := eval(t, p.Spec.Validations[0].MessageExpression, cluster("kubehenge-talos", nil, false))
-	if s, _ := msg.(string); !strings.Contains(s, "kubehenge.dev/allow-deletion") || !strings.Contains(s, "web") {
+	msg, ok := eval(t, p.Spec.Validations[0].MessageExpression, &deletedCluster{class: "kubehenge-talos"}).(string)
+	if !ok || !strings.Contains(msg, "kubehenge.dev/allow-deletion") || !strings.Contains(msg, "web") {
 		t.Errorf("message %q names neither the cluster nor the annotation", msg)
 	}
 }
@@ -166,20 +193,21 @@ var kubectlDelete = regexp.MustCompile(`kubectl\b.*\bdelete (namespace|cluster|c
 // leaves its namespace Terminating.
 func TestEveryPrintedClusterDeleteAnnotatesFirst(t *testing.T) {
 	t.Parallel()
+	repository := os.DirFS("../..")
 	var files []string
-	for _, pattern := range []string{"../../test/e2e/*.sh", "../../docs/*.md", "../../website/.vitepress/theme/*.vue", "../../website/.vitepress/theme/*.js"} {
-		matched, err := filepath.Glob(pattern)
+	for _, pattern := range []string{"test/e2e/*.sh", "docs/*.md", "website/.vitepress/theme/*.vue", "website/.vitepress/theme/*.js"} {
+		matched, err := fs.Glob(repository, pattern)
 		if err != nil || len(matched) == 0 {
 			t.Fatalf("%s: %v, %d files", pattern, err, len(matched))
 		}
 		files = append(files, matched...)
 	}
 	for _, file := range files {
-		text, err := os.ReadFile(file)
+		text, err := fs.ReadFile(repository, file)
 		if err != nil {
 			t.Fatal(err)
 		}
-		script := strings.HasSuffix(file, ".sh")
+		script := path.Ext(file) == ".sh"
 		previous, number := "", 0
 		for line := range strings.SplitSeq(string(text), "\n") {
 			number++
@@ -187,7 +215,7 @@ func TestEveryPrintedClusterDeleteAnnotatesFirst(t *testing.T) {
 			// doc's commands are its code blocks' lines. Its tables name add-on namespaces, which
 			// hold no clusters.
 			printed := strings.Contains(line, "printf ")
-			switch filepath.Ext(file) {
+			switch path.Ext(file) {
 			case ".md":
 				printed = strings.HasPrefix(strings.TrimSpace(line), "kubectl ")
 			case ".vue", ".js":
