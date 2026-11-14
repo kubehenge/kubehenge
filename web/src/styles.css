@@ -825,14 +825,13 @@ button.go {
     overflow-x: auto;
   }
 
-  .topbar > *,
-  .views a {
+  .topbar > * {
     flex-shrink: 0;
   }
 
+  /* Every view stays in sight: a phone's width wraps the tabs to a second row, never cuts them. */
   .views {
-    scrollbar-width: none;
-    overflow-x: auto;
+    flex-wrap: wrap;
   }
 
   .views kbd {
