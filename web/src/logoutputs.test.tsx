@@ -121,10 +121,10 @@ describe("the log outputs fields", () => {
     await user.click(screen.getByText("Log outputs"));
     await user.click(screen.getByRole("button", { name: "Add output" }));
     const first = screen.getByRole("group", { name: "Output 1" });
-    expect(within(first).queryByText(/Lower-case letters/u)).not.toBeInTheDocument();
+    expect(within(first).queryByText(/Lowercase letters/u)).not.toBeInTheDocument();
     expect(within(first).queryByText("Enter an endpoint")).not.toBeInTheDocument();
     await user.type(within(first).getByLabelText("Name"), "Bad Name");
-    expect(within(first).getByText(/Lower-case letters/u)).toBeInTheDocument();
+    expect(within(first).getByText(/Lowercase letters/u)).toBeInTheDocument();
     expect(within(first).queryByText("Enter an endpoint")).not.toBeInTheDocument();
     expect(within(first).queryByLabelText("Authentication")).not.toBeInTheDocument();
 

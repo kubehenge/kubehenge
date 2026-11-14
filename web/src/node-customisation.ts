@@ -115,7 +115,7 @@ export function objectNameProblem(name: string): string | undefined {
   if (name === "") {
     return "Enter a name";
   }
-  return name.length > maxName || !dnsName.test(name) ? "Use lower-case letters, digits, dashes and dots" : undefined;
+  return name.length > maxName || !dnsName.test(name) ? "Use lowercase letters, digits, dashes and dots" : undefined;
 }
 
 /** secretKeyProblem says what is wrong with a key inside a Secret. */

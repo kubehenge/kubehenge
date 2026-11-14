@@ -248,12 +248,12 @@ function pressureTile(h: ClusterHealth): Tile {
 
 function podsTile(h: ClusterHealth): Tile {
   if (filled(h.workload) || (filled(h.pods.error) && h.pods.items.length === 0)) {
-    return { section: "pods", label: "Pods not well", ...notRead };
+    return { section: "pods", label: "Unhealthy pods", ...notRead };
   }
   const n = h.pods.items.length;
   return {
     section: "pods",
-    label: "Pods not well",
+    label: "Unhealthy pods",
     value: n === 0 ? "None" : `${n}${h.pods.truncated === true ? "+" : ""}`,
     state: worst(h.pods.items.map((p) => p.severity)),
   };
@@ -697,7 +697,7 @@ function Pods({ health: h, actions }: { health: ClusterHealth; actions: PodActio
   }
   return (
     <div className="box scroll" id={anchor("pods")}>
-      <h3>Pods not well</h3>
+      <h3>Unhealthy pods</h3>
       <SectionNote section={h.pods} what="pods" />
       <table className="grid stack">
         <thead>

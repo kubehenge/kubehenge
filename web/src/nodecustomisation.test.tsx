@@ -185,7 +185,7 @@ describe("the nodes' files, commands and flags in the wizard", () => {
       bad({ files: [{ ...newFile(), path: "/x", source: "secret", secretName: "Bad", secretKey: "k" }] })[
         "nodeCustomisation"
       ],
-    ).toMatch(/^Secret: Use lower-case/u);
+    ).toMatch(/^Secret: Use lowercase/u);
     expect(bad({ commands: [{ run: " ", roles: "both" }] })["nodeCustomisation"]).toBe("Enter a command");
     expect(bad({ commands: [{ run: "x".repeat(1025), roles: "both" }] })["nodeCustomisation"]).toBe(
       "At most 1024 characters",
@@ -204,7 +204,7 @@ describe("the nodes' files, commands and flags in the wizard", () => {
         "nodeCustomisation"
       ],
     ).toBe("At most 10 files");
-    expect(bad({ auditConfigMap: "Bad_Name" })["nodeCustomisation"]).toMatch(/lower-case/u);
+    expect(bad({ auditConfigMap: "Bad_Name" })["nodeCustomisation"]).toMatch(/lowercase/u);
     expect(fieldProblems("Machines", form, k3s)).not.toHaveProperty("nodeCustomisation");
     expect(
       fieldProblems(

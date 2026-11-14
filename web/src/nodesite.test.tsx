@@ -60,7 +60,7 @@ describe("the registry mirror settings", () => {
     expect(mirrorsProblem([mirror()])).toBeUndefined();
     expect(mirrorsProblem([mirror({ registry: "*", endpoints: "https://harbor.example/proxy/v2" })])).toBeUndefined();
     expect(mirrorsProblem([mirror({ registry: "registry.example:5000", caBundle: certificate })])).toBeUndefined();
-    expect(mirrorsProblem([mirror({ registry: "Docker.io" })])).toMatch(/^Mirror 1: enter a lower-case registry/u);
+    expect(mirrorsProblem([mirror({ registry: "Docker.io" })])).toMatch(/^Mirror 1: enter a lowercase registry/u);
     expect(mirrorsProblem([mirror({ endpoints: "" })])).toBe("Mirror 1: add an endpoint");
     for (const endpoints of [
       "mirror.example",
