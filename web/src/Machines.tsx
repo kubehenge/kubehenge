@@ -42,6 +42,22 @@ function heldText(m: Machine): string {
 const nodesCache = pollCache<PveNode[]>();
 const nodesKept = { cache: nodesCache, key: "nodes" };
 
+/**
+ * useReadyCounts says how many of a cluster's control-plane nodes and workers are ready. A machine
+ * on a Proxmox VE node that is offline is down whatever Cluster API last read of it, so it is not
+ * counted, as its row does not call it ready.
+ */
+export function useReadyCounts(c: Cluster): { controlPlane: number; workers: number } {
+  const { data: nodes } = usePoll(api.nodes, pollIdle, nodesKept);
+  const offline = new Set((nodes ?? []).filter((n) => !n.online).map((n) => n.node));
+  const lost = (role: Machine["role"]): number =>
+    (c.machines ?? []).filter((m) => m.role === role && m.ready && offline.has(m.proxmoxNode ?? "")).length;
+  return {
+    controlPlane: Math.max(0, c.controlPlane.ready - lost("control-plane")),
+    workers: Math.max(0, c.workers.ready - lost("worker")),
+  };
+}
+
 // machineStatus says how far a machine is, as the cluster list says it of clusters. A machine on a
 // Proxmox VE node that is offline is down whatever Cluster API last read of it, and so is one whose
 // Kubernetes node has been not ready for longer than a start or a reboot takes.

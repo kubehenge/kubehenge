@@ -13,7 +13,7 @@ import { EtcdSizeView } from "./EtcdSize";
 import { EtcdSnapshotsDialog, EtcdSnapshotsView, etcdSnapshotsOf, etcdSnapshotsRows } from "./EtcdSnapshots";
 import { ClusterStatus, fleetKey, useFleet } from "./fleet";
 import { useClusterChanges } from "./live";
-import { Machines, Placement } from "./Machines";
+import { Machines, Placement, useReadyCounts } from "./Machines";
 import { nodeOSKey } from "./node-os";
 import { Pools } from "./Pools";
 import { QuorumLost, RecoveryState, RollStalled } from "./Recovery";
@@ -666,6 +666,7 @@ function Summary({
   why: string | undefined;
   onChanged: () => void;
 }): JSX.Element {
+  const ready = useReadyCounts(c);
   return (
     <div className="box">
       <dl className="summary">
@@ -692,13 +693,13 @@ function Summary({
         <dd>{(c.services ?? []).join(", ") || "Default"}</dd>
         <dt>Control plane</dt>
         <dd>
-          {c.controlPlane.ready} of {c.controlPlane.desired} ready
+          {ready.controlPlane} of {c.controlPlane.desired} ready
         </dd>
         <dt>Workers</dt>
         <dd>
           {c.workers.desired === 0 && c.workers.ready === 0
             ? "None"
-            : `${c.workers.ready} of ${c.workers.desired} ready`}
+            : `${ready.workers} of ${c.workers.desired} ready`}
         </dd>
         {c.workerPools.some((p) => p.autoscaling) && (
           <>

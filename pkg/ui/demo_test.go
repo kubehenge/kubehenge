@@ -253,6 +253,27 @@ func TestDemoHasANodeThatIsOnlineAndNotReachable(t *testing.T) {
 	}
 }
 
+func TestDemoManagementAgreesWithItsClusters(t *testing.T) {
+	t.Parallel()
+	_, b := newDemo(t)
+	b.signIn()
+	var health managementHealthView
+	decodeDemo(t, b.do("GET", "/api/setup/health", ""), &health)
+	if len(health.Controllers) == 0 {
+		t.Error("the management cluster runs no controller")
+	}
+	for _, c := range health.Controllers {
+		if c.Ready != c.Wanted {
+			t.Errorf("controller %s/%s has %d of %d ready", c.Namespace, c.Name, c.Ready, c.Wanted)
+		}
+	}
+	var setup setupView
+	decodeDemo(t, b.do("GET", "/api/setup", ""), &setup)
+	if setup.Settings == nil || len(setup.Settings.BackupTargets) != 1 || setup.Settings.BackupTargets[0].Name != "offsite" {
+		t.Errorf("Administration lists backup targets %+v, want the offsite target the create wizard offers", setup.Settings)
+	}
+}
+
 func TestDemoShowsItsFleet(t *testing.T) {
 	t.Parallel()
 	_, b := newDemo(t)

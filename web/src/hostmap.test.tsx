@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
@@ -102,6 +102,9 @@ describe("the cluster's summary", () => {
     await expect(
       within(map).findByRole("link", { name: "web-cp-a, control plane, Node offline" }),
     ).resolves.toBeInTheDocument();
+    // The count agrees with the machine shown as down.
+    const term = screen.getByText("Control plane", { selector: "dt" });
+    await waitFor(() => expect(term.nextElementSibling).toHaveTextContent("2 of 3 ready"));
     unmount();
 
     window.history.replaceState(null, "", "/clusters/default/web/machines");

@@ -92,7 +92,11 @@ func fillDemo(s *Server, clock func() time.Time, dir string) error {
 	if err = os.MkdirAll(filepath.Join(dir, "management"), demoDirMode); err != nil {
 		return fmt.Errorf("the demo's appliance: %w", err)
 	}
-	if err = os.WriteFile(filepath.Join(dir, "management", "settings.json"), fleet.data.Management, demoFileMode); err != nil {
+	settings, err := fleet.managementSettings()
+	if err != nil {
+		return err
+	}
+	if err = os.WriteFile(filepath.Join(dir, "management", "settings.json"), settings, demoFileMode); err != nil {
 		return fmt.Errorf("the demo's appliance: %w", err)
 	}
 	s.Appliance = &appliance.Appliance{Dir: dir, Release: demoName, Now: clock}
