@@ -73,8 +73,7 @@ import {
 const unique = (xs: string[]): string[] => [...new Set(xs)].toSorted();
 
 // A management cluster has one node, or three for high availability.
-const highAvailability = 3;
-
+const nodeCounts: readonly number[] = [1, 3, 5];
 const msPerMinute = 60_000;
 
 const setWhenCreated = "Set when the management cluster was created";
@@ -729,8 +728,8 @@ interface NodeNetwork {
 // appliance does: one network, the gateway in it, no address taken twice. It returns the network
 // or the problem.
 function nodeNetwork(addresses: string[], gateway: Address | undefined, family: Family): NodeNetwork | string {
-  const wrongCount = "Enter 1 or 3 addresses.";
-  if (addresses.length !== 1 && addresses.length !== highAvailability) {
+  const wrongCount = "Enter 1, 3 or 5 addresses.";
+  if (!nodeCounts.includes(addresses.length)) {
     return wrongCount;
   }
   const taken: bigint[] = [];
@@ -3064,9 +3063,9 @@ function setupFields({
 // known.
 function nodeAddressHint(fixed: boolean, family: Family, network: string | undefined): string {
   if (fixed) {
-    return "Add 2 addresses after the first to grow to 3";
+    return "Add addresses after the existing ones to grow to 3 or 5";
   }
-  return network === undefined ? `1 or 3, like ${familyFields[family].example}` : `1 or 3 in ${network}`;
+  return network === undefined ? `1, 3 or 5, like ${familyFields[family].example}` : `1, 3 or 5 in ${network}`;
 }
 
 // FamilyAddressFields are one family's node addresses and gateway. Their labels name the family
