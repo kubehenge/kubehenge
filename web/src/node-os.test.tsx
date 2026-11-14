@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { App } from "./App";
 import { fieldProblems, newForm, request, summary, withClass } from "./create-form";
 import { fakeServer } from "./fake-server";
-import { baseTitle, forDistribution, nodeOSKey, nodeOSRef } from "./node-os";
+import { baseTitle, forDistribution, nodeOSKey, nodeOSLabel, nodeOSRef } from "./node-os";
 import type { Cluster, ClusterClass, NodeOS, NodeOSChoice } from "./types";
 
 const alma: NodeOS = {
@@ -102,6 +102,16 @@ const rke2Cluster: Cluster = {
   nodeOS: alma,
 };
 
+describe("node OS options", () => {
+  it("name a state in brackets, never a sentence", () => {
+    expect(nodeOSLabel({ ...alma, unreleased: "openSUSE has not released Leap 16.1 yet" })).toBe(
+      "AlmaLinux 10 (not released)",
+    );
+    expect(nodeOSLabel({ ...alma, noTemplate: "there is no template" })).toBe("AlmaLinux 10 (no template yet)");
+    expect(nodeOSLabel(alma)).toBe("AlmaLinux 10");
+  });
+});
+
 describe("node OS keys", () => {
   it("carry FIPS mode", () => {
     expect(nodeOSKey(almaFIPS)).toBe("almalinux-10-fips");
@@ -137,7 +147,7 @@ describe("the node OS", () => {
     expect(nodeOS).toHaveValue("almalinux-10");
     await user.click(screen.getByRole("button", { name: "About Node OS" }));
     expect(screen.getByText("Minimal, from AlmaLinux 10's signed packages, with SELinux enforcing.")).toBeVisible();
-    expect(within(nodeOS).getByRole("option", { name: "openSUSE Leap 16.1: not released yet" })).toBeDisabled();
+    expect(within(nodeOS).getByRole("option", { name: "openSUSE Leap 16.1 (not released)" })).toBeDisabled();
     await waitFor(() => expect(screen.getByLabelText("Kubernetes version")).toHaveValue("v1.37.1"));
 
     await user.selectOptions(nodeOS, "rocky-10");

@@ -373,7 +373,7 @@ func readsEveryClustersHealth(t *testing.T, edits map[string]func(*demoCluster))
 		Log:    slog.New(slog.NewTextHandler(logged, nil)),
 	}
 	raw := demoFleetEdited(t, edits)
-	cleanup, err := demoOver(s, func() time.Time { return demoAt }, raw)
+	cleanup, err := demoFrom(s, func() time.Time { return demoAt }, raw)
 	if err != nil {
 		t.Fatal(err)
 	}

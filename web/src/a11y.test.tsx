@@ -1247,7 +1247,9 @@ const cases: Case[] = [
       await check("General");
       await user.click(screen.getByRole("button", { name: "Next" }));
       await waitFor(() => expect(screen.getByLabelText("Bridge")).toHaveValue("vmbr0"));
+      await user.clear(screen.getByLabelText("Gateway"));
       await user.type(screen.getByLabelText("Gateway"), "192.0.2.1");
+      await user.clear(screen.getByLabelText("DNS servers"));
       await user.type(screen.getByLabelText("DNS servers"), "192.0.2.53");
       await user.type(screen.getByLabelText("API address"), "192.0.2.30");
       await user.type(screen.getByLabelText("Node addresses"), "192.0.2.31-192.0.2.39");
@@ -1266,8 +1268,10 @@ const cases: Case[] = [
       await user.click(screen.getByRole("button", { name: "Next" }));
       await check("Add-ons");
       await user.click(screen.getByRole("checkbox", { name: "Use existing cert-manager" }));
+      await user.click(screen.getByRole("button", { name: "Next" }));
+      await check("Policies");
       await user.type(screen.getByLabelText("Namespace labels"), "team");
-      await check("Add-ons with a label problem");
+      await check("Policies with a label problem");
       await user.clear(screen.getByLabelText("Namespace labels"));
       await user.click(screen.getByRole("button", { name: "Next" }));
       await check("Identity providers");

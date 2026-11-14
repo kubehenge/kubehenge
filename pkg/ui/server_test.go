@@ -25,6 +25,7 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
@@ -86,6 +87,8 @@ type fakeAccounts struct {
 	nextID          pve.NextID
 	vmids           []int
 	nextIDForbidden bool
+	// nodeReads counts the listings of the nodes.
+	nodeReads int
 }
 
 func (f *fakeAccounts) CreateAdministratorToken(_ context.Context, t *pve.Ticket, userid, name, _ string) (string, error) {
@@ -220,6 +223,7 @@ func (f *fakeAccounts) Storages(context.Context, *pve.Ticket) ([]pve.Storage, er
 func (f *fakeAccounts) Nodes(context.Context, *pve.Ticket) ([]pve.Node, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.nodeReads++
 	if f.nodes != nil {
 		return slices.Clone(f.nodes), nil
 	}
@@ -991,6 +995,236 @@ func TestCreate(t *testing.T) {
 	expect(t, b.do("POST", "/api/clusters", tagged), http.StatusCreated)
 }
 
+// withKey is createBody with a backup key.
+func withKey(values string) string {
+	return strings.Replace(createBody, `"variables":`, `"backupKey":`+values+`,"variables":`, 1)
+}
+
+const bothKeys = `{"accessKeyID":"AK","secretAccessKey":"SK"}`
+
+func readSecret(h *harness, name string) (*corev1.Secret, error) {
+	s := &corev1.Secret{}
+	return s, h.kube.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: name}, s)
+}
+
+// A key sent with a create request is stored before the cluster, which then owns it. Storing it
+// takes Sys.Modify on the cluster's pool, as the credential endpoint does. One that does not read,
+// or a cluster that exists already, leaves nothing behind and the live cluster's key alone.
+func TestCreateStoresTheKeyAhead(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	b := h.browser()
+	b.signIn("dev@pve")
+	read := func(name string) (*corev1.Secret, error) { return readSecret(h, name) }
+	rec := b.do("POST", "/api/clusters", withKey(bothKeys))
+	expect(t, rec, http.StatusForbidden)
+	if !strings.Contains(rec.Body.String(), "Sys.Modify on /pool/kubehenge/default.web") {
+		t.Errorf("refused with %s", rec.Body)
+	}
+	if _, err := read("web.backup"); err == nil {
+		t.Fatal("a key was stored without Sys.Modify")
+	}
+	h.accounts.mu.Lock()
+	h.accounts.grants["dev@pve"]["/pool/kubehenge/default.web"] = []string{"Sys.Modify"}
+	h.accounts.mu.Unlock()
+	expect(t, b.do("POST", "/api/clusters", withKey(`{"accessKeyID":"AK"}`)), http.StatusUnprocessableEntity)
+	if _, err := read("web.backup"); err == nil {
+		t.Fatal("a key that did not read was stored")
+	}
+	expect(t, b.do("POST", "/api/clusters", withKey(bothKeys)), http.StatusCreated)
+	s, err := read("web.backup")
+	if err != nil || string(s.Data["accessKeyID"]) != "AK" || len(s.OwnerReferences) != 1 || s.OwnerReferences[0].Name != "web" {
+		t.Fatalf("the key after the create: %+v, %v", s, err)
+	}
+	c := &clusterv1.Cluster{}
+	if err = h.kube.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "web"}, c); err != nil ||
+		s.Labels[provisioner.CreateRequestKey] == "" || c.Annotations[provisioner.CreateRequestKey] != s.Labels[provisioner.CreateRequestKey] {
+		t.Errorf("the request's mark: key %v, cluster %v, %v", s.Labels, c.Annotations, err)
+	}
+	other := `{"accessKeyID":"XX","secretAccessKey":"YY"}`
+	expect(t, b.do("POST", "/api/clusters", withKey(other)), http.StatusConflict)
+	if s, err = read("web.backup"); err != nil || string(s.Data["accessKeyID"]) != "AK" {
+		t.Errorf("the live cluster's key after a clash: %+v, %v", s, err)
+	}
+}
+
+// A credential made with kubectl ahead of its cluster is the user's: a create with a key of its own
+// is refused and leaves it as it is.
+func TestCreateLeavesAKubectlKeyAlone(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.accounts.grants["dev@pve"]["/pool/kubehenge/default.web"] = []string{"Sys.Modify"}
+	mine := &corev1.Secret{
+		Namespace: "default", Name: "web.backup", Labels: map[string]string{
+			provisioner.CredentialLabel: "backup", provisioner.CredentialClusterLabel: "web",
+		},
+		Type: provisioner.CredentialType, Data: map[string][]byte{"accessKeyID": []byte("MINE"), "secretAccessKey": []byte("S")},
+	}
+	if err := h.kube.Create(context.Background(), mine); err != nil {
+		t.Fatal(err)
+	}
+	b := h.browser()
+	b.signIn("dev@pve")
+	expect(t, b.do("POST", "/api/clusters", withKey(bothKeys)), http.StatusConflict)
+	s, err := readSecret(h, "web.backup")
+	if err != nil || string(s.Data["accessKeyID"]) != "MINE" || len(s.OwnerReferences) > 0 || s.Labels[provisioner.CreateRequestKey] != "" {
+		t.Errorf("the kubectl-made key: %+v, %v", s, err)
+	}
+}
+
+// Two creates of one name: the one that loses keeps its hands off the winner's key, whichever
+// step it loses at.
+func TestCreateRaceLeavesTheWinnersKey(t *testing.T) {
+	t.Parallel()
+	for _, step := range []string{"key", "cluster"} {
+		h := newHarness(t)
+		h.accounts.grants["dev@pve"]["/pool/kubehenge/default.web"] = []string{"Sys.Modify"}
+		kube, ok := h.kube.(client.WithWatch)
+		if !ok {
+			t.Fatal("the harness's client cannot be wrapped")
+		}
+		winner := &corev1.Secret{
+			Namespace: "default", Name: "web.backup", Labels: map[string]string{
+				provisioner.CredentialLabel: "backup", provisioner.CredentialClusterLabel: "web", provisioner.CreateRequestKey: "winner",
+			},
+			Type: provisioner.CredentialType, Data: map[string][]byte{"accessKeyID": []byte("WIN"), "secretAccessKey": []byte("S")},
+		}
+		landed := false
+		// The winner's key and Cluster land between the loser's look for the name and its writes.
+		land := func(ctx context.Context) {
+			if landed {
+				return
+			}
+			landed = true
+			c := &clusterv1.Cluster{}
+			won := `{"metadata":{"namespace":"default","name":"web","annotations":{"kubehenge.dev/create-request":"winner"}},
+				"spec":{"topology":{"classRef":{"name":"kubehenge-rke2"},"version":"v1.36.5+rke2r1"}}}`
+			if err := json.Unmarshal([]byte(won), c); err != nil {
+				t.Fatal(err)
+			}
+			if step == "key" {
+				if err := kube.Create(ctx, winner.DeepCopy()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := kube.Create(ctx, c); err != nil {
+				t.Fatal(err)
+			}
+		}
+		h.server.setKube(interceptor.NewClient(kube, interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				_, secret := obj.(*corev1.Secret)
+				_, cluster := obj.(*clusterv1.Cluster)
+				if step == "key" && secret || step == "cluster" && cluster {
+					land(ctx)
+				}
+				return c.Create(ctx, obj, opts...)
+			},
+		}))
+		b := h.browser()
+		b.signIn("dev@pve")
+		expect(t, b.do("POST", "/api/clusters", withKey(bothKeys)), http.StatusConflict)
+		s, err := readSecret(h, "web.backup")
+		switch step {
+		case "key":
+			if err != nil || string(s.Data["accessKeyID"]) != "WIN" || s.Labels[provisioner.CreateRequestKey] != "winner" {
+				t.Errorf("lost at the key: the winner's key %+v, %v", s, err)
+			}
+		case "cluster":
+			// The winner made its cluster without a key: the loser's own is gone, nothing else is.
+			if err == nil {
+				t.Errorf("lost at the cluster: the loser's key stayed: %+v", s)
+			}
+		}
+	}
+}
+
+// A machine no node it may use could hold, or disks beyond a thick storage, are refused as
+// admission's own figures say, for the interface and any client of the endpoint alike.
+func TestCreateRefusesMachinesThatNeverFit(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	sizeMachines(t, h)
+	b := h.browser()
+	b.signIn("dev@pve")
+	huge := strings.Replace(createBody, `"variables":{`, `"variables":{"workerMachine":{"cores":4,"memoryMiB":131072,"diskGiB":40},`, 1)
+	rec := b.do("POST", "/api/clusters?dryRun=All", huge)
+	expect(t, rec, http.StatusUnprocessableEntity)
+	if !strings.Contains(rec.Body.String(), "128 GiB of memory") {
+		t.Errorf("refused with %s", rec.Body)
+	}
+	big := strings.Replace(createBody, `"variables":{`, `"variables":{"workerMachine":{"cores":4,"memoryMiB":8192,"diskGiB":500},`, 1)
+	for _, tc := range []struct {
+		name    string
+		st      pve.Storage
+		refused bool
+	}{
+		{"thick LVM", pve.Storage{Type: "lvm"}, true},
+		{"dir with full preallocation", pve.Storage{Type: "dir", Preallocation: "full"}, true},
+		{"thin LVM", pve.Storage{Type: "lvmthin"}, false},
+		{"unknown", pve.Storage{}, false},
+	} {
+		st := tc.st
+		st.Storage, st.Node, st.Content, st.Active, st.Avail, st.Total = "local-lvm", "pve1", []string{"images"}, true, 100<<30, 200<<30
+		h.accounts.mu.Lock()
+		h.accounts.storages = []pve.Storage{st}
+		h.accounts.mu.Unlock()
+		rec = b.do("POST", "/api/clusters?dryRun=All", big)
+		if refused := rec.Code == http.StatusUnprocessableEntity && strings.Contains(rec.Body.String(), "disks need"); refused != tc.refused {
+			t.Errorf("%s: %d %s", tc.name, rec.Code, rec.Body)
+		}
+	}
+}
+
+// The interface refuses what a cluster starts with when thick storage cannot hold it, as the
+// controller's StorageLacksSpace says of it. An autoscaled maximum it cannot hold is accepted: the
+// autoscaler may never grow that far.
+func TestCreateWeighsAnAutoscaledPoolAtItsMinimum(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	sizeMachines(t, h)
+	b := h.browser()
+	b.signIn("dev@pve")
+	h.accounts.mu.Lock()
+	h.accounts.storages = []pve.Storage{{
+		Storage: "local-lvm", Node: "pve1", Type: "lvm", Content: []string{"images"}, Active: true, Avail: 60 << 30, Total: 200 << 30,
+	}}
+	h.accounts.mu.Unlock()
+	// Three control planes of 10 GiB and workers of 10 GiB, on 60 GiB free.
+	sized := strings.Replace(createBody, `"variables":{`,
+		`"variables":{"controlPlaneMachine":{"cores":2,"memoryMiB":4096,"diskGiB":10},"workerMachine":{"cores":2,"memoryMiB":4096,"diskGiB":10},`, 1)
+	scaled := func(name string, least int) string {
+		return strings.Replace(strings.Replace(sized, `"workerReplicas":2,`,
+			fmt.Sprintf(`"workerReplicas":%d,"workerAutoscaling":{"min":%d,"max":5},`, least, least), 1), `"web"`, `"`+name+`"`, 1)
+	}
+	if rec := b.do("POST", "/api/clusters", scaled("grows", 2)); rec.Code != http.StatusCreated {
+		t.Errorf("50 GiB to start, 80 GiB at the maximum: %d %s", rec.Code, rec.Body)
+	}
+	rec := b.do("POST", "/api/clusters", scaled("starts", 4))
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "the disks need 70 GiB and storage local-lvm has 60 GiB free") {
+		t.Errorf("70 GiB to start: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// sizeMachines gives the harness's class machine sizes of 40 GiB disks and 4 GiB memory.
+func sizeMachines(t *testing.T, h *harness) {
+	t.Helper()
+	class := &clusterv1.ClusterClass{}
+	if err := h.kube.Get(t.Context(), client.ObjectKey{Namespace: "kubehenge-system", Name: "kubehenge-rke2"}, class); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"controlPlaneMachine", "workerMachine"} {
+		class.Spec.Variables = append(class.Spec.Variables, clusterv1.ClusterClassVariable{
+			Name: name, Schema: clusterv1.VariableSchema{OpenAPIV3Schema: clusterv1.JSONSchemaProps{
+				Type: "object", Default: &apiextensionsv1.JSON{Raw: []byte(`{"cores":2,"memoryMiB":4096,"diskGiB":40}`)},
+			}},
+		})
+	}
+	if err := h.kube.Update(t.Context(), class); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCreateNeedsTheTemplate(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -1673,6 +1907,22 @@ func TestSessionTellsWhoMayCreate(t *testing.T) {
 		if got := b.do("GET", "/api/session", "").Body.String(); !strings.Contains(got, want) {
 			t.Errorf("%s: session = %s", user, got)
 		}
+	}
+}
+
+func TestSessionTellsWhetherTheSharedBackupKeyIsStored(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	b := h.browser()
+	b.signIn("dev@pve")
+	if got := b.do("GET", "/api/session", "").Body.String(); !strings.Contains(got, `"sharedBackupKeys":{"default":false}`) {
+		t.Errorf("session without the key = %s", got)
+	}
+	if err := h.kube.Create(t.Context(), &corev1.Secret{Namespace: "default", Name: provisioner.CredentialName("", "backup")}); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.do("GET", "/api/session", "").Body.String(); !strings.Contains(got, `"sharedBackupKeys":{"default":true}`) {
+		t.Errorf("session with the key = %s", got)
 	}
 }
 

@@ -44,7 +44,7 @@ const cluster: Cluster = {
 
 const noProblems = new Map<FieldKey, string>();
 
-describe("the HA group labels", () => {
+describe("the HA rule labels", () => {
   it("are offered wherever an administrator lets clusters hold Sys.Audit on /, whatever the user holds", () => {
     expect([
       offersHAGroups(rke2),
@@ -62,13 +62,13 @@ describe("the HA group labels", () => {
     expect(
       request({ ...form, haGroups: false }, { ...rke2, variables: rke2.variables.slice(0, 1) }).variables,
     ).not.toHaveProperty("ccm");
-    expect(Object.fromEntries(summary(form, rke2, { haGroups: true }))["HA group labels"]).toBe(
+    expect(Object.fromEntries(summary(form, rke2, { haGroups: true }))["HA rule labels"]).toBe(
       "On, Sys.Audit on / for the token",
     );
-    expect(Object.fromEntries(summary({ ...form, haGroups: false }, rke2, { haGroups: true }))["HA group labels"]).toBe(
+    expect(Object.fromEntries(summary({ ...form, haGroups: false }, rke2, { haGroups: true }))["HA rule labels"]).toBe(
       "Off",
     );
-    expect(Object.fromEntries(summary(form, rke2))).not.toHaveProperty("HA group labels");
+    expect(Object.fromEntries(summary(form, rke2))).not.toHaveProperty("HA rule labels");
   });
 
   it("are shown ticked on the machines step where offered, and can be switched off", async () => {
@@ -114,7 +114,7 @@ function openOptions(classes: ClusterClass[], shown: Cluster = cluster): () => u
   return () => calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body;
 }
 
-describe("a cluster's HA group labels", () => {
+describe("a cluster's HA rule labels", () => {
   it("are switched off under Options", async () => {
     const sent = openOptions([rke2]);
     const user = userEvent.setup({ delay: null });

@@ -164,7 +164,9 @@ describe("etcd snapshot settings", () => {
     await user.click(await screen.findByRole("button", { name: "Edit etcd snapshots" }));
     const dialog = screen.getByRole("dialog", { name: "Edit etcd snapshots" });
     await user.click(within(dialog).getByLabelText("Take etcd snapshots"));
-    expect(within(dialog).getByText("Choose a target")).toBeInTheDocument();
+    // The first target offered is chosen until the user picks another.
+    expect(within(dialog).getByLabelText("Target")).toHaveValue("store");
+    await user.selectOptions(within(dialog).getByLabelText("Target"), "aws");
     await user.selectOptions(within(dialog).getByLabelText("Target"), "store");
     expect(within(dialog).getByLabelText("Schedule")).toHaveAccessibleDescription(/Every 12 hours from 00:00/u);
     await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));

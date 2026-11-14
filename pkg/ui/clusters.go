@@ -804,9 +804,16 @@ type createRequest struct {
 	// clear of the nodes' network (provisioner.ClusterDefaulter).
 	Pods     []string `json:"pods,omitempty"`
 	Services []string `json:"services,omitempty"`
+	// BackupKey is the cluster's own access key for its backup target. It is stored before the
+	// cluster, which then owns it.
+	BackupKey map[string]string `json:"backupKey,omitempty"`
 }
 
 func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
+	ctx, cancel := context.WithTimeout(r.Context(), createTimeout)
+	defer cancel()
+	ctx = context.WithValue(ctx, nodesReadKey{}, &nodesRead{})
+	r = r.WithContext(ctx)
 	var req createRequest
 	if !readJSON(w, r, &req) {
 		return
@@ -837,16 +844,25 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	c := s.newCluster(u, &req)
+	if !s.machinesFit(w, r, u, class, c) {
+		return
+	}
+	key, ok := s.storeKeyAhead(w, r, u, &req, pool, c)
+	if !ok {
+		return
+	}
 	if r.URL.Query().Get("dryRun") == metav1.DryRunAll {
 		s.checkCreate(w, r, u, c)
 		return
 	}
-	if err = u.kube.Create(r.Context(), c); err != nil {
+	if err = u.kube.Create(ctx, c); err != nil {
+		s.dropKeyAhead(r, u, key)
 		s.kubeError(w, r, err)
 		return
 	}
-	s.Log.InfoContext(r.Context(), "created cluster", "user", u.ticket.Username, "cluster", req.Namespace+"/"+req.Name, "class", req.Class, "version", req.Version)
-	privs, err := s.Accounts.Privileges(r.Context(), u.ticket, pool)
+	s.ownKeyAhead(r, u, key, c)
+	s.Log.InfoContext(ctx, "created cluster", "user", u.ticket.Username, "cluster", req.Namespace+"/"+req.Name, "class", req.Class, "version", req.Version)
+	privs, err := s.Accounts.Privileges(ctx, u.ticket, pool)
 	if err != nil {
 		privs = pve.Privileges{}
 	}
@@ -1028,6 +1044,33 @@ func vlanOnTaggedNetwork(vnet string) string {
 // allowedNodesVariable keeps a cluster's VMs to some of the Proxmox VE nodes.
 const allowedNodesVariable = "allowedNodes"
 
+// nodesReadKey holds, in a request's context, the one read of the nodes its checks share. A read
+// can wait on a node that does not answer, and a create's checks run against one deadline.
+type nodesReadKey struct{}
+
+type nodesRead struct {
+	done  bool
+	nodes []pve.Node
+	err   error
+}
+
+// visibleNodes lists the nodes the user sees, once per request where the request holds a nodesRead.
+// Each caller gets its own copy to narrow.
+func (s *Server) visibleNodes(r *http.Request, u user) ([]pve.Node, error) {
+	read, ok := r.Context().Value(nodesReadKey{}).(*nodesRead)
+	if !ok {
+		read = &nodesRead{}
+	}
+	if !read.done {
+		read.nodes, read.err = s.Accounts.Nodes(r.Context(), u.ticket)
+		read.done = true
+		if read.err != nil {
+			read.err = fmt.Errorf("listing the Proxmox VE nodes: %w", read.err)
+		}
+	}
+	return slices.Clone(read.nodes), read.err
+}
+
 // mayPlace checks the nodes a cluster's VMs are kept to: none twice, and each one the user sees or
 // one of kept, those the cluster already has, which the user may keep without seeing.
 func (s *Server) mayPlace(w http.ResponseWriter, r *http.Request, u user, raw, kept json.RawMessage) bool {
@@ -1042,7 +1085,7 @@ func (s *Server) mayPlace(w http.ResponseWriter, r *http.Request, u user, raw, k
 		writeError(w, http.StatusUnprocessableEntity, "allowed nodes: choose at least one Proxmox VE node")
 		return false
 	}
-	visible, err := s.Accounts.Nodes(r.Context(), u.ticket)
+	visible, err := s.visibleNodes(r, u)
 	if err != nil {
 		s.proxmoxError(w, r, err)
 		return false

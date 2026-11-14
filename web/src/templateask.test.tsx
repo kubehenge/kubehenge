@@ -90,6 +90,9 @@ describe("a missing template", () => {
     const button = await screen.findByRole("button", { name: "Build template" });
     expect(button).toBeDisabled();
     expect(screen.getByText("A version not listed on Rocky Linux 10 takes about 20 minutes")).toBeInTheDocument();
+    expect(
+      screen.getByText("The build VM takes its address from DHCP, unless the settings give a build address."),
+    ).toBeInTheDocument();
     await user.type(screen.getByLabelText("Kubernetes version to build"), "1.37");
     expect(screen.getByLabelText("Kubernetes version to build")).toHaveAttribute("aria-invalid", "true");
     await user.clear(screen.getByLabelText("Kubernetes version to build"));

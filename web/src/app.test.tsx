@@ -1091,6 +1091,9 @@ describe("create", () => {
     rancherInstall: false,
     rancherHostname: "",
     rancherRegister: false,
+    rancherExists: true,
+    noSharedKey: false,
+    taken: [],
     certificates: newForm().certificates,
     namespaceLabels: "",
     existingCertManager: false,
@@ -1100,6 +1103,7 @@ describe("create", () => {
     egress: newForm().egress,
     oidc: [],
     upgradeMode: "off",
+    nodeImages: true,
     backups: false,
     backupFields: {
       target: "",
@@ -1213,6 +1217,11 @@ describe("create", () => {
     });
     expect(Object.fromEntries(summary(open, rke2))["Headlamp"]).toBe("On, at headlamp.example, read-only for everyone");
     expect(request({ ...form, headlamp: false, headlampView: true }, rke2).variables).not.toHaveProperty("headlamp");
+  });
+
+  it("writes machine sizes in the unit the needs use", () => {
+    const big = { ...form, workerMachine: { cores: 4, memoryMiB: 900_000, diskGiB: 9000 } };
+    expect(Object.fromEntries(summary(big, rke2))["Worker machines"]).toBe("4 cores, 878.9 GiB memory, 8.8 TiB disk");
   });
 
   it("sums the form up as the Confirm step shows it", () => {
@@ -1368,7 +1377,7 @@ describe("create", () => {
 
     for (const [addresses, problem] of [
       ["", "Enter at least one address, range or network"],
-      ["10.0.1.100-10.0.1.120", "10.0.1.100-10.0.1.120 is not an address, range or network on the gateway's network"],
+      ["10.0.1.100-10.0.1.120", "10.0.1.100-10.0.1.120 is outside the gateway's network"],
       ["10.0.0.25-10.0.0.30", "10.0.0.25-10.0.0.30 overlaps the node addresses"],
       ["10.0.0.40/28", "10.0.0.40/28 overlaps the node addresses"],
       ["10.0.0.20", "10.0.0.20 overlaps the API address"],
@@ -1435,7 +1444,7 @@ describe("create", () => {
     // Layer 2 holds the pool and the API address to the nodes' network.
     expect(fieldProblems("Network", { ...bgp, loadBalancerMode: "l2" }, withLB)).toMatchObject({
       endpoint: "Use an address on the gateway's network",
-      loadBalancerAddresses: "198.51.100.0/28 is not an address, range or network on the gateway's network",
+      loadBalancerAddresses: "198.51.100.0/28 is outside the gateway's network",
     });
     // kube-vip and Talos only answer by ARP, so the mode stays layer 2.
     expect(request({ ...bgp, loadBalancer: "kube-vip" }, withLB).variables["loadBalancer"]).not.toHaveProperty("mode");
@@ -1462,6 +1471,16 @@ describe("create", () => {
     ] as const) {
       expect(fieldProblems("Network", { ...bgp, ...patch }, withLB)).toStrictEqual(expected);
     }
+  });
+
+  it("lets node image refreshes be switched off", () => {
+    const withUpgrades = {
+      ...rke2,
+      variables: [...rke2.variables, { name: "upgrades", required: false, schema: { type: "object" } }],
+    };
+    const off = { ...form, nodeImages: false };
+    expect(request(off, withUpgrades).variables["upgrades"]).toStrictEqual({ mode: "off", nodeImages: false });
+    expect(Object.fromEntries(summary(off, withUpgrades))["Automatic upgrades"]).toBe("Off");
   });
 
   it("starts automatic upgrades with a window in the browser's time zone", () => {
@@ -1650,7 +1669,7 @@ describe("create", () => {
       /^Enter at least 6 addresses/u,
     );
     expect(fieldProblems("Network", { ...form, addresses: "10.0.1.21-10.0.1.29" }, rke2).addresses).toMatch(
-      /on the gateway's network$/u,
+      /is outside the gateway's network$/u,
     );
     expect(fieldProblems("Network", { ...form, addresses: "10.0.0.29-10.0.0.21" }, rke2).addresses).toMatch(
       /is not an address/u,
@@ -1928,6 +1947,47 @@ describe("create", () => {
     expect(name).not.toHaveAttribute("aria-invalid");
   });
 
+  it("refuses a name another cluster has on the first step", async () => {
+    window.history.replaceState(null, "", "/clusters/new");
+    fakeServer({
+      "GET /api/session": () => ({ body: { user: "alice@pve", csrf: "c1" } }),
+      "GET /api/classes": () => ({ body: [rke2] }),
+      "GET /api/clusters": () => ({
+        body: [
+          {
+            namespace: "clusters",
+            name: "web",
+            class: "kubehenge-rke2",
+            distribution: "rke2",
+            version: "v1.36.5+rke2r1",
+            generation: 1,
+            created: "2026-10-01T00:00:00Z",
+            deleting: false,
+            phase: "Provisioned",
+            available: true,
+            conditions: [],
+            controlPlane: { desired: 1, ready: 1, available: 1, upToDate: 1 },
+            workers: { desired: 1, ready: 1, available: 1, upToDate: 1 },
+            workerPools: [{ name: "md-0", class: "worker", replicas: 1 }],
+            variables: {},
+            pool: "/pool/kubehenge/clusters.web",
+            allowed: { change: true, kubeconfig: true },
+          },
+        ],
+      }),
+      "GET /api/proxmox/storages": () => ({ body: [] }),
+      "GET /api/proxmox/nodes": () => ({ body: [] }),
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const name = await screen.findByLabelText("Name");
+    await screen.findByLabelText("Start from");
+    await user.type(name, "web");
+    await waitFor(() => expect(name).toHaveAccessibleDescription("web is in use. Enter another name."));
+    await user.type(name, "2");
+    expect(name).not.toHaveAttribute("aria-invalid");
+  });
+
   describe("search domains from the node", () => {
     it("keeps what the user typed, or cleared, when another bridge's node answers differently", async () => {
       const user = userEvent.setup({ delay: null });
@@ -1966,6 +2026,29 @@ describe("create", () => {
     const calls = fakeServer({
       "GET /api/session": () => ({ body: { user: "alice@pve", csrf: "c1" } }),
       "GET /api/classes": () => ({ body: [rke2OS] }),
+      "GET /api/clusters": () => ({
+        body: [
+          {
+            namespace: "clusters",
+            name: "rancher",
+            class: "kubehenge-rke2",
+            distribution: "rke2",
+            version: "v1.36.5+rke2r1",
+            generation: 1,
+            created: "2026-10-01T00:00:00Z",
+            deleting: false,
+            phase: "Provisioned",
+            available: true,
+            conditions: [],
+            controlPlane: { desired: 1, ready: 1, available: 1, upToDate: 1 },
+            workers: { desired: 1, ready: 1, available: 1, upToDate: 1 },
+            workerPools: [{ name: "md-0", class: "worker", replicas: 1 }],
+            variables: { rancher: { install: true, hostname: "rancher.example.org" } },
+            pool: "/pool/kubehenge/clusters.rancher",
+            allowed: { change: true, kubeconfig: true },
+          },
+        ],
+      }),
       "GET /api/proxmox/storages": () => ({
         body: [
           {
@@ -2022,7 +2105,7 @@ describe("create", () => {
     expect(screen.getByLabelText("Search domains")).toHaveValue("corp.example");
     expect(screen.getByLabelText("Gateway")).toHaveValue("10.0.0.1");
     expect(screen.getByLabelText("Prefix length")).toHaveValue(16);
-    expect(screen.getByLabelText("API address")).toHaveAttribute("placeholder", "10.0.0.20");
+    expect(screen.getByLabelText("API address")).not.toHaveAttribute("placeholder");
     expect(screen.getByLabelText("Node addresses")).toHaveAccessibleDescription(
       "Ranges like 10.0.0.21-10.0.0.29, networks or addresses",
     );
@@ -2041,6 +2124,10 @@ describe("create", () => {
     await user.type(screen.getByLabelText("VLAN tag"), "10");
     expect(screen.getByLabelText("Gateway")).toHaveValue("");
     expect(screen.getByLabelText("API address")).toHaveValue("");
+    // A problem replaces the hint rather than sitting above it.
+    await user.type(screen.getByLabelText("VLAN tag"), "0000");
+    expect(screen.getByLabelText("VLAN tag")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("VLAN tag")).not.toHaveAccessibleDescription(/Optional/u);
     await user.clear(screen.getByLabelText("VLAN tag"));
     expect(screen.getByLabelText("Gateway")).toHaveValue("10.0.0.1");
     await waitFor(() => expect(screen.getByLabelText("API address")).toHaveValue("10.0.0.30"));
@@ -2074,6 +2161,7 @@ describe("create", () => {
     await user.click(screen.getByRole("checkbox", { name: /Install Rancher/u }));
     await user.click(screen.getByRole("button", { name: "Machines" }));
     expect(within(screen.getByRole("group", { name: "Control plane" })).getByLabelText("Cores")).toHaveValue(4);
+    await user.click(screen.getByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
     // The class's default providers come pre-filled. Adding one more is checked before going on.
@@ -2188,6 +2276,7 @@ describe("create", () => {
     expect(screen.getByRole("checkbox", { name: /Install Rancher/u })).toHaveAccessibleDescription(
       "Needs Sys.Modify on the workload pool",
     );
+    await user.click(screen.getByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
     expect(screen.getByRole("button", { name: "Add identity provider" })).toBeDisabled();
     expect(screen.getByLabelText("Issuer URL")).toBeDisabled();

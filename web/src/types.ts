@@ -27,6 +27,8 @@ export interface Session {
   namespace?: string;
   /** Every namespace the interface creates and changes clusters in, namespace first. */
   namespaces?: string[];
+  /** Whether each namespace holds the access key for every cluster. A namespace left out could not be read. */
+  sharedBackupKeys?: Record<string, boolean>;
 }
 
 /** A cluster, by where it lives. */
@@ -706,6 +708,12 @@ export interface Storage {
   usable: boolean;
   /** Whether the user may give a cluster's token Datastore.Allocate there. */
   allocatable: boolean;
+  /** The storage plugin, such as lvm, lvmthin, zfspool, rbd, dir or nfs. Absent where Proxmox VE did not say. */
+  type?: string;
+  /** Whether a ZFS pool allocates a disk's space on write. */
+  sparse?: boolean;
+  /** How a storage that keeps files lays out a new disk: off, metadata, falloc or full. Absent is off. */
+  preallocation?: string;
 }
 
 export interface PveNode {
@@ -854,7 +862,7 @@ export interface ManagementSettings {
   etcdRestore?: boolean;
   /** The weekly build of the node OS VM templates. Absent, it runs with its defaults. */
   templateRefresh?: TemplateRefreshSettings;
-  /** Clusters have the cloud controller manager's HA group labels unless they switch them off, with Sys.Audit on / for their token. Absent, they have them. */
+  /** Clusters have the cloud controller manager's HA rule labels unless they switch them off, with Sys.Audit on / for their token. Absent, they have them. */
   clusterSysAudit?: boolean;
   /** Kubehenge's controller reads nodes' boot logs through their guest agents, with VM.GuestAgent.FileRead. Absent, it does. */
   nodeBootLogs?: boolean;
@@ -1472,6 +1480,8 @@ export interface CreateRequest {
   variables: Record<string, unknown>;
   pods?: string[];
   services?: string[];
+  /** The cluster's own access key for its backup target, stored before the cluster is made. */
+  backupKey?: Record<string, string>;
 }
 
 export interface ChangeRequest {

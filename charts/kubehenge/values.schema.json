@@ -265,7 +265,7 @@
           }
         },
         "sysAuditGroup": {
-          "description": "The group holding Sys.Audit on / that clusters asking for the cloud controller manager's HA group labels join, empty when no cluster may.",
+          "description": "The group holding Sys.Audit on / that clusters asking for the cloud controller manager's HA rule labels join, empty when no cluster may.",
           "type": "string"
         },
         "etcdRestore": { "type": "boolean" },

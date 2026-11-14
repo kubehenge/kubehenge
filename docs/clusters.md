@@ -33,7 +33,7 @@ Once a worker has joined, the control-plane nodes carry `node-role.kubernetes.io
 
 ## Create a cluster in the interface
 
-**Create cluster** on the cluster list opens a wizard of six steps: General, Network, Machines, Add-ons, Identity providers and Confirm.
+**Create cluster** on the cluster list opens a wizard of seven steps: General, Network, Machines, Add-ons, Policies, Identity providers and Confirm. The egress proxy, CIS hardening, Pod security and automatic upgrades below are on Policies.
 
 ![The wizard's General step: distribution, node OS, Kubernetes version, control-plane nodes and workers](images/create-cluster.png)
 
@@ -47,7 +47,7 @@ Without `VM.Allocate` on the workload pool, **Create cluster** is off and says s
 
 | Field | What it is |
 | --- | --- |
-| Start from | Once there is a cluster: the cluster to copy settings from, by default the newest that works, or **Defaults**. It copies the distribution, node OS, node counts and sizes, bridge, VLAN, MTU, queues, prefix length, gateway, DNS servers, load balancer, pod network and storage. It also copies placement, Proxmox VE HA, HA group labels, Headlamp, monitoring, logs, Pod Security, CIS hardening, Istio, Rancher registration and identity providers. Everything else starts at its default. Choosing another cluster keeps the name, the namespace, and the Kubernetes version while the distribution stays. |
+| Start from | Once there is a cluster: the cluster to copy settings from, or **Defaults**, which is chosen until another is. The later steps say **Copied from** that cluster. It copies the distribution, node OS, node counts and sizes, bridge, VLAN, MTU, queues, prefix length, gateway, DNS servers, load balancer, pod network and storage. It also copies placement, Proxmox VE HA, HA rule labels, Headlamp, monitoring, logs, Pod Security, CIS hardening, Istio, Rancher registration and identity providers. Everything else starts at its default. Choosing another cluster keeps the name, the namespace, and the Kubernetes version while the distribution stays. |
 | Namespace | Only where an administrator has named [more namespaces for clusters](#more-namespaces-for-clusters): the namespace in the management cluster the cluster goes to, `clusters` unless another is chosen. |
 | Name | Lowercase letters, digits and dashes, starting with a letter and ending with a letter or digit, at most 40 characters. It also names the cluster's Proxmox VE pool and VMs. |
 | Distribution | kubeadm, RKE2, k3s or Talos: one per ClusterClass in the management cluster. A distribution without a VM template in the template pool says so. Its clusters cannot be created until an administrator builds one ([templates.md](templates.md)). Where cluster creators may have missing templates built, **Build template** does it from the wizard. |
@@ -218,7 +218,7 @@ RKE2 installs its choice itself. For kubeadm, and for k3s and Talos given Cilium
 | Placement | The Proxmox VE nodes the cluster's VMs may run on: **Any node**, **HA rule nodes**, or **Chosen nodes**. |
 | Proxmox VE HA | Shown when the management cluster has Proxmox VE HA and the storage is shared. On by default. |
 | Newest CSI plugin release | Shown when the management cluster lets clusters choose it. Off by default. See [Persistent volumes](#persistent-volumes). |
-| HA group labels | Shown unless the management cluster switched them off for every cluster ([install-settings.md](install-settings.md#ha-group-labels)). On by default. See below. |
+| HA rule labels | Shown unless the management cluster switched them off for every cluster ([install-settings.md](install-settings.md#ha-rule-labels)). On by default. See below. |
 | Volume snapshots | Shown when the storage is local to each node. Off by default. See [Volume snapshots](#volume-snapshots). |
 
 Placement and the four options below it change later under **Options**.
@@ -246,6 +246,7 @@ A node is left out while it lacks the cluster's storage, template, bridge or VNe
 - **A node back online** counts with the memory it reports itself, not the figures from before it went down.
 - **New clusters:** the create wizard warns, without blocking, when no node it may use has the free memory.
 - **No room anywhere:** the placement stays as it was. The cluster's `NodesLackMemory` condition names the memory needed and the best node's free memory.
+- **Thick storage full:** the interface refuses a new cluster whose disks do not fit a storage that reserves each disk's whole size. A cluster made with kubectl gets the `StorageLacksSpace` condition instead, naming the storage, its nodes, the space needed and the space free. An autoscaled pool counts at its fewest workers. Where only its most workers do not fit, the wizard warns on **Most workers** and on Confirm, and the cluster's events show `AutoscalerNoRoom`.
 - **Bridge or VNet:** a bridge on none of the nodes the cluster may use is refused on creation or change. A VNet counts as present where its zone is applied.
 
 #### Proxmox VE HA
@@ -260,9 +261,9 @@ Proxmox VE's HA manager migrates VMs that share a node apart. It restarts the VM
 
 Workers are not HA resources. The health check replaces a worker lost with its node.
 
-#### HA group labels
+#### HA rule labels
 
-**Add HA group labels** has the cloud controller manager label each node with its Proxmox VE node's HA groups (or HA node-affinity rules). The label is `group.topology.proxmox.sinextra.dev/<group or rule>`, with an empty value. Reading the groups takes `Sys.Audit` on `/`. While the option is on, Kubehenge's controller adds the cluster's user to a group holding it there, unpropagated.
+**Add HA rule labels** has the cloud controller manager label each node with its Proxmox VE node's HA groups (or HA node-affinity rules). The label is `group.topology.proxmox.sinextra.dev/<group or rule>`, with an empty value. Reading the groups takes `Sys.Audit` on `/`. While the option is on, Kubehenge's controller adds the cluster's user to a group holding it there, unpropagated.
 
 The token can then read the Proxmox VE cluster's own configuration (firewall rules, backup jobs, HA, corosync) but change nothing. It reads no more of the guests, storages or nodes than before. Switching the option takes no privilege beyond changing the cluster.
 
@@ -424,7 +425,7 @@ Kubehenge copies the credential into the Secret `kubehenge-log-outputs` in the n
 
 Velero backs up every namespace but Kubernetes' own and the add-ons', with the data in its pods' volumes. It writes to one of the S3 stores an administrator set ([install-settings.md](install-settings.md#backup-targets)). The cluster writes under a folder of its own, encrypted with keys of its own ([Back up and restore](#back-up-and-restore)). Backups run daily at 02:00 by default, each kept for 7 days.
 
-Choose the target, the schedule, its time zone, how long each backup is kept and the access key Velero signs in with. Storing that key needs `Sys.Modify` on the workload pool. Without it, backups wait until someone holding that stores one. The key an administrator stored for every cluster never goes into a cluster. Without any target, the choice is off and says so.
+Choose the target, the schedule, its time zone, how long each backup is kept and the access key Velero signs in with. Storing that key needs `Sys.Modify` on the workload pool. Without it, backups wait until someone holding that stores one. The key an administrator stored for every cluster never goes into a cluster. Without any target, the choice is off and says so. After a create that was cut short, a new create of that name with a key works once 30 seconds have passed.
 
 #### etcd snapshot settings
 
@@ -528,7 +529,7 @@ Kubehenge keeps Rancher's cluster within the Kubernetes versions Rancher's relea
 
 **Upgrade automatically** is off, patch releases, or patch and minor releases, inside a window. The window is every day from 02:00 for four hours in your browser's time zone. The cluster's **Options** change it later ([upgrading.md](upgrading.md#automatically-inside-a-window)).
 
-The nodes of a kubeadm, RKE2 or k3s cluster move to new builds of their VM template in the same window whatever this says ([below](#node-image-refresh)).
+The nodes of a kubeadm, RKE2 or k3s cluster move to new builds of their VM template in the same window whatever this says, unless **Update node images** is unticked ([below](#node-image-refresh)).
 
 ### Identity providers
 
@@ -780,6 +781,7 @@ A pool with 0 as its fewest empties while nothing waits.
 The Scale dialog warns when a pool's remaining workers need more memory than the allowed Proxmox VE nodes have free. It is only advice, since memory frees and fills as other VMs come and go.
 
 - A worker that finds no room waits. The cluster's events show `AutoscalerNoRoom` with the Proxmox VE provider's reason.
+- Thick storage too small for the pools at their maximum also shows `AutoscalerNoRoom`, before any worker waits.
 - After 30 minutes the autoscaler gives the machine up and tries again.
 - Shared storage suits autoscaled pools best, as it lets a new worker start on whichever allowed node has the room.
 
@@ -1020,7 +1022,7 @@ New machines, from scaling up or a repair, clone the template of the release the
 
 ![The Options view: node, network, storage and add-on settings, each with its value and Edit](images/options.png)
 
-A setting that is only on or off has a switch in its row. These are Proxmox VE HA, HA group labels, the CSI plugin's newest release, volume snapshots and Istio. The switch says what switching it on brings, or why it cannot be. The rest have **Edit**.
+A setting that is only on or off has a switch in its row. These are Proxmox VE HA, HA rule labels, the CSI plugin's newest release, volume snapshots and Istio. The switch says what switching it on brings, or why it cannot be. The rest have **Edit**.
 
 | Group | Setting | Shown | Changing it |
 | --- | --- | --- | --- |
@@ -1028,7 +1030,7 @@ A setting that is only on or off has a switch in its row. These are Proxmox VE H
 | Nodes | Talos release | Talos | **Upgrade** upgrades the nodes in place ([Talos upgrades](#talos-upgrades)). |
 | Nodes | Placement | always | Applies to the VMs created after it, by scaling up, an upgrade or a replacement. Those running stay where they are. Nodes the cluster has that you cannot see are listed too, and may be kept ([Machines](#machines)). |
 | Nodes | Proxmox VE HA | where the management cluster has Proxmox VE HA and the storage is shared | Takes the control-plane VMs into HA or out of it ([Machines](#machines)). |
-| Nodes | HA group labels | unless the management cluster switched them off for every cluster, or while they are on | [Machines](#machines). |
+| Nodes | HA rule labels | unless the management cluster switched them off for every cluster, or while they are on | [Machines](#machines). |
 | Nodes | Autoscaler | always | Its expander, its timing and where it runs ([Autoscaling](#autoscaling)). |
 | Network | Pod network | always | Fixed for the cluster's life ([Pod network](#pod-network)). |
 | Network | Load balancer | always | See the list below. |
@@ -1328,7 +1330,7 @@ The monitoring add-on's Alertmanager routes every alert but the always-firing Wa
 An address holds no user name or password. The variable is plain text, so every secret is a stored credential, like the [DNS-01 one](#dns-providers):
 
 - Type it under the cluster's **Options**, **Monitoring**, or when creating the cluster. The interface keeps it in the Secret `<cluster>.<purpose>` beside the Cluster and never shows it again.
-- With kubectl, create that Secret yourself ([With kubectl](#with-kubectl)) with the type `kubehenge.dev/user-credential` and the labels `kubehenge.dev/user-credential=<purpose>` and `kubehenge.dev/credential-cluster=<cluster>`.
+- With kubectl, create that Secret yourself ([With kubectl](#with-kubectl)) with the type `kubehenge.dev/user-credential` and the labels `kubehenge.dev/user-credential=<purpose>` and `kubehenge.dev/credential-cluster=<cluster>`. Kubehenge never deletes such a Secret or makes the Cluster its owner, so it stays when you delete or re-create the Cluster. Storing it again in the interface makes the Cluster its owner.
 - Kubehenge's controller copies the values into the Secrets `kubehenge-alertmanager` and `kubehenge-prometheus` of the `monitoring` namespace.
 - Storing, replacing or removing a credential needs `Sys.Modify` on the cluster's pool ([Who may do what](#who-may-do-what)).
 

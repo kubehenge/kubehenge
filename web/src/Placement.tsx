@@ -352,11 +352,11 @@ export function PlacementDialog({ cluster: c, onClose }: { cluster: Cluster; onC
   );
 }
 
-/** sysAuditAnnotation marks the classes whose clusters may choose the HA group labels. */
+/** sysAuditAnnotation marks the classes whose clusters may choose the HA rule labels. */
 export const sysAuditAnnotation = "kubehenge.dev/sys-audit";
 
 /**
- * offersHAGroups tells whether the class's clusters may have the HA group labels. They take no right
+ * offersHAGroups tells whether the class's clusters may have the HA rule labels. They take no right
  * of the user's own: Sys.Audit on / reads the Proxmox VE cluster's configuration alone, and
  * Kubehenge's administrator decides whether clusters may hold it.
  */
@@ -366,7 +366,7 @@ export const offersHAGroups = (cls: ClusterClass | undefined): boolean =>
 /** haGroupsOn reads whether the cluster's nodes are labelled with their Proxmox VE HA groups. */
 export const haGroupsOn = (c: Cluster): boolean => flag(record(c.variables["ccm"])["haGroups"]) === true;
 
-/** HAGroupsField chooses the HA group labels. */
+/** HAGroupsField chooses the HA rule labels. */
 export function HAGroupsField({
   checked,
   onChange,
@@ -382,8 +382,8 @@ export function HAGroupsField({
         Add HA rule labels
       </label>
       <Info about="HA rule labels">
-        Labels nodes group.topology.proxmox.sinextra.dev/&lt;group&gt; by their Proxmox VE HA rule. Sys.Audit cannot
-        read guests or storages.
+        Labels nodes group.topology.proxmox.sinextra.dev/&lt;group&gt; by HA group and node-affinity rule. Sys.Audit
+        cannot read guests or storages.
       </Info>
       <p className="hint" id={hint}>
         The token gets Sys.Audit on /: reads the cluster configuration
@@ -392,7 +392,7 @@ export function HAGroupsField({
   );
 }
 
-/** useHAGroupsOffered reads whether an existing cluster may have the HA group labels. */
+/** useHAGroupsOffered reads whether an existing cluster may have the HA rule labels. */
 export function useHAGroupsOffered(c: Cluster): boolean {
   const [offered, setOffered] = useState(false);
   const className = c.class;

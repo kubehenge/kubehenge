@@ -52,9 +52,9 @@ export function egressVariable(e: EgressChoice): Record<string, unknown> | undef
 }
 
 /** egressText says in a line where the add-ons' traffic goes. */
-export function egressText(e: EgressChoice): string {
+export function egressText(e: EgressChoice, managementProxy = true): string {
   if (e.mode === "management") {
-    return "Management proxy";
+    return managementProxy ? "Management proxy" : "No proxy";
   }
   if (e.mode === "none") {
     return "No proxy";
@@ -108,26 +108,30 @@ export function EgressFields({
   value: e,
   onChange,
   problems = noProblems,
+  managementProxy = true,
 }: {
   value: EgressChoice;
   onChange: (e: EgressChoice) => void;
   problems?: Partial<Record<EgressField, string | undefined>>;
+  /** Whether the management side has a proxy to offer. Without one, leaving the choice unset means no proxy. */
+  managementProxy?: boolean;
 }): JSX.Element {
   const name = useId();
+  const offered = managementProxy ? modes : modes.filter((m) => m.value !== "management");
   return (
     <>
       <fieldset className="choices">
         <legend>
           Egress proxy <Info about="the egress proxy">{egressInfo}</Info>
         </legend>
-        {modes.map((m) => (
+        {offered.map((m) => (
           <label key={m.value} className="check">
             <input
               type="radio"
               name={name}
               value={m.value}
-              checked={e.mode === m.value}
-              onChange={() => onChange({ ...e, mode: m.value })}
+              checked={e.mode === m.value || (!managementProxy && m.value === "none" && e.mode === "management")}
+              onChange={() => onChange({ ...e, mode: !managementProxy && m.value === "none" ? "management" : m.value })}
             />{" "}
             {m.label}
           </label>

@@ -34,7 +34,6 @@ import {
   pollRunning,
   Said,
   sentence,
-  sole,
   stageLabel,
   useChange,
   usePoll,
@@ -189,8 +188,7 @@ export function withEtcdTarget(
   if (filled(f.target)) {
     return f;
   }
-  const chosen =
-    backups !== undefined && targets.some((t) => t.name === backups) ? backups : sole(targets.map((t) => t.name));
+  const chosen = backups !== undefined && targets.some((t) => t.name === backups) ? backups : targets[0]?.name;
   return { ...f, target: chosen ?? "" };
 }
 
@@ -318,7 +316,11 @@ export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster;
             purpose="backup"
             cluster={c}
             keys={backupKeys}
-            hint={backupCredentialHint}
+            hint={backupCredentialHint(
+              c.namespace,
+              c.name,
+              targets.find((t) => t.name === fields.target),
+            )}
           />
         </>
       )}

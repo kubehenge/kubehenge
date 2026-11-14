@@ -66,8 +66,8 @@ describe("a new cluster's firewall security groups", () => {
     const form = { ...filled, securityGroups: " k8s, corp-base " };
     expect(request(form, withGroups).variables["securityGroups"]).toStrictEqual(["k8s", "corp-base"]);
     expect(request(form, withoutGroups).variables).not.toHaveProperty("securityGroups");
-    expect(Object.fromEntries(summary(form, withGroups))).toMatchObject({ "Security groups": "k8s, corp-base" });
-    expect(summary(filled, withGroups).map(([label]) => label)).not.toContain("Security groups");
+    expect(Object.fromEntries(summary(form, withGroups))).toMatchObject({ Firewall: "Security groups k8s, corp-base" });
+    expect(Object.fromEntries(summary(filled, withGroups))["Firewall"]).toBe("Off, no security groups");
   });
 
   it("follow Proxmox VE's names", () => {

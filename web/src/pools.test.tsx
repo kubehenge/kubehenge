@@ -107,9 +107,8 @@ describe("the pools", () => {
     const { calls, user } = await machinesView();
     await user.click(screen.getByRole("button", { name: "Control plane timeouts" }));
     const dialog = screen.getByRole("dialog", { name: "Control plane timeouts" });
-    expect(within(dialog).getByLabelText("Drain, minutes")).toHaveAccessibleDescription(
-      "Empty takes 60, and 0 sets no limit",
-    );
+    expect(within(dialog).getByLabelText("Drain, minutes")).toHaveAccessibleDescription("0 for no limit");
+    expect(within(dialog).getByLabelText("Drain, minutes")).toHaveAttribute("placeholder", "60");
     expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.type(within(dialog).getByLabelText("Drain, minutes"), "30");
     await user.type(within(dialog).getByLabelText("Node removal, seconds"), "0");
