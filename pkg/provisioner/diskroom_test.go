@@ -7,9 +7,12 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
@@ -59,14 +62,34 @@ func webMachine(name, pool string, made bool) *clusterv1.Machine {
 	}
 	m := &clusterv1.Machine{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: name, Labels: labels}}
 	m.Spec.ClusterName = "web"
+	m.Spec.InfrastructureRef.Name = name
 	m.Status.Initialization.InfrastructureProvisioned = ptr.To(made)
 	return m
+}
+
+// clonedVM is the ProxmoxMachine of web's machine name once capmox has cloned its VM.
+func clonedVM(name string, vmid int64) *unstructured.Unstructured {
+	pm := &unstructured.Unstructured{}
+	pm.SetGroupVersionKind(proxmoxMachineGVK)
+	pm.SetNamespace("team-a")
+	pm.SetName(name)
+	pm.SetLabels(map[string]string{clusterv1.ClusterNameLabel: "web"})
+	_ = unstructured.SetNestedField(pm.Object, vmid, "spec", "virtualMachineID")
+	return pm
 }
 
 func placedOnSpace(t *testing.T, sites *spaceSites, objs ...client.Object) (*Placer, client.Client, *clusterv1.Cluster) {
 	t.Helper()
 	web := diskCluster(t)
-	_, c := newReconciler(t, nil, append([]client.Object{web}, objs...)...)
+	scheme := runtime.NewScheme()
+	if err := clusterv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	scheme.AddKnownTypeWithName(proxmoxMachineGVK, &unstructured.Unstructured{})
+	scheme.AddKnownTypeWithName(proxmoxMachineGVK.GroupVersion().WithKind("ProxmoxMachineList"), &unstructured.UnstructuredList{})
+	class := &clusterv1.ClusterClass{ObjectMeta: metav1.ObjectMeta{Name: "kubehenge-rke2", Namespace: "kubehenge-system"}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(append([]client.Object{class, web}, objs...)...).
+		WithStatusSubresource(&clusterv1.Cluster{}).Build()
 	nodes := &memNodes{free: map[string]int64{"pve1": 64_000}}
 	return &Placer{Client: c, ClassNamespace: "kubehenge-system", Nodes: nodes, Sites: sites}, c, web
 }
@@ -128,6 +151,21 @@ func TestPlacerCountsOnlyTheDisksStillToBeMade(t *testing.T) {
 	want := "Storage local-lvm (on pve1) reserves each disk's whole size and has 10 GiB free. The machines still to be made need 30 GiB"
 	if cond := spaceCondition(t, c, web); cond == nil || cond.Message != want {
 		t.Errorf("%s = %+v, want %q", StorageLacksSpaceCondition, cond, want)
+	}
+}
+
+// Mid-create, every VM is cloned and none provisioned yet: their disks hold their space already, so
+// a thick storage left nearly full by them is not short.
+func TestPlacerCountsClonedVMsAsMade(t *testing.T) {
+	t.Parallel()
+	sites := &spaceSites{}
+	sites.set("lvm", 10)
+	p, c, web := placedOnSpace(t, sites,
+		webMachine("web-cp-a", "", false), webMachine("web-md-a", "md-0", false), webMachine("web-md-b", "md-0", false),
+		clonedVM("web-cp-a", 101), clonedVM("web-md-a", 102), clonedVM("web-md-b", 103))
+	p.placeAll(t.Context())
+	if cond := spaceCondition(t, c, web); cond != nil {
+		t.Errorf("%s = %+v while every VM is cloned", StorageLacksSpaceCondition, cond)
 	}
 }
 

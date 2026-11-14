@@ -22,9 +22,10 @@ import (
 const StorageLacksSpaceCondition = "StorageLacksSpace"
 
 // disksToMake is the disk, in GiB, of the machines a cluster has still to make: in each pool those
-// beyond the machines that exist, and those whose VM is not provisioned yet. A provisioned VM's
-// disk holds its space already, so the storage's free space leaves it out.
-func disksToMake(fit Fit, machines []clusterv1.Machine) int64 {
+// beyond the machines that exist, and those whose VM is not cloned yet. A cloned VM's disk holds
+// its space already, so the storage's free space leaves it out. vmids are the VM IDs capmox
+// recorded on the cluster's ProxmoxMachines, by name.
+func disksToMake(fit Fit, machines []clusterv1.Machine, vmids map[string]int) int64 {
 	var need int64
 	for _, pool := range fit.Pools {
 		var exist, unmade int64
@@ -34,13 +35,19 @@ func disksToMake(fit Fit, machines []clusterv1.Machine) int64 {
 				continue
 			}
 			exist++
-			if p := m.Status.Initialization.InfrastructureProvisioned; p == nil || !*p {
+			if !provisioned(m) && vmids[m.Spec.InfrastructureRef.Name] == 0 {
 				unmade++
 			}
 		}
 		need += (max(pool.Machines-exist, 0) + unmade) * pool.DiskGiB
 	}
 	return need
+}
+
+// provisioned tells whether Cluster API records a machine's infrastructure as made.
+func provisioned(m *clusterv1.Machine) bool {
+	p := m.Status.Initialization.InfrastructureProvisioned
+	return p != nil && *p
 }
 
 // inPool tells whether a machine is one of the control planes (pool "") or of the worker pool named.
@@ -53,8 +60,8 @@ func inPool(m *clusterv1.Machine, pool string) bool {
 
 // diskRoom says why the storage has no room for the disks still to be made, or "" when it has, or
 // when a figure is not known.
-func diskRoom(fit Fit, machines []clusterv1.Machine, storages []pve.Storage, nodes []string) string {
-	need := disksToMake(fit, machines)
+func diskRoom(fit Fit, machines []clusterv1.Machine, vmids map[string]int, storages []pve.Storage, nodes []string) string {
+	need := disksToMake(fit, machines, vmids)
 	if fit.Storage == "" || need == 0 {
 		return ""
 	}
@@ -95,9 +102,17 @@ func (p *Placer) markDisks(ctx context.Context, c *clusterv1.Cluster, storages [
 		log.Error(err, "listing the cluster's machines", "cluster", client.ObjectKeyFromObject(c))
 		return
 	}
+	// Only a machine Cluster API does not record as provisioned may lack its VM.
+	var vmids map[string]int
+	if slices.ContainsFunc(machines.Items, func(m clusterv1.Machine) bool { return !provisioned(&m) }) {
+		if vmids, err = ProxmoxMachineVMIDs(ctx, p.Client, c.Namespace, c.Name); err != nil {
+			log.Error(err, "reading which of the cluster's VMs are cloned", "cluster", client.ObjectKeyFromObject(c))
+			return
+		}
+	}
 	var cond *metav1.Condition
 	have := meta.FindStatusCondition(c.Status.Conditions, StorageLacksSpaceCondition)
-	if msg := diskRoom(fit, machines.Items, storages, nodes); msg != "" {
+	if msg := diskRoom(fit, machines.Items, vmids, storages, nodes); msg != "" {
 		cond = &metav1.Condition{Status: metav1.ConditionTrue, Reason: "NoSpace", Message: msg}
 		if have != nil && have.Message == msg {
 			return
