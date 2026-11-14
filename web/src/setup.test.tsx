@@ -1065,7 +1065,9 @@ describe("setup", () => {
 
   it("takes 1, 3 or 5 node addresses and refuses other counts", () => {
     for (const n of [1, 3, 5]) {
-      expect(setupFieldProblems({ ...form, nodeAddresses: addressesOf(n, "192.0.2.") }, true).nodeAddresses).toBeUndefined();
+      expect(
+        setupFieldProblems({ ...form, nodeAddresses: addressesOf(n, "192.0.2.") }, true).nodeAddresses,
+      ).toBeUndefined();
     }
     for (const n of [0, 2, 4, 6]) {
       expect(setupFieldProblems({ ...form, nodeAddresses: addressesOf(n, "192.0.2.") }, true).nodeAddresses).toBe(
@@ -1075,8 +1077,7 @@ describe("setup", () => {
   });
 
   it("takes 5 IPv6 node addresses and holds them to IPv4's count", () => {
-    const six = (n: number): string =>
-      Array.from({ length: n }, (_, i) => `2001:db8::${11 + i}/64`).join(" ");
+    const six = (n: number): string => Array.from({ length: n }, (_, i) => `2001:db8::${11 + i}/64`).join(" ");
     const five = {
       ...form,
       ...dualStack,
