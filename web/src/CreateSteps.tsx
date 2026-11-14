@@ -542,6 +542,7 @@ export function GeneralStep({
   onChooseNamespace,
   starts,
   onChooseFrom,
+  growthWarning,
 }: StepProps & {
   classes: ClusterClass[];
   cls: ClusterClass | undefined;
@@ -554,6 +555,8 @@ export function GeneralStep({
   /** The clusters a new one may start from, the newest first. */
   starts: Cluster[];
   onChooseFrom: (key: string) => void;
+  /** Thick storage too small for the autoscaled pool at its most, said on the most workers. */
+  growthWarning?: string | undefined;
 }): JSX.Element {
   const runs = forRelease(offered, talos, form.talosVersion);
   const typed = typedVersion(cls, runs);
@@ -639,7 +642,7 @@ export function GeneralStep({
           </select>
         )}
       </Field>
-      <WorkerFields form={form} set={set} shown={shown} cls={cls} />
+      <WorkerFields form={form} set={set} shown={shown} cls={cls} growthWarning={growthWarning} />
       <details className="advanced" open={shown("timeouts") === undefined ? undefined : true}>
         <summary>Node timeouts</summary>
         <h4 className="subsection">Control planes</h4>

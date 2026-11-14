@@ -522,6 +522,7 @@ export function CreateCluster({
                 onChooseNamespace={chooseNamespace}
                 starts={startable(clusters)}
                 onChooseFrom={chooseFrom}
+                growthWarning={room.growthWarning}
               />
             )}
             {step === "Network" && (

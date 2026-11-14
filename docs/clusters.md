@@ -246,7 +246,7 @@ A node is left out while it lacks the cluster's storage, template, bridge or VNe
 - **A node back online** counts with the memory it reports itself, not the figures from before it went down.
 - **New clusters:** the create wizard warns, without blocking, when no node it may use has the free memory.
 - **No room anywhere:** the placement stays as it was. The cluster's `NodesLackMemory` condition names the memory needed and the best node's free memory.
-- **Thick storage full:** the interface refuses a new cluster whose disks do not fit a storage that reserves each disk's whole size. A cluster made with kubectl gets the `StorageLacksSpace` condition instead, naming the storage, its nodes, the space needed and the space free.
+- **Thick storage full:** the interface refuses a new cluster whose disks do not fit a storage that reserves each disk's whole size. A cluster made with kubectl gets the `StorageLacksSpace` condition instead, naming the storage, its nodes, the space needed and the space free. An autoscaled pool counts at its fewest workers. Where only its most workers do not fit, the wizard warns on **Most workers** and on Confirm, and the cluster's events show `AutoscalerNoRoom`.
 - **Bridge or VNet:** a bridge on none of the nodes the cluster may use is refused on creation or change. A VNet counts as present where its zone is applied.
 
 #### Proxmox VE HA

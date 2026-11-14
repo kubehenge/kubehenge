@@ -1137,20 +1137,7 @@ func TestCreateRaceLeavesTheWinnersKey(t *testing.T) {
 func TestCreateRefusesMachinesThatNeverFit(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	class := &clusterv1.ClusterClass{}
-	if err := h.kube.Get(t.Context(), client.ObjectKey{Namespace: "kubehenge-system", Name: "kubehenge-rke2"}, class); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"controlPlaneMachine", "workerMachine"} {
-		class.Spec.Variables = append(class.Spec.Variables, clusterv1.ClusterClassVariable{
-			Name: name, Schema: clusterv1.VariableSchema{OpenAPIV3Schema: clusterv1.JSONSchemaProps{
-				Type: "object", Default: &apiextensionsv1.JSON{Raw: []byte(`{"cores":2,"memoryMiB":4096,"diskGiB":40}`)},
-			}},
-		})
-	}
-	if err := h.kube.Update(t.Context(), class); err != nil {
-		t.Fatal(err)
-	}
+	sizeMachines(t, h)
 	b := h.browser()
 	b.signIn("dev@pve")
 	huge := strings.Replace(createBody, `"variables":{`, `"variables":{"workerMachine":{"cores":4,"memoryMiB":131072,"diskGiB":40},`, 1)
@@ -1179,6 +1166,55 @@ func TestCreateRefusesMachinesThatNeverFit(t *testing.T) {
 		if refused := rec.Code == http.StatusUnprocessableEntity && strings.Contains(rec.Body.String(), "disks need"); refused != tc.refused {
 			t.Errorf("%s: %d %s", tc.name, rec.Code, rec.Body)
 		}
+	}
+}
+
+// The interface refuses what a cluster starts with when thick storage cannot hold it, as the
+// controller's StorageLacksSpace says of it. An autoscaled maximum it cannot hold is accepted: the
+// autoscaler may never grow that far.
+func TestCreateWeighsAnAutoscaledPoolAtItsMinimum(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	sizeMachines(t, h)
+	b := h.browser()
+	b.signIn("dev@pve")
+	h.accounts.mu.Lock()
+	h.accounts.storages = []pve.Storage{{
+		Storage: "local-lvm", Node: "pve1", Type: "lvm", Content: []string{"images"}, Active: true, Avail: 60 << 30, Total: 200 << 30,
+	}}
+	h.accounts.mu.Unlock()
+	// Three control planes of 10 GiB and workers of 10 GiB, on 60 GiB free.
+	sized := strings.Replace(createBody, `"variables":{`,
+		`"variables":{"controlPlaneMachine":{"cores":2,"memoryMiB":4096,"diskGiB":10},"workerMachine":{"cores":2,"memoryMiB":4096,"diskGiB":10},`, 1)
+	scaled := func(name string, least int) string {
+		return strings.Replace(strings.Replace(sized, `"workerReplicas":2,`,
+			fmt.Sprintf(`"workerReplicas":%d,"workerAutoscaling":{"min":%d,"max":5},`, least, least), 1), `"web"`, `"`+name+`"`, 1)
+	}
+	if rec := b.do("POST", "/api/clusters", scaled("grows", 2)); rec.Code != http.StatusCreated {
+		t.Errorf("50 GiB to start, 80 GiB at the maximum: %d %s", rec.Code, rec.Body)
+	}
+	rec := b.do("POST", "/api/clusters", scaled("starts", 4))
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "the disks need 70 GiB and storage local-lvm has 60 GiB free") {
+		t.Errorf("70 GiB to start: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// sizeMachines gives the harness's class machine sizes of 40 GiB disks and 4 GiB memory.
+func sizeMachines(t *testing.T, h *harness) {
+	t.Helper()
+	class := &clusterv1.ClusterClass{}
+	if err := h.kube.Get(t.Context(), client.ObjectKey{Namespace: "kubehenge-system", Name: "kubehenge-rke2"}, class); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"controlPlaneMachine", "workerMachine"} {
+		class.Spec.Variables = append(class.Spec.Variables, clusterv1.ClusterClassVariable{
+			Name: name, Schema: clusterv1.VariableSchema{OpenAPIV3Schema: clusterv1.JSONSchemaProps{
+				Type: "object", Default: &apiextensionsv1.JSON{Raw: []byte(`{"cores":2,"memoryMiB":4096,"diskGiB":40}`)},
+			}},
+		})
+	}
+	if err := h.kube.Update(t.Context(), class); err != nil {
+		t.Fatal(err)
 	}
 }
 

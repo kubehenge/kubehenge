@@ -26,7 +26,13 @@ const fixedOrAutoscaled = (
 );
 
 /** WorkerFields are the create wizard's workers: a fixed number, or the fewest and the most the cluster autoscaler keeps. */
-export function WorkerFields({ form, set, shown, cls }: StepProps & { cls: ClusterClass | undefined }): JSX.Element {
+export function WorkerFields({
+  form,
+  set,
+  shown,
+  cls,
+  growthWarning,
+}: StepProps & { cls: ClusterClass | undefined; growthWarning?: string | undefined }): JSX.Element {
   const offered = variable(cls, "autoscaler") !== undefined;
   const auto = autoscales(form, cls);
   let leastHint: string | undefined;
@@ -63,7 +69,11 @@ export function WorkerFields({ form, set, shown, cls }: StepProps & { cls: Clust
         )}
       </Field>
       {auto && (
-        <Field label="Most workers" error={shown("workerMax")} hint="Each needs its own node address">
+        <Field
+          label="Most workers"
+          error={shown("workerMax")}
+          hint={growthWarning ?? "Each needs its own node address"}
+        >
           {(id) => (
             <input
               id={id}

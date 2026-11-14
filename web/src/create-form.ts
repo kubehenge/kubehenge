@@ -476,9 +476,16 @@ export interface Room {
   /** Set where no node the cluster may use has room for its largest machine. */
   nodeWarning?: string | undefined;
   disk: number;
+  /** The disks of the machines the cluster starts with, each autoscaled pool at its fewest. */
+  startDisk: number;
   freeDisk?: number | undefined;
   /** Set where the disks exceed the free space of a storage that can overcommit, so the cluster may still be made. */
   diskWarning?: string | undefined;
+  /**
+   * Set where thick storage holds what the cluster starts with but not its autoscaled pool at the
+   * most, in the words of the controller's AutoscalerNoRoom event.
+   */
+  growthWarning?: string | undefined;
 }
 
 /** spreadOver counts the online nodes a form's cluster may use, which its control planes spread over. */
@@ -500,8 +507,15 @@ export function createRoom(form: Form, nodes: PveNode[], storages: Storage[]): R
     ? chosen.slice(0, 1)
     : chosen.filter((s) => usable.some((n) => n.node === s.node));
   const disk = (cp * form.controlPlaneMachine.diskGiB + workers * form.workerMachine.diskGiB) * bytesPerGiB;
+  const startDisk =
+    (cp * form.controlPlaneMachine.diskGiB + form.workerReplicas * form.workerMachine.diskGiB) * bytesPerGiB;
   const freeDisk = disks.length > 0 ? disks.reduce((sum, s) => sum + s.avail, 0) : undefined;
   return {
+    growthWarning:
+      freeDisk !== undefined && startDisk <= freeDisk && disk > freeDisk && thick(chosen[0])
+        ? growthWarning(form.storage, disks, { free: freeDisk, need: disk })
+        : undefined,
+    startDisk,
     diskWarning:
       freeDisk !== undefined && disk > freeDisk && !thick(chosen[0])
         ? `The disks need ${bytes(disk)}, ${bytes(freeDisk)} free. Thin storage may take them, until it runs out.`
@@ -514,6 +528,17 @@ export function createRoom(form: Form, nodes: PveNode[], storages: Storage[]): R
     disk,
     freeDisk,
   };
+}
+
+// growthWarning words thick storage too small for the autoscaled pool at its most, as the
+// controller's AutoscalerNoRoom event does.
+function growthWarning(storage: string, disks: Storage[], { free, need }: { free: number; need: number }): string {
+  const where = disks.some((s) => s.shared) ? "shared" : `on ${disks.map((s) => s.node).join(", ")}`;
+  return (
+    `Storage ${storage} (${where}) reserves each disk's whole size and has ${Math.floor(free / bytesPerGiB)} GiB free. ` +
+    `At the autoscaler's maximum, the machines still to be made need ${need / bytesPerGiB} GiB. ` +
+    "A worker past that room waits, and the autoscaler gives it up after 30 minutes"
+  );
 }
 
 /** AddonKey names an add-on in a class's figures. */
@@ -2607,8 +2632,9 @@ function thick(s: Storage | undefined): boolean {
 
 /**
  * capacityProblems holds the machines step to what the cluster could never fit, with the figures
- * Confirm shows: a machine larger than the memory of every node it may use, and disks beyond the
- * storage's free space. Memory that is merely in use now only warns, since the cluster waits for it.
+ * Confirm shows: a machine larger than the memory of every node it may use, and the disks the
+ * cluster starts with beyond the storage's free space. Memory merely in use now, and an autoscaled
+ * pool's most, only warn. The cluster waits for the one and may never reach the other.
  */
 export function capacityProblems(
   step: Step,
@@ -2636,11 +2662,11 @@ export function capacityProblems(
   const room = createRoom(form, nodes, storages);
   if (
     room.freeDisk !== undefined &&
-    room.disk > room.freeDisk &&
+    room.startDisk > room.freeDisk &&
     thick(storages.find((s) => s.storage === form.storage))
   ) {
     p[workers ? "workerMachine" : "controlPlaneMachine"] ??=
-      `The disks need ${bytes(room.disk)}, ${bytes(room.freeDisk)} free. Lower a disk size or the node count.`;
+      `The disks need ${bytes(room.startDisk)}, ${bytes(room.freeDisk)} free. Lower a disk size or the node count.`;
   }
   return p;
 }

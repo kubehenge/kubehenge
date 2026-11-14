@@ -17,9 +17,10 @@ const (
 )
 
 // machinesFit refuses a cluster that could never run on the nodes and storage the user sees: a
-// machine larger than the memory of every online node it may use, or disks beyond the free space
-// of a storage that reserves their whole size. Memory merely in use now is left to the controller,
-// whose NodesLackMemory condition has the cluster wait for room. Where a figure is not known,
+// machine larger than the memory of every online node it may use, or the disks it starts with
+// beyond the free space of a storage that reserves their whole size. Memory merely in use now is
+// left to the controller, whose NodesLackMemory condition has the cluster wait for room. So is an
+// autoscaled pool's maximum, which the autoscaler may never reach. Where a figure is not known,
 // nothing is refused. It answers the request and returns false when it refuses.
 func (s *Server) machinesFit(w http.ResponseWriter, r *http.Request, u user, class *clusterv1.ClusterClass, c *clusterv1.Cluster) bool {
 	fit, err := provisioner.FitOf(c, class)

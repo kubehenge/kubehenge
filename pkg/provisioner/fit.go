@@ -6,8 +6,9 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 )
 
-// Fit is the most a cluster's machines ask of Proxmox VE: the memory of the largest machine, the
-// disks of every machine with each pool at its most workers, and the nodes and storage it chose.
+// Fit is what a cluster's machines ask of Proxmox VE: the memory of the largest machine, the disks
+// of the machines it starts with (each autoscaled pool at its minimum), and the nodes and storage it
+// chose.
 type Fit struct {
 	LargestMiB int64
 	DiskGiB    int64
@@ -55,7 +56,7 @@ func FitOf(c *clusterv1.Cluster, class *clusterv1.ClusterClass) (Fit, error) {
 		f.Pools = append(f.Pools, PoolFit{Name: md.Name, Machines: int64(bounds.least), Most: int64(bounds.most), DiskGiB: diskOf(shape)})
 	}
 	for _, p := range f.Pools {
-		f.DiskGiB += p.Most * p.DiskGiB
+		f.DiskGiB += p.Machines * p.DiskGiB
 	}
 	f.Nodes, f.Storage, err = placementVariables(c)
 	if err != nil {

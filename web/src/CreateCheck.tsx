@@ -87,6 +87,9 @@ export function CreateChecks({ read, room }: { read: CheckRead | undefined; room
       ? []
       : [{ what: "Largest machine", state: "warning" as const, text: room.nodeWarning }]),
     ...roomCheck("Disk", room.disk, room.freeDisk),
+    ...(room.growthWarning === undefined
+      ? []
+      : [{ what: "Most workers", state: "warning" as const, text: room.growthWarning }]),
   ];
   return (
     <dl className="preflight" aria-label="Before creating">
