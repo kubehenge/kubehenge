@@ -71,6 +71,8 @@ jobs:
         env:
           # zizmor's online audits: impostor commits and actions with known vulnerabilities.
           GH_TOKEN: ${{ github.token }}
+          # Pull requests show zizmor's findings on the lines they are about.
+          ZIZMOR_FLAGS: --format=github
           # scripts/fetch.sh reads release files through the API when the download address fails.
           GITHUB_TOKEN: ${{ github.token }}
       - run: make integration
