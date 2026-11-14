@@ -25,6 +25,8 @@ type managementTalos struct {
 	mu       sync.Mutex
 	restored []byte
 	release  chan struct{}
+	// A restore says it started on restoring, then waits for holdRestore to close, when set.
+	restoring, holdRestore chan struct{}
 }
 
 func etcdStream() []byte {
@@ -45,6 +47,10 @@ func (m *managementTalos) Snapshot(context.Context, []byte, []string) (io.ReadCl
 }
 
 func (m *managementTalos) Restore(_ context.Context, _ []byte, _ []string, open func() (io.ReadCloser, error), _ func(string)) error {
+	if m.holdRestore != nil {
+		close(m.restoring)
+		<-m.holdRestore
+	}
 	r, err := open()
 	if err != nil {
 		return err

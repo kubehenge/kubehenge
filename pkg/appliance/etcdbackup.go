@@ -41,6 +41,13 @@ var ErrNoEtcdBackups = errors.New("backups of the management cluster's etcd are 
 // ErrEtcdSnapshotTaking refuses a snapshot while another is being taken.
 var ErrEtcdSnapshotTaking = errors.New("a snapshot is being taken already")
 
+// ErrEtcdRecovering refuses a snapshot while etcd is being restored. It would store the cluster
+// half made, as the newest backup the restore then reads.
+var ErrEtcdRecovering = errors.New("the management cluster is being recovered. Take a snapshot once that has finished")
+
+// recoveryKinds are the runs that restore the management cluster's etcd.
+var recoveryKinds = []string{"recover", "recreate", "etcd-restore"}
+
 // TalosAccess reaches the management cluster's control-plane nodes for its etcd backups.
 // provisioner.ManagementTalos is the real one.
 type TalosAccess interface {
@@ -474,6 +481,9 @@ func (a *Appliance) claimEtcdSnapshot() error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.job.running() && slices.Contains(recoveryKinds, a.job.Kind) {
+		return ErrEtcdRecovering
+	}
 	if a.takingEtcd {
 		return ErrEtcdSnapshotTaking
 	}

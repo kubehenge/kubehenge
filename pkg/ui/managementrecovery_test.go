@@ -216,6 +216,40 @@ func TestRecreateOverTheInterfaceChecksBeforeItStarts(t *testing.T) {
 	}
 }
 
+// A snapshot asked for while etcd is being restored would store the half-made cluster as the newest.
+func TestSnapshotIsRefusedDuringARecovery(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.clock = time.Now()
+	a, talos, store := managementWithTarget(t, h)
+	admin := h.browser()
+	admin.signIn("admin@pve")
+	setUpBackups(t, admin)
+	taken, err := a.TakeEtcdSnapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	talos.restoring, talos.holdRestore = make(chan struct{}), make(chan struct{})
+	expect(t, admin.do("POST", "/api/appliance/etcd-backups/snapshots/"+taken.Name+"/recreate", `{"passphrase":"`+statePassphrase+`"}`), http.StatusAccepted)
+	select {
+	case <-talos.restoring:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the restore never started")
+	}
+	puts := store.puts.Load()
+	rec := admin.do("POST", "/api/appliance/etcd-backups/snapshots", "")
+	close(talos.holdRestore)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "being recovered") {
+		t.Errorf("a snapshot during the recovery: %d %s", rec.Code, rec.Body)
+	}
+	if j := jobEnded(t, a); j.State != "succeeded" {
+		t.Fatalf("recreate: %+v", j)
+	}
+	if store.puts.Load() != puts {
+		t.Error("a snapshot was stored during the recovery")
+	}
+}
+
 func TestRecoverFromOwnBackupsOverTheInterface(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
