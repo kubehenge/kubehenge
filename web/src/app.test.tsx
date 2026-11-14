@@ -1212,6 +1212,11 @@ describe("create", () => {
     expect(request({ ...form, headlamp: false, headlampView: true }, rke2).variables).not.toHaveProperty("headlamp");
   });
 
+  it("writes machine sizes in the unit the needs use", () => {
+    const big = { ...form, workerMachine: { cores: 4, memoryMiB: 900_000, diskGiB: 9000 } };
+    expect(Object.fromEntries(summary(big, rke2))["Worker machines"]).toBe("4 cores, 878.9 GiB memory, 8.8 TiB disk");
+  });
+
   it("sums the form up as the Confirm step shows it", () => {
     const rows = Object.fromEntries(summary(form, rke2));
     expect(rows).toMatchObject({

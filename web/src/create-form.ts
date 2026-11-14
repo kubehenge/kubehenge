@@ -163,6 +163,7 @@ import type {
 } from "./types";
 import {
   browserZone,
+  bytes,
   cniName,
   csiText,
   haGroupsText,
@@ -1379,10 +1380,11 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   return req;
 }
 
-const gib = (mib: number): string => (mib % mibPerGiB === 0 ? `${mib / mibPerGiB} GiB` : `${mib} MiB`);
+// size writes an amount in the unit the Confirm step's needs use, such as 878.9 GiB or 8.8 TiB.
+const size = (mib: number): string => bytes(mib * bytesPerMiB).replace(".0 ", " ");
 /** coresText counts cores, with "core" for one. */
 export const coresText = (n: number): string => `${n} ${n === 1 ? "core" : "cores"}`;
-const machine = (m: Machine): string => `${coresText(m.cores)}, ${gib(m.memoryMiB)} memory, ${m.diskGiB} GiB disk`;
+const machine = (m: Machine): string => `${coresText(m.cores)}, ${size(m.memoryMiB)} memory, ${size(m.diskGiB * mibPerGiB)} disk`;
 
 /** formLoadBalancerValue is what the load-balancer fields show of the form. */
 export const formLoadBalancerValue = (form: Form): LoadBalancerValue => ({
