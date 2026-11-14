@@ -246,6 +246,9 @@ func TestAWakeGoesOnWithOneManagementVMGone(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "no management VM runs on Proxmox VE node pve1, which holds the backup volume") {
 		t.Fatalf("a wake with no VM on the disk's node: %v", err)
 	}
+	if rows := troubleshootingRowsFor(t, err.Error()); len(rows) != 1 || !strings.HasPrefix(rows[0], "no management VM runs") {
+		t.Errorf("the error %q reads as the troubleshooting rows %q, want its own alone", err, rows)
+	}
 	if got := replicas(lost); got != 0 {
 		t.Fatalf("with no VM on the disk's node the store was started to %d replicas", got)
 	}

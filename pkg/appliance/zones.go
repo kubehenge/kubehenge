@@ -85,7 +85,8 @@ func (a *Appliance) followZones(ctx context.Context, kube kubernetes.Interface, 
 		}
 	}
 	if zone != "" && !inZone {
-		return unknown, fmt.Errorf("reading where the management VMs run: no management VM runs on Proxmox VE node %s, which holds the backup volume", zone)
+		// Proxmox VE answered, so the message keeps off the start of a failed read's.
+		return unknown, fmt.Errorf("no management VM runs on Proxmox VE node %s, which holds the backup volume", zone)
 	}
 	return unknown, nil
 }

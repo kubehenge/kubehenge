@@ -241,7 +241,7 @@ var storeReadyPoll = 2 * time.Second
 // wakeStore starts the backup volume's store when it sleeps and waits, within ctx, until its pod is
 // ready, which is once the plugin has attached the disk to that pod's node. Only a store on a node's
 // own storage sleeps, and its pod must land on a node VM on that node, so the nodes' zone labels are
-// set first. A node whose zone is unknown keeps the store asleep.
+// set first. The store stays asleep only when no management VM runs on the node holding the disk.
 func (a *Appliance) wakeStore(ctx context.Context, kube kubernetes.Interface) error {
 	deps := kube.AppsV1().Deployments(backupstore.Namespace)
 	d, err := deps.Get(ctx, backupstore.Service, metav1.GetOptions{})
@@ -554,13 +554,17 @@ func (a *Appliance) backUpToVolume(ctx context.Context, keys *volumeBackupKeys, 
 	if exportErr == nil {
 		rec.Export = export
 	}
-	rec.Copy = a.copyOnAppliance(ctx, keys, file, taken, sealedExport, rec.Copy)
+	// A copy cut short by a stop keeps the record of the last one, which is still in place.
+	if c := a.copyOnAppliance(ctx, keys, file, taken, sealedExport, rec.Copy); c.Error == "" || !snapshotStopped(ctx) {
+		rec.Copy = c
+	}
 	err = errors.Join(err, exportErr)
-	if err != nil {
+	switch {
+	case err == nil:
+		rec.Last, rec.Error, rec.Failed = stored, "", nil
+	case !snapshotStopped(ctx):
 		now := a.now()
 		rec.Error, rec.Failed = err.Error(), &now
-	} else {
-		rec.Last, rec.Error, rec.Failed = stored, "", nil
 	}
 	if werr := writeJSONFile(a.etcdBackupFile("volume-status.json"), rec); werr != nil {
 		err = errors.Join(err, werr)

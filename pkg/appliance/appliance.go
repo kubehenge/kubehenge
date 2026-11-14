@@ -356,10 +356,6 @@ func (a *Appliance) Stop(ctx context.Context) error {
 
 // removalEnv is OpenTofu's environment for a removal, once nothing stands in the removal's way.
 func (a *Appliance) removalEnv(ctx context.Context, j *Job, passphrase string, ticket *pve.Ticket) ([]string, error) {
-	// What a snapshot under way writes must be on disk before the removal clears it.
-	if err := a.stopEtcdSnapshot(ctx, j); err != nil {
-		return nil, err
-	}
 	env, err := a.env(passphrase, ticketAuth(ticket))
 	if err != nil {
 		return nil, err
@@ -368,7 +364,12 @@ func (a *Appliance) removalEnv(ctx context.Context, j *Job, passphrase string, t
 	if _, err := a.output(ctx, env, "api_endpoint"); err != nil {
 		return nil, ErrPassphrase
 	}
-	return env, a.checkLease(ctx, env)
+	if err := a.checkLease(ctx, env); err != nil {
+		return nil, err
+	}
+	// Last, so that a refused removal leaves the backup under way alone. What that snapshot writes
+	// must be on disk before the removal clears it.
+	return env, a.stopEtcdSnapshot(ctx, j)
 }
 
 // forgetRemoved clears what the appliance kept of a management cluster just destroyed. The state

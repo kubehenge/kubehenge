@@ -62,8 +62,18 @@ type snapshotRun struct {
 	done chan struct{}
 	// cancel ends the snapshot's context, once the snapshot has made it. cancelled asks for that
 	// before then.
-	cancel    context.CancelFunc
+	cancel    context.CancelCauseFunc
 	cancelled bool
+}
+
+// errSnapshotStopped is the cause a stopped snapshot's context carries. Such a snapshot did not
+// fail: the run that stopped it decides what happens to the backups, so its error is recorded
+// nowhere and the backups' status keeps the last real result.
+var errSnapshotStopped = errors.New("the etcd snapshot was stopped for a recovery or a removal")
+
+// snapshotStopped tells whether a snapshot's context ended because a run stopped it.
+func snapshotStopped(ctx context.Context) bool {
+	return errors.Is(context.Cause(ctx), errSnapshotStopped)
 }
 
 // stopEtcdSnapshot cancels the snapshot under way, if any, and waits for it to return. A run that
@@ -75,7 +85,7 @@ func (a *Appliance) stopEtcdSnapshot(ctx context.Context, j *Job) error {
 	if run != nil {
 		run.cancelled = true
 		if run.cancel != nil {
-			run.cancel()
+			run.cancel(errSnapshotStopped)
 		}
 	}
 	a.mu.Unlock()
@@ -592,6 +602,9 @@ func (a *Appliance) snapshotEtcd(ctx context.Context, due *time.Time) (*provisio
 	}
 	vol, b, berr, bucket := p.vol, p.b, p.berr, p.bucket
 	failed := func(err error) {
+		if snapshotStopped(ctx) {
+			return
+		}
 		if vol != nil {
 			a.volumeBackupFailed(err)
 		}
@@ -641,16 +654,18 @@ func (a *Appliance) snapshotEtcd(ctx context.Context, due *time.Time) (*provisio
 // which a stop asked for before the run began takes effect at once. finish frees the claim and
 // tells a waiting stop that nothing more is written.
 func (a *Appliance) runSnapshot(ctx context.Context) (context.Context, func()) {
-	ctx, cancel := context.WithTimeout(ctx, etcdBackupTimeout)
+	ctx, timeout := context.WithTimeout(ctx, etcdBackupTimeout)
+	ctx, cancel := context.WithCancelCause(ctx)
 	a.mu.Lock()
 	run := a.snapshot
 	run.cancel = cancel
 	if run.cancelled {
-		cancel()
+		cancel(errSnapshotStopped)
 	}
 	a.mu.Unlock()
 	return ctx, func() {
-		cancel()
+		cancel(nil)
+		timeout()
 		a.mu.Lock()
 		a.snapshot = nil
 		a.mu.Unlock()
@@ -666,7 +681,9 @@ func (a *Appliance) backUpToTarget(ctx context.Context, b *backupSetup, berr err
 	}
 	stored, err := storeEtcdSnapshot(ctx, b, file, taken)
 	if err != nil {
-		a.etcdBackupFailed(err)
+		if !snapshotStopped(ctx) {
+			a.etcdBackupFailed(err)
+		}
 		return stored, err
 	}
 	rec := a.etcdBackupRecord()

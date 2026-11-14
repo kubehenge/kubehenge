@@ -152,7 +152,8 @@ func (s *Server) takeManagementSnapshot(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	err := s.Appliance.StartEtcdSnapshot(r.Context())
-	if errors.Is(err, appliance.ErrNoEtcdBackups) || errors.Is(err, appliance.ErrEtcdSnapshotTaking) || errors.Is(err, appliance.ErrEtcdRecovering) {
+	if errors.Is(err, appliance.ErrNoEtcdBackups) || errors.Is(err, appliance.ErrEtcdSnapshotTaking) ||
+		errors.Is(err, appliance.ErrEtcdRecovering) || errors.Is(err, appliance.ErrEtcdRemoving) {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}

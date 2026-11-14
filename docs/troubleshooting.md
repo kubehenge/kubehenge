@@ -269,11 +269,11 @@ The management cluster's Health shows the failure, and **Administration, Backups
 | "the backup volume's token: …" or "the backup volume: …" | The store `kubehenge-system/kubehenge-backup-store` is not running. `kubectl -n kubehenge-system get pods,pvc` shows whether the claim `kubehenge-backups` is bound and the pod ready. A claim that stays pending means the VM `kubehenge-backups` or its disk is gone. Apply again to make a new one. |
 | "exporting Kubehenge's objects: …" | The snapshot was stored, but the export was not. The reason after the colon names the object the interface could not read. |
 | "the appliance's copy of snapshot … would take …, more than its cap of …" | The snapshot, its export and its key take more than 1 GiB. The snapshot went to the volume alone, and the copy before it stays. |
-| "the management cluster is being recovered" | A snapshot is refused while a restore, a recreation or a recovery runs. Take it once the run has finished. |
+| "the management cluster is being recovered" or "the management cluster is being removed" | A snapshot is refused while a restore, a recreation, a recovery or a removal runs. Take it once a recovery has finished. |
 | A recovery says "the appliance's copy holds the backups of a management cluster removed since" | The copy is of the cluster removed before this one was set up, and is never restored onto it. Recover from the backup volume, or recreate from a backup target's snapshot. |
 | A recovery says "it did not answer within 10m0s" | The backup volume's store did not start. Check the claim and the pod as above. The recovery used the appliance's copy, when it held one. |
 | "reading where the management VMs run: …" | The appliance could not ask Proxmox VE where the management VMs run, so it left the store asleep. The reason after the colon says why. The token is in `kubehenge-system/kubehenge-backup-store-zones`. Apply again to make a new one. |
-| "… no management VM runs on Proxmox VE node …, which holds the backup volume" | The volume's disk sits on that node's own storage and attaches only to a VM there. Migrate a management VM to that node, or apply again to make the lost ones. |
+| "no management VM runs on Proxmox VE node …, which holds the backup volume" | The volume's disk sits on that node's own storage and attaches only to a VM there. Migrate a management VM to that node, or apply again to make the lost ones. |
 | The store's pod stays pending on a node's own storage | No management VM runs on the node that holds the disk. Migrate one back to that node. |
 
 ### Template missing

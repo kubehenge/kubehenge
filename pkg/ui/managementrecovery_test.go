@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/appliance"
 	"github.com/kubehenge/kubehenge/pkg/notify"
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
+	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
 const exportSecret = "an export passphrase of its own"
@@ -248,6 +250,39 @@ func TestSnapshotIsRefusedDuringARecovery(t *testing.T) {
 	if store.puts.Load() != puts {
 		t.Error("a snapshot was stored during the recovery")
 	}
+}
+
+// A snapshot asked for while the management cluster is being removed is refused as a conflict, the
+// same as during a recovery, so the interface and the shell say why and nothing reads as broken.
+func TestSnapshotIsRefusedDuringARemoval(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.clock = time.Now()
+	a, _, _ := managementWithTarget(t, h)
+	admin := h.browser()
+	admin.signIn("admin@pve")
+	setUpBackups(t, admin)
+	removing, release := make(chan struct{}), make(chan struct{})
+	before := func(context.Context, *appliance.Job) error {
+		close(removing)
+		<-release
+		return errors.New("held for the test")
+	}
+	ticket := &pve.Ticket{Username: "admin@pve", Ticket: "PVE:admin@pve:1", CSRF: "csrf", Issued: time.Now()}
+	if err := a.Remove(statePassphrase, appliance.KeepBackups, ticket, before, func() {}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-removing:
+	case <-time.After(30 * time.Second):
+		t.Fatalf("the removal never reached its first step: %+v", a.Current())
+	}
+	rec := admin.do("POST", "/api/appliance/etcd-backups/snapshots", "")
+	close(release)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "being removed") {
+		t.Errorf("a snapshot during the removal: %d %s", rec.Code, rec.Body)
+	}
+	jobEnded(t, a)
 }
 
 func TestRecoverFromOwnBackupsOverTheInterface(t *testing.T) {
