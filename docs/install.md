@@ -628,6 +628,18 @@ The management cluster's etcd holds every cluster's objects. **Administration, B
 
 The appliance takes each snapshot itself through the nodes' Talos API, with a talosconfig that may take etcd snapshots and nothing else. It encrypts the snapshot before it leaves the appliance. The key that opens the snapshots is kept in the target, encrypted with the state passphrase ([details](install-settings.md#management-cluster-etcd-backups)).
 
+#### The backup volume
+
+With no settings at all, every management cluster backs up onto its own backup volume. That is the claim `kubehenge-system/kubehenge-backups`, the disk of the stopped, protected VM `kubehenge-backups`. Proxmox VE deletes a VM's own disks only, so the volume outlives the loss of every management VM.
+
+Every 6 hours the appliance puts an etcd snapshot there, encrypted with the state passphrase, and keeps the newest 28. Beside each goes an export of Kubehenge's objects: the clusters, their classes, the Secrets Kubehenge owns and the setup settings. A backup target, when set up, gets its own snapshots too.
+
+The appliance keeps a copy of the latest snapshot and export, up to 1 GiB. Above that cap the snapshot goes to the volume alone. The disk warning names the copy once it reaches 80 % of its cap, or once the disk has no room for the next one.
+
+**Administration, Backups**, the management cluster's Health and `kubehenge appliance etcd-backups` show where the backups are and the last one. A failed backup degrades Health until the next one succeeds.
+
+To recover, `POST /api/appliance/etcd-backups/recover` with the state passphrase applies the management cluster, restores the newest snapshot and applies again. It reads the volume when the volume survived, else the appliance's copy, and its log names which.
+
 #### Restoring
 
 **Restore…** on a snapshot wipes etcd on every control-plane node of the management cluster and restores it from the snapshot. Every cluster's objects go back to then.
@@ -636,7 +648,7 @@ After a restore, and then daily, the controller compares each cluster with its V
 
 #### The warning while backups are off
 
-While the backups are off, a warning stands on **Administration, Backups** and above the cluster list. Every cluster's CAs, kubeconfigs and backup keys live only in this etcd.
+While neither a target nor the backup volume takes the backups, a warning stands on **Administration, Backups** and above the cluster list. Every cluster's CAs, kubeconfigs and backup keys live only in this etcd.
 
 An administrator can dismiss the warning for 30 days. The page records who did and when. Notifications repeat it weekly.
 

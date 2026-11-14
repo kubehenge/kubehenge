@@ -260,6 +260,16 @@ A version lowered through `version_overrides` is refused ("Downgrade is not supp
 2. Delete its cache Secret in its namespace (`<type>-<name>-<version>-cache`, such as `bootstrap-k3s-v0.4.0-cache`). The operator then installs it again and renews its conditions.
 3. Apply again.
 
+### Backups onto the backup volume fail
+
+The management cluster's Health shows the failure, and **Administration, Backups** gives its error. The appliance tries again after 15 minutes.
+
+| Problem | Cause and fix |
+| --- | --- |
+| "the backup volume's token: …" or "the backup volume: …" | The store `kubehenge-system/kubehenge-backup-store` is not running. `kubectl -n kubehenge-system get pods,pvc` shows whether the claim `kubehenge-backups` is bound and the pod ready. A claim that stays pending means the VM `kubehenge-backups` or its disk is gone. Apply again to make a new one. |
+| "exporting Kubehenge's objects: …" | The snapshot was stored, but the export was not. The reason after the colon names the object the interface could not read. |
+| The appliance's copy is over its cap | The snapshot is larger than 1 GiB. It went to the volume alone, and the copy before it stays. |
+
 ### Template missing
 
 The interface refuses a cluster whose template the controller does not find in the template pool. A cluster made with kubectl, or whose template was deleted after it was made, has machines that stay provisioning. The cluster's **Machines** view shows under each what it waits for, such as `VM template not found`.

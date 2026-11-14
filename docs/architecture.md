@@ -112,6 +112,12 @@ On the schedule set under **Administration, Backups**, it asks a control-plane n
 
 A restore downloads and decrypts the snapshot on the appliance and checks it against the SHA-256 recorded with it. With the admin talosconfig from the state, it wipes etcd on every control-plane node. It then uploads the snapshot to the first node, bootstraps etcd from it and waits for the others to join ([install.md](install.md#back-up-the-management-clusters-etcd)).
 
+### Backup volume
+
+The module installs the Proxmox CSI plugin in the management cluster, from the workload add-on's chart and images. Its token holds `VM.Audit` and `VM.Config.Disk`, so it attaches and grows disks but deletes none. The storage class `kubehenge-management` keeps a released volume.
+
+The backup volume is the disk of a stopped VM, `kubehenge-backups`, outside the management pool. The VM has protection on, and a static volume binds its disk, so deleting the management VMs leaves it. A small store in `kubehenge-system` serves it to the appliance only, through the API server's service proxy, with a token from a Secret. The snapshots and exports on it are encrypted to an age key sealed with the state passphrase.
+
 ## ClusterClasses
 
 One ClusterClass per distribution: kubeadm, RKE2, k3s and Talos. Each takes the same small set of variables:
