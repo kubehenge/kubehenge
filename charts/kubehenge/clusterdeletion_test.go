@@ -2,7 +2,10 @@ package kubehenge_test
 
 import (
 	"bytes"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -152,5 +155,52 @@ func TestDeletingAKubehengeClusterNeedsTheAnnotation(t *testing.T) {
 	msg := eval(t, p.Spec.Validations[0].MessageExpression, cluster("kubehenge-talos", nil, false))
 	if s, _ := msg.(string); !strings.Contains(s, "kubehenge.dev/allow-deletion") || !strings.Contains(s, "web") {
 		t.Errorf("message %q names neither the cluster nor the annotation", msg)
+	}
+}
+
+// kubectlDelete is a kubectl command that deletes clusters, or a namespace that may hold them.
+var kubectlDelete = regexp.MustCompile(`kubectl\b.*\bdelete (namespace|cluster|clusters)\b`)
+
+// Every delete the e2e failure hints, the docs and the website print is one the guard lets through:
+// the annotate step comes first, on the line itself or the one before. A bare one is refused, or
+// leaves its namespace Terminating.
+func TestEveryPrintedClusterDeleteAnnotatesFirst(t *testing.T) {
+	t.Parallel()
+	var files []string
+	for _, pattern := range []string{"../../test/e2e/*.sh", "../../docs/*.md", "../../website/.vitepress/theme/*.vue", "../../website/.vitepress/theme/*.js"} {
+		matched, err := filepath.Glob(pattern)
+		if err != nil || len(matched) == 0 {
+			t.Fatalf("%s: %v, %d files", pattern, err, len(matched))
+		}
+		files = append(files, matched...)
+	}
+	for _, file := range files {
+		text, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		script := strings.HasSuffix(file, ".sh")
+		previous, number := "", 0
+		for line := range strings.SplitSeq(string(text), "\n") {
+			number++
+			// A script's own deletes are checked by running it, so only what it prints is a hint. A
+			// doc's commands are its code blocks' lines. Its tables name add-on namespaces, which
+			// hold no clusters.
+			printed := strings.Contains(line, "printf ")
+			switch filepath.Ext(file) {
+			case ".md":
+				printed = strings.HasPrefix(strings.TrimSpace(line), "kubectl ")
+			case ".vue", ".js":
+				printed = true
+			}
+			if at := kubectlDelete.FindStringIndex(line); printed && at != nil {
+				if !strings.Contains(line[:at[1]], "allow-deletion") && (script || !strings.Contains(previous, "allow-deletion")) {
+					t.Errorf("%s:%d prints a delete without annotating first: %s", file, number, strings.TrimSpace(line))
+				}
+			}
+			if strings.TrimSpace(line) != "" {
+				previous = line
+			}
+		}
 	}
 }
