@@ -4220,12 +4220,14 @@ worker=$(kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${nam
 [ -n "${worker}" ] || fail "no worker machine to hold the deletion up with"
 webhook_retried kubectl -n "${ns}" patch "machine/${worker}" --type json -p "[{\"op\":\"add\",\"path\":\"/metadata/finalizers/-\",\"value\":\"${hold}\"}]" > /dev/null
 # The chart's deletion guard refuses a delete until the cluster carries its annotation.
-if refusal=$(creator -n "${ns}" delete "cluster/${name}" --wait=false 2>&1); then
-    fail "the cluster was deleted without kubehenge.dev/allow-deletion"
-fi
+set +e
+refusal=$(creator -n "${ns}" delete "cluster/${name}" --wait=false 2>&1)
+deleted=$?
+set -e
+[ "${deleted}" -ne 0 ] || fail "the cluster was deleted without kubehenge.dev/allow-deletion"
 case "${refusal}" in
-*kubehenge.dev/allow-deletion*) ;;
-*) fail "the unannotated delete failed for another reason: ${refusal}" ;;
+    *kubehenge.dev/allow-deletion*) ;;
+    *) fail "the unannotated delete failed for another reason: ${refusal}" ;;
 esac
 webhook_retried creator -n "${ns}" annotate "cluster/${name}" kubehenge.dev/allow-deletion=true > /dev/null
 creator -n "${ns}" delete "cluster/${name}" --wait=false
