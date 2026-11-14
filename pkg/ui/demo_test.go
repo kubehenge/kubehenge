@@ -202,11 +202,11 @@ func TestDemoAnswersEveryRead(t *testing.T) { //nolint:paralleltest // swaps Go'
 	}
 }
 
-// The demo's Talos cluster has an upgrade a disruption budget holds, with the event in its activity,
-// and no other cluster has either.
+// The demo's Talos cluster, with its drain held, has an upgrade a disruption budget holds, with the
+// event in its activity, and no other cluster has either.
 func TestDemoHoldsTheTalosUpgradeOfPlatform(t *testing.T) {
 	t.Parallel()
-	_, b := newDemo(t)
+	_, b := newDemoWith(t, map[string]func(*demoCluster){"platform": platformDrainHeld})
 	b.signIn()
 	var clusters []clusterView
 	decodeDemo(t, b.do("GET", "/api/clusters", ""), &clusters)
@@ -291,36 +291,25 @@ func TestDemoShowsItsFleet(t *testing.T) {
 	b.signIn()
 	var clusters []clusterView
 	decodeDemo(t, b.do("GET", "/api/clusters", ""), &clusters)
-	fleet, err := newDemoFleet(demoAt)
+	fleet, err := newDemoFleet(demoAt, demoFleetJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(clusters) != len(fleet.data.Clusters) {
 		t.Fatalf("%d clusters, want %d", len(clusters), len(fleet.data.Clusters))
 	}
-	var health []fleetHealthView
-	decodeDemo(t, b.do("GET", "/api/fleet/health", ""), &health)
-	verdicts := map[string]string{}
-	for _, h := range health {
-		verdicts[h.Name] = h.Verdict
-		// The node that fails forwarded calls is online in Proxmox VE and runs its VMs.
-		for _, a := range h.Attention {
-			if strings.Contains(a.What, "offline") {
-				t.Errorf("%s lists %q, but no Proxmox VE node of the demo is offline", h.Name, a.What)
-			}
+	verdicts := demoVerdicts(t, b)
+	// Most of the fleet is healthy, beside a few clusters with something to show.
+	want := map[string]string{"web": verdictHealthy, "ci": verdictHealthy, "data": verdictHealthy, "platform": verdictHealthy, "edge": verdictChanging}
+	for name, verdict := range want {
+		if verdicts[name] != verdict {
+			t.Errorf("%s is %s, want %s", name, verdicts[name], verdict)
 		}
 	}
-	if verdicts["payments"] != "degraded" || verdicts["web"] != "healthy" || verdicts["edge"] != "changing" {
-		t.Errorf("verdicts %v, want payments degraded, web healthy and edge changing", verdicts)
-	}
-	lacking := false
-	for i := range clusters {
-		for _, cond := range clusters[i].Conditions {
-			lacking = lacking || clusters[i].Name == "ci" && cond.Type == provisioner.NodesLackMemoryCondition && cond.Status == "True"
+	for _, name := range []string{"payments", "staging", "legacy"} {
+		if v := verdicts[name]; v == verdictHealthy || v == verdictChanging {
+			t.Errorf("%s is %s, want it to show its problem", name, v)
 		}
-	}
-	if !lacking {
-		t.Error("the demo's ci cluster does not show NodesLackMemory")
 	}
 	var runs []runView
 	decodeDemo(t, b.do("GET", "/api/runs", ""), &runs)
@@ -358,21 +347,33 @@ func (l *lockedBuffer) String() string {
 	return l.buf.String()
 }
 
+// Every cluster's health reads without an error, in the demo and with each problem the demo can show.
 func TestDemoReadsEveryClustersHealth(t *testing.T) {
 	t.Parallel()
+	for name, edits := range demoProblems {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			readsEveryClustersHealth(t, edits)
+		})
+	}
+}
+
+func readsEveryClustersHealth(t *testing.T, edits map[string]func(*demoCluster)) {
+	t.Helper()
 	logged := &lockedBuffer{}
 	s := &Server{
 		Assets: fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>Kubehenge</title>")}},
 		Log:    slog.New(slog.NewTextHandler(logged, nil)),
 	}
-	cleanup, err := SetUpDemo(s, func() time.Time { return demoAt })
+	raw := demoFleetEdited(t, edits)
+	cleanup, err := setUpDemo(s, func() time.Time { return demoAt }, raw)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(cleanup)
 	b := &demoBrowser{t: t, handler: s.Handler()}
 	b.signIn()
-	fleet, err := newDemoFleet(demoAt)
+	fleet, err := newDemoFleet(demoAt, raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +412,7 @@ func TestDemoShowsPoolLabelsTaintsAndPodChecks(t *testing.T) {
 			notes = append(notes, a.What+" "+a.Message)
 		}
 	}
-	if len(notes) != 1 || !strings.Contains(notes[0], "pool "+defaultPoolLabel) || !strings.Contains(notes[0], "maintenance") {
+	if len(notes) != 1 || !strings.Contains(notes[0], "pool "+provisioner.DefaultPoolLabel) || !strings.Contains(notes[0], "maintenance") {
 		t.Errorf("taint notes %q, want one naming the pool and the taint", notes)
 	}
 	var check struct {
@@ -498,7 +499,7 @@ func TestDemoShowsTheTalosReleaseOfTalosMachines(t *testing.T) {
 
 func TestDemoHoldsOneMachinesReplacement(t *testing.T) {
 	t.Parallel()
-	_, b := newDemo(t)
+	_, b := newDemoWith(t, map[string]func(*demoCluster){"platform": platformDrainHeld})
 	b.signIn()
 	var detail struct {
 		Machines []machineView `json:"machines"`

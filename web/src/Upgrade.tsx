@@ -1,12 +1,11 @@
 import { useEffect, useState, type JSX } from "react";
 
 import { api } from "./api";
-import { addressRoom, freeMemory } from "./Autoscaling";
+import { addedWorkersMiB, addressRoom, freeMemory, poolMost } from "./Autoscaling";
 import { sizeOf } from "./MachineFields";
 import { offlineOf, unreachable } from "./offline-nodes";
-import { poolSize } from "./pool-machine";
 import { Link } from "./router";
-import type { Cluster, ClusterHealth, Effect, Plan, PveNode, UpgradeChecks, WorkerPool } from "./types";
+import type { Cluster, ClusterHealth, Effect, Plan, PveNode, UpgradeChecks } from "./types";
 import { Detail, Status, bytes, errorMessage, localDates } from "./ui";
 
 // What the machines go through, by the most a change does.
@@ -159,9 +158,6 @@ function changeCheck(read: PlanRead | undefined): Check {
   return { what: "Change", state: "info", text: replaces[effectOrder[Math.max(0, ...effects)] ?? "none"] };
 }
 
-// An autoscaled pool may grow to its most, so its most is what addresses and memory must allow.
-const poolMost = (p: WorkerPool): number => p.autoscaling?.max ?? p.replicas;
-
 // A rollout makes each new node before it removes the old one, so it needs one address spare.
 function addressCheck(c: Cluster): Check | undefined {
   const room = addressRoom(c);
@@ -206,19 +202,23 @@ const bytesPerMiB = 1_048_576;
 function addedMiB(before: Cluster, after: Cluster): number {
   const controlPlane = sizeOf(after.variables["controlPlaneMachine"])?.memoryMiB ?? 0;
   const added = Math.max(0, after.controlPlane.desired - before.controlPlane.desired) * controlPlane;
-  return after.workerPools.reduce((sum, p) => {
-    const was = before.workerPools.find((x) => x.name === p.name);
-    return (
-      sum + Math.max(0, poolMost(p) - (was === undefined ? 0 : poolMost(was))) * (poolSize(after, p)?.memoryMiB ?? 0)
-    );
-  }, added);
+  return after.workerPools.reduce((sum, p) => sum + addedWorkersMiB(before, after, p), added);
 }
+
+/** NodesRead is the Proxmox VE nodes, or why they could not be read, unset until they answer. */
+export type NodesRead = PveNode[] | string | undefined;
+
+// Said of the Nodes and Memory lines when the node list fails, its cause behind Detail.
+const notChecked = "Could not be checked";
 
 // memoryCheck compares the memory new machines need with what the nodes have free. It is advice:
 // memory frees and fills as other VMs come and go.
-function memoryCheck(before: Cluster, after: Cluster, nodes: PveNode[]): Check | undefined {
+function memoryCheck(before: Cluster, after: Cluster, read: NodesRead): Check | undefined {
   const wanted = addedMiB(before, after) * bytesPerMiB;
-  const free = freeMemory(after, nodes);
+  if (typeof read === "string") {
+    return wanted > 0 ? { what: "Memory", state: "warning", text: notChecked, detail: [read] } : undefined;
+  }
+  const free = freeMemory(after, read ?? []);
   if (!(wanted > 0) || free === undefined) {
     return undefined;
   }
@@ -229,9 +229,12 @@ function memoryCheck(before: Cluster, after: Cluster, nodes: PveNode[]): Check |
 
 // nodesCheck names the Proxmox VE nodes that run the cluster's machines and are offline, or are up
 // and out of the appliance's reach, which a change that deletes or makes a VM there runs into.
-function nodesCheck(c: Cluster, nodes: PveNode[] | undefined): Check | undefined {
+function nodesCheck(c: Cluster, nodes: NodesRead): Check | undefined {
   if (nodes === undefined) {
     return { what: "Nodes", state: "progress", text: "Checking" };
+  }
+  if (typeof nodes === "string") {
+    return { what: "Nodes", state: "warning", text: notChecked, detail: [nodes] };
   }
   if (nodes.length === 0) {
     return undefined;
@@ -266,7 +269,7 @@ const counted = (n: number, what: string): string => `${n} ${what}${n === 1 ? ""
  * scaleChecks are the addresses and memory a change of the cluster's size needs, from the same
  * figures in the Scale dialog as in Review plan.
  */
-export function scaleChecks(before: Cluster, after: Cluster, nodes: PveNode[]): Check[] {
+export function scaleChecks(before: Cluster, after: Cluster, nodes: NodesRead): Check[] {
   return [addressCheck(after), memoryCheck(before, after, nodes)].filter((ch) => ch !== undefined);
 }
 
@@ -297,7 +300,7 @@ export function useChecks({
   const found = useUpgradeChecks(before, on ? version : undefined);
   const [health, setHealth] = useState<ClusterHealth | string>();
   // Unread until the list answers, so that the plan waits for it.
-  const [nodes, setNodes] = useState<PveNode[]>();
+  const [nodes, setNodes] = useState<NodesRead>();
   const { namespace, name } = before;
   useEffect(() => {
     let current = true;
@@ -317,10 +320,10 @@ export function useChecks({
         if (current) {
           setNodes(listed);
         }
-      } catch {
-        // Without the nodes there is no offline or memory line, and the cluster shows a VM that found no room.
+      } catch (err) {
+        // A list that fails leaves the offline nodes and the free memory unknown, which is a risk to accept.
         if (current) {
-          setNodes([]);
+          setNodes(errorMessage(err));
         }
       }
     }
@@ -334,7 +337,7 @@ export function useChecks({
   const optional = (check: Check | undefined): Check[] => (check === undefined ? [] : [check]);
   return [
     ...(change ? [changeCheck(read)] : []),
-    ...scaleChecks(before, after, nodes ?? []),
+    ...scaleChecks(before, after, nodes),
     ...optional(nodesCheck(before, nodes)),
     ...(version === undefined ? [] : [removedAPIsCheck(found), ...optional(webhooksCheck(found))]),
     healthCheck(health),

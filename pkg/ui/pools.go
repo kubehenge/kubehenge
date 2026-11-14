@@ -12,53 +12,58 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
-// defaultPoolLabel is what the interface, its health items and the CLI call the pool every cluster
-// starts with. A pool's name is a DNS label, so a user's pool can match it only in lower case.
-const defaultPoolLabel = "Workers"
-
-// labelled is whether the default pool goes by its label among pools: not beside a user's pool that
-// would read the same.
-func labelled(name string, pools []string) bool {
-	return name == workerPool && !slices.Contains(pools, strings.ToLower(defaultPoolLabel))
-}
-
-// poolLabel is a pool's name as people know it among the cluster's pools, as the interface writes it.
-func poolLabel(name string, pools []string) string {
-	if labelled(name, pools) {
-		return defaultPoolLabel
-	}
-	return name
-}
-
-// topologyPools are the names of the cluster's worker pools.
-func topologyPools(c *clusterv1.Cluster) []string {
-	names := make([]string, len(c.Spec.Topology.Workers.MachineDeployments))
-	for i, md := range c.Spec.Topology.Workers.MachineDeployments {
-		names[i] = md.Name
-	}
-	return names
-}
-
 // poolNamed is the pool a name given in a change stands for: a pool of that name, or the default
 // pool for its label in any case, so that "workers" works where the interface shows "Workers".
 func poolNamed(c *clusterv1.Cluster, given string) string {
-	pools := topologyPools(c)
-	if slices.Contains(pools, given) || !strings.EqualFold(given, defaultPoolLabel) || !slices.Contains(pools, workerPool) || !labelled(workerPool, pools) {
-		return given
+	pools := provisioner.TopologyPools(c)
+	if !slices.Contains(pools, given) && strings.EqualFold(given, provisioner.DefaultPoolLabel) &&
+		slices.Contains(pools, workerPool) && provisioner.PoolLabel(workerPool, pools) == provisioner.DefaultPoolLabel {
+		return workerPool
 	}
-	return workerPool
+	return given
 }
 
-// poolsNamed is a change's pools by the names of the pools they stand for.
-func poolsNamed[V any](c *clusterv1.Cluster, given map[string]V) map[string]V {
+// poolsNamed is a change's pools by the names of the pools they stand for. It adds each name given
+// to the names spelt, by the pool it stands for.
+func poolsNamed[V any](c *clusterv1.Cluster, given map[string]V, spelt map[string][]string) map[string]V {
 	if given == nil {
 		return nil
 	}
 	out := make(map[string]V, len(given))
 	for name, v := range given {
-		out[poolNamed(c, name)] = v
+		pool := poolNamed(c, name)
+		if !slices.Contains(spelt[pool], name) {
+			spelt[pool] = append(spelt[pool], name)
+		}
+		out[pool] = v
 	}
 	return out
+}
+
+// namePools turns every pool a change names into the pool's own name, or says what is wrong. A
+// change that names one pool in two ways is refused, since which of its values was meant cannot be
+// told.
+func namePools(c *clusterv1.Cluster, req *changeRequest) string {
+	spelt := map[string][]string{}
+	req.WorkerPools = poolsNamed(c, req.WorkerPools, spelt)
+	req.Autoscaling = poolsNamed(c, req.Autoscaling, spelt)
+	req.Pools = poolsNamed(c, req.Pools, spelt)
+	for _, pool := range slices.Sorted(maps.Keys(spelt)) {
+		if names := spelt[pool]; len(names) > 1 {
+			// The pool's own name first, then the others as given.
+			slices.SortFunc(names, func(a, b string) int {
+				switch {
+				case a == pool:
+					return -1
+				case b == pool:
+					return 1
+				}
+				return strings.Compare(a, b)
+			})
+			return "the change names pool " + pool + " as both " + strings.Join(names, " and ") + ". Name it once"
+		}
+	}
+	return ""
 }
 
 // poolChange adds a worker pool or changes one: its workers, and its size, which JSON null sets

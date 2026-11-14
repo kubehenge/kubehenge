@@ -65,6 +65,11 @@ var errDemo = errors.New("the demo changes nothing")
 // cluster, and changes are refused. clock is the demo's time, which its sample data is dated
 // against. The appliance it sets up keeps its settings in a folder that cleanup removes.
 func SetUpDemo(s *Server, clock func() time.Time) (func(), error) {
+	return setUpDemo(s, clock, demoFleetJSON)
+}
+
+// setUpDemo is SetUpDemo over the fleet raw holds, in the form of demo-fleet.json.
+func setUpDemo(s *Server, clock func() time.Time, raw []byte) (func(), error) {
 	if s.Appliance != nil || s.Headlamp != nil || s.Upgrades != nil {
 		return nil, errors.New("the demo runs without the appliance, Headlamp or upgrades")
 	}
@@ -73,15 +78,15 @@ func SetUpDemo(s *Server, clock func() time.Time) (func(), error) {
 		return nil, fmt.Errorf("the demo's appliance: %w", err)
 	}
 	cleanup := func() { _ = os.RemoveAll(dir) }
-	if err := fillDemo(s, clock, dir); err != nil {
+	if err := fillDemo(s, clock, dir, raw); err != nil {
 		cleanup()
 		return nil, err
 	}
 	return cleanup, nil
 }
 
-func fillDemo(s *Server, clock func() time.Time, dir string) error {
-	fleet, err := newDemoFleet(clock().UTC())
+func fillDemo(s *Server, clock func() time.Time, dir string, raw []byte) error {
+	fleet, err := newDemoFleet(clock().UTC(), raw)
 	if err != nil {
 		return err
 	}

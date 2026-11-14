@@ -51,7 +51,7 @@ const createdBy = "kubehenge.dev/created-by"
 // here start with.
 const (
 	workerClass = "worker"
-	workerPool  = "md-0"
+	workerPool  = provisioner.DefaultPool
 )
 
 // The variables that size machines: the control planes', and the workers' of every pool that does
@@ -1251,7 +1251,13 @@ func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user, r
 		return nil, false
 	}
 	before := c.DeepCopy()
-	req.WorkerPools, req.Autoscaling = poolsNamed(c, req.WorkerPools), poolsNamed(c, req.Autoscaling)
+	// The names stand for the pools of this read, which a retry after a conflict reads afresh.
+	named := *req
+	req = &named
+	if msg := namePools(c, req); msg != "" {
+		writeError(w, http.StatusUnprocessableEntity, msg)
+		return nil, false
+	}
 	// Autoscaling goes first, so that a change switching a pool's off may also fix its workers.
 	msg, err := applyAutoscaling(r.Context(), u.kube, c, req.Autoscaling)
 	if err != nil {
@@ -1346,7 +1352,7 @@ func applyTopology(c *clusterv1.Cluster, req *changeRequest) string {
 			return provisioner.WorkersRule + " in each pool"
 		}
 		if isAutoscaled(c, name) {
-			return "pool " + poolLabel(name, topologyPools(c)) + " is autoscaled. Switch autoscaling off to set its workers"
+			return "pool " + provisioner.PoolLabel(name, provisioner.TopologyPools(c)) + " is autoscaled. Switch autoscaling off to set its workers"
 		}
 		if !setWorkerReplicas(c, name, n) {
 			return "the cluster has no worker pool " + name

@@ -4,7 +4,7 @@ import { api } from "./api";
 import { autoscales, controlPlaneSizes, mostWorkers, variable } from "./create-form";
 import type { StepProps } from "./CreateSteps";
 import { addressCount, whole } from "./network";
-import { poolSuffix as suffixOf } from "./pool-machine";
+import { poolSize, poolSuffix as suffixOf } from "./pool-machine";
 import type {
   AutoscalerSettings,
   Autoscaling,
@@ -109,7 +109,8 @@ const entryMost = (e: PoolEntry): number => number(e.autoscale ? e.max : e.repli
 
 const entryLeast = (e: PoolEntry): number => number(e.autoscale ? e.min : e.replicas);
 
-const poolMost = (p: WorkerPool): number => p.autoscaling?.max ?? p.replicas;
+/** poolMost is the most workers a pool may run: an autoscaled pool may grow to its most. */
+export const poolMost = (p: WorkerPool): number => p.autoscaling?.max ?? p.replicas;
 
 // The add-ons that use memory on the nodes by the classes' figures, read from the variables. The
 // server counts them exactly and refuses what they leave no room for. Logs need monitoring, and
@@ -262,19 +263,37 @@ export function freeMemory(c: Cluster, nodes: PveNode[]): number | undefined {
   return usable.reduce((sum, n) => sum + Math.max(0, (n.maxMemory ?? 0) - (n.memory ?? 0)), 0);
 }
 
+/** addedWorkers is how many more workers pool p of a changed cluster may run than it could before. */
+export function addedWorkers(before: Cluster, p: WorkerPool): number {
+  const was = before.workerPools.find((x) => x.name === p.name);
+  return Math.max(0, poolMost(p) - (was === undefined ? 0 : poolMost(was)));
+}
+
+/** addedWorkersMiB is the memory the workers pool p of a changed cluster may add need, in MiB. */
+export const addedWorkersMiB = (before: Cluster, after: Cluster, p: WorkerPool): number =>
+  addedWorkers(before, p) * (poolSize(after, p)?.memoryMiB ?? 0);
+
 /**
- * roomWarning warns when the workers an autoscaled pool may still add need more memory than the
- * nodes the cluster may use have free. It is advice: memory frees and fills as other VMs come and go.
+ * roomWarning warns when the workers an autoscaled pool may add by a change need more memory than
+ * the nodes the cluster may use have free. It counts as the Memory check does, for the one pool. It
+ * is advice: memory frees and fills as other VMs come and go.
  */
-export function roomWarning(c: Cluster, pool: { p: WorkerPool; e: PoolEntry }, nodes: PveNode[]): string | undefined {
-  const workerMiB = quantity(record(c.variables["workerMachine"])["memoryMiB"]);
-  const free = freeMemory(c, nodes);
-  const added = number(pool.e.max) - pool.p.replicas;
-  if (!pool.e.autoscale || workerMiB === undefined || free === undefined || !(added > 0)) {
+export function roomWarning(
+  { before, after }: { before: Cluster; after: Cluster },
+  pool: string,
+  nodes: PveNode[],
+): string | undefined {
+  const p = after.workerPools.find((x) => x.name === pool);
+  const free = freeMemory(after, nodes);
+  if (p?.autoscaling === undefined || free === undefined) {
     return undefined;
   }
-  const wanted = added * workerMiB * bytesPerMiB;
-  return wanted > free ? `${added} more workers need ${bytes(wanted)}, the nodes have ${bytes(free)} free` : undefined;
+  const added = addedWorkers(before, p);
+  const wanted = addedWorkersMiB(before, after, p) * bytesPerMiB;
+  if (!(wanted > free)) {
+    return undefined;
+  }
+  return `${added} more ${added === 1 ? "worker needs" : "workers need"} ${bytes(wanted)}, the nodes have ${bytes(free)} free`;
 }
 
 /** PoolFields edit one worker pool in the Scale dialog: a fixed number of workers, or autoscaled between two. */
@@ -614,7 +633,7 @@ export function ScaleDialog({
             pools={c.workerPools}
             entry={entry}
             problem={invalid[p.name]}
-            warning={roomWarning(c, { p, e: entry }, nodes)}
+            warning={roomWarning({ before: c, after }, p.name, nodes)}
             room={room[p.name]}
             onChange={(e) => setPools({ ...pools, [p.name]: e })}
           />

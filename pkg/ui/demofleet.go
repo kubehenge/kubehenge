@@ -222,9 +222,10 @@ type demoFleet struct {
 	builds, older provisioner.NodeImageBuilds
 }
 
-func newDemoFleet(now time.Time) (*demoFleet, error) {
+// newDemoFleet makes the fleet raw holds, in the form of demo-fleet.json, dated against now.
+func newDemoFleet(now time.Time, raw []byte) (*demoFleet, error) {
 	f := &demoFleet{now: now, workloads: map[string]*Workload{}, members: map[string][]pve.Member{}}
-	if err := json.Unmarshal(demoFleetJSON, &f.data); err != nil {
+	if err := json.Unmarshal(raw, &f.data); err != nil {
 		return nil, fmt.Errorf("the demo's fleet: %w", err)
 	}
 	if err := f.templateLines(); err != nil {

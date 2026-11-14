@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
-import { poolChange, poolEntry, poolProblems, roomFor, roomWarning } from "./Autoscaling";
+import { poolChange, poolEntry, poolProblems, roomFor, roomWarning, scaledCluster } from "./Autoscaling";
 import { applyStaged, fakeServer } from "./fake-server";
 import type { Cluster, PveNode, WorkerPool } from "./types";
 
@@ -38,6 +38,12 @@ const web: Cluster = {
 };
 
 const autoscaled: Cluster = { ...web, workerPools: [scaledPool] };
+
+// mostRaised is a change of c's autoscaled pool to max workers at most, as the Scale dialog makes it.
+const mostRaised = (c: Cluster, max: string): { before: Cluster; after: Cluster } => ({
+  before: c,
+  after: scaledCluster(c, 1, { "md-0": { ...poolEntry(scaledPool), max } }),
+});
 
 const signedIn = { "GET /api/session": () => ({ body: { user: "alice@pve", csrf: "c1" } }) };
 
@@ -182,17 +188,19 @@ describe("the pools' checks", () => {
   });
 
   it("warns only when the nodes the cluster may use lack the memory", () => {
-    const e = { ...poolEntry(scaledPool), max: "5" };
     const roomy: PveNode[] = [{ node: "pve1", online: true, memory: 0, maxMemory: 64 * gib }];
     const tight: PveNode[] = [
       { node: "pve1", online: true, memory: 60 * gib, maxMemory: 64 * gib },
       { node: "pve2", online: true, memory: 0, maxMemory: 256 * gib },
     ];
-    expect(roomWarning(autoscaled, { p: scaledPool, e }, roomy)).toBeUndefined();
-    expect(roomWarning(autoscaled, { p: scaledPool, e }, tight)).toBeUndefined();
+    expect(roomWarning(mostRaised(autoscaled, "5"), "md-0", roomy)).toBeUndefined();
+    expect(roomWarning(mostRaised(autoscaled, "5"), "md-0", tight)).toBeUndefined();
     const kept: Cluster = { ...autoscaled, variables: { ...autoscaled.variables, allowedNodes: ["pve1"] } };
-    expect(roomWarning(kept, { p: scaledPool, e }, tight)).toMatch(/^2 more workers need 16\.0 GiB/u);
-    expect(roomWarning(kept, { p: scaledPool, e }, [])).toBeUndefined();
+    // The most goes from 4 to 5 and to 6: one and two more workers of 8 GiB, on 4 GiB free.
+    expect(roomWarning(mostRaised(kept, "5"), "md-0", tight)).toMatch(/^1 more worker needs 8\.0 GiB/u);
+    expect(roomWarning(mostRaised(kept, "6"), "md-0", tight)).toMatch(/^2 more workers need 16\.0 GiB/u);
+    expect(roomWarning(mostRaised(kept, "4"), "md-0", tight)).toBeUndefined();
+    expect(roomWarning(mostRaised(kept, "5"), "md-0", [])).toBeUndefined();
   });
 });
 
