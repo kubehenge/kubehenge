@@ -257,10 +257,7 @@ verify-talos-pins: web gateway-api
 # own, as git lists them.
 # CI runs the Go analysis and the rest on separate runners, so `lint-other` is everything but Go.
 .PHONY: lint
-lint: ci-lint-go lint-other
-
-.PHONY: ci-lint-go
-ci-lint-go: lint-go lint-gopls
+lint: lint-go lint-gopls lint-other
 
 .PHONY: lint-other
 lint-other: lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-changelog lint-docker lint-typos
@@ -295,17 +292,19 @@ fmt: web/node_modules/.package-lock.json
 # target take about 5 minutes and 4 GB, and an unchanged tree takes seconds from the cache.
 # Even those seconds open every package's cache entries, so inputs that already passed are not
 # linted again: the Go sources, tracked or not, the module, the config and the linter's version.
+# LINT_GO_OS narrows the systems, so that CI lints each on a runner of its own.
 LINT_GO := CGO_ENABLED=0 GOMAXPROCS=4 GOMEMLIMIT=2GiB nice -n 10 golangci-lint run --allow-parallel-runners
 LINT_GO_INPUTS := '*.go' go.mod go.sum .golangci.yml
+LINT_GO_SYSTEMS = $(or $(LINT_GO_OS),linux windows)
 .PHONY: lint-go
 lint-go: web gateway-api
 	go mod tidy -diff
 	golangci-lint config verify
 	key=$$({ git ls-files -s -- $(LINT_GO_INPUTS); git diff HEAD -- $(LINT_GO_INPUTS); \
 		git ls-files -o --exclude-standard -z -- '*.go' | xargs -0 -r git hash-object; \
-		golangci-lint version; } | sha256sum | cut -c1-16); \
+		golangci-lint version; echo $(LINT_GO_SYSTEMS); } | sha256sum | cut -c1-16); \
 	if [ -f "dist/lint-go/$$key" ]; then echo "golangci-lint: these inputs passed before"; \
-	else GOOS=linux $(LINT_GO) ./... && GOOS=windows $(LINT_GO) ./... && \
+	else for os in $(LINT_GO_SYSTEMS); do GOOS=$$os $(LINT_GO) ./... || exit 1; done && \
 		mkdir -p dist/lint-go && touch "dist/lint-go/$$key"; fi
 	$(GOVULNCHECK) ./...
 
