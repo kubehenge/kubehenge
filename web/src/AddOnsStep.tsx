@@ -50,7 +50,6 @@ import {
   registerHint,
 } from "./ui";
 
-
 // HeadlampAddOn installs Headlamp, at a host name of its own if one is given, and read-only for
 // everyone if asked.
 function HeadlampAddOn({ form, set }: Pick<StepProps, "form" | "set">): JSX.Element {
@@ -643,7 +642,14 @@ function AddonCards({
       )}
       {etcdOffered(cls) && (
         <AddonCard mib={0} on={form.etcdSnapshots}>
-          <EtcdSnapshotsChoice form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} namespace={namespace} />
+          <EtcdSnapshotsChoice
+            form={form}
+            set={set}
+            shown={shown}
+            cls={cls}
+            canTrust={canTrust}
+            namespace={namespace}
+          />
         </AddonCard>
       )}
       {variable(cls, "certificates") && (
@@ -729,9 +735,7 @@ export function PoliciesStep(props: AddOnsProps): JSX.Element {
           <Field
             label="Upgrade automatically"
             hint={
-              form.upgradeMode === "off" && !form.nodeImages
-                ? undefined
-                : `Daily 02:00 to 06:00, ${browserZone()} time`
+              form.upgradeMode === "off" && !form.nodeImages ? undefined : `Daily 02:00 to 06:00, ${browserZone()} time`
             }
           >
             {(id) => <ModeSelect id={id} value={form.upgradeMode} onChange={(m) => set("upgradeMode", m)} />}

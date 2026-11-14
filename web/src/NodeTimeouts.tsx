@@ -136,11 +136,7 @@ export function NodeTimeoutFields({
   const problems = timeoutProblems(value);
   return (
     <>
-      <Field
-        label="Drain, minutes"
-        error={problems.drain}
-        hint={noLimitHint}
-      >
+      <Field label="Drain, minutes" error={problems.drain} hint={noLimitHint}>
         {(id) => (
           <input
             id={id}
@@ -151,11 +147,7 @@ export function NodeTimeoutFields({
           />
         )}
       </Field>
-      <Field
-        label="Volume detach, minutes"
-        error={problems.detach}
-        hint={noLimitHint}
-      >
+      <Field label="Volume detach, minutes" error={problems.detach} hint={noLimitHint}>
         {(id) => (
           <input
             id={id}
@@ -166,11 +158,7 @@ export function NodeTimeoutFields({
           />
         )}
       </Field>
-      <Field
-        label="Node removal, seconds"
-        error={problems.deletion}
-        hint={noLimitHint}
-      >
+      <Field label="Node removal, seconds" error={problems.deletion} hint={noLimitHint}>
         {(id) => (
           <input
             id={id}

@@ -157,7 +157,15 @@ describe("the egress proxy without a management proxy", () => {
   it("offers no management proxy, and no proxy is the choice", async () => {
     const changes: EgressChoice[] = [];
     const user = userEvent.setup({ delay: null });
-    render(<EgressFields value={newEgress()} managementProxy={false} onChange={(e) => changes.push(e)} />);
+    render(
+      <EgressFields
+        value={newEgress()}
+        managementProxy={false}
+        onChange={(e) => {
+          changes.push(e);
+        }}
+      />,
+    );
     expect(screen.queryByRole("radio", { name: "Management proxy" })).not.toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "No proxy" })).toBeChecked();
     await user.click(screen.getByRole("radio", { name: "Own proxy" }));

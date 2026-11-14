@@ -57,17 +57,23 @@ describe("the machines step and what the cluster could never fit", () => {
 
   it("marks a machine larger than every node's memory, and disks beyond the storage's free space", () => {
     const big = { ...sized, workerMachine: { cores: 4, memoryMiB: 900_000, diskGiB: 9000 } };
-    expect(capacityProblems("Machines", big, [node("pve1", 20)], [local])).toStrictEqual({
+    expect(capacityProblems("Machines", big, { nodes: [node("pve1", 20)], storages: [local] })).toStrictEqual({
       workerMachine: "No node has 878.9 GiB of memory. Lower the machine's memory.",
     });
     const disks = { ...sized, workerMachine: { cores: 4, memoryMiB: 4096, diskGiB: 9000 } };
-    expect(capacityProblems("Machines", disks, [node("pve1", 20)], [local])).toStrictEqual({
+    expect(capacityProblems("Machines", disks, { nodes: [node("pve1", 20)], storages: [local] })).toStrictEqual({
       workerMachine: "The disks need 8.8 TiB, 610.0 GiB free. Lower a disk size or the node count.",
     });
   });
 
   it("only warns, elsewhere and for memory in use, since the cluster waits for room", () => {
-    expect(capacityProblems("Machines", sized, [node("pve1", 2)], [local])).toStrictEqual({});
-    expect(capacityProblems("Network", { ...sized, workerMachine: { cores: 4, memoryMiB: 900_000, diskGiB: 30 } }, [node("pve1", 2)], [local])).toStrictEqual({});
+    expect(capacityProblems("Machines", sized, { nodes: [node("pve1", 2)], storages: [local] })).toStrictEqual({});
+    expect(
+      capacityProblems(
+        "Network",
+        { ...sized, workerMachine: { cores: 4, memoryMiB: 900_000, diskGiB: 30 } },
+        { nodes: [node("pve1", 2)], storages: [local] },
+      ),
+    ).toStrictEqual({});
   });
 });

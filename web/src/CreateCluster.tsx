@@ -90,6 +90,30 @@ const raising = new Set<keyof Form>([
   "existingCertManager",
 ]);
 
+// CopiedNote says on the steps after General which cluster the values were copied from.
+function CopiedNote({ from, step }: { from: Cluster | undefined; step: Step }): JSX.Element | null {
+  return from === undefined || step === "General" || step === "Confirm" ? null : (
+    <p className="hint">Copied from {from.name}</p>
+  );
+}
+
+// CreateButton is Confirm's primary button. It says so when the cluster waits for room.
+function CreateButton({
+  blocked,
+  waits,
+  onCreate,
+}: {
+  blocked: boolean;
+  waits: boolean;
+  onCreate: () => void;
+}): JSX.Element {
+  return (
+    <button type="button" className="primary" disabled={blocked} onClick={onCreate}>
+      {waits ? "Create and wait" : "Create"}
+    </button>
+  );
+}
+
 export function CreateCluster({
   canTrust,
   namespaces,
@@ -217,12 +241,12 @@ export function CreateCluster({
     : bridgeNetwork(bridge, bridgesByNode, dnsByNode);
   // Registering needs a Rancher that one of the clusters runs.
   const rancherExists = clusters.some((x) => record(x.variables["rancher"])["install"] === true);
-  const namespace = namespaces.length > 1 ? namespaceOf(entered, namespaces) : "";
+  const formNamespace = namespaces.length > 1 ? namespaceOf(entered, namespaces) : "";
   const chosen: Form = withBackupChoices(
     {
       ...withBridgeNetwork(withTalosRelease(entered, talos, offered), net, kept),
-      namespace,
-      taken: clusters.filter((x) => namespace === "" || x.namespace === namespace).map((x) => x.name),
+      namespace: formNamespace,
+      taken: clusters.filter((x) => formNamespace === "" || x.namespace === formNamespace).map((x) => x.name),
       rancherExists,
       rancherRegister: rancherExists && entered.rancherRegister,
       bridge,
@@ -275,13 +299,14 @@ export function CreateCluster({
       bridgesByNode,
       online: nodes.filter((x) => x.online).map((x) => x.node),
     }),
-    ...capacityProblems(step, form, nodes, usableStorages),
+    ...capacityProblems(step, form, { nodes, storages: usableStorages }),
     ...csiProblems(step, form, csi),
     ...snapshotsProblems(step, form, snapshots),
   };
   const open = Object.values(byField);
   // A cluster that fits the nodes but not what they have free now waits for room.
   const waits = createRoom(form, nodes, usableStorages).nodeWarning !== undefined;
+  const refused = Object.keys(capacityProblems("Machines", form, { nodes, storages: usableStorages })).length > 0;
   const shown = (k: FieldKey): string | undefined => (attempted.has(step) || touched.has(k) ? byField[k] : undefined);
   const wizardRef = useRef<HTMLDivElement>(null);
 
@@ -378,9 +403,7 @@ export function CreateCluster({
           ))}
         </nav>
         <div className="wizard-body" ref={wizardRef}>
-          {copiedFrom !== undefined && step !== "General" && step !== "Confirm" && (
-            <p className="hint">Copied from {copiedFrom.name}</p>
-          )}
+          <CopiedNote from={copiedFrom} step={step} />
           {step === "General" && (
             <GeneralStep
               form={form}
@@ -485,16 +508,13 @@ export function CreateCluster({
                 Back
               </button>
               {step === "Confirm" ? (
-                <button
-                  type="button"
-                  className="primary"
-                  disabled={busy || !checked.accepted || Object.keys(capacityProblems("Machines", form, nodes, usableStorages)).length > 0}
-                  onClick={() => {
+                <CreateButton
+                  blocked={[busy, !checked.accepted, refused].some(Boolean)}
+                  waits={waits}
+                  onCreate={() => {
                     void create();
                   }}
-                >
-                  {waits ? "Create and wait" : "Create"}
-                </button>
+                />
               ) : (
                 <button type="button" className="primary" onClick={next}>
                   Next

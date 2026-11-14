@@ -182,7 +182,15 @@ import { quantity, record, text, texts } from "./values";
 
 export { nodeCustomisationOf } from "./node-customisation";
 
-export const steps = ["General", "Network", "Machines", "Add-ons", "Policies", "Identity providers", "Confirm"] as const;
+export const steps = [
+  "General",
+  "Network",
+  "Machines",
+  "Add-ons",
+  "Policies",
+  "Identity providers",
+  "Confirm",
+] as const;
 export type Step = (typeof steps)[number];
 
 export interface Machine {
@@ -337,7 +345,9 @@ export const newUpgrades = (mode: Form["upgradeMode"], timeZone: string, nodeIma
   mode,
   ...(nodeImages ? {} : { nodeImages: false }),
   // With nothing to run there is no window to keep.
-  ...(mode === "off" && !nodeImages ? {} : { window: { start: defaultStart, durationMinutes: defaultMinutes, timeZone } }),
+  ...(mode === "off" && !nodeImages
+    ? {}
+    : { window: { start: defaultStart, durationMinutes: defaultMinutes, timeZone } }),
 });
 
 export const versionExamples: Record<string, string> = {
@@ -1385,7 +1395,8 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
 const size = (mib: number): string => bytes(mib * bytesPerMiB).replace(".0 ", " ");
 /** coresText counts cores, with "core" for one. */
 export const coresText = (n: number): string => `${n} ${n === 1 ? "core" : "cores"}`;
-const machine = (m: Machine): string => `${coresText(m.cores)}, ${size(m.memoryMiB)} memory, ${size(m.diskGiB * mibPerGiB)} disk`;
+const machine = (m: Machine): string =>
+  `${coresText(m.cores)}, ${size(m.memoryMiB)} memory, ${size(m.diskGiB * mibPerGiB)} disk`;
 
 /** formLoadBalancerValue is what the load-balancer fields show of the form. */
 export const formLoadBalancerValue = (form: Form): LoadBalancerValue => ({
@@ -2495,7 +2506,11 @@ export function memoryNodeWarning(form: Form, nodes: PveNode[]): string | undefi
  * Confirm shows: a machine larger than the memory of every node it may use, and disks beyond the
  * storage's free space. Memory that is merely in use now only warns, since the cluster waits for it.
  */
-export function capacityProblems(step: Step, form: Form, nodes: PveNode[], storages: Storage[]): Problems {
+export function capacityProblems(
+  step: Step,
+  form: Form,
+  { nodes, storages }: { nodes: PveNode[]; storages: Storage[] },
+): Problems {
   if (step !== "Machines") {
     return {};
   }

@@ -631,7 +631,13 @@ function BackupKey({
   return filled(existingSecret) ? (
     <p className="hint">Access key: Secret {existingSecret} in velero</p>
   ) : (
-    <CredentialField label="Access key" purpose="backup" cluster={c} keys={backupKeys} hint={backupCredentialHint(c.namespace, c.name)} />
+    <CredentialField
+      label="Access key"
+      purpose="backup"
+      cluster={c}
+      keys={backupKeys}
+      hint={backupCredentialHint(c.namespace, c.name)}
+    />
   );
 }
 

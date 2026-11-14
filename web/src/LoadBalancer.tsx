@@ -136,8 +136,7 @@ const loadBalancerInfo = (distribution: string | undefined): string =>
   }`;
 
 const addressesHint = (families: FamilyChoice, example?: string): string => {
-  const like =
-    example ?? (hasFamily(families, "IPv4") ? "10.0.0.100-10.0.0.120" : "2001:db8::100-2001:db8::120");
+  const like = example ?? (hasFamily(families, "IPv4") ? "10.0.0.100-10.0.0.120" : "2001:db8::100-2001:db8::120");
   return `Free addresses on the nodes' network, like ${like}`;
 };
 
@@ -274,9 +273,7 @@ export function addressesProblem(entries: string[], network: NodesNetwork, route
   const networks = networksOf(network).map((n) => ({ gateway: n.gateway, prefix: routed ? 0 : n.prefix }));
   const { bad } = addressCountIn(entries, networks);
   if (bad !== undefined) {
-    return routed
-      ? `${bad} is not an address, range or network`
-      : offNetworkText(bad);
+    return routed ? `${bad} is not an address, range or network` : offNetworkText(bad);
   }
   const reserved = holdingReserved(entries, network);
   if (reserved !== undefined) {

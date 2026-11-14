@@ -244,7 +244,15 @@ const wizard = (): ReturnType<typeof fakeServer> => {
     "GET /api/classes": () => ({ body: [rke2] }),
     "GET /api/proxmox/storages": () => ({
       body: [
-        { storage: "local-lvm", node: "pve1", shared: false, content: ["images"], avail: 2 ** 40, total: 2 ** 41, usable: true },
+        {
+          storage: "local-lvm",
+          node: "pve1",
+          shared: false,
+          content: ["images"],
+          avail: 2 ** 40,
+          total: 2 ** 41,
+          usable: true,
+        },
       ],
     }),
     "GET /api/proxmox/nodes": () => ({ body: [{ node: "pve1", online: true }] }),

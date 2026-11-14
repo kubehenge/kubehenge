@@ -21,7 +21,9 @@ const fields = (distribution: string): JSX.Element => (
     families="ipv4"
     value={value}
     errors={{}}
-    onChange={() => undefined}
+    onChange={() => {
+      // The help is read, not changed.
+    }}
     password={null}
   />
 );
