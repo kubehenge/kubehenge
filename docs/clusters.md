@@ -1366,6 +1366,8 @@ Kubehenge keeps a worker on every node that holds the cluster's bound volumes. I
 
 - **Replacements:** in an upgrade, a node image refresh or a health-check repair, a new worker goes to a node whose volumes would be left without a worker. That is usually its predecessor's node.
 - **More workers:** when a pool grows, new workers go to the nodes with volumes and no worker first.
+- **A node that goes offline** before such a worker's VM is made is let go of within one placement round, and the worker goes to the cluster's other nodes.
+- **No workers:** a cluster that asks for no workers runs its pods on its control planes, which count instead.
 - **Shared storage** has no such limit, and nothing changes there.
 
 When a volume's node has no worker, the cluster's `VolumesWithoutWorker` condition names the volumes and the fix. `kubectl describe cluster` shows it.
@@ -1374,8 +1376,10 @@ When a volume's node has no worker, the cluster's `VolumesWithoutWorker` conditi
 | --- | --- |
 | `NodeOffline`, `NodeInMaintenance` | Bring the node back. |
 | `NodeNotAllowed` | Add the node to `allowedNodes`, or move the volumes. |
+| `StorageInactive` | Activate the cluster's storage on the node. |
+| `NodeUnavailable` | The cluster's VMs cannot go to the node now. The cluster's other conditions say why. |
 | `TooFewWorkers` | Add workers, at least one per node with volumes. |
-| `NoWorker` | Delete a worker on another node. Its replacement goes to the node with volumes. |
+| `NoWorker` | Delete the machine the condition names. Its replacement goes to the node with volumes. |
 | `NodeGone` | The node left the Proxmox VE cluster. Restore the volumes from a backup or delete their claims. |
 
 The create wizard and the change checks warn when a cluster has fewer workers than nodes its volumes are on. An autoscaled pool counts at its minimum.

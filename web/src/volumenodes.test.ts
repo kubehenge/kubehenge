@@ -54,6 +54,13 @@ describe("the change checks and the nodes holding volumes", () => {
     });
     expect(volumesCheck(web)).toBeUndefined();
   });
+
+  it("says nothing for a cluster without workers, whose control planes run its pods", () => {
+    const controlPlanes: Cluster = { ...web, volumeNodes: ["pve1", "pve2"], workerPools: [] };
+    expect(volumesCheck(controlPlanes)).toBeUndefined();
+    const emptied: Cluster = { ...controlPlanes, workerPools: [{ name: "md-0", class: "worker", replicas: 0 }] };
+    expect(scaleChecks(emptied, emptied, [])).not.toContainEqual(expect.objectContaining({ what: "Volumes" }));
+  });
 });
 
 const node = (name: string): PveNode => ({ node: name, online: true });

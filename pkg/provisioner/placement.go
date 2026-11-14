@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -69,6 +71,12 @@ type Placer struct {
 	// Workload reads a workload cluster, for the volumes on storage local to each node. Unset, none
 	// are read and nothing steers workers to them.
 	Workload func(ctx context.Context, c *clusterv1.Cluster) (r client.Reader, found bool, err error)
+	// VolumeTimeout bounds the read of one cluster's volumes, 5 s where zero. The volumes are read
+	// beside the placement, which no cluster that is slow to answer holds up.
+	VolumeTimeout time.Duration
+	// volumesBusy is set while a round of volume reads runs, and volumes waits for it.
+	volumesBusy atomic.Bool
+	volumes     sync.WaitGroup
 }
 
 // NodesSkippedCondition on a Cluster says that Placer left Proxmox VE nodes out of its placement
@@ -120,17 +128,22 @@ func (p *Placer) placeAll(ctx context.Context) {
 		log.Error(err, "listing clusters")
 		return
 	}
+	var jobs []volumeJob
 	for i := range clusters.Items {
 		c := &clusters.Items[i]
 		if Owns(c, p.ClassNamespace) && c.DeletionTimestamp.IsZero() {
-			p.place(ctx, c, online, sites, skipped)
+			if job := p.place(ctx, c, online, sites, skipped); job != nil {
+				jobs = append(jobs, *job)
+			}
 		}
 	}
+	p.startVolumes(ctx, jobs, online, sites)
 }
 
 // place records where one cluster's VMs may go, and what keeps them from going anywhere, as one look
-// at the nodes and the storages found them.
-func (p *Placer) place(ctx context.Context, c *clusterv1.Cluster, online []Node, sites *Sites, skipped []NodeFault) {
+// at the nodes and the storages found them. It returns what reading the cluster's volumes needs,
+// nil where the placement could not be judged.
+func (p *Placer) place(ctx context.Context, c *clusterv1.Cluster, online []Node, sites *Sites, skipped []NodeFault) *volumeJob {
 	log := ctrl.LoggerFrom(ctx).WithName("placer")
 	p.markSkipped(ctx, c, skipped)
 	p.markVersions(ctx, c, online)
@@ -138,13 +151,13 @@ func (p *Placer) place(ctx context.Context, c *clusterv1.Cluster, online []Node,
 	needs, err := needsOf(c, sites)
 	if err != nil {
 		log.Error(err, "reading the cluster's node OS", "cluster", client.ObjectKeyFromObject(c))
-		return
+		return nil
 	}
 	level := needs.Level
 	chosen, storage, err := placementVariables(c)
 	if err != nil {
 		log.Error(err, "reading the cluster's nodes and storage", "cluster", client.ObjectKeyFromObject(c))
-		return
+		return nil
 	}
 	// The annotation lists every node the cluster could use, whichever it chose, for the hook to
 	// narrow. Whether a VM has a place at all is judged against the chosen ones.
@@ -167,7 +180,8 @@ func (p *Placer) place(ctx context.Context, c *clusterv1.Cluster, online []Node,
 		p.clearNewer(c)
 	}
 	p.record(ctx, c, hosts, refusedForFaults(blocked, hosts, skipped))
-	p.markVolumes(ctx, c, online, sites, chosen, storage)
+	p.unpinStale(ctx, c, placement(chosen, hosts))
+	return &volumeJob{cluster: c, chosen: chosen, storage: storage, hosts: placement(chosen, hosts)}
 }
 
 // nodeNames are the names of the nodes, kept to chosen where the cluster chose any.
@@ -349,9 +363,12 @@ func (h *Hooks) placementPatch(ctx context.Context, cluster *clusterv1.Cluster, 
 	return patch, nil
 }
 
+// jsonPatchAdd is the JSON patch operation that adds a value.
+const jsonPatchAdd = "add"
+
 // addOp is a JSON patch operation adding value at path.
 func addOp(path string, value any) map[string]any {
-	return map[string]any{"op": "add", "path": path, valueKey: value}
+	return map[string]any{"op": jsonPatchAdd, "path": path, valueKey: value}
 }
 
 // onlineNodes are the nodes recorded on the cluster, or, for a cluster the Placer has not got to

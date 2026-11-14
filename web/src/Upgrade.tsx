@@ -267,11 +267,12 @@ const counted = (n: number, what: string): string => `${n} ${what}${n === 1 ? ""
 
 /**
  * volumesCheck warns when the cluster would have fewer workers than Proxmox VE nodes holding its
- * volumes on node-local storage. An autoscaled pool counts at its minimum.
+ * volumes on node-local storage. An autoscaled pool counts at its minimum. A cluster that asks for
+ * no workers runs its pods on its control planes and gets no line.
  */
 export function volumesCheck(after: Cluster): Check | undefined {
   const held = after.volumeNodes ?? [];
-  if (held.length === 0) {
+  if (held.length === 0 || !after.workerPools.some((p) => poolMost(p) > 0)) {
     return undefined;
   }
   const workers = after.workerPools.reduce((sum, p) => sum + (p.autoscaling?.min ?? p.replicas), 0);

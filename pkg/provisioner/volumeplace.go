@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"gomodules.xyz/jsonpatch/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -24,9 +26,14 @@ import (
 )
 
 // VolumeNodesAnnotation lists, on a cluster whose storage is local to each node, the Proxmox VE
-// nodes its bound volumes are on. A pod can use such a volume only on a worker on its node, so
-// WorkerPlacement sends a new worker to one of them that is left without one.
+// nodes its bound volumes are on, the one with the most volumes first. A pod can use such a
+// volume only on a node of the cluster on the volume's node, so WorkerPlacement sends a new worker
+// to one of them that is left without one.
 const VolumeNodesAnnotation = "kubehenge.dev/volume-nodes"
+
+// VolumePinAnnotation is on a ProxmoxMachine that WorkerPlacement kept to the node it names. The
+// Placer takes the pin off again when that node can no longer take the VM before it is made.
+const VolumePinAnnotation = "kubehenge.dev/volume-pin"
 
 // VolumesWithoutWorkerCondition on a Cluster names the bound volumes whose node has no worker,
 // whose pods therefore stay Pending, and what gives them one.
@@ -41,15 +48,29 @@ const (
 	reasonNodeNotAllowed  = "NodeNotAllowed"
 	reasonNodeOffline     = "NodeOffline"
 	reasonNodeMaintenance = "NodeInMaintenance"
+	reasonStorageInactive = "StorageInactive"
+	reasonNodeUnavailable = "NodeUnavailable"
 	reasonTooFewWorkers   = "TooFewWorkers"
 	reasonNoWorker        = "NoWorker"
 )
+
+var reasonOrder = []string{
+	reasonNodeGone, reasonNodeNotAllowed, reasonNodeOffline, reasonNodeMaintenance, reasonStorageInactive,
+	reasonNodeUnavailable, reasonTooFewWorkers, reasonNoWorker,
+}
 
 // volumesNamed is how many volumes a sentence of the condition names before it counts the rest.
 const volumesNamed = 3
 
 // handleFields are those of the CSI plugin's volume handle: region/zone/storage/volume.
 const handleFields = 4
+
+// defaultVolumeTimeout bounds the read of one cluster's volumes where Placer.VolumeTimeout is zero.
+// A cluster that answers takes well under a second, and one that does not is tried again next round.
+const defaultVolumeTimeout = 5 * time.Second
+
+// placerFieldOwner writes what the Placer changes on ProxmoxMachines.
+const placerFieldOwner = client.FieldOwner("kubehenge-placer")
 
 // volumesByNode are the bound volumes of the CSI plugin on storage, each as its claim's
 // namespace/name, by the Proxmox VE node their node affinity keeps them to. A volume that more
@@ -99,29 +120,37 @@ func claimOf(pv *corev1.PersistentVolume) string {
 	return pv.Name
 }
 
-// clusterWorkers are where a cluster's workers run, how many there are, and whether one is still
-// being placed.
+// clusterWorkers are the machines that run a cluster's pods: its workers, or its control planes
+// where it has no workers to ask for.
 type clusterWorkers struct {
-	on      map[string]int
-	count   int
+	// on names the machines on each node.
+	on    map[string][]string
+	count int
+	// pending is set while one of them is still being placed.
 	pending bool
+	// controlPlanes is set where the control planes run the pods.
+	controlPlanes bool
 }
 
-// workersOf reads where the cluster's workers that are not being deleted run.
+// workersOf reads where the machines that run the cluster's pods are, those being deleted left out.
 func workersOf(ctx context.Context, c client.Reader, cluster *clusterv1.Cluster) (clusterWorkers, error) {
 	pms := proxmoxMachineList()
 	if err := c.List(ctx, pms, client.InNamespace(cluster.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: cluster.Name}); err != nil {
 		return clusterWorkers{}, fmt.Errorf("listing the cluster's ProxmoxMachines: %w", err)
 	}
-	w := clusterWorkers{on: map[string]int{}}
+	// A cluster without workers takes the taint off its control planes, which then run its pods.
+	w := clusterWorkers{on: map[string][]string{}, controlPlanes: !wantsWorkers(cluster)}
 	for i := range pms.Items {
 		pm := &pms.Items[i]
-		if pm.GetLabels()[clusterv1.MachineDeploymentNameLabel] == "" || !pm.GetDeletionTimestamp().IsZero() {
+		_, controlPlane := pm.GetLabels()[clusterv1.MachineControlPlaneLabel]
+		worker := pm.GetLabels()[clusterv1.MachineDeploymentNameLabel] != ""
+		runsPods := worker || w.controlPlanes && controlPlane
+		if !runsPods || !pm.GetDeletionTimestamp().IsZero() {
 			continue
 		}
 		w.count++
 		if node := nodeOf(pm); node != "" {
-			w.on[node]++
+			w.on[node] = append(w.on[node], pm.GetName())
 		} else {
 			w.pending = true
 		}
@@ -140,18 +169,46 @@ func nodeOf(pm *unstructured.Unstructured) string {
 	return ""
 }
 
-// markVolumes records on a cluster on storage local to each node which nodes hold its volumes,
-// and which of those volumes have no worker on their node. On shared storage it clears both.
-func (p *Placer) markVolumes(ctx context.Context, c *clusterv1.Cluster, online []Node, sites *Sites, chosen []string, storage string) {
-	if p.Workload == nil || sites == nil {
+// volumeJob is what reading one cluster's volumes needs from its placement: the nodes it chose,
+// its storage, and the nodes a new VM of it may go to now.
+type volumeJob struct {
+	cluster *clusterv1.Cluster
+	chosen  []string
+	storage string
+	hosts   []string
+}
+
+// startVolumes reads the clusters' volumes beside the placement, every cluster at once, so that
+// neither the placement nor another cluster waits on one that is slow to answer. A round still
+// running when the next placement ends is left to finish, and that placement's round is skipped.
+func (p *Placer) startVolumes(ctx context.Context, jobs []volumeJob, online []Node, sites *Sites) {
+	if p.Workload == nil || sites == nil || len(jobs) == 0 || !p.volumesBusy.CompareAndSwap(false, true) {
 		return
 	}
+	p.volumes.Go(func() {
+		defer p.volumesBusy.Store(false)
+		var round sync.WaitGroup
+		for _, job := range jobs {
+			round.Go(func() { p.markVolumes(ctx, job, online, sites) })
+		}
+		round.Wait()
+	})
+}
+
+// markVolumes records on a cluster on storage local to each node which nodes hold its volumes,
+// and which of those volumes have no worker on their node. On shared storage it clears both.
+func (p *Placer) markVolumes(ctx context.Context, job volumeJob, online []Node, sites *Sites) {
+	c := job.cluster
 	log := ctrl.LoggerFrom(ctx).WithName("placer").WithValues("cluster", client.ObjectKeyFromObject(c))
-	site, known := sites.Storages[storage]
+	site, known := sites.Storages[job.storage]
 	var volumes map[string][]string
 	if known && !site.Shared {
+		// Until its control plane is up a cluster has no volumes, and its API does not answer.
+		if !meta.IsStatusConditionTrue(c.Status.Conditions, clusterv1.ClusterControlPlaneInitializedCondition) {
+			return
+		}
 		var read bool
-		if volumes, read = p.readVolumes(ctx, c, storage); !read {
+		if volumes, read = p.readVolumes(ctx, c, job.storage); !read {
 			return
 		}
 	}
@@ -163,7 +220,9 @@ func (p *Placer) markVolumes(ctx context.Context, c *clusterv1.Cluster, online [
 			return
 		}
 	}
-	nodes, cond := volumeReport(volumes, site.Nodes, online, chosen, workers)
+	nodes, cond := volumeReport(&volumeFacts{
+		volumes: volumes, site: site, storage: job.storage, online: online, chosen: job.chosen, hosts: job.hosts, workers: workers,
+	})
 	p.recordVolumeNodes(ctx, c, nodes)
 	have := meta.FindStatusCondition(c.Status.Conditions, VolumesWithoutWorkerCondition)
 	if (cond == nil && have == nil) || (cond != nil && have != nil && have.Reason == cond.Reason && have.Message == cond.Message) {
@@ -174,86 +233,137 @@ func (p *Placer) markVolumes(ctx context.Context, c *clusterv1.Cluster, online [
 	}
 }
 
-// readVolumes reads the cluster's bound volumes on storage by node, and read is false while the
-// cluster cannot be read.
+// readVolumes reads the cluster's bound volumes on storage by node, within the Placer's
+// VolumeTimeout. read is false while the cluster cannot be read in that time. A read that runs
+// over is left to end on the client's own timeout.
 func (p *Placer) readVolumes(ctx context.Context, c *clusterv1.Cluster, storage string) (map[string][]string, bool) {
 	log := ctrl.LoggerFrom(ctx).WithName("placer").WithValues("cluster", client.ObjectKeyFromObject(c))
-	reader, found, err := p.Workload(ctx, c)
-	if err != nil || !found {
-		if err != nil && ctx.Err() == nil {
-			log.Error(err, "reaching the cluster to read its volumes")
-		}
-		return nil, false
+	timeout := cmp.Or(p.VolumeTimeout, defaultVolumeTimeout)
+	bounded, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	type result struct {
+		pvs   []corev1.PersistentVolume
+		found bool
+		err   error
 	}
-	pvs := &corev1.PersistentVolumeList{}
-	if err := reader.List(ctx, pvs); err != nil {
+	done := make(chan result, 1)
+	go func() {
+		reader, found, err := p.Workload(bounded, c)
+		if err != nil || !found {
+			done <- result{found: found, err: err}
+			return
+		}
+		pvs := &corev1.PersistentVolumeList{}
+		err = reader.List(bounded, pvs)
+		done <- result{pvs: pvs.Items, found: true, err: err}
+	}()
+	select {
+	case r := <-done:
+		if r.err != nil && ctx.Err() == nil {
+			log.Error(r.err, "reading the cluster's persistent volumes")
+		}
+		if r.err != nil || !r.found {
+			return nil, false
+		}
+		return volumesByNode(r.pvs, storage), true
+	case <-bounded.Done():
 		if ctx.Err() == nil {
-			log.Error(err, "listing the cluster's persistent volumes")
+			log.Info("the cluster's persistent volumes were not read in time", "timeout", timeout.String())
 		}
 		return nil, false
 	}
-	return volumesByNode(pvs.Items, storage), true
+}
+
+// volumeFacts are what volumeReport judges: the volumes by node, the cluster's storage and where it
+// is configured, the nodes online, those the cluster chose and those a new VM of it may go to now,
+// and the machines that run its pods.
+type volumeFacts struct {
+	volumes map[string][]string
+	site    StorageSite
+	storage string
+	online  []Node
+	chosen  []string
+	hosts   []string
+	workers clusterWorkers
 }
 
 // bareNode is a node holding volumes without a worker, and why where it cannot take one.
 type bareNode struct{ node, reason string }
 
-// volumeReport is which of the nodes holding volumes are in the Proxmox VE cluster (existing), the
-// one with the most volumes first, and the condition naming the volumes whose node has no worker,
-// nil when every one has.
-func volumeReport(volumes map[string][]string, existing []string, online []Node, chosen []string, workers clusterWorkers) ([]string, *metav1.Condition) {
+// volumeReport is which of the nodes holding volumes are in the Proxmox VE cluster, the one with
+// the most volumes first, and the condition naming the volumes whose node has no worker, nil when
+// every one has.
+func volumeReport(f *volumeFacts) ([]string, *metav1.Condition) {
 	var nodes []string
-	type bare = bareNode
-	var without []bare
-	// usable counts the nodes with volumes that can take a worker.
+	var without []bareNode
+	// usable counts the nodes with volumes that a new VM of the cluster may go to now.
 	usable := 0
-	for _, n := range slices.Sorted(maps.Keys(volumes)) {
-		if !slices.Contains(existing, n) {
-			without = append(without, bare{n, reasonNodeGone})
+	// The webhook fills the nodes in this order, so the advice follows it too.
+	for _, n := range byVolumes(f.volumes, slices.Collect(maps.Keys(f.volumes))) {
+		if !slices.Contains(f.site.Nodes, n) {
+			without = append(without, bareNode{n, reasonNodeGone})
 			continue
 		}
 		nodes = append(nodes, n)
-		i := slices.IndexFunc(online, func(o Node) bool { return o.Name == n })
-		allowed := len(chosen) == 0 || slices.Contains(chosen, n)
-		if allowed && i >= 0 && !online[i].Maintenance {
+		if slices.Contains(f.hosts, n) {
 			usable++
 		}
-		if workers.on[n] > 0 {
+		if len(f.workers.on[n]) > 0 {
 			continue
 		}
-		switch {
-		case !allowed:
-			without = append(without, bare{n, reasonNodeNotAllowed})
-		case i < 0:
-			without = append(without, bare{n, reasonNodeOffline})
-		case online[i].Maintenance:
-			without = append(without, bare{n, reasonNodeMaintenance})
-		default:
-			without = append(without, bare{n, ""})
-		}
+		without = append(without, bareNode{n, whyNoWorker(f, n)})
 	}
-	return byVolumes(volumes, nodes), withoutCondition(without, volumes, usable, workers)
+	return nodes, withoutCondition(f, without, usable)
 }
 
-// withoutCondition says why each bare node has no worker, nil when none is left to say: a node
-// that can take a worker needs none said while one is on its way, as that one is sent there first.
-func withoutCondition(without []bareNode, volumes map[string][]string, usable int, workers clusterWorkers) *metav1.Condition {
+// whyNoWorker is why a node with volumes and without a worker cannot take one, "" where it can.
+func whyNoWorker(f *volumeFacts, n string) string {
+	i := slices.IndexFunc(f.online, func(o Node) bool { return o.Name == n })
+	switch {
+	case len(f.chosen) > 0 && !slices.Contains(f.chosen, n):
+		return reasonNodeNotAllowed
+	case i < 0:
+		return reasonNodeOffline
+	case f.online[i].Maintenance:
+		return reasonNodeMaintenance
+	case slices.Contains(f.online[i].InactiveStorages, f.storage) || !slices.Contains(f.site.Active, n):
+		return reasonStorageInactive
+	case !slices.Contains(f.hosts, n):
+		return reasonNodeUnavailable
+	}
+	return ""
+}
+
+// withoutCondition says why each bare node has no worker and what gives it one, nil when none is
+// left to say: a node that can take a worker needs nothing said while one is on its way, as that
+// one is sent there first.
+func withoutCondition(f *volumeFacts, without []bareNode, usable int) *metav1.Condition {
 	sentences := make([]string, 0, len(without))
 	reason := ""
+	spare := spareWorkers(f)
+	next := 0
 	for _, b := range without {
 		r := b.reason
+		text := ""
 		if r == "" {
 			switch {
-			case usable > workers.count:
+			case f.workers.controlPlanes:
+				r, text = reasonNoWorker, fmt.Sprintf("%s on node %s, where no control plane runs. Add a worker pool, or move %s with pvecsictl migrate.",
+					volumeList(f.volumes[b.node]), b.node, pronoun(f.volumes[b.node]))
+			case usable > f.workers.count:
 				r = reasonTooFewWorkers
-			case workers.pending:
+			case f.workers.pending:
 				continue
 			default:
-				r = reasonNoWorker
+				r, text = reasonNoWorker, noWorkerSentence(f, b.node, spare, next)
+				next++
 			}
 		}
-		sentences = append(sentences, volumeSentence(r, b.node, volumes[b.node], usable, workers.count))
-		if reason == "" || reasonRank(r) < reasonRank(reason) {
+		if text == "" {
+			text = volumeSentence(r, b.node, f.volumes[b.node], f.storage, usable, f.workers.count)
+		}
+		sentences = append(sentences, text)
+		if reason == "" || slices.Index(reasonOrder, r) < slices.Index(reasonOrder, reason) {
 			reason = r
 		}
 	}
@@ -263,16 +373,66 @@ func withoutCondition(without []bareNode, volumes map[string][]string, usable in
 	return &metav1.Condition{Status: metav1.ConditionTrue, Reason: reason, Message: strings.Join(sentences, " ")}
 }
 
-func reasonRank(reason string) int {
-	return slices.Index([]string{reasonNodeGone, reasonNodeNotAllowed, reasonNodeOffline, reasonNodeMaintenance, reasonTooFewWorkers, reasonNoWorker}, reason)
+// spareWorker is a worker whose deletion leaves no node with volumes without one.
+type spareWorker struct{ name, node string }
+
+// spareWorkers are the workers whose deletion uncovers no node with volumes: those on nodes without
+// volumes, then all but one on each node with volumes, in the order of the nodes' names.
+func spareWorkers(f *volumeFacts) []spareWorker {
+	var free, extra []spareWorker
+	for _, n := range slices.Sorted(maps.Keys(f.workers.on)) {
+		names := slices.Sorted(slices.Values(f.workers.on[n]))
+		if len(f.volumes[n]) == 0 {
+			for _, name := range names {
+				free = append(free, spareWorker{name, n})
+			}
+			continue
+		}
+		for _, name := range names[1:] {
+			extra = append(extra, spareWorker{name, n})
+		}
+	}
+	return append(free, extra...)
+}
+
+// noWorkerSentence gives the next bare node that can take a worker the worker to delete for it.
+// The replacement of a deleted worker goes to the first node with volumes and no worker, so each
+// fix holds once those before it are done.
+func noWorkerSentence(f *volumeFacts, node string, spare []spareWorker, next int) string {
+	what := volumeList(f.volumes[node])
+	then := ""
+	if next > 0 {
+		then = "After that, "
+	}
+	if next < len(spare) {
+		s := spare[next]
+		verb := "Delete"
+		if then != "" {
+			verb = "delete"
+		}
+		return fmt.Sprintf("%s on node %s, which has no worker. %s%s machine %s on node %s, and its replacement goes to %s.",
+			what, node, then, verb, s.name, s.node, node)
+	}
+	verb := "Add"
+	if then != "" {
+		verb = "add"
+	}
+	return fmt.Sprintf("%s on node %s, which has no worker. %s%s a worker to a pool, and it goes to %s.", what, node, then, verb, node)
+}
+
+func pronoun(claims []string) string {
+	if len(claims) == 1 {
+		return "it"
+	}
+	return "them"
 }
 
 // volumeSentence says why the volumes on node have no worker there and what gives them one.
-func volumeSentence(reason, node string, claims []string, usable, workers int) string {
+func volumeSentence(reason, node string, claims []string, storage string, usable, workers int) string {
 	what := volumeList(claims)
-	them, claimsOf := "them", "their claims"
+	them, claimsOf := pronoun(claims), "their claims"
 	if len(claims) == 1 {
-		them, claimsOf = "it", "its claim"
+		claimsOf = "its claim"
 	}
 	switch reason {
 	case reasonNodeGone:
@@ -283,28 +443,26 @@ func volumeSentence(reason, node string, claims []string, usable, workers int) s
 		return fmt.Sprintf("%s on node %s, which is offline. Bring %s back online.", what, node, node)
 	case reasonNodeMaintenance:
 		return fmt.Sprintf("%s on node %s, which is in maintenance. Their pods start once %s leaves maintenance.", what, node, node)
-	case reasonTooFewWorkers:
-		return fmt.Sprintf("%s on node %s, which has no worker. Volumes are on %d nodes and the cluster has %d workers, so add workers to a pool.", what, node, usable, workers)
+	case reasonStorageInactive:
+		return fmt.Sprintf("%s on node %s, where storage %s is not active. Activate %s on %s.", what, node, storage, storage, node)
+	case reasonNodeUnavailable:
+		return fmt.Sprintf("%s on node %s, which cannot take this cluster's VMs now. The cluster's other conditions say why.", what, node)
 	default:
-		return fmt.Sprintf("%s on node %s, which has no worker. Delete a worker on another node and its replacement goes to %s.", what, node, node)
+		return fmt.Sprintf("%s on node %s, which has no worker. Volumes are on %d nodes and the cluster has %d workers, so add workers to a pool.", what, node, usable, workers)
 	}
 }
 
 // volumeList names the volumes, the first few by name, as the subject of a sentence.
 func volumeList(claims []string) string {
 	sorted := slices.Sorted(slices.Values(claims))
-	noun := "Volumes"
+	noun, verb := "Volumes", "are"
 	if len(sorted) == 1 {
-		noun = "Volume"
+		noun, verb = "Volume", "is"
 	}
 	named := sorted[:min(len(sorted), volumesNamed)]
 	text := strings.Join(named, ", ")
 	if rest := len(sorted) - len(named); rest > 0 {
 		text += fmt.Sprintf(" and %d more", rest)
-	}
-	verb := "are"
-	if len(sorted) == 1 {
-		verb = "is"
 	}
 	return noun + " " + text + " " + verb
 }
@@ -329,6 +487,41 @@ func (p *Placer) recordVolumeNodes(ctx context.Context, c *clusterv1.Cluster, no
 	if err := p.Client.Patch(ctx, target, client.RawPatch(types.MergePatchType, patch)); err != nil && ctx.Err() == nil {
 		ctrl.LoggerFrom(ctx).WithName("placer").Error(err, "recording the nodes that hold volumes", "cluster", client.ObjectKeyFromObject(c))
 	}
+}
+
+// unpinStale takes the pin off each of the cluster's machines that WorkerPlacement kept to a node a
+// new VM of the cluster can no longer go to, before its VM is made. capmox then places it on the
+// nodes the cluster names, where it would otherwise wait for the health check to replace it.
+func (p *Placer) unpinStale(ctx context.Context, c *clusterv1.Cluster, can []string) {
+	if c.Annotations[VolumeNodesAnnotation] == "" {
+		return
+	}
+	log := ctrl.LoggerFrom(ctx).WithName("placer").WithValues("cluster", client.ObjectKeyFromObject(c))
+	pms := proxmoxMachineList()
+	if err := p.Client.List(ctx, pms, client.InNamespace(c.Namespace), client.MatchingLabels{clusterv1.ClusterNameLabel: c.Name}); err != nil {
+		if ctx.Err() == nil {
+			log.Error(err, "listing the cluster's ProxmoxMachines")
+		}
+		return
+	}
+	for i := range pms.Items {
+		pm := &pms.Items[i]
+		pin := pm.GetAnnotations()[VolumePinAnnotation]
+		if pin == "" || slices.Contains(can, pin) || !pm.GetDeletionTimestamp().IsZero() || made(pm) {
+			continue
+		}
+		patch := []byte(`{"metadata":{"annotations":{"` + VolumePinAnnotation + `":null}},"spec":{"allowedNodes":null}}`)
+		if err := p.Client.Patch(ctx, pm, client.RawPatch(types.MergePatchType, patch), placerFieldOwner); err != nil && ctx.Err() == nil {
+			log.Error(err, "taking the pin off a machine kept to a node it cannot go to", "proxmoxMachine", pm.GetName(), "node", pin)
+		}
+	}
+}
+
+// made tells whether capmox has started on a ProxmoxMachine's VM.
+func made(pm *unstructured.Unstructured) bool {
+	node, _, _ := unstructured.NestedString(pm.Object, "status", "proxmoxNode")
+	vmid, _, _ := unstructured.NestedInt64(pm.Object, "spec", "virtualMachineID")
+	return node != "" || vmid != 0
 }
 
 // WorkerPlacement sends a new worker of a cluster with volumes on storage local to each node to a
@@ -358,11 +551,15 @@ func (w *WorkerPlacement) Handle(ctx context.Context, req admission.Request) adm
 	if node == "" {
 		return admission.Allowed("")
 	}
-	return admission.Patched("", jsonpatch.NewOperation("add", "/spec/allowedNodes", []string{node}))
+	pin := jsonpatch.NewOperation(jsonPatchAdd, "/metadata/annotations", map[string]string{VolumePinAnnotation: node})
+	if pm.GetAnnotations() != nil {
+		pin = jsonpatch.NewOperation(jsonPatchAdd, "/metadata/annotations/"+strings.ReplaceAll(VolumePinAnnotation, "/", "~1"), node)
+	}
+	return admission.Patched("", jsonpatch.NewOperation(jsonPatchAdd, "/spec/allowedNodes", []string{node}), pin)
 }
 
 // nodeFor is the node with volumes and no other worker that a new worker goes to, the one with the
-// most volumes first, or "" where every such node the cluster may use has a worker.
+// most volumes first, or "" where every such node the cluster may use now has a worker.
 func (w *WorkerPlacement) nodeFor(ctx context.Context, pm *unstructured.Unstructured, namespace string) (string, error) {
 	labels := pm.GetLabels()
 	pool, set, name := labels[clusterv1.MachineDeploymentNameLabel], labels[clusterv1.MachineSetNameLabel], labels[clusterv1.ClusterNameLabel]
@@ -389,7 +586,9 @@ func (w *WorkerPlacement) nodeFor(ctx context.Context, pm *unstructured.Unstruct
 	if err != nil {
 		return "", err
 	}
-	can := placement(chosen, online)
+	// Only nodes the record names as taking VMs now, so online and out of maintenance: placement()
+	// keeps a cluster to its chosen nodes while all are down, which a pin must not.
+	can := slices.DeleteFunc(slices.Clone(online), func(n string) bool { return len(chosen) > 0 && !slices.Contains(chosen, n) })
 	if own, _, _ := unstructured.NestedStringSlice(pm.Object, "spec", "allowedNodes"); len(own) > 0 {
 		can = slices.DeleteFunc(can, func(n string) bool { return !slices.Contains(own, n) })
 	}
