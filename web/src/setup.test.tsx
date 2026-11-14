@@ -140,6 +140,11 @@ const dualStack: Partial<SetupForm> = {
 };
 const ipv6Only: Partial<SetupForm> = { ...dualStack, families: "ipv6", dnsServers: "2001:db8::53" };
 
+// n node addresses from the given prefix, one after the other.
+const addressesOf = (n: number, prefix: string): string =>
+  Array.from({ length: n }, (_, i) => `${prefix}${11 + i}/24`).join(" ");
+const six = (n: number): string => Array.from({ length: n }, (_, i) => `2001:db8::${11 + i}/64`).join(" ");
+
 type NetworkKey = "nodes" | "nodeAddresses" | "nodeAddresses6" | "gateway" | "gateway6" | "apiAddress" | "dnsServers";
 const networkKeys: NetworkKey[] = [
   "nodes",
@@ -1060,9 +1065,6 @@ describe("setup", () => {
     ).toBeUndefined();
   });
 
-  const addressesOf = (n: number, prefix: string): string =>
-    Array.from({ length: n }, (_, i) => `${prefix}${11 + i}/24`).join(" ");
-
   it("takes 1, 3 or 5 node addresses and refuses other counts", () => {
     for (const n of [1, 3, 5]) {
       expect(
@@ -1077,7 +1079,6 @@ describe("setup", () => {
   });
 
   it("takes 5 IPv6 node addresses and holds them to IPv4's count", () => {
-    const six = (n: number): string => Array.from({ length: n }, (_, i) => `2001:db8::${11 + i}/64`).join(" ");
     const five = {
       ...form,
       ...dualStack,

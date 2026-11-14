@@ -72,8 +72,10 @@ import {
 
 const unique = (xs: string[]): string[] => [...new Set(xs)].toSorted();
 
-// A management cluster has one node, or three for high availability.
-const nodeCounts: readonly number[] = [1, 3, 5];
+// A management cluster has one node, or three or five for high availability.
+const highAvailability = 3;
+const largestCluster = 5;
+const nodeCounts = new Set<number>([1, highAvailability, largestCluster]);
 const msPerMinute = 60_000;
 
 const setWhenCreated = "Set when the management cluster was created";
@@ -729,7 +731,7 @@ interface NodeNetwork {
 // or the problem.
 function nodeNetwork(addresses: string[], gateway: Address | undefined, family: Family): NodeNetwork | string {
   const wrongCount = "Enter 1, 3 or 5 addresses.";
-  if (!nodeCounts.includes(addresses.length)) {
+  if (!nodeCounts.has(addresses.length)) {
     return wrongCount;
   }
   const taken: bigint[] = [];
