@@ -140,6 +140,10 @@ describe("the control-plane default", () => {
 
   it("is one where only two of three nodes are online", async () => {
     await open(3, 1);
-    await waitFor(() => expect(screen.getByLabelText("Control-plane nodes")).toHaveValue("1"));
+    // The form starts at one, so the test waits for the nodes to have had their chance to raise it.
+    await expect(
+      waitFor(() => expect(screen.getByLabelText("Control-plane nodes")).toHaveValue("3"), { timeout: 500 }),
+    ).rejects.toThrow();
+    expect(screen.getByLabelText("Control-plane nodes")).toHaveValue("1");
   });
 });
