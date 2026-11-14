@@ -311,8 +311,8 @@ func TestPreflightAddressesInUse(t *testing.T) {
 	inv.Answering[netip.MustParseAddr("10.0.0.11")] = true
 	inv.Answering[netip.MustParseAddr("10.0.0.10")] = true
 	f := settings("pve1").Preflight(inv, false)
-	mentions(t, f.Errors, "Address 10.0.0.11 answers")
-	mentions(t, f.Errors, "Address 10.0.0.10 answers")
+	mentions(t, f.Errors, "Address 10.0.0.11 already answers")
+	mentions(t, f.Errors, "Address 10.0.0.10 already answers")
 	if f := settings("pve1").Preflight(inv, true); len(f.Errors) != 0 {
 		t.Errorf("the module's own VMs answer once its state exists: %+v", f)
 	}

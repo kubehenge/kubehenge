@@ -405,7 +405,7 @@ func TestIPv6AddressesAreChecked(t *testing.T) {
 	f := Findings{Errors: []string{}, Warnings: []string{}}
 	inv := &Inventory{Answering: map[netip.Addr]bool{netip.MustParseAddr("fd00:1::11"): true}}
 	s.checkAddressesFree(inv, &f)
-	if len(f.Errors) != 1 || !strings.Contains(f.Errors[0], "Address fd00:1::11 answers") {
+	if len(f.Errors) != 1 || !strings.Contains(f.Errors[0], "Address fd00:1::11 already answers") {
 		t.Errorf("an IPv6 node address that answers: %v", f.Errors)
 	}
 	list := dualSettings("IPv4", "IPv6")
