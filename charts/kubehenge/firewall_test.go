@@ -72,8 +72,10 @@ func TestEveryClassDefaultsTheFirewallOn(t *testing.T) {
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("annotations with groups and ports = %v, want %v", got, want)
 			}
-			if got := annotations(`, "firewall": {"enabled": false}`); got != nil {
-				t.Errorf("annotations with the firewall off = %v, want none", got)
+			off := variablesOf(t, `{"builtin": {"cluster": {"name": "c", "namespace": "n", "network": {"pods": ["10.244.0.0/16"]}}},
+				"controlPlaneEndpoint": "10.0.0.5", "network": `+ipv4Net+`, "firewall": {"enabled": false}}`)
+			if metadata, ok := asMap(t, field(t, class.patched(t, "ProxmoxMachineTemplate", off), "spec", "template"))["metadata"]; ok {
+				t.Errorf("metadata with the firewall off = %v, want none", metadata)
 			}
 		})
 	}

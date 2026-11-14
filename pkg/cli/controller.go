@@ -749,6 +749,7 @@ func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *pro
 	firewall := &provisioner.FirewallSources{
 		Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Namespace: o.r.ClassNamespace,
 		Management: o.managementAddrs, Interval: firewallSourcesInterval, Datacenter: cloud,
+		Events: mgr.GetEventRecorder("kubehenge"),
 	}
 	if err = mgr.Add(firewall); err != nil {
 		return fmt.Errorf("the firewall sources: %w", err)

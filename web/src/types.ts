@@ -738,6 +738,11 @@ export interface HARule {
   allowed: string[];
 }
 
+/** Whether Proxmox VE's datacenter firewall is on. "unknown" to a user without Sys.Audit on /. */
+export interface DatacenterFirewall {
+  state: "on" | "off" | "unknown";
+}
+
 export interface HARules {
   /** Whether the user may read the rules, which takes Sys.Audit on /, or is offered them. */
   readable: boolean;

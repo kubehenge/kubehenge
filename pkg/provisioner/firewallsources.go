@@ -16,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -74,6 +75,9 @@ type FirewallSources struct {
 	Interval   time.Duration
 	// Datacenter reads whether Proxmox VE's datacenter firewall is on. Nil, no condition is kept.
 	Datacenter APIReach
+	// Events, when set, records a warning on the cluster once its firewall does nothing or its
+	// state cannot be read.
+	Events events.EventRecorder
 }
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable.
@@ -210,12 +214,10 @@ func proxmoxClusterAddresses(pc *unstructured.Unstructured) []string {
 		}
 	}
 	pools := []map[string]any{pc.Object}
-	if spec, ok := pc.Object["spec"].(map[string]any); ok {
-		zones, _ := spec["zoneConfigs"].([]any)
-		for _, zone := range zones {
-			if z, ok := zone.(map[string]any); ok {
-				pools = append(pools, map[string]any{"spec": z})
-			}
+	zones, _, _ := unstructured.NestedSlice(pc.Object, "spec", "zoneConfigs")
+	for _, zone := range zones {
+		if z, ok := zone.(map[string]any); ok {
+			pools = append(pools, map[string]any{"spec": z})
 		}
 	}
 	for _, pool := range pools {
@@ -267,7 +269,7 @@ func (f *FirewallSources) markInactive(ctx context.Context, c *clusterv1.Cluster
 		cond = &metav1.Condition{Status: metav1.ConditionTrue, Reason: "DatacenterFirewallOff", Message: FirewallInactiveMessage}
 	default:
 		cond = &metav1.Condition{
-			Status: metav1.ConditionUnknown, Reason: "DatacenterFirewallUnread",
+			Status: metav1.ConditionUnknown, Reason: "FirewallStateUnknown",
 			Message: "Kubehenge cannot read whether Proxmox VE's datacenter firewall is on, which needs Sys.Audit on /",
 		}
 	}
@@ -275,8 +277,12 @@ func (f *FirewallSources) markInactive(ctx context.Context, c *clusterv1.Cluster
 	if (cond == nil && have == nil) || (cond != nil && have != nil && have.Status == cond.Status && have.Reason == cond.Reason) {
 		return nil
 	}
-	if _, err := markCluster(ctx, f.Client, f.Reader, client.ObjectKeyFromObject(c), FirewallInactiveCondition, cond); err != nil && !apierrors.IsNotFound(err) {
+	before, err := markCluster(ctx, f.Client, f.Reader, client.ObjectKeyFromObject(c), FirewallInactiveCondition, cond)
+	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("marking the datacenter firewall: %w", err)
+	}
+	if err == nil && f.Events != nil && newlyMarked(before, cond) {
+		f.Events.Eventf(c, nil, corev1.EventTypeWarning, FirewallInactiveCondition, "WatchFirewall", "%s", cond.Message)
 	}
 	return nil
 }

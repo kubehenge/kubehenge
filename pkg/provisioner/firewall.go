@@ -115,14 +115,17 @@ func (v *ClusterValidator) validateFirewall(ctx context.Context, old, c *cluster
 			errs = checkSecurityGroups(groups, existing)
 		}
 	}
-	// Groups are named to act, which needs the datacenter firewall on, so they are held to the
-	// check also while it is off. The firewall alone is held to it once the datacenter's is on.
-	return append(errs, v.validateAPIReach(ctx, len(groups) > 0)...)
+	checked := FirewallVariable
+	if len(groups) > 0 {
+		checked = SecurityGroupsVariable
+	}
+	return append(errs, v.validateAPIReach(ctx, checked)...)
 }
 
-// validateAPIReach is checkAPIReach with what the hooks read. Unless always, it holds only while the
-// datacenter firewall is on.
-func (v *ClusterValidator) validateAPIReach(ctx context.Context, always bool) field.ErrorList {
+// validateAPIReach is checkAPIReach with what the hooks read, its error under the variable checked.
+// Security groups are named to act, which needs the datacenter firewall on, so they are held to the
+// check also while it is off. The firewall alone is held to it once the datacenter's is on.
+func (v *ClusterValidator) validateAPIReach(ctx context.Context, variable string) field.ErrorList {
 	if v.Hooks.APIReach == nil || v.Hooks.Management == nil {
 		return nil
 	}
@@ -135,12 +138,8 @@ func (v *ClusterValidator) validateAPIReach(ctx context.Context, always bool) fi
 		return nil
 	}
 	reach, ok := v.Hooks.APIReach.APIReach(ctx)
-	if !ok || (!always && !reach.Enabled) {
+	if !ok || (variable != SecurityGroupsVariable && !reach.Enabled) {
 		return nil
-	}
-	variable := FirewallVariable
-	if always {
-		variable = SecurityGroupsVariable
 	}
 	return checkAPIReach(reach, management, endpoints, variable)
 }

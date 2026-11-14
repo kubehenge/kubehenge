@@ -22,7 +22,7 @@ import {
 import { CSIField, SnapshotsField } from "./CsiPlugin";
 import { maxEtcdQuotaGiB, minEtcdQuotaGiB } from "./EtcdSize";
 import { FamiliesField } from "./Families";
-import { FirewallField } from "./Firewall";
+import { FirewallField, type DatacenterFirewallState } from "./Firewall";
 import { HostOutageField, graceVariable } from "./HostOutage";
 import { LoadBalancerFields, passwordInfo, passwordLabel } from "./LoadBalancer";
 import { MachineFields } from "./MachineFields";
@@ -734,7 +734,13 @@ function FamilyFields({
 }
 
 /** InterfaceFields are the options of the nodes' interface the class offers. */
-function InterfaceFields({ form, set, shown, cls }: StepProps & { cls: ClusterClass | undefined }): JSX.Element {
+function InterfaceFields({
+  form,
+  set,
+  shown,
+  cls,
+  datacenter,
+}: StepProps & { cls: ClusterClass | undefined; datacenter: DatacenterFirewallState | undefined }): JSX.Element {
   const network = variable(cls, "network")?.properties;
   return (
     <>
@@ -773,6 +779,7 @@ function InterfaceFields({ form, set, shown, cls }: StepProps & { cls: ClusterCl
           onGroups={(s) => set("securityGroups", s)}
           portsError={shown("firewallPorts")}
           groupsError={shown("securityGroups")}
+          datacenter={datacenter}
         />
       )}
     </>
@@ -789,6 +796,7 @@ export function NetworkStep({
   network6,
   free,
   checked,
+  datacenter,
 }: StepProps & {
   cls: ClusterClass | undefined;
   bridgeOptions: Bridge[];
@@ -800,6 +808,8 @@ export function NetworkStep({
   free?: FreeAddresses | undefined;
   /** What probing the addresses typed found. */
   checked?: FreeAddresses | undefined;
+  /** Whether Proxmox VE's datacenter firewall is on, where it was read. */
+  datacenter?: DatacenterFirewallState | undefined;
 }): JSX.Element {
   const fullIn = (family: Family): string | undefined => {
     const [full, searched] = family === "IPv6" ? [free?.full6, free?.network6] : [free?.full, free?.network];
@@ -841,7 +851,7 @@ export function NetworkStep({
           )
         }
       </Field>
-      <InterfaceFields form={form} set={set} shown={shown} cls={cls} />
+      <InterfaceFields form={form} set={set} shown={shown} cls={cls} datacenter={datacenter} />
       {offersFamilies && (
         <FamiliesField
           value={form.families}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -11,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -35,9 +37,9 @@ func firewallCluster(name, groups string) (*clusterv1.Cluster, *unstructured.Uns
 }
 
 // The management cluster's nodes and the appliance's addresses reach the ProxmoxCluster of every
-// cluster with security groups, and follow the appliance's ConfigMap when an address is added,
-// changed or removed. A cluster without groups is left alone, and one whose groups go loses the
-// annotation. A run that finds nothing changed writes nothing.
+// cluster firewalled by its groups, and follow the appliance's ConfigMap when an address is added,
+// changed or removed. A cluster without a firewall is left alone, and one whose groups go loses
+// the annotation. A run that finds nothing changed writes nothing.
 func TestFirewallSourcesFollowTheAppliance(t *testing.T) {
 	t.Parallel()
 	web, webPC := firewallCluster("web", `["k8s"]`)
@@ -136,8 +138,8 @@ func TestFirewallSourcesPassOverClustersNotReady(t *testing.T) {
 	}
 }
 
-// withVariable sets a cluster's variable to raw.
-func withVariable(c *clusterv1.Cluster, name, raw string) {
+// addVariable sets a cluster's variable to raw.
+func addVariable(c *clusterv1.Cluster, name, raw string) {
 	c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{Name: name, Value: apiextensionsv1.JSON{Raw: []byte(raw)}})
 }
 
@@ -162,14 +164,14 @@ func annotationsOf(t *testing.T, kube client.Client, pc *unstructured.Unstructur
 func TestFirewallSourcesOfADefaultCluster(t *testing.T) {
 	t.Parallel()
 	on, onPC := firewallCluster("on", "")
-	withVariable(on, FirewallVariable, `{"enabled": true}`)
-	withVariable(on, loadBalancerVariable, `{"enabled": true, "addresses": ["10.0.0.30-10.0.0.40", "2001:db8::30/124"]}`)
+	addVariable(on, FirewallVariable, `{"enabled": true}`)
+	addVariable(on, loadBalancerVariable, `{"enabled": true, "addresses": ["10.0.0.30-10.0.0.40", "2001:db8::30/124"]}`)
 	off, offPC := firewallCluster("off", "")
-	withVariable(off, FirewallVariable, `{"enabled": false}`)
-	withVariable(off, loadBalancerVariable, `{"enabled": true, "addresses": ["10.0.0.50"]}`)
+	addVariable(off, FirewallVariable, `{"enabled": false}`)
+	addVariable(off, loadBalancerVariable, `{"enabled": true, "addresses": ["10.0.0.50"]}`)
 	disabledLB, disabledLBPC := firewallCluster("nolb", "")
-	withVariable(disabledLB, FirewallVariable, `{"enabled": true}`)
-	withVariable(disabledLB, loadBalancerVariable, `{"enabled": false, "addresses": ["10.0.0.60"]}`)
+	addVariable(disabledLB, FirewallVariable, `{"enabled": true}`)
+	addVariable(disabledLB, loadBalancerVariable, `{"enabled": false, "addresses": ["10.0.0.60"]}`)
 	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(on, onPC, off, offPC, disabledLB, disabledLBPC).Build()
 	f := &FirewallSources{Client: kube, Reader: kube, Namespace: "kubehenge-system", Management: []string{"192.0.2.11", "2001:db8::11"}}
 	if err := f.runOnce(t.Context()); err != nil {
@@ -196,7 +198,7 @@ func TestFirewallSourcesLetInClusterMeshPeers(t *testing.T) {
 	mesh := func(name string, id int, endpoint, pods, peers string) (*clusterv1.Cluster, *unstructured.Unstructured) {
 		c := meshCluster(name, id, endpoint, pods, `{"enabled": true, "peers": `+peers+`}`)
 		c.Namespace = "team"
-		withVariable(c, FirewallVariable, `{"enabled": true}`)
+		addVariable(c, FirewallVariable, `{"enabled": true}`)
 		_, pc := firewallCluster(name, "")
 		pc.Object["spec"] = map[string]any{
 			"controlPlaneEndpoint": map[string]any{"host": endpoint},
@@ -226,13 +228,14 @@ func TestFirewallSourcesLetInClusterMeshPeers(t *testing.T) {
 func TestFirewallSourcesWarnWhileTheDatacenterFirewallIsOff(t *testing.T) {
 	t.Parallel()
 	on, onPC := firewallCluster("on", "")
-	withVariable(on, FirewallVariable, `{"enabled": true}`)
+	addVariable(on, FirewallVariable, `{"enabled": true}`)
 	off, offPC := firewallCluster("off", "")
-	withVariable(off, FirewallVariable, `{"enabled": false}`)
+	addVariable(off, FirewallVariable, `{"enabled": false}`)
 	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(on, onPC, off, offPC).
 		WithStatusSubresource(&clusterv1.Cluster{}).Build()
 	reach := &fakeAPIReach{reach: &pve.APIReach{Enabled: false}, ok: true}
-	f := &FirewallSources{Client: kube, Reader: kube, Namespace: "kubehenge-system", Datacenter: reach}
+	recorder := events.NewFakeRecorder(10)
+	f := &FirewallSources{Client: kube, Reader: kube, Namespace: "kubehenge-system", Datacenter: reach, Events: recorder}
 	condition := func(c *clusterv1.Cluster) *metav1.Condition {
 		t.Helper()
 		got := &clusterv1.Cluster{}
@@ -246,23 +249,37 @@ func TestFirewallSourcesWarnWhileTheDatacenterFirewallIsOff(t *testing.T) {
 		reach    *pve.APIReach
 		readable bool
 		want     metav1.ConditionStatus
+		reason   string
 	}{
-		{name: "datacenter off", reach: &pve.APIReach{}, readable: true, want: metav1.ConditionTrue},
-		{name: "unreadable", readable: false, want: metav1.ConditionUnknown},
+		{name: "datacenter off", reach: &pve.APIReach{}, readable: true, want: metav1.ConditionTrue, reason: "DatacenterFirewallOff"},
+		{name: "unreadable", readable: false, want: metav1.ConditionUnknown, reason: "FirewallStateUnknown"},
 		{name: "datacenter on", reach: &pve.APIReach{Enabled: true}, readable: true},
 	} {
 		reach.reach, reach.ok = step.reach, step.readable
-		if err := f.runOnce(t.Context()); err != nil {
-			t.Fatalf("%s: %v", step.name, err)
+		// A second pass over the same state records no second event.
+		for range 2 {
+			if err := f.runOnce(t.Context()); err != nil {
+				t.Fatalf("%s: %v", step.name, err)
+			}
 		}
 		got := condition(on)
 		switch {
 		case step.want == "" && got != nil:
 			t.Errorf("%s: %+v, want none", step.name, got)
-		case step.want != "" && (got == nil || got.Status != step.want):
-			t.Errorf("%s: %+v, want %s", step.name, got, step.want)
+		case step.want != "" && (got == nil || got.Status != step.want || got.Reason != step.reason):
+			t.Errorf("%s: %+v, want %s for %s", step.name, got, step.want, step.reason)
 		case step.want == metav1.ConditionTrue && got.Message != FirewallInactiveMessage:
 			t.Errorf("%s: message %q", step.name, got.Message)
+		}
+		var recorded []string
+		for len(recorder.Events) > 0 {
+			recorded = append(recorded, <-recorder.Events)
+		}
+		if want := step.want != ""; want != (len(recorded) == 1) || len(recorded) > 1 {
+			t.Errorf("%s: events %q, want one warning only while the firewall does nothing or is unknown", step.name, recorded)
+		}
+		if len(recorded) == 1 && !strings.HasPrefix(recorded[0], "Warning "+FirewallInactiveCondition) {
+			t.Errorf("%s: event %q", step.name, recorded[0])
 		}
 		if got := condition(off); got != nil {
 			t.Errorf("%s: the cluster without a firewall has %+v", step.name, got)

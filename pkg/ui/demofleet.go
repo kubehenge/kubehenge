@@ -1257,8 +1257,10 @@ func (*demoAccounts) NodeAddresses(context.Context, *pve.Ticket) (map[string]str
 	return map[string]string{}, nil
 }
 
+// APIReach has the datacenter firewall on with no node's firewall on, so the demo's clusters'
+// firewalls act and nothing cuts off the API.
 func (*demoAccounts) APIReach(context.Context, *pve.Ticket) (*pve.APIReach, error) {
-	return &pve.APIReach{}, nil
+	return &pve.APIReach{Enabled: true}, nil
 }
 
 func (*demoAccounts) NextID(context.Context, *pve.Ticket) (pve.NextID, error) {

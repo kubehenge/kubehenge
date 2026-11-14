@@ -1,7 +1,8 @@
-import { useState, type JSX } from "react";
+import { useEffect, useState, type JSX } from "react";
 
+import { api } from "./api";
 import { isSecurityGroup, list } from "./network";
-import type { Cluster } from "./types";
+import type { Cluster, DatacenterFirewall } from "./types";
 import { Dialog, ErrorBox, Field, stageLabel, useChange } from "./ui";
 import { quantity, record, text, texts } from "./values";
 
@@ -68,6 +69,52 @@ export function firewallVariable(f: FirewallFields): { enabled: boolean; ports?:
   return ports.length > 0 ? { enabled: f.on, ports } : { enabled: f.on };
 }
 
+export type DatacenterFirewallState = DatacenterFirewall["state"];
+
+/**
+ * useDatacenterFirewall reads whether Proxmox VE's datacenter firewall is on. A read that fails
+ * leaves it unknown. Nothing waits on it, so it never stops a create.
+ */
+export function useDatacenterFirewall(): DatacenterFirewallState | undefined {
+  const [state, setState] = useState<DatacenterFirewallState>();
+  useEffect(() => {
+    async function load(): Promise<void> {
+      try {
+        const read = await api.datacenterFirewall();
+        setState(read.state);
+      } catch {
+        setState("unknown");
+      }
+    }
+    void load();
+  }, []);
+  return state;
+}
+
+/** datacenterNote is what a firewall that is on needs said of the datacenter firewall, if anything. */
+export function datacenterNote(state: DatacenterFirewallState | undefined): string | undefined {
+  if (state === "off") {
+    return "Proxmox VE's datacenter firewall is off, so this cluster's firewall does nothing";
+  }
+  return state === "unknown" ? "Datacenter firewall state unknown" : undefined;
+}
+
+/**
+ * clusterFirewallText is the firewall's row on a cluster's page: its setting, then its state where
+ * the controller found that it does nothing or could not tell.
+ */
+export function clusterFirewallText(c: Cluster): string {
+  const setting = firewallText(
+    firewallOf(c.variables["firewall"], c.variables["securityGroups"]),
+    securityGroupsOf(c.variables["securityGroups"]),
+  );
+  const inactive = c.conditions.find((x) => x.type === "FirewallInactive");
+  if (inactive?.status === "True") {
+    return `${setting}. Inactive, datacenter firewall off`;
+  }
+  return inactive?.status === "Unknown" ? `${setting}. State unknown` : setting;
+}
+
 /** firewallText is how Confirm and the settings list the firewall. */
 export function firewallText(f: FirewallFields, groups: string): string {
   if (!f.on) {
@@ -108,6 +155,7 @@ export function FirewallField({
   onGroups,
   portsError,
   groupsError,
+  datacenter,
 }: {
   value: FirewallFields;
   onChange: (f: FirewallFields) => void;
@@ -115,7 +163,10 @@ export function FirewallField({
   onGroups: (s: string) => void;
   portsError?: string | undefined;
   groupsError?: string | undefined;
+  /** The datacenter firewall's state, where it was read. */
+  datacenter?: DatacenterFirewallState | undefined;
 }): JSX.Element {
+  const note = value.on ? datacenterNote(datacenter) : undefined;
   return (
     <>
       <label className="check">
@@ -129,10 +180,11 @@ export function FirewallField({
         Firewall
       </label>
       <p className="hint">
-        {value.on
-          ? "Open: API, ingress, load balancer, NodePorts, ping. Acts once the datacenter firewall is on."
-          : "Every port open"}
+        {!value.on && "Every port open"}
+        {value.on && "Opens the API, ingress, load balancer, NodePorts and ping."}
+        {value.on && datacenter === undefined && " Acts once the datacenter firewall is on."}
       </p>
+      {note !== undefined && <p className="warning">{note}</p>}
       {value.on && (
         <Field label="Further open ports" hint="Optional, such as tcp/8443, udp/4000-4010" error={portsError}>
           {(id) => (

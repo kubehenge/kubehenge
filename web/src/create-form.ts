@@ -53,7 +53,14 @@ import {
   type EtcdSnapshotFields,
   type EtcdSnapshotsValue,
 } from "./EtcdSnapshots";
-import { firewallPortsProblem, firewallText, firewallVariable, securityGroupsProblem } from "./Firewall";
+import {
+  datacenterNote,
+  firewallPortsProblem,
+  firewallText,
+  firewallVariable,
+  securityGroupsProblem,
+  type DatacenterFirewallState,
+} from "./Firewall";
 import {
   gitOpsFields,
   gitOpsProblems,
@@ -1529,7 +1536,7 @@ function releaseRows(form: Form, c: ClusterClass, defined: Set<string>): [string
   return rows;
 }
 
-function interfaceRows(form: Form): [string, string][] {
+function interfaceRows(form: Form, datacenter: DatacenterFirewallState | undefined): [string, string][] {
   const rows: [string, string][] = [];
   if (form.mtu) {
     rows.push(["MTU", form.mtu]);
@@ -1537,7 +1544,9 @@ function interfaceRows(form: Form): [string, string][] {
   if (form.queues) {
     rows.push(["Queues", form.queues]);
   }
-  rows.push(["Firewall", firewallText({ on: form.firewall, ports: form.firewallPorts }, form.securityGroups)]);
+  const firewall = firewallText({ on: form.firewall, ports: form.firewallPorts }, form.securityGroups);
+  const note = form.firewall ? datacenterNote(datacenter) : undefined;
+  rows.push(["Firewall", note === undefined ? firewall : `${firewall}. ${note}`]);
   return rows;
 }
 
@@ -1564,6 +1573,8 @@ interface SummaryOffered {
   csi?: boolean;
   snapshots?: boolean;
   haGroups?: boolean;
+  /** The datacenter firewall's state, which the firewall's row names when it is not on. */
+  datacenterFirewall?: DatacenterFirewallState | undefined;
 }
 
 // proxmoxRows are the summary's rows of where the nodes go on Proxmox VE and how it looks after them.
@@ -1605,7 +1616,7 @@ export function summary(form: Form, c: ClusterClass, offered: SummaryOffered = {
       autoscales(form, c) ? `${form.workerReplicas} to ${form.workerMax}, autoscaled` : String(form.workerReplicas),
     ],
     ["Bridge", form.vlan ? `${form.bridge}, VLAN ${form.vlan}` : form.bridge],
-    ...interfaceRows(form),
+    ...interfaceRows(form, offered.datacenterFirewall),
     ...(form.families === "ipv4" ? [] : [["Address families", familyLabels[form.families]] as [string, string]]),
     ["API address", form.endpoint],
     ...(hasFamily(form.families, "IPv4")

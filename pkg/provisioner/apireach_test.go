@@ -49,7 +49,7 @@ func TestValidatorHoldsTheDefaultFirewallToTheLockoutCheck(t *testing.T) {
 		hooks.Endpoint = endpointV4
 		v := &ClusterValidator{Hooks: hooks}
 		c := withSecurityGroups(networkCluster("192.168.1.1", 24), tc.groups)
-		withVariable(c, FirewallVariable, tc.firewall)
+		addVariable(c, FirewallVariable, tc.firewall)
 		_, err := v.ValidateCreate(context.Background(), c)
 		switch {
 		case tc.refusal == "" && err != nil && (strings.Contains(err.Error(), "IPSet management") || strings.Contains(err.Error(), "firewall on")):

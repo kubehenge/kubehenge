@@ -18,6 +18,7 @@ import type {
   FleetHealth,
   HealthEvent,
   FreeAddresses,
+  DatacenterFirewall,
   HARules,
   Job,
   ManagementAutomatic,
@@ -502,6 +503,7 @@ export interface Api {
     },
   ) => Promise<FreeAddresses>;
   haRules: () => Promise<HARules>;
+  datacenterFirewall: () => Promise<DatacenterFirewall>;
 }
 
 export const api: Api = {
@@ -655,6 +657,7 @@ export const api: Api = {
   freeAddresses: (node, bridge, req) =>
     request("POST", `/api/proxmox/nodes/${encodeURIComponent(node)}/bridges/${encodeURIComponent(bridge)}/free`, req),
   haRules: () => request("GET", "/api/proxmox/ha-rules"),
+  datacenterFirewall: () => request("GET", "/api/proxmox/datacenter-firewall"),
 };
 
 /** dnsOf reads how a node resolves names. A node whose DNS cannot be read offers none. */

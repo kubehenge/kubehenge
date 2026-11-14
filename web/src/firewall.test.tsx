@@ -45,6 +45,15 @@ const cluster: Cluster = {
   machines: [],
 };
 
+// nextUntilCreate steps through the wizard to Confirm, whose button creates.
+async function nextUntilCreate(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  if (screen.queryByRole("button", { name: "Create" }) !== null) {
+    return;
+  }
+  await user.click(screen.getByRole("button", { name: "Next" }));
+  await nextUntilCreate(user);
+}
+
 describe("a new cluster's firewall", () => {
   it("is on by default on the Network step, with its ports and groups", async () => {
     const set = vi.fn<(k: keyof Form, v: unknown) => void>();
@@ -96,6 +105,94 @@ describe("a new cluster's firewall", () => {
     expect(request(filled, withoutFirewall).variables).not.toHaveProperty("firewall");
   });
 
+  it.each([
+    { state: "off", says: "Proxmox VE's datacenter firewall is off, so this cluster's firewall does nothing" },
+    { state: "unknown", says: "Datacenter firewall state unknown" },
+  ] as const)("says on its step and on Confirm when the datacenter firewall is $state", (seen) => {
+    const step = (form: Form, datacenter?: "on" | "off" | "unknown"): JSX.Element => (
+      <NetworkStep
+        form={form}
+        set={vi.fn<(k: keyof Form, v: unknown) => void>()}
+        shown={(k) => new Map<FieldKey, string>().get(k)}
+        cls={withFirewall}
+        bridgeOptions={[]}
+        datacenter={datacenter}
+      />
+    );
+    const { rerender } = render(step(filled, seen.state));
+    expect(screen.getByText(seen.says)).toBeInTheDocument();
+    expect(Object.fromEntries(summary(filled, withFirewall, { datacenterFirewall: seen.state }))["Firewall"]).toBe(
+      `On, serving ports open. ${seen.says}`,
+    );
+
+    rerender(step(filled, "on"));
+    expect(screen.queryByText(seen.says)).not.toBeInTheDocument();
+    expect(Object.fromEntries(summary(filled, withFirewall, { datacenterFirewall: "on" }))["Firewall"]).toBe(
+      "On, serving ports open",
+    );
+
+    const off = { ...filled, firewall: false };
+    rerender(step(off, seen.state));
+    expect(screen.queryByText(seen.says)).not.toBeInTheDocument();
+    expect(Object.fromEntries(summary(off, withFirewall, { datacenterFirewall: seen.state }))["Firewall"]).toBe("Off");
+  });
+
+  it("reads the datacenter firewall through the session and still creates with it off", async () => {
+    window.history.replaceState(null, "", "/clusters/new");
+    const cls: ClusterClass = {
+      ...withFirewall,
+      variables: [
+        { name: "controlPlaneEndpoint", required: true, schema: { type: "string" } },
+        ...withFirewall.variables,
+      ],
+    };
+    const says = "Proxmox VE's datacenter firewall is off, so this cluster's firewall does nothing";
+    const calls = fakeServer({
+      "GET /api/session": () => ({ body: { user: "alice@pve", csrf: "c1", canCreate: true, canTrust: true } }),
+      "GET /api/classes": () => ({ body: [cls] }),
+      "GET /api/proxmox/storages": () => ({
+        body: [
+          {
+            storage: "local-lvm",
+            node: "pve1",
+            shared: false,
+            content: ["images"],
+            avail: 2 ** 40,
+            total: 2 ** 41,
+            usable: true,
+          },
+        ],
+      }),
+      "GET /api/proxmox/nodes": () => ({ body: [{ node: "pve1", online: true }] }),
+      "GET /api/proxmox/nodes/pve1/bridges": () => ({
+        body: [{ bridge: "vmbr0", node: "pve1", vlanAware: false, usable: true }],
+      }),
+      "GET /api/proxmox/ha-rules": () => ({ body: { readable: true, rules: [] } }),
+      "GET /api/proxmox/datacenter-firewall": () => ({ body: { state: "off" } }),
+      "POST /api/clusters?dryRun=All": () => ({ body: { manifest: "kind: Cluster\n" } }),
+      "POST /api/clusters": () => ({ status: 201, body: { ...cluster, namespace: "default" } }),
+      "GET /api/clusters/default/web": () => ({ body: { ...cluster, namespace: "default" } }),
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.type(await screen.findByLabelText("Name"), "web");
+    await waitFor(() => expect(screen.getByRole("option", { name: "k3s" })).toBeInTheDocument());
+    await user.selectOptions(screen.getByLabelText("Distribution"), "kubehenge-k3s");
+    await user.type(screen.getByLabelText("Kubernetes version"), "v1.36.5+k3s1");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(screen.getByLabelText("Bridge")).toHaveValue("vmbr0"));
+    await expect(screen.findByText(says)).resolves.toBeInTheDocument();
+    await user.type(screen.getByLabelText("API address"), "10.0.0.20");
+    await user.type(screen.getByLabelText("Node addresses"), "10.0.0.21-10.0.0.29");
+    await user.type(screen.getByLabelText("Gateway"), "10.0.0.1");
+    await user.type(screen.getByLabelText("DNS servers"), "10.0.0.1");
+    await nextUntilCreate(user);
+    expect(screen.getByText(`On, serving ports open. ${says}`)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(calls.map((c) => c.key)).toContain("POST /api/clusters"));
+  });
+
   it("refuses ports it cannot write and group names Proxmox VE refuses", () => {
     for (const ok of ["", "tcp/8443", "udp/1-65535, tcp/80"]) {
       expect(fieldProblems("Network", { ...filled, firewallPorts: ok }, withFirewall)).not.toHaveProperty(
@@ -128,6 +225,24 @@ describe("a new cluster's firewall", () => {
 });
 
 describe("a cluster's firewall in its options", () => {
+  it.each([
+    { status: "True", says: "On, serving ports open. Inactive, datacenter firewall off" },
+    { status: "Unknown", says: "On, serving ports open. State unknown" },
+    { status: "False", says: "On, serving ports open" },
+  ])("says what the controller found of it, $status", async ({ status, says }) => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const found = {
+      ...cluster,
+      conditions: [{ type: "FirewallInactive", status, reason: "DatacenterFirewallOff", since: cluster.created }],
+    };
+    fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": { body: found },
+    });
+    render(<App />);
+    await expect(screen.findByRole("cell", { name: says })).resolves.toBeInTheDocument();
+  });
+
   it("switches off, which drops the groups", async () => {
     expect(firewallText({ on: false, ports: "" }, "k8s")).toBe("Off");
     window.history.replaceState(null, "", "/clusters/clusters/web/options");
