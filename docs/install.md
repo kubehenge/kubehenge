@@ -1,6 +1,6 @@
 # Installing Kubehenge
 
-Kubehenge runs on Proxmox VE as a small appliance, an unprivileged LXC container that serves Kubehenge's web interface. From the interface, an administrator creates the management cluster (one or three Talos Linux VMs running Cluster API and Kubehenge's controller). From then on, clusters are created from the interface or with kubectl. Those who keep their infrastructure as code can apply the management cluster with Terraform/OpenTofu instead ([below](#alternative-terraformopentofu)).
+Kubehenge runs on Proxmox VE as a small appliance, an unprivileged LXC container that serves Kubehenge's web interface. From the interface, an administrator creates the management cluster (one, three or five Talos Linux VMs running Cluster API and Kubehenge's controller). From then on, clusters are created from the interface or with kubectl. Those who keep their infrastructure as code can apply the management cluster with Terraform/OpenTofu instead ([below](#alternative-terraformopentofu)).
 
 1. Check the [requirements](#requirements).
 2. [Install the appliance](#install-the-appliance) with one line in the Proxmox VE shell.
@@ -40,7 +40,7 @@ Kubehenge gives every node of every cluster a static address, with no DHCP serve
 
 #### Addresses for the management cluster
 
-- **The management cluster** needs one free address per node (one, or three for high availability) and one for its Kubernetes API's virtual IP. All are in one subnet on one bridge, with a gateway and DNS servers.
+- **The management cluster** needs one free address per node (one, three or five for high availability) and one for its Kubernetes API's virtual IP. All are in one subnet on one bridge, with a gateway and DNS servers.
   - Its VMs can run on several Proxmox VE nodes. Each of those needs that bridge, in the same layer-2 network.
   - The bridge can be an SDN VNet. Cluster API's token gets `SDN.Use` (its network role) on `/sdn/zones/<zone>/<vnet>`, or on `/sdn/zones/localnetwork/<bridge>` for a node's bridge.
   - The appliance reaches its nodes on ports 50000 (Talos API) and 6443 (Kubernetes API).
@@ -129,7 +129,7 @@ Proxmox VE downloads disk images through the datacenter's proxy. The Add-on Prov
 | What | vCPUs | Memory | Disk |
 | --- | --- | --- | --- |
 | The appliance | 2 | 1 GiB, and 512 MiB swap | 8 GB |
-| Each management cluster node (one or three) | 4 | 4 GiB | 32 GB |
+| Each management cluster node (one, three or five) | 4 | 4 GiB | 32 GB |
 | A cluster's control-plane node, by default | 2 | 4 GiB (kubeadm: 4800 MiB) | 30 GiB |
 | A cluster's worker, by default | 2 | 6 GiB | 40 GiB |
 
@@ -439,7 +439,7 @@ They also bring the warnings about the [backup](#back-up-the-appliance) and the 
 | VLAN tag | Optional, 1 to 4094. Refused on a VNet of a VLAN zone, which tags its traffic already. A VLAN-aware VNet takes one. |
 | MTU | Optional, 1280 to 65520 ([details](install-settings.md#management-network-mtu)). |
 | Address families | IPv4, IPv6, or both, the first one primary. Fixed once the management cluster exists. |
-| Node addresses | One address, or three for high availability, each with its prefix length: `192.0.2.11/24` or `2001:db8::11/64`. All in one network, the gateway's, and none of them the network's own address or an IPv4 broadcast address. With both families, the page asks for IPv4 and IPv6 node addresses. It takes as many of each. Each node takes the one at its place in both lists. |
+| Node addresses | One address, or three or five for high availability, each with its prefix length: `192.0.2.11/24` or `2001:db8::11/64`. All in one network, the gateway's, and none of them the network's own address or an IPv4 broadcast address. With both families, the page asks for IPv4 and IPv6 node addresses. It takes as many of each. Each node takes the one at its place in both lists. |
 | API address | The virtual IP of the management cluster's Kubernetes API. An unused address of the primary family in the nodes' network, neither a node address nor the gateway. It moves to a healthy node when one fails. |
 | Gateway | The nodes' default gateway, one per family with both. An IPv6 one may be link-local. |
 | DNS servers | Addresses of the cluster's families, one per line or separated by commas. A dual-stack cluster needs one of each. |

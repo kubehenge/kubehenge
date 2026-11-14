@@ -140,6 +140,11 @@ const dualStack: Partial<SetupForm> = {
 };
 const ipv6Only: Partial<SetupForm> = { ...dualStack, families: "ipv6", dnsServers: "2001:db8::53" };
 
+// n node addresses from the given prefix, one after the other.
+const addressesOf = (n: number, prefix: string): string =>
+  Array.from({ length: n }, (_, i) => `${prefix}${11 + i}/24`).join(" ");
+const six = (n: number): string => Array.from({ length: n }, (_, i) => `2001:db8::${11 + i}/64`).join(" ");
+
 type NetworkKey = "nodes" | "nodeAddresses" | "nodeAddresses6" | "gateway" | "gateway6" | "apiAddress" | "dnsServers";
 const networkKeys: NetworkKey[] = [
   "nodes",
@@ -634,11 +639,11 @@ describe("setup", () => {
     expect(screen.getByLabelText("Bridge")).toHaveValue("vmbr0");
     expect(screen.getByLabelText("Gateway")).toHaveValue("192.0.2.1");
     const addresses = screen.getByLabelText("Node addresses");
-    expect(addresses).toHaveAccessibleDescription("1 or 3 in 192.0.2.0/24");
+    expect(addresses).toHaveAccessibleDescription("1, 3 or 5 in 192.0.2.0/24");
     // Next on a step with something missing stays there, says what, and goes to it.
     await next(user);
     expect(screen.getByRole("button", { name: "Network" })).toHaveAttribute("aria-current", "step");
-    expect(addresses).toHaveAccessibleDescription("Enter 1 or 3 addresses. 1 or 3 in 192.0.2.0/24");
+    expect(addresses).toHaveAccessibleDescription("Enter 1, 3 or 5 addresses. 1, 3 or 5 in 192.0.2.0/24");
     expect(addresses).toHaveFocus();
     expect(screen.getByRole("button", { name: "Services" })).toBeDisabled();
     await user.type(addresses, "192.0.2.11/24");
@@ -1060,6 +1065,53 @@ describe("setup", () => {
     ).toBeUndefined();
   });
 
+  it("takes 1, 3 or 5 node addresses and refuses other counts", () => {
+    for (const n of [1, 3, 5]) {
+      expect(
+        setupFieldProblems({ ...form, nodeAddresses: addressesOf(n, "192.0.2.") }, true).nodeAddresses,
+      ).toBeUndefined();
+    }
+    for (const n of [0, 2, 4, 6]) {
+      expect(setupFieldProblems({ ...form, nodeAddresses: addressesOf(n, "192.0.2.") }, true).nodeAddresses).toBe(
+        "Enter 1, 3 or 5 addresses.",
+      );
+    }
+  });
+
+  it("takes 5 IPv6 node addresses and holds them to IPv4's count", () => {
+    const five = {
+      ...form,
+      ...dualStack,
+      nodeAddresses: addressesOf(5, "192.0.2."),
+      nodeAddresses6: six(5),
+      nodes: ["pve1"],
+    };
+    expect(setupFieldProblems(five, true).nodeAddresses6).toBeUndefined();
+    expect(setupFieldProblems({ ...five, nodeAddresses6: six(3) }, true).nodeAddresses6).toBe(
+      "Enter as many IPv6 as IPv4 addresses.",
+    );
+    expect(setupFieldProblems({ ...five, nodeAddresses6: six(4) }, true).nodeAddresses6).toBe(
+      "Enter 1, 3 or 5 addresses.",
+    );
+  });
+
+  it("lets an existing management cluster grow to 3 or 5 after its nodes", () => {
+    for (const [was, now] of [
+      [1, 3],
+      [1, 5],
+      [3, 5],
+    ] as const) {
+      const kept = settings({ ...form, nodeAddresses: addressesOf(was, "192.0.2.") });
+      expect(
+        setupFieldProblems({ ...form, nodeAddresses: addressesOf(now, "192.0.2.") }, false, kept).nodeAddresses,
+      ).toBeUndefined();
+    }
+    const kept = settings({ ...form, nodeAddresses: addressesOf(5, "192.0.2.") });
+    expect(
+      setupFieldProblems({ ...form, nodeAddresses: addressesOf(3, "192.0.2.") }, false, kept).nodeAddresses,
+    ).toMatch(/^Keep 192.0.2.11\/24, /u);
+  });
+
   it("sends and reads back the network of each family choice", () => {
     expect(settings(form)).not.toHaveProperty("ipFamilies");
     expect(settings(form)).not.toHaveProperty("nodeAddressesIPv6");
@@ -1154,13 +1206,13 @@ describe("setup", () => {
     expect(screen.queryByLabelText("IPv6 node addresses")).toBeNull();
     expect(screen.queryByLabelText("IPv4 node addresses")).toBeNull();
     await user.selectOptions(families, "IPv6 and IPv4");
-    expect(screen.getByLabelText("IPv6 node addresses")).toHaveAccessibleDescription("1 or 3 in 2001:db8::/64");
+    expect(screen.getByLabelText("IPv6 node addresses")).toHaveAccessibleDescription("1, 3 or 5 in 2001:db8::/64");
     expect(screen.getByLabelText("IPv6 gateway")).toHaveValue("2001:db8::1");
     expect(screen.getByLabelText("IPv4 gateway")).toHaveValue("192.0.2.1");
     expect(screen.queryByLabelText("Gateway")).toBeNull();
     // One family takes the plain labels, IPv6 included.
     await user.selectOptions(families, "IPv6");
-    expect(screen.getByLabelText("Node addresses")).toHaveAccessibleDescription("1 or 3 in 2001:db8::/64");
+    expect(screen.getByLabelText("Node addresses")).toHaveAccessibleDescription("1, 3 or 5 in 2001:db8::/64");
     expect(screen.getByLabelText("Gateway")).toHaveValue("2001:db8::1");
     expect(screen.queryByLabelText("IPv4 gateway")).toBeNull();
     expect(screen.queryByLabelText("IPv6 gateway")).toBeNull();

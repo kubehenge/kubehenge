@@ -413,6 +413,9 @@ func (s *Settings) Families() []string {
 // HasIPv6 tells that the cluster has an IPv6 family, alone or beside IPv4.
 func (s *Settings) HasIPv6() bool { return slices.Contains(s.Families(), familyIPv6) }
 
+// nodeCounts are the node counts a management cluster may have.
+var nodeCounts = []int{1, 3, 5}
+
 // NodeCount is the number of management nodes, which the primary family's addresses give.
 func (s *Settings) NodeCount() int { return len(s.addressesOf(s.Families()[0])) }
 
@@ -626,8 +629,8 @@ func (s *Settings) checkFamilyAddresses(p *problems, family string) familyNet {
 	}
 	out := familyNet{family: family, gateway: gateway, nodes: map[netip.Addr]bool{}}
 	addresses := s.addressesOf(family)
-	if n := len(addresses); n != 1 && n != 3 {
-		p.addf("%s: one, or three for high availability", label)
+	if n := len(addresses); !slices.Contains(nodeCounts, n) {
+		p.addf("%s: one, three or five for high availability", label)
 	}
 	for _, a := range addresses {
 		prefix, err := netip.ParsePrefix(a)
