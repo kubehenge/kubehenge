@@ -63,7 +63,7 @@ The names below are the defaults. The users, groups and roles start with the man
 
 ## Remove the appliance
 
-Remove the management cluster first. Without the appliance its state is gone. Everything the setup made then has to be found and deleted by hand ([the list](install.md#losing-the-passphrase)).
+Remove the management cluster first. Without the appliance its state is gone. Everything the setup made then has to be found and deleted by hand ([the list](install.md#starting-over)).
 
 In the shell of the node the appliance runs on, as root:
 
