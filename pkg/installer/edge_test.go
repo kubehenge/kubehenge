@@ -669,6 +669,34 @@ func TestFinishedApplianceIsLeftAlone(t *testing.T) {
 	}
 }
 
+// Ctrl+C on the failure screen keeps the failure and says what was undone and what stays.
+func TestCtrlCOnFailureKeepsTheFailure(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true, rootStorages: 2})
+	h.exec.fail("pct start 100", 1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	keys, typed := pressEnter(ctx, func() bool { return h.exec.count("pct create") > 0 })
+	screen := &syncBuffer{}
+	var errs strings.Builder
+	cfg := h.session(Config{IP: "dhcp", PVEEntry: "no"}).Cfg
+	streams := ioStreams{in: keys, out: screen, errs: &errs, size: []tea.ProgramOption{tea.WithWindowSize(100, 40)}}
+	ended := make(chan error, 1)
+	go func() { ended <- executeOn(ctx, h.env(), &cfg, streams, true, "xterm") }()
+	for !strings.Contains(strings.ReplaceAll(ansi.Strip(screen.String()), " ", ""), "Container100wasremoved") && ctx.Err() == nil {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("the failure screen never said what was undone: %q", ansi.Strip(screen.String()))
+	}
+	_, _ = typed.Write([]byte{0x03})
+	err := <-ended
+	if err == nil || !strings.Contains(err.Error(), "did not start") || !strings.Contains(err.Error(), "Container 100 was removed.") ||
+		!strings.Contains(err.Error(), "template stays on storage local-lvm") || errs.Len() != 0 {
+		t.Fatalf("Ctrl+C on the failure screen: err %v, said %q", err, errs.String())
+	}
+}
+
 // An upgraded appliance that cannot be protected gets one warning with pct's own message and the
 // one fix, and is never offered for removal, since it holds the management cluster's state.
 func TestUpgradeProtectionWarning(t *testing.T) {

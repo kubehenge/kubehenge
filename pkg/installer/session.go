@@ -17,6 +17,9 @@ type Session struct {
 	CA    *CAChoice
 	// Notices are the one-line decisions made without asking, such as the storage picked.
 	Notices []string
+
+	// vlanAware holds what routeVLANError read of each bridge, as a form checks on every key.
+	vlanAware map[string]bool
 }
 
 // Needs lists the questions still open.
@@ -275,19 +278,39 @@ func (s *Session) pickAPIHost(ties Ties) (bool, error) {
 // create a second bridge and take over the port's VLAN device, which would cut the node's own
 // network.
 func (s *Session) checkRouteVLAN(ctx context.Context) error {
-	f, c := s.Facts, &s.Cfg
+	f := s.Facts
 	b, v := f.DefaultBridge, f.DefaultVLAN
-	if v == "" || c.Bridge != b || c.VLAN != v {
-		return nil
-	}
-	if !s.Node.bridgeVLANAware(ctx, b) {
-		return userErr(fmt.Sprintf("the node's default route leaves by %s.%s, but %s is not VLAN aware, so a tag on it would make Proxmox VE create %sv%s and take over the port's .%s, which cuts the node's own network", b, v, b, b, v, v),
-			fmt.Sprintf("Make %s VLAN aware in the node's network settings, or name another bridge or VLAN with --bridge and --vlan", b))
+	if err := s.routeVLANError(ctx, s.Cfg.Bridge, s.Cfg.VLAN); err != nil || v == "" || s.Cfg.Bridge != b || s.Cfg.VLAN != v {
+		return err
 	}
 	if f.VLANFromRoute {
 		s.noticef("VLAN %s on %s, since the node's default route leaves by %s.%s (name --bridge %s for no VLAN)", v, b, b, v, b)
 	}
 	return nil
+}
+
+// routeVLANError is the refusal of a bridge and VLAN that are the node's default route device on
+// a bridge that is not VLAN aware, nil for any other pair. The flags, the detected route and the
+// terminal's VLAN field all go through it. Each bridge is read once.
+func (s *Session) routeVLANError(ctx context.Context, bridge, vlan string) error {
+	f := s.Facts
+	b, v := f.DefaultBridge, f.DefaultVLAN
+	if v == "" || bridge != b || vlan != v {
+		return nil
+	}
+	aware, read := s.vlanAware[b]
+	if !read {
+		aware = s.Node.bridgeVLANAware(ctx, b)
+		if s.vlanAware == nil {
+			s.vlanAware = map[string]bool{}
+		}
+		s.vlanAware[b] = aware
+	}
+	if aware {
+		return nil
+	}
+	return userErr(fmt.Sprintf("the node's default route leaves by %s.%s, but %s is not VLAN aware, so a tag on it would make Proxmox VE create %sv%s and take over the port's .%s, which cuts the node's own network", b, v, b, b, v, v),
+		fmt.Sprintf("Make %s VLAN aware in the node's network settings, or name another bridge or VLAN with --bridge and --vlan", b))
 }
 
 func (s *Session) noticef(format string, args ...any) {

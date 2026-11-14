@@ -96,6 +96,11 @@ type Runner struct {
 	unprotected bool
 	done        map[string]bool
 	created     bool
+	// removed and stuck say how Cleanup's removal of the container went, fetched that this run
+	// downloaded the template, which stays for the next run.
+	removed     bool
+	stuck       bool
+	fetched     bool
 	started     bool
 	partial     string
 	address     string
@@ -291,11 +296,31 @@ func (r *Runner) Made() bool {
 func (r *Runner) Left() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !r.unprotected {
-		return ""
-	}
+	return r.unprotectedText()
+}
+
+// Outcome says what a stopped run undid and what it left, once its cleanup has run.
+func (r *Runner) Outcome() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	id := r.S.Cfg.CTID
-	return "The appliance is installed in container " + id + " but not protected against deletion. Protect it with: pct set " + id + " --protection 1, or remove it with: pct destroy " + id + " --purge"
+	var said string
+	switch {
+	case r.unprotected:
+		return r.unprotectedText()
+	case r.created:
+		said = "Container " + id + " is still there. Remove it with: pct destroy " + id + " --purge"
+	case r.stuck:
+		said = "Container " + id + " could not be removed, or was gone already. Check with: pct status " + id
+	case r.removed:
+		said = "Container " + id + " was removed."
+	default:
+		said = "No container was made."
+	}
+	if r.fetched {
+		said += " The container template stays on storage " + r.S.Cfg.TemplateStorage + " for the next run."
+	}
+	return said
 }
 
 // Cleanup removes what a failed run made, so running it again starts clean. It is safe to call
@@ -313,11 +338,21 @@ func (r *Runner) Cleanup(ctx context.Context) {
 	id := r.S.Cfg.CTID
 	_, _ = r.pct(ctx, "unlock", id)
 	_, _ = r.pct(ctx, "stop", id)
-	_, _ = r.pct(ctx, "destroy", id, "--purge", "--destroy-unreferenced-disks", "1")
+	_, err := r.pct(ctx, "destroy", id, "--purge", "--destroy-unreferenced-disks", "1")
+	r.removed, r.stuck = err == nil, err != nil
 	r.created, r.started = false, false
 	for _, s := range []string{"create", "start", "address", "network", "certificate", "install", "service", "updates", "entry"} {
 		delete(r.done, s)
 	}
+}
+
+// unprotectedText is Left with mu held.
+func (r *Runner) unprotectedText() string {
+	if !r.unprotected {
+		return ""
+	}
+	id := r.S.Cfg.CTID
+	return "The appliance is installed in container " + id + " but not protected against deletion. Protect it with: pct set " + id + " --protection 1, or remove it with: pct destroy " + id + " --purge"
 }
 
 // pause waits one step interval, and ends at once when the run was cancelled.
@@ -451,6 +486,9 @@ func (r *Runner) stepTemplate(ctx context.Context) error {
 		return fmt.Errorf("rename: %w", err)
 	}
 	r.partial = ""
+	r.mu.Lock()
+	r.fetched = true
+	r.mu.Unlock()
 	r.finish("template", r.template+", checksum verified")
 	return nil
 }

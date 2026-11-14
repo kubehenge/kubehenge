@@ -78,15 +78,18 @@ func executeOn(ctx context.Context, env *Env, cfg *Config, streams ioStreams, in
 		}
 		return fmt.Errorf("run: %w", err)
 	}
+	outcome := model.Outcome()
 	if model.Cancelled() {
-		if left := model.Left(); left != "" {
-			_, _ = fmt.Fprintln(streams.errs, "Cancelled. "+left)
-			return nil
+		if outcome == "" {
+			outcome = "Nothing was changed."
 		}
-		_, _ = fmt.Fprintln(streams.errs, "Cancelled. Nothing was changed.")
+		_, _ = fmt.Fprintln(streams.errs, "Cancelled. "+outcome)
 		return nil
 	}
-	return model.Err()
+	if err = model.Err(); err != nil && outcome != "" && outcome != model.Left() {
+		return fmt.Errorf("%w. %s", err, outcome)
+	}
+	return err
 }
 
 // CanDrawScreen reports whether a terminal of this TERM value can show the full-screen installer.
