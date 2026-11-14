@@ -207,7 +207,7 @@ The task log shows what each Kubehenge account did. In an appliance's management
 | No bridges to choose from | Proxmox VE lists a node's bridges only with `Sys.Audit` on the node. Type the bridge's name instead. A bridge marked "no SDN.Use" needs that privilege on `/sdn/zones/localnetwork/<bridge>`, or on `/sdn/zones/<zone>/<vnet>` for a VNet. |
 | "`<user>` needs `Pool.Audit` on `<pool>`" | Proxmox VE lists a pool's VMs only to a user with `Pool.Audit` on it. Without it a cluster shows no nodes, console links or reboot. `PVEPoolUser` and `PVEAuditor` hold it. A role of your own needs it added. |
 | "Proxmox VE refused: …" | Proxmox VE answered. The reason after the colon is its own, such as "VM is locked (backup)" or "cluster not ready - no quorum?". Fix that first. |
-| "Proxmox VE did not answer" | No connection, a timeout or a certificate error. |
+| "Proxmox VE did not answer" | No connection, a timeout or a certificate error. Check that the appliance reaches the Proxmox VE API on port 8006 and trusts its certificate ([install.md](install.md#the-proxmox-ve-api)). |
 | "The user name and realm together are at most 64 characters" | Proxmox VE takes no longer sign-in name, `user@realm` counted whole. |
 | "Sign-in failed" with a right password | Proxmox VE gives one answer to a wrong password, an unknown or disabled user, and a realm that requires a second factor the user lacks. Ask an administrator to set up the factor. |
 | "Wrong code, a locked factor or a cluster without quorum" | Eight wrong TOTP codes lock TOTP until a recovery key is used. Proxmox VE says nothing of it. Sign in with a recovery key. Without one, an administrator resets the user's factors. A cluster without quorum refuses every code, a right one too, because Proxmox VE records each use in its cluster files. Sign in on a node's console until quorum returns. |
@@ -419,7 +419,7 @@ The webhook refuses `nodeCustomisation` with one message per problem, and kubect
 | `Talos writes machine files under /var and /etc/cri/conf.d only` | Move the file there. |
 | `Secret <name> is not in namespace <ns>` | Create the Secret beside the Cluster. A Secret in another namespace is not read. |
 | `Secret <name> has no key <key>` and `ConfigMap <name> has no key policy.yaml` | Add the key, or name the one that exists. |
-| `the audit policy has no rules` or `has to be a Policy of audit.k8s.io/v1` | The API server would not start with it. |
+| `the audit policy has no rules` or `has to be a Policy of audit.k8s.io/v1` | The API server would not start with it. Give a Policy of `audit.k8s.io/v1` with at least one rule. |
 
 The class schema refuses a bad `permissions`, a path with `..` or a double slash, or both `content` and `secret`.
 
@@ -615,7 +615,7 @@ The proxy's errors:
 
 | Error | Cause and fix |
 | --- | --- |
-| `is not one of the cluster's own` or `is not named after the cluster's volume owner VM` | Something in the cluster asked to copy a volume that is not the cluster's. The proxy copies only the volumes the CSI plugin made for the cluster. |
+| `is not one of the cluster's own` or `is not named after the cluster's volume owner VM` | Something in the cluster asked to copy a volume that is not the cluster's. The proxy copies only the volumes the CSI plugin made for the cluster. Snapshot or clone a volume of this cluster. |
 | `cannot land on node` | The plugin asked for a copy on another node than its volume's. A copy stays on its volume's node. Schedule the pod that uses it there. |
 | `no holder VM on node … has room for another copy yet` | This is temporary. Kubehenge's controller adds a holder VM on that node within a reconcile. The sidecar asks again. |
 | `Permission check failed` naming `VM.Clone` | The cluster's role lacks it. Apply the management cluster's module again. |
@@ -718,7 +718,7 @@ Shut that VM down in Proxmox VE before the node goes down. Start it again once t
 | `TalosUpgradeAbandoned`, "node … to Talos …: its machine is being deleted" | The cluster scaled down or replaced the node while it was upgraded. Nothing to do. Its successor is upgraded as any other node. |
 | `TalosDrainBlocked`, "node … is held while it drains: Pod … cannot evict pod …" | A PodDisruptionBudget keeps a pod on the node and the upgrade waits. The text names the pod and the budget. **Upgrade held by** on the cluster shows it too. `kubectl get pdb -A` shows why the budget allows no disruption. A workload short of ready replicas explains most. Once it is healthy the pod leaves and the upgrade goes on. A budget that can never be met, such as `minAvailable` equal to a single replica, holds until the drain timeout. Lower the budget, or shorten the drain timeout of the control plane or the pool under **Machines**, **Timeouts…**. |
 | `TalosStatefulSetsWaiting`, "node … waits to drain: StatefulSet … replicas ready" | A StatefulSet with a ready pod on the node is short of replicas. Bring it back, or wait for the drain timeout (`TalosStatefulSetsNotReady`). |
-| `TalosDrain`, "node … reboots without all its pods moved: the drain timeout of … ran out" | The pods named were still on the node at the timeout. It rebooted anyway. |
+| `TalosDrain`, "node … reboots without all its pods moved: the drain timeout of … ran out" | The pods named were still on the node at the timeout. It rebooted anyway. `kubectl get pdb -A` shows what held them. Raise the drain timeout if they only needed longer ([clusters.md](clusters.md#node-timeouts)). |
 
 ### Upgrades held back
 
@@ -1017,7 +1017,7 @@ kubectl -n <namespace> get events --field-selector reason=LeftBehind
 
 | Problem | Cause and fix |
 | --- | --- |
-| Newer releases shows "Couldn't check" | The reason follows it. The appliance could not fetch the release index from kubehenge.dev, its signature did not check out, or it has expired. |
+| Newer releases shows "Couldn't check" | The reason follows it. The appliance could not fetch the release index from kubehenge.dev, its signature did not check out, or it has expired. Check that the container reaches kubehenge.dev. |
 | "the release index has expired" | The index it reached was not signed again within two weeks. With a mirror (`KUBEHENGE_RELEASE_INDEX`), copy the index and its signatures to it again. A clock far ahead makes a fresh index look expired too. `timedatectl` in the container shows it. |
 | The last upgrade failed | The reason is on the Administration page, and in `journalctl -u kubehenge-update` inside the appliance. The release installed before runs again in every case but one, below. |
 | `"release … did not start: …; rolled back to …"` | The new release was installed, but its interface did not answer within 2 minutes, or stopped and was restarted soon after. The updater, or `install.sh --upgrade`, put the old release back. `journalctl -u kubehenge` shows why the new one did not start. Report it with that log ([below](#reporting-a-problem)). |
@@ -1029,7 +1029,7 @@ kubectl -n <namespace> get events --field-selector reason=LeftBehind
 
 **Administration, Backups** shows the last snapshot's error, as does `kubehenge appliance etcd-backups` in the appliance's shell. The appliance tries again 15 minutes later. `journalctl -u kubehenge` inside the appliance logs each one.
 
-- **"reaching etcd: … etcd snapshot: …"** or **"reaching the Talos API of …"** means no control-plane node's Talos API (port 50000), or etcd behind it, answered.
+- **"reaching etcd: … etcd snapshot: …"** or **"reaching the Talos API of …"** means no control-plane node's Talos API (port 50000), or etcd behind it, answered. Check that the VMs run and that port 50000 is open from the appliance.
 - **"the snapshots' talosconfig: …"** or a refusal by the Talos API means the talosconfig kept for snapshots expired or no longer matches the management cluster's CA. Apply the management cluster again, which makes a new one, or **Change…** the backups.
 - **"target …: …"** or **"deleting older snapshots: …"** means the target refused the access key, or the key may not delete there. In the second case the snapshot was taken and only the removal of the oldest failed.
 - **"the passphrase does not open the target's key for the management cluster's snapshots"** means the target holds a key stored under another state's passphrase. See [details](install-settings.md#management-cluster-etcd-backups).
