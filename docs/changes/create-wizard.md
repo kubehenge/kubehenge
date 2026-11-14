@@ -1,3 +1,7 @@
+### Added
+
+- A cluster whose disks do not fit its thick storage gets a `StorageLacksSpace` condition, also when made with kubectl or GitOps.
+
 ### Changed
 
 - **Create cluster** starts from **Defaults**, and says **Copied from** the cluster you chose on the later steps. Etcd snapshots stay on with the first backup target, and their access key is optional.
