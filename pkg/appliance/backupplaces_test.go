@@ -131,7 +131,7 @@ func TestRemoveDeletesOrFencesTheAppliancesCopy(t *testing.T) {
 
 // The copy's cap counts all it holds, the export included, and a copy over it never replaces the
 // last that fit.
-func TestTheCopysCapCountsItsExport(t *testing.T) {
+func TestTheCopyCapCountsItsExport(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	now := time.Date(2027, 3, 1, 12, 0, 0, 0, time.UTC)

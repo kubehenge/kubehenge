@@ -43,29 +43,28 @@ func TestIntegrationInterfaceFollowsZones(t *testing.T) { //nolint:paralleltest 
 	}
 	ctx := context.Background()
 	// mgmt-cp-2 joined since the last apply, with no zone yet.
-	joined := zoned("mgmt-cp-2", "", false)
-	delete(joined.Labels, corev1.LabelTopologyZone)
-	for _, n := range []*corev1.Node{zoned("mgmt-cp-0", "pve1", true), zoned("mgmt-cp-1", "pve1", false), joined, zoned("worker", "pve1", false)} {
+	nodes := []*corev1.Node{zoned("mgmt-cp-0", "pve1", withBeta...), zoned("mgmt-cp-1", "pve1", zoneOnly...), zoned("mgmt-cp-2", ""), zoned("worker", "pve1", zoneOnly...)}
+	for _, n := range nodes {
 		n.Labels["kept"] = "yes"
-		if _, err := admin.CoreV1().Nodes().Create(ctx, n, metav1.CreateOptions{}); err != nil {
+		if _, err = admin.CoreV1().Nodes().Create(ctx, n, metav1.CreateOptions{}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	patch := func(c kubernetes.Interface, node, body string) error {
-		_, err := c.CoreV1().Nodes().Patch(ctx, node, types.MergePatchType, []byte(body), metav1.PatchOptions{})
-		return err //nolint:wrapcheck // the test reads the API's own error
+		_, perr := c.CoreV1().Nodes().Patch(ctx, node, types.MergePatchType, []byte(body), metav1.PatchOptions{})
+		return perr
 	}
 
 	// The policy takes a moment to be enforced after it is made.
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
-		err := patch(ui, "mgmt-cp-0", `{"metadata":{"labels":{"kept":"no"}}}`)
+		err = patch(ui, "mgmt-cp-0", `{"metadata":{"labels":{"kept":"no"}}}`)
 		if apierrors.IsInvalid(err) {
 			break
 		}
 		if err != nil {
 			t.Fatalf("another label of a management node: %v", err)
 		}
-		if err := patch(admin, "mgmt-cp-0", `{"metadata":{"labels":{"kept":"yes"}}}`); err != nil {
+		if err = patch(admin, "mgmt-cp-0", `{"metadata":{"labels":{"kept":"yes"}}}`); err != nil {
 			t.Fatal(err)
 		}
 		if time.Now().After(deadline) {
@@ -74,7 +73,7 @@ func TestIntegrationInterfaceFollowsZones(t *testing.T) { //nolint:paralleltest 
 	}
 
 	a := &Appliance{vmHosts: hostsAt(t, map[string]string{"mgmt-cp-0": "pve2", "mgmt-cp-1": "pve1", "mgmt-cp-2": "pve3", "worker": "pve1"})}
-	if err := a.followZones(ctx, ui); err != nil {
+	if err = a.followZones(ctx, ui); err != nil {
 		t.Fatalf("the interface could not correct the zones: %v", err)
 	}
 	moved, err := admin.CoreV1().Nodes().Get(ctx, "mgmt-cp-0", metav1.GetOptions{})

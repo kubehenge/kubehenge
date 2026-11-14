@@ -17,7 +17,7 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
-// TokenHeader carries the store's token. The API server's service proxy drops Authorization, so
+// TokenHeader carries the store's token. The API server's service proxy drops the authorisation header, so
 // the token travels in a header of its own.
 const TokenHeader = "X-Kubehenge-Store-Token" //nolint:gosec // a header's name
 

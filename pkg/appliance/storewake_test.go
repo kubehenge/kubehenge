@@ -19,8 +19,8 @@ import (
 
 func storeDeployment(replicas int32, idle string) *appsv1.Deployment {
 	d := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: backupstore.Service, Namespace: backupstore.Namespace},
-		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+		Name: backupstore.Service, Namespace: backupstore.Namespace,
+		Spec: appsv1.DeploymentSpec{Replicas: &replicas},
 	}
 	if idle != "" {
 		d.Annotations = map[string]string{idleReplicas: idle}
@@ -30,8 +30,8 @@ func storeDeployment(replicas int32, idle string) *appsv1.Deployment {
 
 func zonesToken() *corev1.Secret {
 	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: zonesSecret, Namespace: backupstore.Namespace},
-		Data:       map[string][]byte{zonesKey: []byte(standInToken)},
+		Name: zonesSecret, Namespace: backupstore.Namespace,
+		Data: map[string][]byte{zonesKey: []byte(standInToken)},
 	}
 }
 
@@ -39,16 +39,20 @@ func zonesToken() *corev1.Secret {
 // it too, base64.
 const standInToken = "fake"
 
-func zoned(name, zone string, beta bool) *corev1.Node {
-	n := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{
-		corev1.LabelTopologyRegion: "kubehenge",
-		corev1.LabelTopologyZone:   zone,
-	}}}
-	if beta {
-		n.Labels[corev1.LabelFailureDomainBetaZone] = zone
+// zoned is a management node in the region with the zone labels given, each set to zone.
+func zoned(name, zone string, labels ...string) *corev1.Node {
+	n := &corev1.Node{Name: name, Labels: map[string]string{corev1.LabelTopologyRegion: "kubehenge"}}
+	for _, l := range labels {
+		n.Labels[l] = zone
 	}
 	return n
 }
+
+// Zone labels for zoned.
+var (
+	zoneOnly = []string{corev1.LabelTopologyZone}
+	withBeta = []string{corev1.LabelTopologyZone, corev1.LabelFailureDomainBetaZone}
+)
 
 // hostsAt stands in for Proxmox VE, which says where each VM runs, and fails a token it never gave.
 func hostsAt(t *testing.T, hosts map[string]string) func(context.Context, string) (map[string]string, error) {
@@ -113,7 +117,7 @@ func TestTheStoreStaysUpOnSharedStorage(t *testing.T) {
 	kube := fake.NewClientset(up)
 	a := &Appliance{vmHosts: func(context.Context, string) (map[string]string, error) {
 		t.Error("a store on shared storage asked Proxmox VE where the node VMs run")
-		return nil, nil
+		return map[string]string{}, nil
 	}}
 	ctx := t.Context()
 	if err := a.wakeStore(ctx, kube); err != nil {
@@ -143,7 +147,7 @@ func TestAMovedNodeVMsZoneIsCorrectedBeforeTheStoreWakes(t *testing.T) {
 	ready := storeDeployment(0, "0")
 	ready.Status.ReadyReplicas = 1
 	kube := fake.NewClientset(ready, zonesToken(),
-		zoned("mgmt-cp-0", "pve1", true), zoned("mgmt-cp-1", "pve1", false), zoned("mgmt-cp-2", "pve3", false))
+		zoned("mgmt-cp-0", "pve1", withBeta...), zoned("mgmt-cp-1", "pve1", zoneOnly...), zoned("mgmt-cp-2", "pve3", zoneOnly...))
 	var atWake map[string]map[string]string
 	kube.PrependReactor("patch", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
 		atWake = map[string]map[string]string{}
@@ -152,7 +156,12 @@ func TestAMovedNodeVMsZoneIsCorrectedBeforeTheStoreWakes(t *testing.T) {
 			t.Error(err)
 			return false, nil, nil
 		}
-		for _, n := range nodes.(*corev1.NodeList).Items {
+		list, ok := nodes.(*corev1.NodeList)
+		if !ok {
+			t.Errorf("the tracker listed nodes as %T", nodes)
+			return false, nil, nil
+		}
+		for _, n := range list.Items {
 			atWake[n.Name] = n.Labels
 		}
 		return false, nil, nil
@@ -182,7 +191,7 @@ func TestAMovedNodeVMsZoneIsCorrectedBeforeTheStoreWakes(t *testing.T) {
 	}
 
 	// Without the token the wake cannot tell where the VMs run, and does not start the store.
-	blind := fake.NewClientset(storeDeployment(0, "0"), zoned("mgmt-cp-0", "pve1", false))
+	blind := fake.NewClientset(storeDeployment(0, "0"), zoned("mgmt-cp-0", "pve1", zoneOnly...))
 	short, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 	if err := a.wakeStore(short, blind); err == nil {
@@ -193,7 +202,7 @@ func TestAMovedNodeVMsZoneIsCorrectedBeforeTheStoreWakes(t *testing.T) {
 	}
 
 	// A node Proxmox VE lists no VM for may carry any zone, so the store stays asleep.
-	unlisted := fake.NewClientset(storeDeployment(0, "0"), zonesToken(), zoned("mgmt-cp-0", "pve1", false), zoned("mgmt-cp-9", "pve1", false))
+	unlisted := fake.NewClientset(storeDeployment(0, "0"), zonesToken(), zoned("mgmt-cp-0", "pve1", zoneOnly...), zoned("mgmt-cp-9", "pve1", zoneOnly...))
 	err := (&Appliance{vmHosts: hostsAt(t, map[string]string{"mgmt-cp-0": "pve1"})}).wakeStore(short, unlisted)
 	if err == nil || !strings.Contains(err.Error(), "reading where the management VMs run: Proxmox VE lists no VM for node mgmt-cp-9") {
 		t.Fatalf("a wake with node mgmt-cp-9 unlisted: %v", err)
@@ -209,9 +218,7 @@ func TestAnApplyLabelsTheManagementNodesZones(t *testing.T) {
 	t.Parallel()
 	a, _ := newAppliance(t)
 	a.Talos = &fakeManagementTalos{}
-	fresh := zoned("mgmt-cp-0", "", false)
-	delete(fresh.Labels, corev1.LabelTopologyZone)
-	management := fake.NewClientset(storeDeployment(0, "0"), zonesToken(), fresh, zoned("mgmt-cp-1", "pve1", true))
+	management := fake.NewClientset(storeDeployment(0, "0"), zonesToken(), zoned("mgmt-cp-0", ""), zoned("mgmt-cp-1", "pve1", withBeta...))
 	a.ManagementClient = func(admin []byte) (kubernetes.Interface, error) {
 		if string(admin) != "admin-kubeconfig" {
 			t.Errorf("the management cluster was reached with %q, not the admin kubeconfig", admin)

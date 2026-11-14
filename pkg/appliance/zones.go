@@ -18,7 +18,7 @@ import (
 // zonesSecret holds the Proxmox VE token that reads where the management cluster's VMs run. The
 // storage chart makes it on every storage.
 const (
-	zonesSecret = backupstore.Service + "-zones" //nolint:gosec // a Secret's name
+	zonesSecret = backupstore.Service + "-zones"
 	zonesKey    = "token"
 )
 
