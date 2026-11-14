@@ -712,8 +712,7 @@ button.go {
   color: var(--error);
 }
 
-.runs-stalled h3,
-.runs-stalled .run-error {
+.runs-stalled h3 {
   color: var(--warning);
 }
 
