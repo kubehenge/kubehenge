@@ -4,6 +4,7 @@ import { api } from "./api";
 import { useClusterHealth, pollUnwell } from "./cluster-health";
 import { attentionFix } from "./cluster-paths";
 import { standing } from "./fleet";
+import { offlineOf, useProxmoxNodes, withNodeFindings } from "./offline-nodes";
 import { poolLabel } from "./pool-machine";
 import { Link } from "./router";
 import type {
@@ -131,7 +132,8 @@ function Verdict({
   stale: boolean;
 }): JSX.Element {
   const at = new Date(h.read).toLocaleTimeString();
-  const s = standing(c, { ...h, namespace: c.namespace, name: c.name });
+  const own = { ...h, namespace: c.namespace, name: c.name };
+  const s = standing(c, withNodeFindings(c, own, offlineOf(useProxmoxNodes())) ?? own);
   return (
     <div className="verdict">
       <Status state={s.state} text={s.verdict} />

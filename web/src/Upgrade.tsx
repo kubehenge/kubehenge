@@ -3,9 +3,10 @@ import { useEffect, useState, type JSX } from "react";
 import { api } from "./api";
 import { addressRoom, freeMemory } from "./Autoscaling";
 import { sizeOf } from "./MachineFields";
+import { nodeFindings, offlineOf } from "./offline-nodes";
 import { poolSize } from "./pool-machine";
 import { Link } from "./router";
-import type { Cluster, ClusterHealth, Effect, Plan, PveNode, UpgradeChecks } from "./types";
+import type { Attention, Cluster, ClusterHealth, Effect, Plan, PveNode, UpgradeChecks } from "./types";
 import { Detail, Status, bytes, errorMessage, localDates } from "./ui";
 
 // What the machines go through, by the most a change does.
@@ -172,7 +173,8 @@ function addressCheck(c: Cluster): Check | undefined {
     : { what: "Addresses", state: "error", text: "None spare. Add one under Options." };
 }
 
-function healthCheck(health: ClusterHealth | string | undefined): Check {
+// The cluster's own health and what its offline nodes mean count together, as on the health page.
+function healthCheck(health: ClusterHealth | string | undefined, onNodes: Attention[]): Check {
   if (health === undefined) {
     return { what: "Health", state: "progress", text: "Checking" };
   }
@@ -182,8 +184,9 @@ function healthCheck(health: ClusterHealth | string | undefined): Check {
   if (health.verdict === "unreachable") {
     return { what: "Health", state: "error", text: "Unreachable" };
   }
-  const errors = health.attention.filter((a) => a.severity === "error").length;
-  const warnings = health.attention.filter((a) => a.severity === "warning").length;
+  const found = [...onNodes, ...health.attention];
+  const errors = found.filter((a) => a.severity === "error").length;
+  const warnings = found.filter((a) => a.severity === "warning").length;
   if (errors + warnings === 0) {
     return { what: "Health", state: "ok", text: "No problems" };
   }
@@ -311,7 +314,7 @@ export function useChecks({
     ...scaleChecks(before, after, nodes),
     ...optional(nodesCheck(before, nodes)),
     ...(version === undefined ? [] : [removedAPIsCheck(found), ...optional(webhooksCheck(found))]),
-    healthCheck(health),
+    healthCheck(health, nodeFindings(before, offlineOf(nodes))),
   ];
 }
 

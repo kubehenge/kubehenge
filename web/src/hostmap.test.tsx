@@ -114,6 +114,26 @@ describe("the cluster's summary", () => {
     await expect(within(row).findByText("Node offline")).resolves.toBeInTheDocument();
   });
 
+  it("calls no cluster well while a node of it is offline", async () => {
+    const stale = {
+      ...web,
+      workers: { desired: 2, ready: 2, available: 2, upToDate: 2 },
+      machines: [machine("web-cp-a", "control-plane", { proxmoxNode: "pve4" })],
+    };
+    fakeServer({
+      "GET /api/session": { body: { user: "alice@pve", csrf: "c1" } },
+      "GET /api/clusters": { body: [stale] },
+      "GET /api/clusters/default/web": { body: stale },
+      "GET /api/runs": { body: [] },
+      "GET /api/proxmox/nodes": { body: [{ node: "pve4", online: false }] },
+    });
+    window.history.replaceState(null, "", "/clusters/default/web");
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText("Degraded").length).toBeGreaterThan(0));
+    expect(screen.queryAllByText("Available")).toHaveLength(0);
+    expect(screen.queryAllByText("Healthy")).toHaveLength(0);
+  });
+
   it("shows a machine whose node stopped reporting as down, not as on its way", async () => {
     const health: ClusterHealth = {
       read: created,

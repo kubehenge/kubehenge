@@ -3,6 +3,7 @@ import { createContext, use, useCallback, useEffect, useMemo, useRef, type JSX, 
 import { api } from "./api";
 import { clusterPath, type View } from "./cluster-paths";
 import { useClusterChanges } from "./live";
+import { offlineOf, useProxmoxNodes, withNodeFindings } from "./offline-nodes";
 import { Link } from "./router";
 import type { Cluster, FleetHealth, Replicas, RunInfo } from "./types";
 import { Status, distributionName, filled, pollIdle, settled, usePoll } from "./ui";
@@ -81,10 +82,27 @@ export function FleetProvider({ reads = true, children }: { reads?: boolean; chi
     },
     [put, reloadRuns],
   );
+  const offlineKey = [...offlineOf(useProxmoxNodes(reads))].sort().join("\n");
+  const offline = useMemo(() => new Set(offlineKey === "" ? [] : offlineKey.split("\n")), [offlineKey]);
+  // What an offline Proxmox VE node or a control-plane node not ready means joins what each cluster's
+  // health found, so no view calls such a cluster well.
+  const health = useMemo(() => {
+    const byCluster = new Map((read ?? []).map((h) => [fleetKey(h), h]));
+    let any = read !== undefined;
+    for (const c of data ?? []) {
+      const was = byCluster.get(fleetKey(c));
+      const now = withNodeFindings(c, was, offline);
+      if (now !== was && now !== undefined) {
+        byCluster.set(fleetKey(c), now);
+        any = true;
+      }
+    }
+    return any ? byCluster : undefined;
+  }, [data, read, offline]);
   const fleet = useMemo(
     () => ({
       clusters: data,
-      health: read && new Map(read.map((h) => [fleetKey(h), h])),
+      health,
       runs,
       error,
       stale,
@@ -92,7 +110,7 @@ export function FleetProvider({ reads = true, children }: { reads?: boolean; chi
       next,
       show,
     }),
-    [data, read, runs, error, stale, reload, next, show],
+    [data, health, runs, error, stale, reload, next, show],
   );
   return <FleetContext value={fleet}>{children}</FleetContext>;
 }

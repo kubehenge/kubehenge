@@ -4,6 +4,7 @@ import { api } from "./api";
 import { BootLogDialog } from "./BootLog";
 import { useClusterHealth } from "./cluster-health";
 import { clusterPath } from "./cluster-paths";
+import { offlineOf, readyCounts, useProxmoxNodes } from "./offline-nodes";
 import { poolLabel } from "./pool-machine";
 import { Link, useQuery } from "./router";
 import type { Cluster, HealthNode, Machine, PveNode } from "./types";
@@ -18,9 +19,6 @@ import {
   age,
   errorMessage,
   filled,
-  pollCache,
-  pollIdle,
-  usePoll,
   type Health,
 } from "./ui";
 
@@ -39,24 +37,9 @@ function heldText(m: Machine): string {
   return `${held}. Replaced after ${until} at the latest.`;
 }
 
-// The Proxmox VE nodes, kept for every view of every cluster that places machines on them.
-const nodesCache = pollCache<PveNode[]>();
-const nodesKept = { cache: nodesCache, key: "nodes" };
-
-/**
- * useReadyCounts says how many of a cluster's control-plane nodes and workers are ready. A machine
- * on a Proxmox VE node that is offline is down whatever Cluster API last read of it, so it is not
- * counted, as its row does not call it ready.
- */
+/** useReadyCounts says how many of a cluster's control-plane nodes and workers are ready, as its machines are shown. */
 export function useReadyCounts(c: Cluster): { controlPlane: number; workers: number } {
-  const { data: nodes } = usePoll(api.nodes, pollIdle, nodesKept);
-  const offline = new Set((nodes ?? []).filter((n) => !n.online).map((n) => n.node));
-  const lost = (role: Machine["role"]): number =>
-    (c.machines ?? []).filter((m) => m.role === role && m.ready && offline.has(m.proxmoxNode ?? "")).length;
-  return {
-    controlPlane: Math.max(0, c.controlPlane.ready - lost("control-plane")),
-    workers: Math.max(0, c.workers.ready - lost("worker")),
-  };
+  return readyCounts(c, offlineOf(useProxmoxNodes()));
 }
 
 // machineStatus says how far a machine is, as the cluster list says it of clusters. A machine on a
@@ -123,7 +106,7 @@ export function Machines({
   why: string | undefined;
   onChanged: () => void;
 }): JSX.Element {
-  const { data: nodes } = usePoll(api.nodes, pollIdle, nodesKept);
+  const nodes = useProxmoxNodes();
   const health = useClusterHealth(c);
   const [replacing, setReplacing] = useState<Machine>();
   const [deleting, setDeleting] = useState<Machine>();
@@ -541,7 +524,7 @@ function hostState(h: Host): string {
  */
 export function Placement({ cluster: c }: { cluster: Cluster }): JSX.Element {
   // Only those who see the nodes get them. The others see the nodes of their machines alone.
-  const { data: nodes } = usePoll(api.nodes, pollIdle, nodesKept);
+  const nodes = useProxmoxNodes();
   const health = useClusterHealth(c);
   const nodeOf = new Map((health.data?.nodes.items ?? []).map((n) => [n.machine ?? n.name, n]));
   const machines = c.machines ?? [];
