@@ -312,9 +312,6 @@ export interface LoadBalancerErrors {
   routerID?: string | undefined;
 }
 
-/** The fields of a value that can change. */
-export type LoadBalancerKey = keyof LoadBalancerValue;
-
 /** bgpOffered tells whether a cluster may announce over BGP: with MetalLB, and not on Talos. */
 export const bgpOffered = (distribution: string | undefined, implementation: Implementation): boolean =>
   implementation === "metallb" && distribution !== "talos";
