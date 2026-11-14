@@ -41,7 +41,7 @@ import {
   Skeleton,
   Views,
 } from "./ui";
-import { UpgradeChecksList, usePlan } from "./Upgrade";
+import { ChecksList, useChecks, usePlan } from "./Upgrade";
 
 type Action = "scale" | "upgrade" | "delete" | "backups" | "autoscaler" | "etcdSnapshots" | OptionAction;
 
@@ -800,6 +800,8 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
   const held = c.talos ? targets.filter((v) => !runsKubernetes(talos, running, v)) : [];
   const version = chosen ?? preferredTarget(targets, held, c.version);
   const read = usePlan(c, version);
+  const changing = version !== c.version;
+  const checks = useChecks({ before: c, version, read, change: true, on: changing });
   return (
     <Dialog
       title={`Upgrade ${c.name}`}
@@ -815,9 +817,9 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
           <button
             type="submit"
             className="primary"
-            disabled={busy || version === c.version || read?.error !== undefined}
+            disabled={busy || !changing || read?.error !== undefined}
           >
-            Upgrade
+            Add to plan
           </button>
         </>
       }
@@ -849,13 +851,8 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
         </p>
       )}
       {c.talos && <TalosNote running={running} held={held} upgrading={filled(c.talos.upgrading)} />}
-      {version !== c.version && (
-        <UpgradeChecksList
-          cluster={c}
-          version={version}
-          read={read}
-          healthPath={clusterPath(c.namespace, c.name, "health")}
-        />
+      {changing && (
+        <ChecksList checks={checks} healthPath={clusterPath(c.namespace, c.name, "health")} label="Before upgrading" />
       )}
       <UpgradeAddonChanges cluster={c} onClose={onClose} />
       <ErrorBox message={error} />

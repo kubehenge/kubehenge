@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { fieldProblems, newForm, request, summary, type FieldKey } from "./create-form";
 import { MachinesStep, type StepProps } from "./CreateSteps";
-import { applyStaged, fakeServer } from "./fake-server";
+import { acceptProblems, applyStaged, fakeServer } from "./fake-server";
 import {
   newFile,
   nodeCustomisationChanges,
@@ -399,6 +399,7 @@ describe("a cluster's node customisation in its options", () => {
     expect(
       within(screen.getByRole("dialog", { name: "Review plan" })).getByRole("row", { name: /^Node customisation/u }),
     ).toHaveTextContent("Replaces every machine one by one");
+    await acceptProblems(user);
     await user.click(
       within(screen.getByRole("dialog", { name: "Review plan" })).getByRole("button", { name: "Apply" }),
     );

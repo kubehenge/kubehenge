@@ -252,7 +252,7 @@ export function poolChange(
 }
 
 /** freeMemory is the memory the nodes a cluster may use have free, in bytes, unknown without figures. */
-function freeMemory(c: Cluster, nodes: PveNode[]): number | undefined {
+export function freeMemory(c: Cluster, nodes: PveNode[]): number | undefined {
   const allowed = texts(c.variables["allowedNodes"]);
   const usable = nodes.filter((n) => n.online && (allowed === undefined || allowed.includes(n.node)));
   if (usable.length === 0 || usable.some((n) => n.maxMemory === undefined)) {

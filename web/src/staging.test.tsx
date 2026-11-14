@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
-import { applyStaged, fakeServer, type Route } from "./fake-server";
+import { acceptProblems, applyStaged, fakeServer, type Route } from "./fake-server";
 import { merged } from "./Staging";
 import type { Cluster, Effect, Plan } from "./types";
 import { record } from "./values";
@@ -79,6 +79,7 @@ describe("staged changes", () => {
     expect(plan.getByRole("row", { name: /^Monitoring/u })).toHaveTextContent(
       "MonitoringOffOnReplaces workers one by one",
     );
+    await acceptProblems(user);
     await user.click(plan.getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(screen.queryByRole("region", { name: "Staged changes" })).not.toBeInTheDocument());
     expect(calls.filter((c) => c.key === `PATCH ${path}`).map((c) => c.body)).toStrictEqual([
@@ -152,6 +153,54 @@ describe("staged changes", () => {
     expect(screen.queryByRole("region", { name: "Staged changes" })).not.toBeInTheDocument();
     expect(screen.getByRole("row", { name: /^Headlamp/u })).not.toHaveTextContent(/Staged/u);
     expect(calls.map((c) => c.key)).not.toContain(`PATCH ${path}`);
+  });
+
+  it("list what an upgrade meets, and apply only once its problems are accepted", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web");
+    const upgraded: Cluster = { ...cluster, version: "v1.37.1+k3s1" };
+    const calls = fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      [`GET ${path}`]: { body: cluster },
+      "GET /api/versions/k3s": { body: { versions: ["v1.37.1+k3s1"] } },
+      [`GET ${path}/health`]: {
+        body: {
+          verdict: "degraded",
+          attention: [{ severity: "error", section: "nodes", what: "Node web-md-0-a not ready" }],
+          nodes: { items: [] },
+        },
+      },
+      [`GET ${path}/upgrade-checks?version=v1.37.1%2Bk3s1`]: {
+        body: {
+          removedAPIs: [{ api: "flowcontrol.apiserver.k8s.io/v1beta3 flowschemas", removedIn: "1.32" }],
+          webhooks: [],
+          unchecked: [],
+          lines: [],
+          basis: "requests",
+        },
+      },
+      [`POST ${path}/plan`]: { body: { cluster: upgraded, changes: [{ setting: "version", effect: "all" }] } },
+      [`PATCH ${path}`]: { body: upgraded },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Upgrade" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Upgrade web" }));
+    const change = await dialog.findByText("Replaces every node, one at a time");
+    expect(change).toHaveClass("status-idle");
+    expect(change).not.toHaveClass("status-ok");
+    await dialog.findByText("1 problem");
+    await user.click(dialog.getByRole("button", { name: "Add to plan" }));
+
+    await user.click(await screen.findByRole("button", { name: "Review plan" }));
+    const plan = within(screen.getByRole("dialog", { name: "Review plan" }));
+    await plan.findByText("1 in use");
+    expect(plan.getByText("1 problem")).toBeInTheDocument();
+    expect(plan.getByRole("button", { name: "Apply" })).toBeDisabled();
+    await user.click(plan.getByRole("checkbox", { name: "Accept the problems" }));
+    expect(plan.getByRole("button", { name: "Apply" })).toBeEnabled();
+    await user.click(plan.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(calls.map((c) => c.key)).toContain(`PATCH ${path}`));
   });
 
   it("merge, a later change of a setting winning", () => {

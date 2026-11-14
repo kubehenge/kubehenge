@@ -1,10 +1,12 @@
 import { useEffect, useState, type JSX, type ReactNode } from "react";
 
 import { api, ApiError, httpPreconditionFailed } from "./api";
+import { clusterPath } from "./cluster-paths";
 import { changeLines, effects, planRows, worstEffect } from "./plan-rows";
 import { StagingContext, useStaging, type Staging } from "./staging-context";
 import type { ChangeRequest, Cluster, ClusterClass } from "./types";
 import { Dialog, ErrorBox, errorMessage } from "./ui";
+import { Accept, ChecksList, needsAccepting, useChecks } from "./Upgrade";
 
 // mergedPools is two changes of pools as one: a pool's later change adds to its earlier one, and a
 // deletion ends both.
@@ -171,11 +173,17 @@ function PlanDialog({
     void load();
   }, [className]);
   const { staged } = staging;
+  const checks = useChecks({ before: c, after: staged?.plan.cluster ?? c, version: staged?.req.version });
+  const [accepted, setAccepted] = useState(false);
   if (staged === undefined) {
     return null;
   }
   const { plan } = staged;
+  const stopped = needsAccepting(checks) && !accepted;
   const apply = async (): Promise<void> => {
+    if (stopped) {
+      return;
+    }
     setBusy(true);
     setError(undefined);
     try {
@@ -199,7 +207,7 @@ function PlanDialog({
           <button type="button" onClick={onClose}>
             Keep staged
           </button>
-          <button type="submit" className="primary" disabled={busy}>
+          <button type="submit" className="primary" disabled={busy || stopped}>
             Apply
           </button>
         </>
@@ -211,6 +219,8 @@ function PlanDialog({
           {w}
         </p>
       ))}
+      <ChecksList checks={checks} healthPath={clusterPath(c.namespace, c.name, "health")} label="Before applying" />
+      <Accept checks={checks} accepted={accepted} onChange={setAccepted} />
       <div className="scroll">
         <table className="grid plan stack">
           <thead>

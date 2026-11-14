@@ -274,7 +274,7 @@ describe("a plan that rolls the only control plane", () => {
       await within(dialog).findByRole("combobox", { name: "Kubernetes version" }),
       "v1.36.6+rke2r1",
     );
-    await user.click(within(dialog).getByRole("button", { name: "Upgrade" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await user.click(await screen.findByRole("button", { name: "Review plan" }));
     expect(screen.getByRole("dialog", { name: "Review plan" })).toHaveTextContent(warning);
   });

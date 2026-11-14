@@ -537,7 +537,7 @@ describe("clusters", () => {
     expect(dialog.getByText("None spare. Add one under Options.")).toBeInTheDocument();
     await waitFor(() => expect(dialog.getByText("2 problems")).toBeInTheDocument());
     expect(dialog.getByRole("link", { name: "Health" })).toHaveAttribute("href", "/clusters/default/web/health");
-    expect(dialog.getByRole("button", { name: "Upgrade" })).toBeDisabled();
+    expect(dialog.getByRole("button", { name: "Add to plan" })).toBeDisabled();
   });
 
   it("warns of removed APIs and fail-closed webhooks in the upgrade dialog, and still upgrades", async () => {
@@ -567,7 +567,7 @@ describe("clusters", () => {
     expect(dialog.getByText("1 at risk")).toBeInTheDocument();
     expect(dialog.getByText("flowcontrol.apiserver.k8s.io/v1beta3 flowschemas, removed in 1.32")).toBeInTheDocument();
     expect(dialog.getByText("policy-guard: Service guard/policy has 1 ready endpoint")).toBeInTheDocument();
-    await user.click(dialog.getByRole("button", { name: "Upgrade" }));
+    await user.click(dialog.getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(calls.find((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({
@@ -640,7 +640,7 @@ describe("clusters", () => {
       ).toStrictEqual(["v1.32.4+rke2r1 (running)", "v1.33.13+rke2r3", "v1.32.13+rke2r2"]),
     );
     await user.selectOptions(within(dialog).getByLabelText("Kubernetes version"), "v1.33.13+rke2r3");
-    await user.click(within(dialog).getByRole("button", { name: "Upgrade" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(calls.find((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({
