@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"filippo.io/age"
@@ -314,6 +315,30 @@ func (a *Appliance) backUpToVolume(ctx context.Context, keys *volumeBackupKeys, 
 		err = errors.Join(err, werr)
 	}
 	return stored, err
+}
+
+// backupVolumeAddress is the backup volume's VM in the module.
+const backupVolumeAddress = "proxmox_virtual_environment_vm.backups"
+
+// releaseBackupVolume prepares the backup volume for a destroy of the module. Kept, its VM leaves
+// OpenTofu's state, so that the destroy passes it by. Removed, its protection is lifted, so that
+// the destroy deletes it with its disk.
+func (a *Appliance) releaseBackupVolume(ctx context.Context, j *Job, env []string, remove bool) error {
+	if remove {
+		j.Add("Lifting the backup volume's protection, so that it is removed too")
+		return a.tofu(ctx, j, env, jsonMessage, "apply", "-auto-approve", "-input=false", "-json",
+			"-target="+backupVolumeAddress, "-var=backup_volume={protection=false}")
+	}
+	held := false
+	err := a.tofu(ctx, j, env, func(line string) string {
+		held = held || strings.TrimSpace(line) == backupVolumeAddress
+		return ""
+	}, "state", "list", backupVolumeAddress)
+	if err != nil || !held {
+		return err
+	}
+	j.Add("Keeping the backup volume and its VM " + backupVolumeAddress + " on Proxmox VE")
+	return a.tofu(ctx, j, env, plainLine, "state", "rm", backupVolumeAddress)
 }
 
 // volumeBackupFailed records why a snapshot for the volume could not be taken at all.

@@ -225,8 +225,9 @@ func (a *Appliance) Idle() error {
 // Remove destroys the management cluster and everything the module made on Proxmox VE, on the
 // user's ticket, and returns the appliance to its first run. before runs first: what the module
 // does not own but its pools still hold, the templates, has to go before the pools can. gone is
-// called once the management cluster is gone.
-func (a *Appliance) Remove(passphrase string, ticket *pve.Ticket, before func(ctx context.Context, j *Job) error, gone func()) error {
+// called once the management cluster is gone. The backup volume stays, out of OpenTofu's state,
+// unless removeBackups asks for it to go too.
+func (a *Appliance) Remove(passphrase string, removeBackups bool, ticket *pve.Ticket, before func(ctx context.Context, j *Job) error, gone func()) error {
 	if err := ValidPassphrase(passphrase); err != nil {
 		return err
 	}
@@ -249,6 +250,9 @@ func (a *Appliance) Remove(passphrase string, ticket *pve.Ticket, before func(ct
 			return err
 		}
 		if err := a.init(ctx, j, env); err != nil {
+			return err
+		}
+		if err := a.releaseBackupVolume(ctx, j, env, removeBackups); err != nil {
 			return err
 		}
 		j.Add("Destroying the management cluster")

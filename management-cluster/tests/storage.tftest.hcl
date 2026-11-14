@@ -82,7 +82,9 @@ run "csi_plugin_is_the_workload_clusters_pinned_release" {
       ]) &&
       toset(proxmox_virtual_environment_role.management_csi.privileges) == toset(["VM.Audit", "VM.Config.Disk"]) &&
       !contains(proxmox_virtual_environment_role.cluster_storage.privileges, "Datastore.Allocate") &&
-      !proxmox_user_token.management_csi.privileges_separation
+      !proxmox_user_token.management_csi.privileges_separation &&
+      proxmox_acl.management_csi_backups.path == "/vms/${proxmox_virtual_environment_vm.backups.vm_id}" &&
+      proxmox_acl.management_csi_backups.role_id == "kubehenge-management-csi"
     )
     error_message = "the plugin's token must reach the management pool's VMs and add space on their storage, and delete no volume"
   }
@@ -107,7 +109,7 @@ run "backup_volume_outlives_the_node_vms" {
       !proxmox_virtual_environment_vm.backups.delete_unreferenced_disks_on_destroy &&
       proxmox_virtual_environment_vm.backups.name == "kubehenge-backups" &&
       contains(proxmox_virtual_environment_vm.backups.tags, "backups") &&
-      proxmox_virtual_environment_vm.backups.pool_id == "kubehenge-management" &&
+      proxmox_virtual_environment_vm.backups.pool_id == null &&
       proxmox_virtual_environment_vm.backups.disk[0].datastore_id == "fast" &&
       proxmox_virtual_environment_vm.backups.disk[0].size == 20
     )

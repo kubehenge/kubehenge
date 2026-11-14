@@ -56,15 +56,26 @@ resource "proxmox_acl" "management_csi" {
   propagate = each.value.propagate
 }
 
+# The plugin attaches the backups VM's disk to the node VMs and makes its volumes under that VM.
+resource "proxmox_acl" "management_csi_backups" {
+  user_id   = proxmox_virtual_environment_user.management_csi.user_id
+  path      = "/vms/${proxmox_virtual_environment_vm.backups.vm_id}"
+  role_id   = proxmox_virtual_environment_role.management_csi.role_id
+  propagate = false
+}
+
 # The backup volume is the one disk of a VM that never starts. Proxmox VE deletes a disk with a VM
 # only when the VM owns it, so losing or destroying every node VM, which the plugin attaches it to,
-# leaves it. Protection refuses deleting this VM or its disk until it is lifted.
+# leaves it. Protection refuses deleting this VM or its disk until it is lifted. It sits in no pool,
+# so that it can stay when the management pool goes.
 resource "proxmox_virtual_environment_vm" "backups" {
   name        = "${var.cluster_name}-backups"
   description = "The backup volume of Kubehenge management cluster ${var.cluster_name}: etcd snapshots and exports. Protected, kept when the management cluster is removed."
   tags        = ["kubehenge", "management", "backups"]
   node_name   = local.backup_volume.node
-  pool_id     = proxmox_virtual_environment_pool.management.pool_id
+
+  # Destroyed after the node VMs, which may still have its disk attached.
+  depends_on = [proxmox_virtual_environment_vm.node]
 
   started    = false
   on_boot    = false
@@ -137,7 +148,7 @@ resource "helm_release" "storage" {
     type = "string"
   }]
 
-  depends_on = [helm_release.cluster_api_providers, proxmox_acl.management_csi]
+  depends_on = [helm_release.cluster_api_providers, proxmox_acl.management_csi, proxmox_acl.management_csi_backups]
 }
 
 resource "helm_release" "proxmox_csi" {
