@@ -15,8 +15,9 @@ import (
 )
 
 type resourceRule struct {
-	Operations []string `json:"operations"`
-	Resources  []string `json:"resources"`
+	APIVersions []string `json:"apiVersions"`
+	Operations  []string `json:"operations"`
+	Resources   []string `json:"resources"`
 }
 
 type matchConstraints struct {
@@ -39,8 +40,8 @@ type admissionPolicy struct {
 	Spec policySpec `json:"spec"`
 }
 
-// deletionPolicy renders the chart and finds its policy on deleting clusters.
-func deletionPolicy(t *testing.T) admissionPolicy {
+// controllerDocuments renders the chart's controller.yaml into its YAML documents.
+func controllerDocuments(t *testing.T) []string {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "helm", "template", "kubehenge", ".", "--namespace", "kubehenge-system",
 		"--values", "../../pkg/provisioner/testdata/integration-values.yaml", "--show-only", "templates/controller.yaml")
@@ -50,7 +51,13 @@ func deletionPolicy(t *testing.T) admissionPolicy {
 	if err != nil {
 		t.Fatalf("helm template: %v: %s", err, stderr.String())
 	}
-	for doc := range strings.SplitSeq(string(out), "\n---") {
+	return strings.Split(string(out), "\n---")
+}
+
+// deletionPolicy renders the chart and finds its policy on deleting clusters.
+func deletionPolicy(t *testing.T) admissionPolicy {
+	t.Helper()
+	for _, doc := range controllerDocuments(t) {
 		var p admissionPolicy
 		if err := yaml.Unmarshal([]byte(doc), &p); err != nil {
 			t.Fatal(err)

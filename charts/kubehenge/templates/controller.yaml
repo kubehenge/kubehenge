@@ -182,8 +182,10 @@ spec:
   failurePolicy: Fail
   matchConstraints:
     resourceRules:
+      # One version, as the webhooks match: the API server converts a delete through any other
+      # version to it, so the expressions read one shape.
       - apiGroups: [cluster.x-k8s.io]
-        apiVersions: ["*"]
+        apiVersions: [v1beta2]
         operations: [DELETE]
         resources: [clusters]
   # A class of Kubehenge's name in this namespace, the cluster's own when classRef names none, as the
@@ -621,10 +623,12 @@ spec:
 ---
 # The controller checks Kubehenge's clusters as they are created and changed (pkg/provisioner's
 # ClusterValidator), among them the grants a cluster asks for, such as Datastore.Allocate on its
-# storage. While the controller is away no cluster is created or changed: one let through then
-# would keep what the check refuses. Nothing the management cluster needs to come up writes a
+# storage. While the controller is away no cluster is created or its spec changed: one let through
+# then would keep what the check refuses. Nothing the management cluster needs to come up writes a
 # Cluster, and a cluster being deleted is never held up by it: the check leaves such a cluster
 # alone but for the name that abandons its deletion, which only the controller carries out anyway.
+# An update that leaves the spec and the annotations the check reads as they were never calls it,
+# so a cluster can take kubehenge.dev/allow-deletion, and be deleted, while the controller is away.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
@@ -643,6 +647,13 @@ webhooks:
           (has(object.metadata.annotations) && 'kubehenge.dev/abandon-deletion' in object.metadata.annotations &&
           !(has(oldObject.metadata.annotations) && 'kubehenge.dev/abandon-deletion' in oldObject.metadata.annotations &&
           oldObject.metadata.annotations['kubehenge.dev/abandon-deletion'] == object.metadata.annotations['kubehenge.dev/abandon-deletion']))
+      - name: spec-or-checked-annotations-changed
+        expression: >-
+          request.operation != 'UPDATE' || object.spec != oldObject.spec ||
+          ['kubehenge.dev/abandon-deletion', 'kubehenge.dev/cilium-cluster-id'].filter(k, has(object.metadata.annotations) &&
+          k in object.metadata.annotations).map(k, k + '=' + object.metadata.annotations[k]) !=
+          ['kubehenge.dev/abandon-deletion', 'kubehenge.dev/cilium-cluster-id'].filter(k, has(oldObject.metadata.annotations) &&
+          k in oldObject.metadata.annotations).map(k, k + '=' + oldObject.metadata.annotations[k])
     timeoutSeconds: 5
     clientConfig:
       service:
