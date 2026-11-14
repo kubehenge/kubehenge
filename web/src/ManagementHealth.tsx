@@ -9,6 +9,13 @@ const managementKept = { cache: managementCache, key: "" };
 const rebootCache = pollCache<RebootReadiness>();
 const rebootKept = { cache: rebootCache, key: "" };
 
+// proxmoxShort says whether the management cluster's view of Proxmox VE is missing anything.
+function proxmoxShort(p: ManagementHealth["proxmox"]): boolean {
+  return (
+    p !== undefined && (!p.ok || filled(p.blind) || (p.tokens ?? []).length > 0 || (p.unreachable ?? []).length > 0)
+  );
+}
+
 export function healthVerdict(h: ManagementHealth): { state: "ok" | "warning" | "error"; text: string } {
   if (!h.answers) {
     return { state: "error", text: "Not answering" };
@@ -20,10 +27,7 @@ export function healthVerdict(h: ManagementHealth): { state: "ok" | "warning" | 
   const short =
     nodes.some((n) => !n.ready) ||
     (h.controllers ?? []).some((c) => c.ready < c.wanted) ||
-    h.proxmox?.ok === false ||
-    filled(h.proxmox?.blind) ||
-    (h.proxmox?.tokens ?? []).length > 0 ||
-    (h.proxmox?.unreachable ?? []).length > 0 ||
+    proxmoxShort(h.proxmox) ||
     (h.etcd !== undefined && h.etcd.healthy < h.etcd.members) ||
     filled(h.backups?.error);
   return short ? { state: "warning", text: "Degraded" } : { state: "ok", text: "Healthy" };
@@ -130,12 +134,7 @@ function UnownedVMs({ vms }: { vms: { vmid: number }[] }): JSX.Element | null {
 
 /** SameHostWarning says that one Proxmox VE host's loss can take every backup, and what survives it. */
 export function SameHostWarning(): JSX.Element {
-  return (
-    <p className="warning">
-      Losing one Proxmox VE host can lose the backup volume and the appliance&apos;s copy. Add a bucket target to keep
-      backups elsewhere.
-    </p>
-  );
+  return <p className="warning">Losing one Proxmox VE host can lose every backup. Add a bucket target.</p>;
 }
 
 // BackupLine says where the management backups are and when the last ran, or why the last failed.

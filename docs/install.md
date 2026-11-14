@@ -646,7 +646,7 @@ The appliance keeps a copy of the latest snapshot, its export and its key, up to
 
 To recover after the management VMs are lost, use **Recover…** in the backup volume's box, or `kubehenge appliance etcd-backups recover`. Both ask for the state passphrase. The run applies the management cluster and waits up to 10 minutes for the backup volume. It then restores the newest snapshot of the volume and the appliance's copy, and applies again. Its log names the snapshot, where it was read and why.
 
-Removing the management cluster stops these backups. **Also delete the backup volume** deletes the appliance's copy too. Kept, the copy is never restored onto a management cluster set up later.
+Removing the management cluster stops these backups. **Delete the backup volume** deletes the appliance's copy too. Kept, the copy is never restored onto a management cluster set up later.
 
 #### Restoring
 

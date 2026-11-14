@@ -77,10 +77,10 @@ export function RemoveDialog({ onClose, onStarted }: { onClose: () => void; onSt
       }
     >
       <p>Deletes the management cluster, templates, pools, users and roles. Delete every cluster first.</p>
-      <p>Keeps the backup volume: the VM kubehenge-backups and its disk, with the etcd snapshots and exports.</p>
+      <p>Keeps the backup volume, VM kubehenge-backups, with its etcd snapshots and exports.</p>
       <label className="check">
-        <input type="checkbox" checked={removeBackups} onChange={(e) => setRemoveBackups(e.target.checked)} /> Also
-        delete the backup volume
+        <input type="checkbox" checked={removeBackups} onChange={(e) => setRemoveBackups(e.target.checked)} /> Delete
+        the backup volume
       </label>
       <Field label="State passphrase">
         {(id) => (

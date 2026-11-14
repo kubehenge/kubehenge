@@ -10,7 +10,7 @@ import type { ManagementBackups as Backups, ManagementHealth } from "./types";
 
 const passphrase = "correct horse battery staple";
 
-const lostWithHost = /Losing one Proxmox VE host can lose the backup volume/u;
+const lostWithHost = /Losing one Proxmox VE host can lose every backup/u;
 
 const onVolume: NonNullable<Backups["volume"]> = {
   claim: "kubehenge-system/kubehenge-backups",
@@ -83,8 +83,8 @@ describe("the backup volume", () => {
     const closed = vi.fn<() => void>();
     const started = vi.fn<() => void>();
     render(<RemoveDialog onClose={closed} onStarted={started} />);
-    expect(screen.getByText(/Keeps the backup volume: the VM kubehenge-backups/u)).toBeVisible();
-    const box = screen.getByRole("checkbox", { name: "Also delete the backup volume" });
+    expect(screen.getByText(/Keeps the backup volume, VM kubehenge-backups/u)).toBeVisible();
+    const box = screen.getByRole("checkbox", { name: "Delete the backup volume" });
     expect(box).not.toBeChecked();
     await user.type(screen.getByLabelText("State passphrase"), passphrase);
     await user.type(screen.getByLabelText("Type remove to confirm"), "remove");

@@ -210,6 +210,19 @@ const certificateIn = (days: number): void => {
 
 const problems = (over: Partial<SetupForm>) => setupFieldProblems({ ...form, ...over });
 
+// editStored opens Edit settings on an appliance whose stored settings are the ones given.
+async function editStored(stored: object): Promise<void> {
+  fakeServer({
+    ...administrator,
+    ...administration,
+    ...oneNode,
+    "GET /api/setup": { body: { appliance: true, ready: true, allowed: true, settings: stored } },
+  });
+  const user = userEvent.setup({ delay: null });
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Edit settings" }));
+}
+
 describe("setup", () => {
   it("builds the settings", () => {
     expect(settings({ ...form, vlan: "30" })).toStrictEqual({
@@ -1470,24 +1483,15 @@ describe("setup", () => {
       workloadBridges: ["vmbr0"],
       bootstrapDatastore: "local",
     };
-    const lostWithHost = /Losing one Proxmox VE host can lose the backup volume/u;
-    const edit = async (settings: object): Promise<void> => {
-      fakeServer({
-        ...administrator,
-        ...administration,
-        ...oneNode,
-        "GET /api/setup": { body: { appliance: true, ready: true, allowed: true, settings } },
-      });
-      const user = userEvent.setup({ delay: null });
-      render(<App />);
-      await user.click(await screen.findByRole("button", { name: "Edit settings" }));
-    };
-
-    await edit(saved);
+    const lostWithHost = /Losing one Proxmox VE host can lose every backup/u;
+    await editStored(saved);
     await expect(screen.findByText(lostWithHost)).resolves.toBeVisible();
     cleanup();
 
-    await edit({ ...saved, backupTargets: [{ name: "store", bucket: "backups", endpoint: "https://s3.example.org" }] });
+    await editStored({
+      ...saved,
+      backupTargets: [{ name: "store", bucket: "backups", endpoint: "https://s3.example.org" }],
+    });
     await screen.findByRole("heading", { name: "Services" });
     expect(screen.queryByText(lostWithHost)).not.toBeInTheDocument();
   });

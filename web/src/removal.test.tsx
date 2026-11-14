@@ -21,7 +21,7 @@ describe("removing Kubehenge", () => {
     await user.type(screen.getByLabelText("Type remove to confirm"), "remove{Enter}");
     await waitFor(() => expect(started).toHaveBeenCalledWith());
     expect(calls.filter((c) => c.key === "POST /api/setup/remove").map((c) => c.body)).toStrictEqual([
-      { passphrase: "correct horse battery staple", confirm: "remove" },
+      { passphrase: "correct horse battery staple", confirm: "remove", removeBackups: false },
     ]);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
