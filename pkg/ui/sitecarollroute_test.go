@@ -21,3 +21,18 @@ func TestSiteCARollRouteChecksTheAuthorityAndNeedsTheSetupPrivileges(t *testing.
 	viewer.signIn("viewer@pve")
 	expect(t, viewer.do("POST", "/api/setup/site-ca-roll", `{"siteCA":""}`), http.StatusForbidden)
 }
+
+func TestTimeZoneRouteAnswersAsTheServersTimeZoneDatabaseDoes(t *testing.T) {
+	t.Parallel()
+	h, b := preflightHarness(t)
+	for zone, want := range map[string]int{
+		"Europe/Kyiv": http.StatusOK, "Etc/GMT+1": http.StatusOK, "Factory": http.StatusOK,
+		"Europe/zurich": http.StatusUnprocessableEntity, "America/new_york": http.StatusUnprocessableEntity,
+		"Mars/Olympus": http.StatusUnprocessableEntity, "Local": http.StatusUnprocessableEntity,
+	} {
+		expect(t, b.do("POST", "/api/setup/time-zone", `{"timeZone":"`+zone+`"}`), want)
+	}
+	viewer := h.browser()
+	viewer.signIn("viewer@pve")
+	expect(t, viewer.do("POST", "/api/setup/time-zone", `{"timeZone":"UTC"}`), http.StatusForbidden)
+}

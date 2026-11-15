@@ -150,10 +150,10 @@ func (a *Appliance) Current() *JobView {
 func (a *Appliance) Apply(settings *Settings, passphrase string, ticket *pve.Ticket, ready func(ctx context.Context, kubeconfig []byte) error) error {
 	// The run outlives the call, so it works on a copy the caller cannot change under it.
 	s := *settings
-	if err := s.Validate(); err != nil {
+	was := a.SavedSettings()
+	if err := s.ValidateAgainst(was); err != nil {
 		return err
 	}
-	was := a.SavedSettings()
 	if was != nil && a.Ready() {
 		if err := s.KeepsFixed(was); err != nil {
 			return err
@@ -177,10 +177,11 @@ func (a *Appliance) Apply(settings *Settings, passphrase string, ticket *pve.Tic
 // Check validates settings as Apply would, against the running management cluster's too, without
 // starting a run.
 func (a *Appliance) Check(settings *Settings) error {
-	if err := settings.Validate(); err != nil {
+	was := a.SavedSettings()
+	if err := settings.ValidateAgainst(was); err != nil {
 		return err
 	}
-	if was := a.SavedSettings(); was != nil && a.Ready() {
+	if was != nil && a.Ready() {
 		return settings.KeepsFixed(was)
 	}
 	return nil

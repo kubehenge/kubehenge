@@ -57,10 +57,7 @@ func TestSiteCARollsInheritingClustersWithinTheLimitAndTheirWindows(t *testing.T
 		siteCluster("own", jsonVar(trustedCAsVariable, `["x"]`)),
 		siteCluster("done", jsonVar(SiteCAsVariable, `["new"]`)),
 	}
-	plan, err := PlanSiteRoll("new", SiteRollClusters(clusters, siteClassNamespace), 1, siteNow)
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := PlanSiteRoll("new", SiteRollClusters(clusters, siteClassNamespace, nil), 1, siteNow)
 	if !slices.Equal(plan.Now, keys("a")) {
 		t.Errorf("rolling now = %v, want a alone, since the limit is 1", plan.Now)
 	}
@@ -78,10 +75,7 @@ func TestSiteCARollsInheritingClustersWithinTheLimitAndTheirWindows(t *testing.T
 func TestSiteCARollLeavesUnbuiltClustersOutOfThePacing(t *testing.T) {
 	t.Parallel()
 	clusters := []clusterv1.Cluster{unbuilt("new-1"), unbuilt("new-2", jsonVar(upgradesVariable, mondayWindow)), siteCluster("a")}
-	plan, err := PlanSiteRoll("new", SiteRollClusters(clusters, siteClassNamespace), 1, siteNow)
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := PlanSiteRoll("new", SiteRollClusters(clusters, siteClassNamespace, nil), 1, siteNow)
 	if !slices.Equal(plan.Now, keys("a")) || len(plan.Waiting) != 0 || len(plan.Windows) != 0 {
 		t.Errorf("plan = %+v, want a to roll alone and the unbuilt clusters outside the plan", plan)
 	}
@@ -92,10 +86,7 @@ func TestSiteCARollCountsClustersAlreadyRolling(t *testing.T) {
 	busy := siteCluster("busy")
 	busy.Status.Conditions = append(busy.Status.Conditions, metav1.Condition{Type: clusterv1.ClusterRollingOutCondition, Status: metav1.ConditionTrue})
 	clusters := []clusterv1.Cluster{busy, siteCluster("a"), siteCluster("b")}
-	plan, err := PlanSiteRoll("new", SiteRollClusters(clusters, siteClassNamespace), SiteRollLimit, siteNow)
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := PlanSiteRoll("new", SiteRollClusters(clusters, siteClassNamespace, nil), SiteRollLimit, siteNow)
 	if plan.Rolling != 1 || len(plan.Now) != SiteRollLimit-1 {
 		t.Errorf("rolling = %d, now = %v, want 1 rolling and %d more", plan.Rolling, plan.Now, SiteRollLimit-1)
 	}
@@ -103,10 +94,7 @@ func TestSiteCARollCountsClustersAlreadyRolling(t *testing.T) {
 
 func TestSiteCAUnsetLeavesClustersAlone(t *testing.T) {
 	t.Parallel()
-	plan, err := PlanSiteRoll("", SiteRollClusters([]clusterv1.Cluster{siteCluster("a"), siteCluster("b", jsonVar(upgradesVariable, mondayWindow))}, siteClassNamespace), 4, siteNow)
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := PlanSiteRoll("", SiteRollClusters([]clusterv1.Cluster{siteCluster("a"), siteCluster("b", jsonVar(upgradesVariable, mondayWindow))}, siteClassNamespace, nil), 4, siteNow)
 	if len(plan.Now)+len(plan.Windows)+len(plan.Waiting) != 0 {
 		t.Errorf("plan = %+v, want nothing to roll", plan)
 	}

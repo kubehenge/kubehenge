@@ -629,8 +629,10 @@ func (o *controllerOptions) parseReleaseMirror() error {
 		o.releaseMirror.CABundle = string(ca)
 	}
 	if o.timeZone != "" {
+		// Schedules stay in UTC. A wrong zone is no reason to stop the controller, which the clusters'
+		// upgrades, snapshots and deletions depend on. Each reconcile reports it on its cluster.
 		if err := provisioner.SetDefaultTimeZone(o.timeZone); err != nil {
-			return fmt.Errorf("--time-zone: %w", err)
+			o.r.SiteTimeZoneProblem = fmt.Sprintf("--time-zone: %v", err)
 		}
 	}
 	if o.siteCAFile != "" {

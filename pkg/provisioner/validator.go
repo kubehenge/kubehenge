@@ -127,6 +127,8 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	errs = append(errs, validateGitOps(c)...)
 	errs = append(errs, validateEgress(c)...)
 	errs = append(errs, validateNodeSite(old, c, time.Now())...)
+	errs = append(errs, validateSiteCAsOwner(ctx, old, c, v.Hooks.ClassNamespace)...)
+	errs = append(errs, validateUpgradeWindow(old, c)...)
 	errs = append(errs, validateAddonSettings(old, c)...)
 	errs = append(errs, v.validateNodeCustomisation(ctx, old, c)...)
 	errs = append(errs, validateAutoscaling(c)...)

@@ -45,11 +45,11 @@ func apiServer(t *testing.T, objects ...client.Object) client.WithWatch {
 
 func TestSiteCAPlaceStaysTakenUntilTheRolloutIsDone(t *testing.T) {
 	t.Parallel()
-	objects := make([]client.Object, 0, 2*SiteRollLimit)
+	objects := make([]client.Object, 0, 4*SiteRollLimit)
 	for i := range 2 * SiteRollLimit {
 		c := siteCluster(fmt.Sprintf("web-%d", i))
 		markReconciled(&c)
-		objects = append(objects, &c)
+		objects = append(objects, &c, workers(&c, rolloutState{Generation: 1, Observed: 1}))
 	}
 	kube := apiServer(t, objects...)
 	r := &Reconciler{Client: kube, Reader: kube, ClassNamespace: siteClassNamespace, SiteCA: siteCAPEM, Now: func() time.Time { return siteNow }}
@@ -83,10 +83,7 @@ func TestSiteCARollCountsOnlyLiveClustersOfKubehengesClasses(t *testing.T) {
 	deleting := siteCluster("b-deleting")
 	deleting.DeletionTimestamp = &metav1.Time{Time: siteNow}
 	clusters := []clusterv1.Cluster{foreign, deleting, siteCluster("z-kubehenge")}
-	plan, err := PlanSiteRoll("new", SiteRollClusters(clusters, siteClassNamespace), 1, siteNow)
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := PlanSiteRoll("new", SiteRollClusters(clusters, siteClassNamespace, nil), 1, siteNow)
 	if !slices.Equal(plan.Now, keys("z-kubehenge")) || plan.Inherits != 1 {
 		t.Errorf("plan = %+v, want the Kubehenge cluster to roll and no other cluster counted", plan)
 	}
@@ -97,10 +94,7 @@ func TestPausedClusterWaitsForItsUnpauseAndTakesNoPlace(t *testing.T) {
 	paused := siteCluster("a-paused")
 	paused.Spec.Paused = new(true)
 	clusters := []clusterv1.Cluster{paused, siteCluster("b")}
-	plan, err := PlanSiteRoll("new", SiteRollClusters(clusters, siteClassNamespace), 1, siteNow)
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := PlanSiteRoll("new", SiteRollClusters(clusters, siteClassNamespace, nil), 1, siteNow)
 	if !slices.Equal(plan.Now, keys("b")) || !slices.Equal(plan.Waiting, keys("a-paused")) {
 		t.Errorf("plan = %+v, want b to roll and the paused cluster to wait", plan)
 	}

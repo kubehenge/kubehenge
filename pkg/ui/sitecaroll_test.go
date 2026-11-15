@@ -35,10 +35,7 @@ func TestSiteCARollNamesHowManyRollNowAndHowManyWait(t *testing.T) {
 		with("windowed", "upgrades", `{"mode":"patch","window":{"weekdays":["Mon"],"start":"02:00","timeZone":"UTC"}}`),
 		with("own", "trustedCAs", `["x"]`),
 	)
-	roll, err := siteCARollOf("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n", "kubehenge-system", clusters, now)
-	if err != nil {
-		t.Fatal(err)
-	}
+	roll := siteCARollOf("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n", "kubehenge-system", clusters, nil, now)
 	if roll.Inherits != provisioner.SiteRollLimit+3 || roll.Now != provisioner.SiteRollLimit || roll.Waiting != 2 || roll.Windows != 1 {
 		t.Errorf("roll = %+v, want %d inheriting, %d now, 2 waiting for a place and 1 for its window", roll, provisioner.SiteRollLimit+3, provisioner.SiteRollLimit)
 	}

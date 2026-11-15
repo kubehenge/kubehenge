@@ -76,6 +76,9 @@ type Reconciler struct {
 	// SiteCA is the PEM authority every cluster without trustedCAs of its own trusts. Empty when
 	// the site sets none.
 	SiteCA string
+	// SiteTimeZoneProblem is why the site time zone the controller was given is no time zone, which
+	// leaves schedules that name none in UTC. Each cluster reports it.
+	SiteTimeZoneProblem string
 	// Registrar removes clusters from Rancher before Rancher itself is switched off.
 	Registrar *Registrar
 	// Remotes reaches the workload clusters, to take their workloads out of the mesh before Istio

@@ -173,13 +173,16 @@ func checkCertificates(bundle string, now time.Time) error {
 	if len(bundle) > maxNodePEMBytes {
 		return fmt.Errorf("at most %d KiB", maxNodePEMBytes/kibibyte)
 	}
-	rest := []byte(bundle)
+	// Each BEGIN line opens a block. Decoding the whole bundle at once would pass over a damaged block
+	// and keep the next, so each is decoded on its own and a damaged one refuses the bundle.
+	const begin = "-----BEGIN "
 	found := 0
-	for {
+	var rest []byte
+	for n, segment := range strings.Split(bundle, begin)[1:] {
 		var block *pem.Block
-		block, rest = pem.Decode(rest)
+		block, rest = pem.Decode([]byte(begin + segment))
 		if block == nil {
-			break
+			return fmt.Errorf("block %d is no complete PEM block", n+1)
 		}
 		if block.Type != certificateBlock {
 			return fmt.Errorf("holds a %s. Give certificates only", strings.ToLower(block.Type))
