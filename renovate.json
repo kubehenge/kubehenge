@@ -27,6 +27,7 @@
   "postUpdateOptions": ["gomodTidy", "gomodUpdateImportPaths"],
   "ignorePresets": [":ignoreModulesAndTests"],
   "ignorePaths": ["**/node_modules/**"],
+  "gitIgnoredAuthors": ["41898282+github-actions[bot]@users.noreply.github.com"],
   "helm-values": {
     "description": "Off. values.yaml names the Headlamp image by tag and digest alone, which this manager reads as an image called by its tag; the custom managers below read every version in it.",
     "enabled": false
@@ -134,6 +135,11 @@
       "description": "The cluster autoscaler is pinned once for each Kubernetes minor version, as each release carries its minor's scheduler, so each line takes the patches of its own minor; a release for a new minor is added as a line of its own.",
       "matchDepNames": ["registry.k8s.io/autoscaling/cluster-autoscaler"],
       "matchUpdateTypes": ["major", "minor"],
+      "enabled": false
+    },
+    {
+      "description": "Calico's images and the Tigera operator move only with the tigera-operator chart: Calico pushes a release's images days before it publishes the release and its chart, and the operator runs only the images of the release its chart carries. scripts/renovate-refresh.sh, which the renovate workflow runs on Renovate's branch, sets them to the chart's release.",
+      "matchDepNames": ["quay.io/calico/**", "quay.io/tigera/operator"],
       "enabled": false
     },
     {

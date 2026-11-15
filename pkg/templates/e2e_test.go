@@ -255,9 +255,7 @@ func bootClone(t *testing.T, b *Builder, template int, bake *Bake) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if s, serr := node.Storage(context.Background(), iso); serr == nil {
-			_ = deleteVolume(context.Background(), s, fmt.Sprintf("%s:iso/"+proxmox.UserDataISOFormat, iso, cloneID))
-		}
+		_ = deleteVolume(context.Background(), node.StorageRef(iso), fmt.Sprintf("%s:iso/"+proxmox.UserDataISOFormat, iso, cloneID))
 	})
 
 	task, err = vm.Start(ctx)
@@ -300,10 +298,7 @@ func assertNoLeftovers(t *testing.T, b *Builder) {
 		stores = append(stores, iso)
 	}
 	for _, name := range stores {
-		s, err := node.Storage(ctx, name)
-		if err != nil {
-			t.Fatal(err)
-		}
+		s := node.StorageRef(name)
 		content, err := s.GetContent(ctx)
 		if err != nil {
 			t.Fatal(err)

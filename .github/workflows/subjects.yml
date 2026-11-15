@@ -5,6 +5,9 @@ name: subjects
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened, ready_for_review]
+  # renovate.yml starts it on Renovate's branch after it commits there with GITHUB_TOKEN, which
+  # starts no workflow. It checks the branch's open pull request and the commits since main.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -20,16 +23,29 @@ jobs:
     name: Subjects
     runs-on: ubuntu-26.04
     timeout-minutes: 5
+    permissions:
+      contents: read # to read the commits
+      pull-requests: read # to read the title of a dispatched run's pull request
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
       - env:
+          EVENT: ${{ github.event_name }}
           TITLE: ${{ github.event.pull_request.title }}
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
+          BRANCH: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          if [ "$EVENT" = workflow_dispatch ]; then
+            TITLE=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open \
+              --json title \
+              --jq 'if length == 0 then error("no open pull request") else .[0].title end')
+            BASE=$(git merge-base origin/main HEAD)
+            HEAD=$GITHUB_SHA
+          fi
           status=0
           printf '%s\n' "$TITLE" | scripts/subjects.sh title || status=1
           git log --format=%s "$BASE..$HEAD" | scripts/subjects.sh commits || status=1

@@ -68,8 +68,8 @@ worker_memory_for() {
 }
 # The S3 store the backup tests write to.
 # renovate: datasource=github-release-attachments depName=seaweedfs/seaweedfs
-SEAWEEDFS_VERSION=4.52
-SEAWEEDFS_SHA256=8b538c22d47d0c3fb6792adaa6b0c735a967401270a53427d5a476dcaca9b7ae
+SEAWEEDFS_VERSION=4.53
+SEAWEEDFS_SHA256=d1a7dec9f48d8b33895a0ea8951971defc2dc5312906dcc76fa5a5f74a6ee90d
 
 # Each step shows the time since the test started, which is how a slow run shows where it lost it.
 e2e_started=$(date +%s)

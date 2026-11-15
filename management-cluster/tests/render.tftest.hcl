@@ -1560,8 +1560,8 @@ run "providers_install_from_checked_manifests" {
     condition = [
       for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : p.manifests if p.kind == "CoreProvider"
       ] == [{
-        metadata   = "https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.14.3/metadata.yaml@sha256:${local.tested_manifests["kubernetes-sigs/cluster-api/releases/download/v1.14.3/metadata.yaml"]}"
-        components = "https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.14.3/core-components.yaml@sha256:${local.tested_manifests["kubernetes-sigs/cluster-api/releases/download/v1.14.3/core-components.yaml"]}"
+        metadata   = "https://github.com/kubernetes-sigs/cluster-api/releases/download/${local.tested_versions.cluster_api}/metadata.yaml@sha256:${local.tested_manifests["kubernetes-sigs/cluster-api/releases/download/${local.tested_versions.cluster_api}/metadata.yaml"]}"
+        components = "https://github.com/kubernetes-sigs/cluster-api/releases/download/${local.tested_versions.cluster_api}/core-components.yaml@sha256:${local.tested_manifests["kubernetes-sigs/cluster-api/releases/download/${local.tested_versions.cluster_api}/core-components.yaml"]}"
     }]
     error_message = "a provider's files must be its release's, at its version, each with its digest"
   }

@@ -11,14 +11,14 @@ dir=${1:?usage: $0 <directory>}
 ENVTEST=v1.37.0
 # Each file its own version and SHA-256, so that Renovate moves them together.
 # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api
-CLUSTER_API=v1.14.3
-CLUSTER_API_SHA256=f70be959af4aba061b91cb264b3b1961ae38ca49e2eb542ccf2640146f5221a7
+CLUSTER_API=v1.14.4
+CLUSTER_API_SHA256=0030264eb0a0d90ebacc9da8f6bbb717bee32e45ffadc4a74784fb5ad7b9bb0b
 # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api
-CLUSTER_API_BOOTSTRAP=v1.14.3
-CLUSTER_API_BOOTSTRAP_SHA256=537d6db3b70aad723710825f76073659865dc1a115715ef5d5c470da3b9bcc39
+CLUSTER_API_BOOTSTRAP=v1.14.4
+CLUSTER_API_BOOTSTRAP_SHA256=cf805775f24d197581b06e938bcd0eb9a9ed49d675f67e0f689ce7b71e5e397c
 # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api
-CLUSTER_API_CONTROL_PLANE=v1.14.3
-CLUSTER_API_CONTROL_PLANE_SHA256=a211e2e54b6b6fb93e59191f5db8ee76ad6ff92a698f1c62f9d6ce4d5218cf87
+CLUSTER_API_CONTROL_PLANE=v1.14.4
+CLUSTER_API_CONTROL_PLANE_SHA256=7fecb41843dcff7e05ab539dbe497c050a9aa7c888d4fb68be12d3c1805be438
 # renovate: datasource=github-release-attachments depName=ionos-cloud/cluster-api-provider-proxmox
 CAPMOX=v0.9.2
 CAPMOX_SHA256=6817322435b42cfda07a8f94006bacb709afb83445ce24545af253c7904755d8
@@ -26,17 +26,17 @@ CAPMOX_SHA256=6817322435b42cfda07a8f94006bacb709afb83445ce24545af253c7904755d8
 HELM_ADDON=v0.6.4
 HELM_ADDON_SHA256=a70f4eb77eac626231daca1e2a046b4b069bb84320efa327cc8c56a9c4ca03e6
 # renovate: datasource=github-release-attachments depName=rancher/cluster-api-provider-rke2
-RKE2_BOOTSTRAP=v0.27.1
-RKE2_BOOTSTRAP_SHA256=41ba1ea09cb53db1ce30123817779e1697377db3f61fe9e869e6b35702ba2065
+RKE2_BOOTSTRAP=v0.27.2
+RKE2_BOOTSTRAP_SHA256=0ba4c73bfe335bfa1b8a277b4df5f35e9a475f47f93038809010a1dc111063a2
 # renovate: datasource=github-release-attachments depName=rancher/cluster-api-provider-rke2
-RKE2_CONTROL_PLANE=v0.27.1
-RKE2_CONTROL_PLANE_SHA256=512b361ae35b38e0db85c3997f4c36f84e12c0c5414865ca2fbbbb51d138bfaf
+RKE2_CONTROL_PLANE=v0.27.2
+RKE2_CONTROL_PLANE_SHA256=f47336d0d34e6c96797d633470c7566973ba5b86925791fa68cbf60add607378
 # renovate: datasource=github-release-attachments depName=k3s-io/cluster-api-k3s
-K3S_BOOTSTRAP=v0.4.0
-K3S_BOOTSTRAP_SHA256=26301df3f6a1b9a14317061bd586a73711d54c956ee8f679982fb3301c6ab71d
+K3S_BOOTSTRAP=v0.5.0
+K3S_BOOTSTRAP_SHA256=ed311227fd133dbdfccaad643f0c68c12c06f9bfec75221d57dffcefc8936a26
 # renovate: datasource=github-release-attachments depName=k3s-io/cluster-api-k3s
-K3S_CONTROL_PLANE=v0.4.0
-K3S_CONTROL_PLANE_SHA256=2e3754bb42be197c31b7567496767f22091f4da74453eb366d29c8bd06e28270
+K3S_CONTROL_PLANE=v0.5.0
+K3S_CONTROL_PLANE_SHA256=9032b67bb1a2642f967c00763ca3706ee0eaea34e855e646f0fec452e838b624
 # renovate: datasource=github-release-attachments depName=kubehenge/cluster-api-bootstrap-provider-talos
 TALOS_BOOTSTRAP=v0.7.0
 TALOS_BOOTSTRAP_SHA256=0a46d57902fa63a9ad47d986f26596bd93c8a82b0ca6af8bc89753f9a65eabd8

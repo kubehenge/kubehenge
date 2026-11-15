@@ -5,6 +5,9 @@ on:
   pull_request:
   push:
     branches: [main]
+  # renovate.yml starts it on Renovate's branch after it pushes there with GITHUB_TOKEN, whose
+  # pushes start no workflow.
+  workflow_dispatch:
 
 permissions:
   contents: read
