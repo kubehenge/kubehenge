@@ -388,6 +388,8 @@ export interface Api {
   setup: (settings: ManagementSettings, passphrase: string) => Promise<Job>;
   setupCheck: (settings: ManagementSettings) => Promise<SetupFindings>;
   siteCARoll: (siteCA: string) => Promise<SiteCARoll>;
+  /** timeZoneCheck refuses a time zone name the server's time zone database does not know. */
+  timeZoneCheck: (timeZone: string) => Promise<unknown>;
 
   health: (ns: string, name: string) => Promise<ClusterHealth>;
   /** upgradeChecks reads the removed APIs in use and the fail-closed webhooks an upgrade to version would meet. */
@@ -566,6 +568,7 @@ export const api: Api = {
   setup: (settings, passphrase) => request("POST", "/api/setup", { settings, passphrase }),
   setupCheck: (settings) => request("POST", "/api/setup/check", { settings }),
   siteCARoll: (siteCA) => request("POST", "/api/setup/site-ca-roll", { siteCA }),
+  timeZoneCheck: (timeZone) => request("POST", "/api/setup/time-zone", { timeZone }),
 
   health: (ns, name) => request("GET", `${clusterPath(ns, name)}/health`),
   upgradeChecks: (ns, name, version) =>

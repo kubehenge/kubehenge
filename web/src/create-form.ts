@@ -173,7 +173,7 @@ import type {
   Versions,
 } from "./types";
 import {
-  defaultZone,
+  browserZone,
   bytes,
   cniName,
   csiText,
@@ -351,6 +351,8 @@ export interface Form {
   /** Whether the nodes move to new node images (on Talos, patch releases) inside the window. */
   nodeImages: boolean;
   backups: boolean;
+  /** The time zone a schedule not yet named starts in: the site's once the classes are read, else the browser's. */
+  siteZone: string;
   backupFields: BackupFields;
   /** Whether the cluster gets an access key of its own, stored once it is created. */
   // storeBackupKey is whether the form stores the cluster's own access key for its backups.
@@ -1077,6 +1079,7 @@ export const newForm = (): Form => ({
   upgradeMode: "patch",
   nodeImages: true,
   backups: true,
+  siteZone: browserZone(),
   backupFields: newBackupFields(),
   storeBackupKey: true,
   backupKey: {},
@@ -1474,7 +1477,7 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   // A cluster whose nodes move to new template builds needs its window in the browser's time zone
   // even with Kubernetes upgrades off.
   if (form.upgradeMode !== "off" || defined.has("upgrades")) {
-    variables["upgrades"] = newUpgrades(form.upgradeMode, defaultZone(), form.nodeImages);
+    variables["upgrades"] = newUpgrades(form.upgradeMode, form.siteZone, form.nodeImages);
   }
   const req: CreateRequest = {
     ...(form.namespace ? { namespace: form.namespace } : {}),
@@ -1683,7 +1686,7 @@ export function summary(form: Form, c: ClusterClass, offered: SummaryOffered = {
   }
   rows.push(...customisationRows(form, defined), ...addOnRows(form, c, defined));
   if (defined.has("upgrades")) {
-    const upgrades = newUpgrades(form.upgradeMode, defaultZone(), form.nodeImages);
+    const upgrades = newUpgrades(form.upgradeMode, form.siteZone, form.nodeImages);
     rows.push(["Automatic upgrades", describe(upgrades, refreshesNodes(upgrades), c.distribution)]);
   }
   if (defined.has("oidc")) {
@@ -2108,15 +2111,12 @@ function balancerProblems(form: Form, c: ClusterClass | undefined): Problems {
   return p;
 }
 
-/** siteZoneOf is the time zone the site set for schedules, which every class carries. */
-export const siteZoneOf = (classes: ClusterClass[]): string =>
-  classes.map((c) => c.annotations?.["kubehenge.dev/time-zone"] ?? "").find((zone) => zone !== "") ?? "";
-
-/** withSiteZone moves the schedules that still start in zone `was` to the site's zone. */
-export const withSiteZone = (f: Form, was: string, zone: string): Form => ({
+/** withSiteZone moves the schedules that still start in the form's zone to the site's zone. */
+export const withSiteZone = (f: Form, zone: string): Form => ({
   ...f,
-  etcdFields: f.etcdFields.timeZone === was ? { ...f.etcdFields, timeZone: zone } : f.etcdFields,
-  backupFields: f.backupFields.timeZone === was ? { ...f.backupFields, timeZone: zone } : f.backupFields,
+  siteZone: zone,
+  etcdFields: f.etcdFields.timeZone === f.siteZone ? { ...f.etcdFields, timeZone: zone } : f.etcdFields,
+  backupFields: f.backupFields.timeZone === f.siteZone ? { ...f.backupFields, timeZone: zone } : f.backupFields,
 });
 
 /**

@@ -5,10 +5,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import { PoliciesStep } from "./AddOnsStep";
 import { App } from "./App";
-import { newForm, request, summary, withBackupChoices, type Form } from "./create-form";
+import { newForm, request, summary, withBackupChoices, withSiteZone, type Form } from "./create-form";
 import { fakeServer, type Route } from "./fake-server";
 import type { ClusterClass } from "./types";
-import { setSiteZone } from "./ui";
 
 const noProblem = vi.fn<() => string | undefined>();
 const object = { type: "object" };
@@ -25,9 +24,12 @@ const classOf = (zone: string): ClusterClass => ({
 
 describe("the site time zone in the wizard", () => {
   it("is where new upgrade windows start, in the hint, the request and the summary", () => {
-    setSiteZone("Asia/Tokyo");
     const cls = classOf("Asia/Tokyo");
-    const form: Form = withBackupChoices({ ...newForm(), name: "web", className: cls.name }, cls, true);
+    const form: Form = withBackupChoices(
+      { ...withSiteZone(newForm(), "Asia/Tokyo"), name: "web", className: cls.name },
+      cls,
+      true,
+    );
     expect(JSON.stringify(request(form, cls).variables["upgrades"])).toContain('"timeZone":"Asia/Tokyo"');
     expect(Object.fromEntries(summary(form, cls))["Automatic upgrades"]).toContain("Asia/Tokyo");
 
@@ -46,7 +48,6 @@ describe("the site time zone in the wizard", () => {
     }
     render(<Step />);
     expect(screen.getByText("Upgrades run daily 02:00 to 06:00, Asia/Tokyo time")).toBeInTheDocument();
-    setSiteZone("");
   });
 
   it("is where a new cluster's schedules start once the classes say so", async () => {
@@ -121,6 +122,5 @@ describe("the site time zone in the wizard", () => {
     }
     await user.click(screen.getByRole("button", { name: "Next" }));
     await expect(screen.findByText("Upgrades run daily 02:00 to 06:00, Asia/Tokyo time")).resolves.toBeInTheDocument();
-    setSiteZone("");
   });
 });

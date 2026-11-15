@@ -24,7 +24,8 @@ import {
   Info,
   Status,
   age,
-  defaultZone,
+  browserZone,
+  useSiteZone,
   bytes,
   distributionName,
   errorMessage,
@@ -99,12 +100,12 @@ export interface EtcdSnapshotFields {
 }
 
 /** etcdFieldsOf are the fields of a cluster's settings. What it leaves unset is the chart's default. */
-export function etcdFieldsOf(v: EtcdSnapshotsValue): EtcdSnapshotFields {
+export function etcdFieldsOf(v: EtcdSnapshotsValue, zone = browserZone()): EtcdSnapshotFields {
   return {
     target: v.target ?? "",
     schedule: v.schedule ?? defaultEtcdSchedule,
-    // What is in effect: UTC when snapshots name none. Snapshots switched on start in the browser's zone.
-    timeZone: v.timeZone ?? (v.enabled ? "UTC" : defaultZone()),
+    // What is in effect: UTC when snapshots name none. Snapshots switched on start in zone, the site's.
+    timeZone: v.timeZone ?? (v.enabled ? "UTC" : zone),
     keep: String(v.keep ?? defaultEtcdKeep),
     upload: v.distributionUpload === true,
   };
@@ -248,12 +249,31 @@ export function EtcdSnapshotFieldset({
 }
 
 /** EtcdSnapshotsDialog switches a cluster's etcd snapshots on or off and changes how they run. */
-export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+export function EtcdSnapshotsDialog({
+  cluster: c,
+  onClose,
+}: {
+  cluster: Cluster;
+  onClose: () => void;
+}): JSX.Element | null {
+  const zone = useSiteZone();
+  return zone === undefined ? null : <EtcdSnapshotsForm cluster={c} zone={zone} onClose={onClose} />;
+}
+
+function EtcdSnapshotsForm({
+  cluster: c,
+  zone,
+  onClose,
+}: {
+  cluster: Cluster;
+  zone: string;
+  onClose: () => void;
+}): JSX.Element {
   const current = etcdSnapshotsOf(c.variables["etcdSnapshots"]);
   const offered = useClassTargets(c.class);
   const targets = offered ?? [];
   const [enabled, setEnabled] = useState(current.enabled);
-  const [typed, setTyped] = useState<EtcdSnapshotFields>(() => etcdFieldsOf(current));
+  const [typed, setTyped] = useState<EtcdSnapshotFields>(() => etcdFieldsOf(current, zone));
   const { busy, error, send } = useChange(c, onClose);
   const hint = useId();
   const backups = backupsOf(c.variables["backups"]);

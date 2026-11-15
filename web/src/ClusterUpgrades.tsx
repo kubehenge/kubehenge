@@ -1,7 +1,18 @@
 import { useState, type JSX } from "react";
 
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, Field, Info, defaultZone, stageLabel, timeZones, useChange, weekdays } from "./ui";
+import {
+  Dialog,
+  ErrorBox,
+  Field,
+  Info,
+  browserZone,
+  stageLabel,
+  timeZones,
+  useChange,
+  useSiteZone,
+  weekdays,
+} from "./ui";
 import { oneOf, quantities, quantity, record, text, texts } from "./values";
 
 export const upgradeModes = ["off", "patch", "minor"] as const;
@@ -138,7 +149,7 @@ interface PolicyFields {
   timeZone: string;
 }
 
-export function fieldsOf(current: UpgradePolicy): PolicyFields {
+export function fieldsOf(current: UpgradePolicy, zone = browserZone()): PolicyFields {
   const w = current.window ?? {};
   const nodeImages = refreshesNodes(current);
   const active = (current.mode !== undefined && current.mode !== "off") || nodeImages;
@@ -149,8 +160,8 @@ export function fieldsOf(current: UpgradePolicy): PolicyFields {
     monthDays: (w.monthDays ?? []).join(", "),
     start: w.start ?? defaultStart,
     hours: String((w.durationMinutes ?? defaultMinutes) / minutesPerHour),
-    // What is in effect: UTC when a policy names none. A new policy starts in the browser's zone.
-    timeZone: w.timeZone ?? (active ? "UTC" : defaultZone()),
+    // What is in effect: UTC when a policy names none. A new policy starts in zone, the site's.
+    timeZone: w.timeZone ?? (active ? "UTC" : zone),
   };
 }
 
@@ -178,8 +189,21 @@ function policyOf(f: PolicyFields): UpgradePolicy {
   return { mode: f.mode, ...off, window };
 }
 
-export function UpgradesDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
-  const initial = fieldsOf(upgradePolicy(c.variables["upgrades"]));
+export function UpgradesDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element | null {
+  const zone = useSiteZone();
+  return zone === undefined ? null : <UpgradesForm cluster={c} zone={zone} onClose={onClose} />;
+}
+
+function UpgradesForm({
+  cluster: c,
+  zone,
+  onClose,
+}: {
+  cluster: Cluster;
+  zone: string;
+  onClose: () => void;
+}): JSX.Element {
+  const initial = fieldsOf(upgradePolicy(c.variables["upgrades"]), zone);
   const talos = c.distribution === "talos";
   const [mode, setMode] = useState<UpgradeMode>(initial.mode);
   const [nodeImages, setNodeImages] = useState(initial.nodeImages);

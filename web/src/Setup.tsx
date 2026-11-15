@@ -65,7 +65,6 @@ import {
   pollIdle,
   pollRunning,
   Said,
-  isTimeZone,
   timeZones,
   usePoll,
   weekdayName,
@@ -1067,7 +1066,8 @@ function releaseMirrorProblems(f: SetupForm): SetupProblems {
   return p;
 }
 
-// siteDefaultProblems are those of the site CA and the site time zone.
+// siteDefaultProblems are those of the site CA. The server judges the time zone, with its own
+// time zone database, as useTimeZoneProblem asks it.
 function siteDefaultProblems(f: SetupForm): SetupProblems {
   const p: SetupProblems = {};
   if (filled(f.siteCA)) {
@@ -1077,12 +1077,43 @@ function siteDefaultProblems(f: SetupForm): SetupProblems {
       p.siteCA = "Paste PEM certificates.";
     }
   }
-  const zone = f.timeZone.trim();
-  if (zone !== "" && !isTimeZone(zone)) {
-    p.timeZone = "Use an IANA name like Europe/Zurich.";
-  }
   return p;
 }
+
+// useTimeZoneProblem asks the server whether it knows the time zone, once the typing has paused.
+// Empty is no problem: the schedules then stay in UTC.
+export function useTimeZoneProblem(timeZone: string): string | undefined {
+  const zone = timeZone.trim();
+  const [verdict, setVerdict] = useState<{ zone: string; problem: string | undefined }>();
+  useEffect(() => {
+    let current = true;
+    async function ask(): Promise<void> {
+      if (zone === "") {
+        return;
+      }
+      try {
+        await api.timeZoneCheck(zone);
+        if (current) {
+          setVerdict({ zone, problem: undefined });
+        }
+      } catch (err) {
+        if (current) {
+          setVerdict({ zone, problem: errorMessage(err) });
+        }
+      }
+    }
+    const timer = window.setTimeout(() => {
+      void ask();
+    }, timeZoneAskDelayMs);
+    return () => {
+      current = false;
+      window.clearTimeout(timer);
+    };
+  }, [zone]);
+  return verdict?.zone === zone ? verdict.problem : undefined;
+}
+
+const timeZoneAskDelayMs = 400;
 
 /** siteCARollText says what saving a site CA does to the clusters, empty where nothing changes. */
 export function siteCARollText(roll: SiteCARoll): string {
@@ -1095,7 +1126,7 @@ export function siteCARollText(roll: SiteCARoll): string {
     ...(roll.windows > 0 ? [`${roll.windows} at window`] : []),
     ...(roll.waiting > 0 ? [`${roll.waiting} queued`] : []),
   ];
-  return `Replaces nodes: ${parts.join(", ")}.`;
+  return `Replaces nodes (${parts.join(", ")}).`;
 }
 
 // SiteCARollNote tells, before the site CA is saved, how many clusters take it and when.
@@ -1130,7 +1161,7 @@ function SiteCARollNote({ siteCA }: { siteCA: string }): JSX.Element | null {
       current = false;
     };
   }, [asks, candidate]);
-  return text === "" ? null : <p className="hint">{text}</p>;
+  return text === "" ? null : <div>{text}</div>;
 }
 
 // offerProblems are those of what the management cluster offers the clusters it makes.
@@ -2313,16 +2344,16 @@ export function AdvancedFields({
       </Field>
       <Field
         label="Site CA"
-        hint="PEM, the default for every connection"
+        hint={
+          <>
+            PEM, the default for every connection
+            <SiteCARollNote siteCA={form.siteCA} />
+          </>
+        }
         info="Every cluster's nodes, the release mirror, backup targets and identity providers trust it unless they name an authority of their own."
         error={shown("siteCA")}
       >
-        {(id) => (
-          <>
-            <textarea id={id} rows={3} value={form.siteCA} onChange={(e) => set("siteCA", e.target.value)} />
-            <SiteCARollNote siteCA={form.siteCA} />
-          </>
-        )}
+        {(id) => <textarea id={id} rows={3} value={form.siteCA} onChange={(e) => set("siteCA", e.target.value)} />}
       </Field>
       <Field
         label="Time zone"
@@ -2330,9 +2361,7 @@ export function AdvancedFields({
         info="New etcd snapshots, backups and upgrade windows start in it. A cluster's own zone wins."
         error={shown("timeZone")}
       >
-        {(id) => (
-          <input id={id} placeholder="UTC" value={form.timeZone} onChange={(e) => set("timeZone", e.target.value)} />
-        )}
+        {(id) => <input id={id} value={form.timeZone} onChange={(e) => set("timeZone", e.target.value)} />}
       </Field>
       <Field
         label="Release mirror"
@@ -2526,7 +2555,11 @@ function SetupWizard({
   };
   // A new passphrase is chosen, and repeated, only when no earlier run left a state to open.
   const firstRun = !manage && status.resumes !== true;
-  const byField = setupFieldProblems(effective, firstRun, fixed);
+  const zoneProblem = useTimeZoneProblem(effective.timeZone);
+  const byField = {
+    ...setupFieldProblems(effective, firstRun, fixed),
+    ...(zoneProblem === undefined ? {} : { timeZone: zoneProblem }),
+  };
   const problemsIn = (s: SetupStep): boolean => stepFields[s].some((k) => byField[k] !== undefined);
   const shown = (k: SetupField): string | undefined =>
     attempted.has(stepOf(k)) || touched.has(k) ? byField[k] : undefined;

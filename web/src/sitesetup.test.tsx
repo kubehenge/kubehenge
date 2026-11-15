@@ -1,11 +1,11 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type JSX } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { newForm } from "./create-form";
 import { fakeServer } from "./fake-server";
-import { AdvancedFields, formOf, type SetupForm } from "./Setup";
+import { AdvancedFields, formOf, useTimeZoneProblem, type SetupForm } from "./Setup";
 import { fromCluster } from "./start-from";
 import type { Cluster } from "./types";
 
@@ -36,8 +36,21 @@ describe("the site settings in Setup", () => {
     render(<Fields />);
     await user.click(screen.getByLabelText("Site CA"));
     await user.paste(pem);
-    await expect(screen.findByText("Replaces nodes: 2 now, 1 at window.")).resolves.toBeInTheDocument();
+    await expect(screen.findByText("Replaces nodes (2 now, 1 at window).")).resolves.toBeInTheDocument();
     expect(calls.find((c) => c.key === "POST /api/setup/site-ca-roll")?.body).toStrictEqual({ siteCA: `${pem}\n` });
+  });
+
+  it("put that note after the field's hint, and carry no placeholder in the time zone", async () => {
+    const user = userEvent.setup({ delay: null });
+    fakeServer({ "POST /api/setup/site-ca-roll": { body: { inherits: 1, now: 1, windows: 0, waiting: 0 } } });
+    render(<Fields />);
+    await user.click(screen.getByLabelText("Site CA"));
+    await user.paste(pem);
+    const note = await screen.findByText("Replaces nodes (1 now).");
+    const hint = screen.getByText(/PEM, the default for every connection/u);
+    expect(hint).toContainElement(note);
+    expect(hint.textContent).toMatch(/^PEM, the default for every connection/u);
+    expect(screen.getByLabelText("Time zone")).not.toHaveAttribute("placeholder");
   });
 
   it("says what clearing the site CA replaces", async () => {
@@ -48,7 +61,7 @@ describe("the site settings in Setup", () => {
     render(<Fields />);
     await user.click(screen.getByLabelText("Site CA"));
     await user.paste(pem);
-    await expect(screen.findByText("Replaces nodes: 3 now.")).resolves.toBeInTheDocument();
+    await expect(screen.findByText("Replaces nodes (3 now).")).resolves.toBeInTheDocument();
     await user.clear(screen.getByLabelText("Site CA"));
     await waitFor(() => {
       expect(calls.findLast((c) => c.key === "POST /api/setup/site-ca-roll")?.body).toStrictEqual({ siteCA: "" });
@@ -70,6 +83,23 @@ describe("the site settings in Setup", () => {
     render(<Fields />);
     await user.type(screen.getByLabelText("Time zone"), "Europe/Zurich");
     expect(screen.getByLabelText("Time zone")).toHaveValue("Europe/Zurich");
+  });
+
+  it("let the server judge a time zone, as saving does", async () => {
+    const calls = fakeServer({
+      "POST /api/setup/time-zone": {
+        status: 422,
+        body: { error: 'time zone "Europe/zurich" is not an IANA time zone' },
+      },
+    });
+    const { result, rerender } = renderHook(({ zone }) => useTimeZoneProblem(zone), { initialProps: { zone: "" } });
+    expect(result.current).toBeUndefined();
+    rerender({ zone: "Europe/zurich" });
+    await waitFor(() => expect(result.current).toBe('time zone "Europe/zurich" is not an IANA time zone'));
+    expect(calls.map((c) => c.body)).toStrictEqual([{ timeZone: "Europe/zurich" }]);
+    fakeServer({ "POST /api/setup/time-zone": { body: {} } });
+    rerender({ zone: "Factory" });
+    await waitFor(() => expect(result.current).toBeUndefined());
   });
 });
 

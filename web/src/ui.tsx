@@ -563,35 +563,41 @@ export function saveFile(blob: Blob, name: string): void {
 /** browserZone is the browser's IANA time zone, UTC when it names none. */
 export const browserZone = (): string => new Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
-let siteZone = "";
+/** siteZoneOf is the time zone the site set for schedules, which every class carries. Empty when it set none. */
+export const siteZoneOf = (classes: { annotations?: Record<string, string> | undefined }[]): string =>
+  classes.map((c) => c.annotations?.["kubehenge.dev/time-zone"] ?? "").find((zone) => zone !== "") ?? "";
 
-/** setSiteZone sets the site's default time zone, which the classes carry. Empty, the browser's. */
-export function setSiteZone(zone: string): void {
-  siteZone = zone;
+/**
+ * useSiteZone is the time zone a new schedule starts in: the site's, read from the server, else the
+ * browser's. It is undefined until the server has answered, so that a form never starts in a zone
+ * it has to leave.
+ */
+export function useSiteZone(): string | undefined {
+  const [zone, setZone] = useState<string>();
+  useEffect(() => {
+    let current = true;
+    async function load(): Promise<void> {
+      let zoneRead = "";
+      try {
+        zoneRead = siteZoneOf(await api.classes());
+      } catch {
+        // The browser's zone serves where the classes cannot be read.
+      }
+      if (current) {
+        setZone(zoneRead || browserZone());
+      }
+    }
+    void load();
+    return () => {
+      current = false;
+    };
+  }, []);
+  return zone;
 }
-
-/** defaultZone is the time zone a new schedule starts in: the site's, else the browser's. */
-export const defaultZone = (): string => (siteZone === "" ? browserZone() : siteZone);
 
 /** timeZones lists the IANA time zones, with UTC and the current one, which the browser may not list. */
 export function timeZones(current: string): string[] {
   return [...new Set(["UTC", current, ...Intl.supportedValuesOf("timeZone")])];
-}
-
-/**
- * isTimeZone tells whether the browser knows the IANA time zone by that name, aliases such as
- * Europe/Kyiv and Etc/UTC included, which the list of timeZones leaves out. A name starts with a
- * capital, as the server's tz database reads it.
- */
-export function isTimeZone(zone: string): boolean {
-  if (!/^[A-Z][\w+/-]*$/u.test(zone)) {
-    return false;
-  }
-  try {
-    return new Intl.DateTimeFormat("en", { timeZone: zone }).resolvedOptions().timeZone !== "";
-  } catch {
-    return false;
-  }
 }
 
 const weekdayNames: Record<string, string> = {

@@ -43,17 +43,7 @@ import { LogsFields, logsHint, logsNeedMonitoring } from "./Logs";
 import { NamespaceLabelsField } from "./NamespaceLabels";
 import { PodSecurityFields, cisHint, cisInfo } from "./PodSecurity";
 import type { ClusterClass } from "./types";
-import {
-  Field,
-  Info,
-  defaultZone,
-  filled,
-  headlampHint,
-  headlampViewHint,
-  headlampViewLabel,
-  istioHint,
-  registerHint,
-} from "./ui";
+import { Field, Info, filled, headlampHint, headlampViewHint, headlampViewLabel, istioHint, registerHint } from "./ui";
 
 // HeadlampAddOn installs Headlamp, at a host name of its own if one is given, and read-only for
 // everyone if asked.
@@ -796,7 +786,7 @@ export function PoliciesStep(props: AddOnsProps): JSX.Element {
               : "Replaces the nodes with each new template build."}
           </Info>
           {(form.upgradeMode !== "off" || form.nodeImages) && (
-            <p className="hint">Upgrades run daily 02:00 to 06:00, {defaultZone()} time</p>
+            <p className="hint">Upgrades run daily 02:00 to 06:00, {form.siteZone} time</p>
           )}
         </>
       )}
