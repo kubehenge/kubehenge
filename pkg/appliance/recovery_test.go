@@ -343,8 +343,9 @@ func appliesIn(log string) []string {
 			calls = append(calls, rec.Args)
 		}
 	}
-	var out []string
-	for _, plan := range appliedPlans(calls) {
+	plans := appliedPlans(calls)
+	out := make([]string, 0, len(plans))
+	for _, plan := range plans {
 		out = append(out, strings.Join(plan, " "))
 	}
 	return out
