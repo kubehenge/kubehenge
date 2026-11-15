@@ -2119,6 +2119,57 @@ if [ "${restores_etcd}" = true ]; then
         }
         until_true 900 "every control plane a member of the restored etcd" etcd_rejoined
     fi
+
+    step "etcd snapshots: one taken onto the management cluster's backup volume"
+    set_variable etcdSnapshots "{\"enabled\":true,\"keep\":2,\"schedule\":\"${etcd_schedule}\"}"
+    volume_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    wl -n default create configmap e2e-before-volume-snapshot --from-literal=marker="${volume_marker}"
+    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    webhook_retried kubectl -n "${ns}" annotate cluster "${name}" --overwrite \
+        "kubehenge.dev/etcd-snapshot-requested={\"by\":\"e2e\",\"at\":\"${now}\"}"
+    until_true 900 "an etcd snapshot taken onto the backup volume" snapshot_taken
+    volume_snapshot=$(kubectl -n "${ns}" get cluster "${name}" -o json |
+        jq -r '.metadata.annotations["kubehenge.dev/etcd-snapshot"] | fromjson | .name')
+    [ "${volume_snapshot}" != "${snapshot_name}" ] || fail "no new snapshot was taken onto the backup volume"
+    "${kubehenge}" cluster etcd-snapshots list "${name}" -n "${ns}" | grep -q -F "Kept on:     the backup volume" ||
+        fail "the CLI does not say the snapshots are on the backup volume"
+
+    wl -n default delete configmap e2e-before-volume-snapshot
+    lost_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    wl -n default create configmap e2e-after-volume-snapshot --from-literal=marker="${lost_marker}"
+    control_planes=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+    control_plane_count=$(printf '%s' "${control_planes}" | wc -w)
+    if [ "${distribution}" != talos ] && [ "${control_plane_count}" -ge 3 ]; then
+        step "etcd's quorum lost on purpose, then restored from the backup volume"
+        # Every member but the first drops etcd's peer traffic, so no member has a majority and the
+        # API server stops answering. Those machines are replaced by the restore.
+        for machine in ${control_planes#* }; do
+            on_machines "${machine}" "iptables -I INPUT -p tcp --dport 2380 -j DROP && iptables -I OUTPUT -p tcp --dport 2380 -j DROP" > /dev/null
+        done
+        api_down() {
+            # shellcheck disable=SC2310 # polled with set -e off, and an answer is what is checked.
+            if wl get --raw /readyz > /dev/null 2>&1; then
+                return 1
+            fi
+        }
+        until_true 600 "the cluster's API server down without its quorum" api_down
+    else
+        step "etcd restored from the backup volume"
+    fi
+    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    webhook_retried kubectl -n "${ns}" annotate cluster "${name}" --overwrite \
+        "kubehenge.dev/etcd-restore={\"snapshot\":\"${volume_snapshot}\",\"by\":\"e2e\",\"at\":\"${now}\"}"
+    until_true 2400 "etcd restored from the backup volume" etcd_restored
+    until_true 1200 "cluster ${name} available after the restore from the volume" available_or_failed
+    wl wait --for=condition=Ready nodes --all --timeout=10m
+    until_true 300 "the ConfigMap made before the volume snapshot back" wl -n default get configmap e2e-before-volume-snapshot
+    # shellcheck disable=SC2310 # absent's answer is what is checked.
+    absent wl -n default get configmap e2e-after-volume-snapshot ||
+        fail "a ConfigMap made after the volume snapshot outlived the restore"
+    wl -n default delete configmap e2e-before-volume-snapshot
+    # shellcheck disable=SC2310 # absent's answer is what is checked.
+    absent wl -n kube-system get pods -l app.kubernetes.io/name=kubehenge-restore -o name ||
+        fail "the pod that received the snapshot outlived the restore"
 fi
 
 case ${part}-${distribution} in
