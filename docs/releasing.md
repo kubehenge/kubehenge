@@ -138,4 +138,44 @@ done
 
 `gh release verify` checks GitHub's attestation of the published release, its tag and every file as they now stay. `make verify-providers`, from the same checkout, checks the Talos providers the tag pins the same way, against their forks' release workflows. Until the packages on ghcr.io are public, the image checks need a login (`docker login ghcr.io`). `index.json` should hold the previous releases unchanged and one new entry whose checksum matches `SHA256SUMS`.
 
-How users check a release before installing it is in [install.md](install.md#verifying-a-release).
+## Verifying a release
+
+Users check a release before installing it as follows. `install.sh` checks what it downloads. The appliance installs only releases listed in an index signed with the project's release key. What is left to check yourself is the script.
+
+The release workflow built each file and each image Kubehenge runs from the tagged source, on a GitHub-hosted runner (SLSA Build Level 3). Each carries signed build provenance and an SPDX SBOM. They are stored as GitHub attestations and, for the files, in `kubehenge_<version>.intoto.jsonl`.
+
+With the [GitHub CLI](https://cli.github.com), for the release you install (`<version>` without the `v`):
+
+```sh
+gh release download v<version> --repo kubehenge/kubehenge --dir kubehenge-release
+cd kubehenge-release
+sha256sum -c kubehenge_<version>_SHA256SUMS
+for file in install.sh kubehenge_<version>_linux_amd64.tar.gz; do
+  gh attestation verify "$file" --repo kubehenge/kubehenge \
+    --bundle kubehenge_<version>.intoto.jsonl \
+    --signer-workflow kubehenge/kubehenge/.github/workflows/release-build.yml \
+    --source-ref refs/tags/v<version> --deny-self-hosted-runners
+done
+```
+
+The checksums prove the files are the ones the release lists. The attestation proves the release workflow built them, from this repository at that tag, with the steps in `release-build.yml`.
+
+### The SBOM
+
+`kubehenge_<version>_linux_amd64.spdx.json` lists every file in the archive with its SHA-256 and every package in it at its exact version. A vulnerability scanner such as Grype or Trivy can read it. Add `--predicate-type https://spdx.dev/Document/v2.3` to the command above to check the SBOM attested to the archive instead of its provenance.
+
+### The images
+
+The images carry the same provenance and SBOM in the registry, and a Sigstore signature that cosign checks:
+
+```sh
+image=ghcr.io/kubehenge/kubehenge:v<version>
+gh attestation verify "oci://$image" --repo kubehenge/kubehenge \
+  --signer-workflow kubehenge/kubehenge/.github/workflows/release-build.yml \
+  --source-ref refs/tags/v<version> --deny-self-hosted-runners
+cosign verify "$image" \
+  --certificate-identity https://github.com/kubehenge/kubehenge/.github/workflows/release-build.yml@refs/tags/v<version> \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+The Cluster API providers for Talos come from Kubehenge's forks ([architecture.md](architecture.md#what-the-run-creates)), each signed and attested by its own release workflow. The management cluster's nodes pull their images only with that signature. `make verify-providers`, from a checkout of the tag, checks their files and images against the digests the tag pins, with the GitHub CLI and cosign.
