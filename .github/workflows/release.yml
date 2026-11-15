@@ -50,6 +50,7 @@ jobs:
       CONTROLLER: ${{ needs.build.outputs.controller }}
       CAPMOX: ${{ needs.build.outputs.capmox }}
       HELM_ADDON: ${{ needs.build.outputs.helm-addon }}
+      PROXMOX_CSI: ${{ needs.build.outputs.proxmox-csi }}
       # The workflow that signed everything, as the certificates name it.
       SIGNER: ${{ github.repository }}/.github/workflows/release-build.yml
     steps:
@@ -114,7 +115,8 @@ jobs:
           }
           for image in "ghcr.io/kubehenge/kubehenge@$CONTROLLER" \
             "ghcr.io/kubehenge/cluster-api-provider-proxmox@$CAPMOX" \
-            "ghcr.io/kubehenge/cluster-api-addon-provider-helm@$HELM_ADDON"; do
+            "ghcr.io/kubehenge/cluster-api-addon-provider-helm@$HELM_ADDON" \
+            "ghcr.io/kubehenge/proxmox-csi-controller@$PROXMOX_CSI"; do
             verify "oci://$image"
             verify "oci://$image" --predicate-type https://spdx.dev/Document/v2.3
             cosign verify "$image" --certificate-identity "https://github.com/$SIGNER@$GITHUB_REF" \
