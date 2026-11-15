@@ -624,6 +624,12 @@ stuck_state() {
           + "\n  containers: \([.status.containerStatuses[]? | "\(.name) \(.state | keys[0]) \(.state[] | .reason // "")"] | join("; "))"' >&2 || true
     management_get '/api/v1/events' | jq -r '.items[] | select(.involvedObject.kind == "Pod" and .type != "Normal")
         | "\(.lastTimestamp // .eventTime) \(.involvedObject.namespace)/\(.involvedObject.name) \(.reason): \(.message)"' >&2 || true
+    echo "-- the pods and endpoints in kubehenge-system, which the interface reaches through the API server" >&2
+    management_get '/api/v1/namespaces/kubehenge-system/pods' | jq -r '.items[]
+        | "\(.metadata.name) \(.status.podIP // "-") on \(.spec.nodeName // "-"): \(.status.phase), started \(.status.startTime // "-"), restarts \([.status.containerStatuses[]?.restartCount] | add // 0)"
+          + (if .metadata.deletionTimestamp then ", deleted at \(.metadata.deletionTimestamp)" else "" end)' >&2 || true
+    management_get '/apis/discovery.k8s.io/v1/namespaces/kubehenge-system/endpointslices' | jq -r '.items[]
+        | "\(.metadata.labels["kubernetes.io/service-name"]): \([.endpoints[]? | "\(.addresses[0]) ready=\(.conditions.ready) \(.targetRef.name // "")"] | join("; "))"' >&2 || true
     echo "-- the management cluster's namespaces held in Terminating" >&2
     management_get '/api/v1/namespaces' | jq -r '.items[] | select(.status.phase == "Terminating")
         | "\(.metadata.name), deleted at \(.metadata.deletionTimestamp)\n"
