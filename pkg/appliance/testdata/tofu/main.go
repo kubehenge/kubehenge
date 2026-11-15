@@ -51,13 +51,6 @@ func run(dir string, args []string) int {
 	case "init":
 		fmt.Println("OpenTofu has been initialised")
 	case "apply":
-		// A saved plan named last must be there, as OpenTofu refuses to apply one that is not.
-		if last := args[len(args)-1]; !strings.HasPrefix(last, "-") {
-			if _, err := os.Stat(filepath.Join(dir, last)); err != nil {
-				fmt.Fprintln(os.Stderr, "Error: no saved plan "+last)
-				return 1
-			}
-		}
 		// A "slow" apply runs until it is interrupted, then writes <dir>/../state-written as
 		// OpenTofu writes its state, and fails.
 		if strings.Contains(string(vars), `"slow"`) {
