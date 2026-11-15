@@ -106,7 +106,9 @@ spec:
           persistentVolumeClaim:
             claimName: {{ .Values.backupVolume.claim }}
 ---
-# The appliance reaches the store through the API server as the interface, and reads its token.
+# The appliance reaches the store as the interface through a port-forward to its ready pod, which
+# it finds in the Service's EndpointSlices, and reads its token. RBAC cannot name a Deployment's
+# pods, so the policy below holds the port-forwards to the store's.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -114,9 +116,11 @@ metadata:
   namespace: {{ $ns }}
 rules:
   - apiGroups: [""]
-    resources: [services/proxy]
-    resourceNames: [{{ $name }}, "{{ $name }}:http"]
-    verbs: [get, update, delete]
+    resources: [pods/portforward]
+    verbs: [create]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [list]
   - apiGroups: [""]
     resources: [secrets]
     resourceNames: [{{ $name }}]
@@ -140,6 +144,125 @@ subjects:
   - kind: ServiceAccount
     name: kubehenge-interface
     namespace: {{ $ns }}
+---
+# The interface's port-forwards reach the store's pods alone, named as its Deployment names them.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}-client
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CONNECT]
+        resources: [pods/portforward]
+  matchConditions:
+    - name: interface
+      expression: request.userInfo.username == 'system:serviceaccount:{{ $ns }}:kubehenge-interface'
+  validations:
+    - expression: request.namespace == '{{ $ns }}' && request.name.matches('^{{ $name }}-[a-z0-9]{1,10}-[a-z0-9]{5}$')
+      message: the interface forwards to the backup store's pods only
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}-client
+spec:
+  policyName: {{ $name }}-client
+  validationActions: [Deny]
+{{- $controller := "kubehenge-controller" }}
+---
+# The controller stores the etcd snapshots of clusters without a bucket target. It reaches the store
+# through its Service, reads its token, and asks the appliance to wake it through an annotation.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-snapshots
+  namespace: {{ $ns }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [{{ $name }}]
+    verbs: [get]
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [{{ $name }}]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-snapshots
+  namespace: {{ $ns }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}-snapshots
+subjects:
+  - kind: ServiceAccount
+    name: {{ $controller }}
+    namespace: {{ $ns }}
+---
+# RBAC cannot narrow a patch to one annotation, so this policy holds the controller's changes to the
+# store to its wake request.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}-snapshots
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [UPDATE]
+        resources: [deployments]
+  matchConditions:
+    - name: controller
+      expression: request.userInfo.username == 'system:serviceaccount:{{ $ns }}:{{ $controller }}'
+  variables:
+    - name: before
+      expression: "has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}"
+    - name: after
+      expression: "has(object.metadata.annotations) ? object.metadata.annotations : {}"
+  validations:
+    - expression: >-
+        object.spec == oldObject.spec
+        && (has(object.metadata.labels) ? object.metadata.labels : {}) == (has(oldObject.metadata.labels) ? oldObject.metadata.labels : {})
+        && variables.after.all(k, k.startsWith('kubehenge.dev/wake-requested-') || (k in variables.before && variables.before[k] == variables.after[k]))
+        && variables.before.all(k, k.startsWith('kubehenge.dev/wake-requested-') || k in variables.after)
+      message: the controller changes nothing of the backup store but its wake request
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}-snapshots
+spec:
+  policyName: {{ $name }}-snapshots
+  validationActions: [Deny]
+---
+# The controller's pods alone reach the store's port over the network. The interface's port-forward
+# arrives inside the store's pod, past any NetworkPolicy. Both still send the store's token.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-snapshots
+  namespace: {{ $ns }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $name }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ $controller }}
+      ports:
+        - protocol: TCP
+          port: 8080
 {{- $zones := printf "%s-zones" $name }}
 {{- with .Values.backupVolume.zonesToken }}
 {{- /* The appliance alone sets the nodes' zone labels. It reads where the node VMs run with this

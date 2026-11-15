@@ -435,19 +435,32 @@ interface ScheduledTarget {
   timeZone: string;
 }
 
+/**
+ * volumeTarget is a target field's value for the management cluster's backup volume, which a
+ * variable names by leaving its target out. No backup target's name can be it. An empty field is
+ * one not chosen yet.
+ */
+export const volumeTarget = "@volume";
+
+/** volumeName is what the interface calls the management cluster's backup volume. */
+export const volumeName = "Backup volume";
+
 /** TargetScheduleFields edits where a cluster's runs go and when they start. */
 export function TargetScheduleFields({
   value,
   update,
   targets,
   problems,
+  volume = false,
 }: {
   value: ScheduledTarget;
   update: (patch: Partial<ScheduledTarget>) => void;
   targets: OfferedTarget[];
   problems: { target?: string | undefined; schedule?: string | undefined };
+  /** volume offers the management cluster's backup volume beside the targets. */
+  volume?: boolean;
 }): JSX.Element {
-  const listed = targets.some((t) => t.name === value.target);
+  const listed = targets.some((t) => t.name === value.target) || (volume && value.target === volumeTarget);
   return (
     <>
       <Field label="Target" error={problems.target}>
@@ -456,6 +469,7 @@ export function TargetScheduleFields({
             <option value="" disabled>
               Choose…
             </option>
+            {volume && <option value={volumeTarget}>{volumeName}</option>}
             {targets.map((t) => (
               <option key={t.name} value={t.name}>
                 {t.name}: {targetText(t)}

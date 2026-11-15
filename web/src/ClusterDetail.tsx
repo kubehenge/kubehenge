@@ -899,15 +899,18 @@ function DeleteDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [dropSnapshots, setDropSnapshots] = useState(false);
+  const etcd = etcdSnapshotsOf(c.variables["etcdSnapshots"]);
+  const onVolume = etcd.enabled && etcd.target === undefined;
   // A new cluster of the same name and target restores what stays behind.
   const kept = [
     ...(backupsOf(c.variables["backups"]).enabled ? ["Backups"] : []),
-    ...(etcdSnapshotsOf(c.variables["etcdSnapshots"]).enabled ? ["etcd snapshots"] : []),
+    ...(etcd.enabled && !onVolume ? ["etcd snapshots"] : []),
   ];
   const remove = async (): Promise<void> => {
     setBusy(true);
     try {
-      await api.remove(c.namespace, c.name, typed);
+      await api.remove(c.namespace, c.name, { confirm: typed, deleteEtcdSnapshots: dropSnapshots });
       fleet?.show({ ...c, deleting: true });
       navigate("/");
     } catch (err) {
@@ -935,6 +938,12 @@ function DeleteDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
     >
       <p>Deletes its machines and persistent volumes, and removes it from Rancher. This can&apos;t be undone.</p>
       {kept.length > 0 && <p>{`${kept.join(" and ")} stay in the target.`}</p>}
+      {onVolume && (
+        <label className="check">
+          <input type="checkbox" checked={dropSnapshots} onChange={(e) => setDropSnapshots(e.target.checked)} /> Delete
+          volume snapshots
+        </label>
+      )}
       <Field label="Confirm name" hint={`Type ${c.name}.`}>
         {(id) => <input id={id} value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" />}
       </Field>

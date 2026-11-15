@@ -10,6 +10,7 @@ import type {
   ClusterClass,
   ClusterHealth,
   ClusterRef,
+  RemovedCluster,
   ClusterEtcdSnapshots,
   CreateCheck,
   ControlPlaneRecovery,
@@ -352,8 +353,11 @@ export interface Api {
   /** change is made against the cluster as its user was shown it. A newer generation refuses it. */
   change: (c: ClusterShown, req: ChangeRequest) => Promise<Cluster>;
   plan: (c: ClusterShown, req: ChangeRequest) => Promise<Plan>;
-  /** remove deletes the cluster. confirm is its name as the user typed it. */
-  remove: (ns: string, name: string, confirm: string) => Promise<void>;
+  /**
+   * remove deletes the cluster. confirm is its name as the user typed it. deleteEtcdSnapshots takes
+   * its snapshots on the backup volume too.
+   */
+  remove: (ns: string, name: string, typed: { confirm: string; deleteEtcdSnapshots: boolean }) => Promise<void>;
   backups: (ns: string, name: string) => Promise<ClusterBackups>;
   backUp: (ns: string, name: string) => Promise<BackupRun>;
   /** deleteBackup has Velero delete a backup before it runs out, once its name is typed to confirm. */
@@ -368,6 +372,10 @@ export interface Api {
   /** podSecurityCheck lists the running pods the restricted Pod Security level would refuse. */
   podSecurityCheck: (ns: string, name: string) => Promise<PodSecurityCheck>;
   takeEtcdSnapshot: (ns: string, name: string) => Promise<void>;
+  /** removedClusters lists the removed clusters of a namespace whose snapshots the backup volume keeps. */
+  removedClusters: (ns: string) => Promise<RemovedCluster[]>;
+  /** deleteRemoved deletes a removed cluster's snapshots and backup keys, its name typed to confirm. */
+  deleteRemoved: (ns: string, name: string, confirm: string) => Promise<void>;
   /** defragmentEtcd asks the controller to defragment every etcd member at once. */
   defragmentEtcd: (ns: string, name: string) => Promise<void>;
   etcdRestorePlan: (ns: string, name: string, snapshot: string) => Promise<EtcdRestorePlan>;
@@ -536,7 +544,8 @@ export const api: Api = {
     requestAgainst("PATCH", clusterPath(c.namespace, c.name), { body: req, generation: c.generation }),
   plan: (c, req) =>
     requestAgainst("POST", `${clusterPath(c.namespace, c.name)}/plan`, { body: req, generation: c.generation }),
-  remove: (ns, name, confirm) => act("DELETE", clusterPath(ns, name), { confirm }),
+  remove: (ns, name, { confirm, deleteEtcdSnapshots }) =>
+    act("DELETE", clusterPath(ns, name), deleteEtcdSnapshots ? { confirm, deleteEtcdSnapshots } : { confirm }),
   backups: (ns, name) => request("GET", `${clusterPath(ns, name)}/backups`),
   backUp: (ns, name) => request("POST", `${clusterPath(ns, name)}/backups`),
   deleteBackup: (ns, name, { backup, confirm }) =>
@@ -550,6 +559,9 @@ export const api: Api = {
   etcdSnapshots: (ns, name) => request("GET", `${clusterPath(ns, name)}/etcd-snapshots`),
   podSecurityCheck: (ns, name) => request("GET", `${clusterPath(ns, name)}/pod-security-check`),
   takeEtcdSnapshot: (ns, name) => act("POST", `${clusterPath(ns, name)}/etcd-snapshots`),
+  removedClusters: (ns) => request("GET", `/api/removed-etcd-snapshots/${encodeURIComponent(ns)}`),
+  deleteRemoved: (ns, name, confirm) =>
+    act("DELETE", `/api/removed-etcd-snapshots/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`, { confirm }),
   defragmentEtcd: (ns, name) => act("POST", `${clusterPath(ns, name)}/etcd-defrag`),
   etcdRestorePlan: (ns, name, snapshot) => request("GET", `${etcdSnapshotURL(ns, name, snapshot)}/restore-plan`),
   restoreEtcd: (ns, name, req) => act("POST", `${clusterPath(ns, name)}/etcd-restores`, req),

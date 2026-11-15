@@ -3,8 +3,16 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
-import { scheduleText } from "./Backups";
-import { etcdFieldsOf, etcdProblems, etcdSnapshotsText, restoreProblem } from "./EtcdSnapshots";
+import { when } from "./backup-runs";
+import { scheduleText, volumeName, volumeTarget } from "./Backups";
+import {
+  etcdFieldsOf,
+  etcdProblems,
+  etcdSnapshotsText,
+  etcdSnapshotsVariable,
+  restoreProblem,
+  withEtcdTarget,
+} from "./EtcdSnapshots";
 import { applyStaged, fakeServer } from "./fake-server";
 import type { Cluster, ClusterClass, ClusterEtcdSnapshots, EtcdRestorePlan } from "./types";
 import { browserZone } from "./ui";
@@ -76,6 +84,10 @@ const snapshot = {
   size: 12 * 1024 * 1024,
 };
 
+// leading matches text that starts with s, its white space read as toHaveTextContent reads it.
+const leading = (s: string): RegExp =>
+  new RegExp(`^${s.replaceAll(/\s+/gu, " ").replaceAll(/[\\^$.*+?()[\]{}|]/gu, String.raw`\$&`)}`, "u");
+
 const view: ClusterEtcdSnapshots = {
   enabled: true,
   target: "store",
@@ -134,10 +146,69 @@ describe("etcd snapshot settings", () => {
     expect(etcdSnapshotsText({ enabled: false })).toBe("Off");
     const offered = [{ name: "store", bucket: "backups" }];
     expect(etcdProblems({ ...etcdFieldsOf({ enabled: true }), target: "store" }, offered)).toStrictEqual({});
-    expect(etcdProblems({ ...etcdFieldsOf({ enabled: true }), keep: "0" }, offered)).toStrictEqual({
+    expect(etcdProblems({ ...etcdFieldsOf({ enabled: true }), target: "", keep: "0" }, offered)).toStrictEqual({
       target: "Choose a target",
       keep: "A whole number from 1 to 1000",
     });
+    // Without a target the snapshots go to the backup volume, which needs no key.
+    expect(etcdFieldsOf({ enabled: true }).target).toBe(volumeTarget);
+    expect(etcdProblems(etcdFieldsOf({ enabled: true }), offered, { backups: "store" })).toStrictEqual({});
+    expect(etcdSnapshotsText({ enabled: true })).toBe(
+      "Every 12 hours from 00:00 (UTC), keeps 14, to the backup volume",
+    );
+  });
+
+  it("keep the backup volume once chosen, and a bucket once chosen", () => {
+    const offered = [{ name: "store", bucket: "backups" }];
+    const volume = etcdFieldsOf({ enabled: true });
+    expect(withEtcdTarget(volume, offered, "store").target).toBe(volumeTarget);
+    expect(etcdSnapshotsVariable(withEtcdTarget(volume, offered, "store"))).not.toHaveProperty("target");
+    const unchosen = { ...volume, target: "" };
+    expect(withEtcdTarget(unchosen, offered, undefined).target).toBe("store");
+    expect(withEtcdTarget(unchosen, [], undefined).target).toBe(volumeTarget);
+    expect(etcdSnapshotsVariable({ ...volume, target: "store" }).target).toBe("store");
+  });
+
+  it.each([
+    {
+      from: "store",
+      to: volumeName,
+      etcdSnapshots: { enabled: true, target: "store" },
+      shown: /^store:/u,
+      pick: volumeTarget,
+      sent: { enabled: true, keep: 14, schedule: "0 */12 * * *", timeZone: "UTC" },
+    },
+    {
+      from: volumeName,
+      to: "store",
+      etcdSnapshots: { enabled: true },
+      shown: volumeName,
+      pick: "store",
+      sent: { enabled: true, keep: 14, schedule: "0 */12 * * *", target: "store", timeZone: "UTC" },
+    },
+  ])("move from $from to $to in a cluster's options", async ({ etcdSnapshots, shown, pick, sent }) => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const calls = fakeServer({
+      ...signedIn,
+      "GET /api/clusters/clusters/web": { body: { ...cluster, variables: { ...cluster.variables, etcdSnapshots } } },
+      "GET /api/classes": { body: [rke2] },
+      "GET /api/clusters/clusters/web/credentials/backup": {
+        body: { purpose: "backup", set: true, canChange: true },
+      },
+      "PATCH /api/clusters/clusters/web": { body: snapshotting },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Edit etcd snapshots" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit etcd snapshots" });
+    const target = within(dialog).getByLabelText("Target");
+    expect(target).toHaveDisplayValue(shown);
+    await user.selectOptions(target, pick);
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
+    const body = calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body;
+    expect(body).toHaveProperty("variables.etcdSnapshots", sent);
   });
 
   it("allow a restore only from a snapshot of the cluster's distribution and Kubernetes minor", () => {
@@ -283,12 +354,20 @@ describe("a cluster's etcd snapshots", () => {
       ...base,
       "GET /api/clusters/clusters/web/etcd-snapshots": { body: view },
       "POST /api/clusters/clusters/web/etcd-snapshots": { status: 202, body: { by: "dev@pve", at: taken } },
+      "GET /api/removed-etcd-snapshots/clusters": {
+        body: [{ namespace: "clusters", name: "old", keys: true, snapshots: [snapshot] }],
+      },
     });
     const user = userEvent.setup({ delay: null });
     render(<App />);
 
     await expect(screen.findByText("Every 6 hours from 00:00 (UTC), keeps 10, to store")).resolves.toBeInTheDocument();
-    expect(screen.getByText("Last snapshot").nextElementSibling).toHaveTextContent(/^Taken/u);
+    await expect(screen.findByRole("button", { name: "Delete old's snapshots" })).resolves.toBeInTheDocument();
+    expect(screen.getByText("Kept on").nextElementSibling).toHaveTextContent(/^store$/u);
+    // A snapshot taken as planned shows its time alone, with no state word before it.
+    const lastTaken = screen.getByText("Last taken").nextElementSibling;
+    expect(lastTaken).toHaveTextContent(leading(`${when(snapshot.time)} (`));
+    expect(lastTaken).toHaveTextContent(/ ago\)$/u);
     expect(screen.getByRole("link", { name: `Download ${snapshot.name}` })).toHaveAttribute(
       "href",
       `/api/clusters/clusters/web/etcd-snapshots/${encodeURIComponent(snapshot.name)}`,
@@ -298,6 +377,18 @@ describe("a cluster's etcd snapshots", () => {
 
     await user.click(screen.getByRole("button", { name: "Take snapshot" }));
     await waitFor(() => expect(calls.map((c) => c.key)).toContain("POST /api/clusters/clusters/web/etcd-snapshots"));
+  });
+
+  it("say a failed try before the time of the last one taken", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/backups");
+    const failed = { ...view, condition: { ...view.condition, status: "False", reason: "Failed", message: "no room" } };
+    fakeServer({ ...base, "GET /api/clusters/clusters/web/etcd-snapshots": { body: failed } });
+    render(<App />);
+
+    await expect(screen.findByText("Last taken")).resolves.toBeInTheDocument();
+    expect(screen.getByText("Last taken").nextElementSibling).toHaveTextContent(
+      leading(`Failed ${when(snapshot.time)} (`),
+    );
   });
 
   it("say where RKE2's own snapshots go and how they come back", async () => {

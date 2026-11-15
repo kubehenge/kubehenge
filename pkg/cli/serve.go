@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/appliance"
+	"github.com/kubehenge/kubehenge/pkg/backupstore"
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
 	"github.com/kubehenge/kubehenge/pkg/release"
@@ -488,7 +489,7 @@ func applianceVMIDDefault() int {
 // certificate is for, by which it finds its guest in Proxmox VE and notices an address it lost. It
 // also reads the use of the disk holding the appliance's state in dir.
 func knowTheAppliance(s *ui.Server, cert *x509.Certificate, dir string) {
-	s.DiskUse = func() (uint64, uint64, error) { return appliance.DiskUse(dir) }
+	s.DiskUse = func() (uint64, uint64, error) { return backupstore.DiskUse(dir) }
 	s.ApplianceMACs, s.OwnAddresses = ownMACs(), ownAddresses
 	s.CertificateNames = cert.DNSNames
 	for _, ip := range cert.IPAddresses {

@@ -185,6 +185,9 @@ type Server struct {
 	ConnectWorkload func(server string, ca []byte, token string) (*Workload, error)
 	// OpenStore reaches the backup targets clusters' etcd snapshots are in. Unset, over HTTPS.
 	OpenStore provisioner.OpenStore
+	// Volume is the backup volume, for the snapshots of clusters without a target. Unset, the
+	// appliance's.
+	Volume provisioner.BackupVolume
 	// NewClientset reaches the management cluster for what its controller-runtime client cannot
 	// read, the providers' logs a support bundle carries. Nil leaves bundles without them.
 	NewClientset func() (kubernetes.Interface, error)
@@ -389,6 +392,8 @@ func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/restores/{restore}/log", s.managed(s.showRestoreLog))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/backups/{backup}/log", s.managed(s.showBackupLog))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/certificates/ca", s.managed(s.ingressCA))
+	mux.HandleFunc("GET /api/removed-etcd-snapshots/{namespace}", s.managed(s.removedEtcdSnapshots))
+	mux.HandleFunc("DELETE /api/removed-etcd-snapshots/{namespace}/{name}", s.managed(s.deleteRemovedEtcdSnapshots))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/etcd-snapshots", s.managed(s.etcdSnapshots))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/etcd-snapshots", s.managed(s.takeEtcdSnapshot))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/etcd-defrag", s.managed(s.defragEtcd))

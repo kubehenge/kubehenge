@@ -116,7 +116,7 @@ A restore downloads and decrypts the snapshot on the appliance and checks it aga
 
 The module installs the Proxmox CSI plugin in the management cluster, from the workload add-on's chart and images. Its token holds `VM.Audit` and `VM.Config.Disk`, so it attaches and grows disks but deletes none. The storage class `kubehenge-management` keeps a released volume.
 
-The backup volume is the disk of a stopped VM, `kubehenge-backups`, outside the management pool. The VM has protection on, and a static volume binds its disk, so deleting the management VMs leaves it. A small store in `kubehenge-system` serves it to the appliance only, through the API server's service proxy, with a token from a Secret. The snapshots and exports on it are encrypted to an age key sealed with the state passphrase.
+The backup volume is the disk of a stopped VM, `kubehenge-backups`, outside the management pool. The VM has protection on, and a static volume binds its disk, so deleting the management VMs leaves it. A small store in `kubehenge-system` serves it with a token from a Secret. The appliance reaches it through a port-forward to its pod, and the controller over the network, which a NetworkPolicy opens to the controller's pods alone. The snapshots and exports on it are encrypted to an age key sealed with the state passphrase.
 
 ## ClusterClasses
 

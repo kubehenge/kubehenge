@@ -1,6 +1,6 @@
 //go:build unix
 
-package appliance
+package backupstore
 
 import (
 	"fmt"

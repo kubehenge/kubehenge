@@ -809,25 +809,28 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
   schema:
     openAPIV3Schema:
       type: object
+      default:
+        enabled: true
       description: >-
         Snapshots of the cluster's etcd, which holds every object of the cluster but its volumes'
-        data, on a schedule to one of the S3 targets an administrator set, beside the cluster's
-        Velero backups in an etcd folder of its own. Kubehenge's controller takes each snapshot
-        through the cluster's API server with a client certificate it signs for itself, encrypts
-        it with age to a key of the cluster's own in the <cluster>-backup-keys Secret, and stores
-        it with the credential typed into the interface for the cluster, or else the one for every
+        data, on a schedule. They go to one of the S3 targets an administrator set, beside the
+        cluster's Velero backups in an etcd folder of its own, or without a target to the
+        management cluster's backup volume. Kubehenge's controller takes each snapshot through the
+        cluster's API server with a client certificate it signs for itself, encrypts it with age to
+        a key of the cluster's own in the <cluster>-backup-keys Secret, and stores it, in a target
+        with the credential typed into the interface for the cluster, or else the one for every
         cluster; no key or credential enters the cluster. Restoring one brings back the cluster's
         objects as they were, for a cluster that lost its etcd quorum or had its objects deleted
         or damaged.
       properties:
         enabled:
           type: boolean
-          default: false
+          default: true
         target:
           type: string
           minLength: 1
           maxLength: 63
-          description: The administrator's target to store the snapshots in, by name.
+          description: The administrator's target to store the snapshots in, by name. Without one they go to the management cluster's backup volume.
         schedule:
           type: string
           minLength: 1
@@ -857,8 +860,8 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
             target. Switching it, or changing the schedule or keep while it is on, replaces the
             control-plane machines.
       x-kubernetes-validations:
-        - rule: "!self.enabled || has(self.target)"
-          message: etcd snapshots need a target.
+        - rule: "!has(self.distributionUpload) || !self.distributionUpload || has(self.target)"
+          message: The distribution's own upload needs a target, as the servers upload to a bucket.
         - rule: "!has(self.distributionUpload) || !self.distributionUpload || self.enabled"
           message: The distribution's own upload takes the target, schedule and keep of etcd snapshots, which are off.
 - name: podSecurity

@@ -1,6 +1,6 @@
 // Package backupstore keeps objects as files on a volume and serves them over HTTP to holders of a
 // token. It runs in the management cluster on the backup volume. The appliance reaches it through
-// the Kubernetes API's service proxy, and the controller through its Service.
+// a port-forward to its pod (Forward), and the controller through its Service.
 package backupstore
 
 import (
@@ -17,8 +17,7 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
-// TokenHeader carries the store's token. The API server's service proxy drops the authorisation header, so
-// the token travels in a header of its own.
+// TokenHeader carries the store's token.
 const TokenHeader = "X-Kubehenge-Store-Token" //nolint:gosec // a header's name
 
 // MetadataHeader carries an object's metadata as a JSON object.
@@ -31,6 +30,14 @@ const maxMetadata = 8 << 10
 type Server struct {
 	Dir   string
 	Token string
+	// DiskUse reads the bytes taken and free under Dir. Nil reads the file system's.
+	DiskUse func(string) (uint64, uint64, error)
+}
+
+// Room is the space on the volume: what is free to write, and its size.
+type Room struct {
+	Free int64 `json:"free"`
+	Size int64 `json:"size"`
 }
 
 // Entry is one object in a listing.
@@ -45,6 +52,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc("GET /list", s.authorised(s.list))
+	mux.HandleFunc("GET /room", s.authorised(s.room))
 	mux.HandleFunc("PUT /objects/{key...}", s.authorised(s.put))
 	mux.HandleFunc("GET /objects/{key...}", s.authorised(s.get))
 	mux.HandleFunc("HEAD /objects/{key...}", s.authorised(s.get))
@@ -150,6 +158,26 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 	raw, err := json.Marshal(entries)
 	if err != nil {
 		fail(w, fmt.Errorf("listing: %w", err))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(raw)
+}
+
+func (s *Server) room(w http.ResponseWriter, _ *http.Request) {
+	use := s.DiskUse
+	if use == nil {
+		use = DiskUse
+	}
+	used, free, err := use(s.Dir)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	//nolint:gosec // a file system's bytes fit an int64
+	raw, err := json.Marshal(Room{Free: int64(free), Size: int64(used + free)})
+	if err != nil {
+		fail(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

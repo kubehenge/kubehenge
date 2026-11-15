@@ -161,6 +161,9 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 	if _, err = runCluster(t, srv.URL, token, "delete", "web", "--yes"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = runCluster(t, srv.URL, token, "delete", "web", "--yes", "--delete-etcd-snapshots"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = runCluster(t, srv.URL, token, "machine", "delete", "web", "web-md-0-a"); err == nil {
 		t.Error("a machine was deleted without --yes")
 	}
@@ -192,6 +195,7 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 		`PATCH /api/clusters/clusters/web {"controlPlaneReplicas":5,"workerPools":{"md-0":4}}`,
 		`PATCH /api/clusters/clusters/web {"controlPlaneTimeouts":{"nodeDeletionTimeoutSeconds":0,"nodeDrainTimeoutSeconds":1800,"nodeVolumeDetachTimeoutSeconds":600},"pools":{"gpu":{"timeouts":{"nodeVolumeDetachTimeoutSeconds":90}},"md-0":{"timeouts":{"nodeDrainTimeoutSeconds":3600}}}}`,
 		`DELETE /api/clusters/clusters/web {"confirm":"web"}`,
+		`DELETE /api/clusters/clusters/web {"confirm":"web","deleteEtcdSnapshots":true}`,
 		"PUT /api/clusters/clusters/web/machines/web-cp-1/replacement",
 		"DELETE /api/clusters/clusters/web/machines/web-cp-1/replacement",
 		"DELETE /api/clusters/clusters/web/machines/web-md-0-a",
