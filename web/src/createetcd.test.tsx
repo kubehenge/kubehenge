@@ -137,6 +137,10 @@ describe("a new cluster's etcd snapshots", () => {
     });
     expect(Object.fromEntries(summary(form, bare))["etcd snapshots"]).toMatch(/to the backup volume/u);
     expect(pendingCredentials(form, bare)).toStrictEqual([]);
+    // Half a key typed for a bucket before is neither asked for nor stored.
+    const halfKey = filledForm(bare, { noSharedKey: true, backupKey: { accessKeyID: "AK", secretAccessKey: "" } });
+    expect(fieldProblems("Add-ons", halfKey, bare)).toStrictEqual({});
+    expect(pendingCredentials(halfKey, bare)).toStrictEqual([]);
   });
 
   it("take the backups' target when it is one of the offered", () => {
@@ -303,6 +307,7 @@ describe("the add-ons step", () => {
     expect(screen.getByText("No snapshots until a key for store is stored")).toBeInTheDocument();
     await user.selectOptions(target, "Backup volume");
     expect(target).toHaveDisplayValue("Backup volume");
+    expect(screen.queryByRole("option", { name: /no longer offered/u })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Access key ID")).not.toBeInTheDocument();
     expect(screen.queryByText(/No snapshots until a key/u)).not.toBeInTheDocument();
     await user.selectOptions(target, "store");

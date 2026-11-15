@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
+import { when } from "./backup-runs";
 import { scheduleText, volumeName, volumeTarget } from "./Backups";
 import {
   etcdFieldsOf,
@@ -82,6 +83,10 @@ const snapshot = {
   sha256: "a".repeat(64),
   size: 12 * 1024 * 1024,
 };
+
+// leading matches text that starts with s, its white space read as toHaveTextContent reads it.
+const leading = (s: string): RegExp =>
+  new RegExp(`^${s.replaceAll(/\s+/gu, " ").replaceAll(/[\\^$.*+?()[\]{}|]/gu, String.raw`\$&`)}`, "u");
 
 const view: ClusterEtcdSnapshots = {
   enabled: true,
@@ -349,13 +354,20 @@ describe("a cluster's etcd snapshots", () => {
       ...base,
       "GET /api/clusters/clusters/web/etcd-snapshots": { body: view },
       "POST /api/clusters/clusters/web/etcd-snapshots": { status: 202, body: { by: "dev@pve", at: taken } },
+      "GET /api/removed-etcd-snapshots/clusters": {
+        body: [{ namespace: "clusters", name: "old", keys: true, snapshots: [snapshot] }],
+      },
     });
     const user = userEvent.setup({ delay: null });
     render(<App />);
 
     await expect(screen.findByText("Every 6 hours from 00:00 (UTC), keeps 10, to store")).resolves.toBeInTheDocument();
+    await expect(screen.findByRole("button", { name: "Delete old's snapshots" })).resolves.toBeInTheDocument();
     expect(screen.getByText("Kept on").nextElementSibling).toHaveTextContent(/^store$/u);
-    expect(screen.getByText("Last taken").nextElementSibling).toHaveTextContent(/ ago\)$/u);
+    // A snapshot taken as planned shows its time alone, with no state word before it.
+    const lastTaken = screen.getByText("Last taken").nextElementSibling;
+    expect(lastTaken).toHaveTextContent(leading(`${when(snapshot.time)} (`));
+    expect(lastTaken).toHaveTextContent(/ ago\)$/u);
     expect(screen.getByRole("link", { name: `Download ${snapshot.name}` })).toHaveAttribute(
       "href",
       `/api/clusters/clusters/web/etcd-snapshots/${encodeURIComponent(snapshot.name)}`,
@@ -365,6 +377,18 @@ describe("a cluster's etcd snapshots", () => {
 
     await user.click(screen.getByRole("button", { name: "Take snapshot" }));
     await waitFor(() => expect(calls.map((c) => c.key)).toContain("POST /api/clusters/clusters/web/etcd-snapshots"));
+  });
+
+  it("say a failed try before the time of the last one taken", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/backups");
+    const failed = { ...view, condition: { ...view.condition, status: "False", reason: "Failed", message: "no room" } };
+    fakeServer({ ...base, "GET /api/clusters/clusters/web/etcd-snapshots": { body: failed } });
+    render(<App />);
+
+    await expect(screen.findByText("Last taken")).resolves.toBeInTheDocument();
+    expect(screen.getByText("Last taken").nextElementSibling).toHaveTextContent(
+      leading(`Failed ${when(snapshot.time)} (`),
+    );
   });
 
   it("say where RKE2's own snapshots go and how they come back", async () => {
