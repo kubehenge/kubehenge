@@ -623,9 +623,13 @@ func (run *restoreRun) fetch(ctx context.Context) error {
 		return err
 	}
 	if run.target.OnVolume() {
-		staged, err := run.checkedForNode(ctx, !run.scripts.Bumps)
-		if err != nil {
-			return err
+		var bump uint64
+		if !run.scripts.Bumps {
+			bump = etcdRevisionBump
+		}
+		staged, cerr := run.checkedForNode(ctx, bump)
+		if cerr != nil {
+			return cerr
 		}
 		defer func() { _ = os.Remove(staged.path) }()
 		if run.answers(ctx) {
@@ -670,12 +674,12 @@ func (run *restoreRun) sealedForNode(ctx context.Context, password string) (seal
 		}
 		plain = r
 	} else {
-		checked, err := run.checkedForNode(ctx, true)
+		checked, err := run.checkedForNode(ctx, etcdRevisionBump)
 		if err != nil {
 			return sealedSnapshot{}, err
 		}
 		remove = func() { _ = os.Remove(checked.path) }
-		f, err := os.Open(checked.path) //nolint:gosec // the controller's own file of the snapshot
+		f, err := os.Open(checked.path)
 		if err != nil {
 			remove()
 			return sealedSnapshot{}, fmt.Errorf("reading the snapshot: %w", err)
@@ -711,9 +715,9 @@ func (run *restoreRun) transcode(ctx context.Context, key, password string) (str
 type checkedSnapshot struct{ path, sum string }
 
 // checkedForNode keeps the snapshot in a file of ScratchDir, checked against the checksum it was
-// stored with and as etcd's database (checkedEtcdSnapshot), with etcd's checksum at its end. bump
-// moves its revision on, for the restores that keep it.
-func (run *restoreRun) checkedForNode(ctx context.Context, bump bool) (checkedSnapshot, error) {
+// stored with and as etcd's database (checkedEtcdSnapshot), with etcd's checksum at its end. A bump
+// above 0 moves its revision on, for the restores that keep it.
+func (run *restoreRun) checkedForNode(ctx context.Context, bump uint64) (checkedSnapshot, error) {
 	var path string
 	err := run.withSnapshot(ctx, func(r io.Reader) error {
 		var err error

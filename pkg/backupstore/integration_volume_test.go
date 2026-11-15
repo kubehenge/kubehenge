@@ -119,12 +119,15 @@ func checkStorePortOpen(t *testing.T, objects []*unstructured.Unstructured) {
 		}
 		rules, _, _ := unstructured.NestedSlice(o.Object, "spec", "ingress")
 		for _, r := range rules {
-			rule, _ := r.(map[string]any)
+			rule, ok := r.(map[string]any)
+			if !ok {
+				continue
+			}
 			ports, _, _ := unstructured.NestedSlice(rule, "ports")
 			_, narrowed := rule["from"]
 			if !narrowed && slices.ContainsFunc(ports, func(p any) bool {
-				port, _ := p.(map[string]any)
-				return fmt.Sprint(port["port"]) == strconv.Itoa(storePort)
+				port, isMap := p.(map[string]any)
+				return isMap && fmt.Sprint(port["port"]) == strconv.Itoa(storePort)
 			}) {
 				return
 			}

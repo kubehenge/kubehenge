@@ -426,10 +426,12 @@ func TestEtcdRestoreFromTheVolumeKeepsTheOthersStoppedPastTheReset(t *testing.T)
 			}
 			if tc.stopFail {
 				f.guests.fail = func(vmid int64, step string) error {
-					if step == stepStop && vmid == 103 {
-						if stops++; stops == 2 {
-							return errors.New("the guest agent timed out")
-						}
+					if step != stepStop || vmid != 103 {
+						return nil
+					}
+					stops++
+					if stops == 2 {
+						return errors.New("the guest agent timed out")
 					}
 					return nil
 				}

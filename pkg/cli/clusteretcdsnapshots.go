@@ -131,14 +131,17 @@ snapshots open with. They cannot be brought back.`,
 				return errNoRemovedNamespace
 			}
 			path := "/api/removed-etcd-snapshots/" + url.PathEscape(o.namespace) + "/" + url.PathEscape(args[0])
-			body, err := o.call(cmd.Context(), http.MethodDelete, path, map[string]string{"confirm": args[0]})
+			req := struct {
+				Confirm string `json:"confirm"`
+			}{args[0]}
+			body, err := o.call(cmd.Context(), http.MethodDelete, path, req)
 			if err != nil {
 				return err
 			}
 			var a struct {
 				Deleted int `json:"deleted"`
 			}
-			if err := json.Unmarshal(body, &a); err != nil {
+			if err = json.Unmarshal(body, &a); err != nil {
 				return fmt.Errorf("reading the interface's answer: %w", err)
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "removed cluster %s: deleted %d snapshots and its backup keys\n", args[0], a.Deleted)

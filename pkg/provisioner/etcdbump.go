@@ -42,14 +42,14 @@ const snapshotFileMode = 0o600
 // and a node's kube-proxy keeps the Services' endpoints from before. With it, every watch from
 // before ends as compacted, and its client lists again. The file is the caller's to remove.
 func bumpedEtcdSnapshot(dir string, r io.Reader) (string, error) {
-	return checkedEtcdSnapshot(dir, r, true)
+	return checkedEtcdSnapshot(dir, r, etcdRevisionBump)
 }
 
 // checkedEtcdSnapshot writes the snapshot read from r into a new file in dir, without the checksum
 // etcd appends, and checks it as `etcdutl snapshot status` does: the checksum, and every page of
-// the database. bump moves its revision on as bumpedEtcdSnapshot says. The file is the caller's to
-// remove.
-func checkedEtcdSnapshot(dir string, r io.Reader, bump bool) (string, error) {
+// the database. A bump above 0 moves its revision on by that much, as bumpedEtcdSnapshot says.
+// The file is the caller's to remove.
+func checkedEtcdSnapshot(dir string, r io.Reader, bump uint64) (string, error) {
 	f, err := os.CreateTemp(dir, "etcd-snapshot-*.db")
 	if err != nil {
 		return "", fmt.Errorf("making room for the snapshot: %w", err)
@@ -71,8 +71,8 @@ func checkedEtcdSnapshot(dir string, r io.Reader, bump bool) (string, error) {
 	if err = checkEtcdDatabase(path); err != nil {
 		return "", err
 	}
-	if bump {
-		if err = bumpEtcdRevision(path, etcdRevisionBump); err != nil {
+	if bump > 0 {
+		if err = bumpEtcdRevision(path, bump); err != nil {
 			return "", err
 		}
 	}
@@ -93,7 +93,7 @@ func checkEtcdDatabase(path string) (err error) {
 		}
 		err = errors.Join(err, db.Close())
 	}()
-	return db.View(func(tx *bolt.Tx) error {
+	err = db.View(func(tx *bolt.Tx) error {
 		if tx.Bucket(etcdKeyBucket) == nil || tx.Bucket(etcdMetaBucket) == nil {
 			return errors.New("the snapshot is no etcd database")
 		}
@@ -102,6 +102,10 @@ func checkEtcdDatabase(path string) (err error) {
 		}
 		return nil
 	})
+	if err != nil {
+		return fmt.Errorf("checking the snapshot: %w", err)
+	}
+	return nil
 }
 
 // stripEtcdChecksum checks the SHA-256 etcd appends to a snapshot and takes it off, leaving the

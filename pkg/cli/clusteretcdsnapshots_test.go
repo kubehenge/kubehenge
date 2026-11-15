@@ -70,7 +70,7 @@ func TestClusterRemovedEtcdSnapshots(t *testing.T) {
 		"without --yes":       {"removed-etcd-snapshots", "delete", "old", "-n", "clusters"},
 		"without a namespace": {"removed-etcd-snapshots", "delete", "old", "--yes"},
 	} {
-		if _, err := runCluster(t, srv.URL, token, args...); err == nil {
+		if _, refused := runCluster(t, srv.URL, token, args...); refused == nil {
 			t.Errorf("deleted %s", name)
 		}
 	}

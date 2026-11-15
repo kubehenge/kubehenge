@@ -136,7 +136,7 @@ func TestCheckedStaysOnTheNetwork(t *testing.T) {
 func TestAnswered(t *testing.T) {
 	t.Parallel()
 	// A port just closed refuses, with the error each platform reports for it.
-	l, err := net.Listen("tcp4", "127.0.0.1:0")
+	l, err := new(net.ListenConfig).Listen(t.Context(), "tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestAnswered(t *testing.T) {
 	if err = l.Close(); err != nil {
 		t.Fatal(err)
 	}
-	_, refused := net.Dial("tcp4", closed)
+	_, refused := new(net.Dialer).DialContext(t.Context(), "tcp4", closed)
 	timeout := &net.OpError{Op: "dial", Net: "tcp4", Err: errors.New("i/o timeout")}
 	if !answered(nil) || !answered(refused) || answered(timeout) || answered(context.DeadlineExceeded) {
 		t.Fatal("answered tells a refused or made connection from one that reached no host wrongly")

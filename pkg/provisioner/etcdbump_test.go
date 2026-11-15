@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -146,8 +147,8 @@ func TestCheckedEtcdSnapshotRefusesADamagedDatabase(t *testing.T) {
 		binary.BigEndian.PutUint16(db[p*pageSize+flagsAt:], 0xffff)
 	}
 	sum := sha256.Sum256(db)
-	damaged := append(db, sum[:]...)
-	for _, bump := range []bool{false, true} {
+	damaged := slices.Concat(db, sum[:])
+	for _, bump := range []uint64{0, etcdRevisionBump} {
 		dir := t.TempDir()
 		if _, err := checkedEtcdSnapshot(dir, bytes.NewReader(damaged), bump); err == nil || !strings.Contains(err.Error(), "damaged") {
 			t.Errorf("bump %v: err = %v, want it damaged", bump, err)
@@ -175,7 +176,7 @@ func TestCheckedEtcdSnapshotRefusesAPageFreedInUse(t *testing.T) {
 		binary.LittleEndian.PutUint64(f[idsAt:], root)
 	}
 	sum := sha256.Sum256(db)
-	if _, err := checkedEtcdSnapshot(t.TempDir(), bytes.NewReader(append(db, sum[:]...)), false); err == nil || !strings.Contains(err.Error(), "damaged") {
+	if _, err := checkedEtcdSnapshot(t.TempDir(), bytes.NewReader(slices.Concat(db, sum[:])), 0); err == nil || !strings.Contains(err.Error(), "damaged") {
 		t.Errorf("err = %v, want it damaged", err)
 	}
 }

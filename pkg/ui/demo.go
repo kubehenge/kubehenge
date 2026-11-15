@@ -357,7 +357,7 @@ func (demoVolume) Open(context.Context, string) (provisioner.VolumeStore, error)
 
 func (demoVolume) Done(context.Context, string) error { return nil }
 
-func (demoVolume) Room(context.Context) (free, size int64, err error) {
+func (demoVolume) Room(context.Context) (int64, int64, error) {
 	return demoVolumeSize, demoVolumeSize, nil
 }
 
