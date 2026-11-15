@@ -87,6 +87,9 @@ func (a *Appliance) applyPlanned(ctx context.Context, j *Job, env []string, t *p
 		j.Add(fmt.Sprintf("etcd timed out a request, as slow storage makes it do. Running again in %s, attempt %d of %d", pause, attempt+1, applyAttempts))
 		select {
 		case <-ctx.Done():
+			if errors.Is(context.Cause(ctx), ErrServiceStopped) {
+				return fmt.Errorf("tofu apply: interrupted as %w, so run it again: %w", ErrServiceStopped, err)
+			}
 			return err
 		case <-time.After(pause):
 		}

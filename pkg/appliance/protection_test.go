@@ -190,6 +190,34 @@ func TestApplyRunsAgainWhileEtcdTimesOut(t *testing.T) {
 	}
 }
 
+// A service stop in the pause before the next run ends the job as a stop mid-run does.
+func TestStopDuringTheEtcdPauseSaysRunItAgain(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	a.stallPause = time.Hour
+	writePlan(t, a, change{nodeVMAddress + "[0]", []string{"update"}, 1001})
+	if err := os.WriteFile(filepath.Join(a.Dir, "stalls"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Apply(settings("stall"), "correct horse battery staple", ticket(), func(context.Context, []byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	for j := a.Current(); j == nil || !slices.ContainsFunc(j.Log, func(l string) bool { return strings.Contains(l, "Running again in") }); j = a.Current() {
+		if ctx.Err() != nil {
+			t.Fatalf("the job never paused: %+v", j)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := a.Stop(ctx); err != nil {
+		t.Fatalf("Stop = %v", err)
+	}
+	if j := waitFor(t, a); j.State != StateFailed || !strings.Contains(j.Error, "interrupted as the appliance's service stopped") || !strings.Contains(j.Error, "so run it again") {
+		t.Fatalf("the job once stopped = %+v", j)
+	}
+}
+
 func TestInPlaceChangeAppliesWithProtectionOn(t *testing.T) {
 	t.Parallel()
 	a, _ := newAppliance(t)
