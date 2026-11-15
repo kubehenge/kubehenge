@@ -251,9 +251,9 @@ func checkReceiver(t *testing.T, p *corev1.Pod, file, node string) {
 	}
 }
 
-// A cluster whose API server does not answer cannot get the snapshot: the restore fails before
-// etcd stops, and its status and event say why and what to do.
-func TestEtcdRestoreFromTheVolumeNeedsTheAPIServer(t *testing.T) {
+// A controller that cannot reach workload clusters, or has no receiver image, refuses a restore
+// from the volume before etcd stops, and its status and event say what to do.
+func TestEtcdRestoreFromTheVolumeNeedsAWayToTheNode(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		workloads *handOverAPI
@@ -261,10 +261,6 @@ func TestEtcdRestoreFromTheVolumeNeedsTheAPIServer(t *testing.T) {
 	}{
 		"no workload clients": {nil, receiverImage},
 		"no receiver image":   {newFakeWorkloads(t, nil), ""},
-		"no kubeconfig":       {&handOverAPI{found: false}, receiverImage},
-		"API server down": {newFakeWorkloads(t, &interceptor.Funcs{Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
-			return errors.New("dial tcp 10.0.0.10:6443: connect: connection refused")
-		}}), receiverImage},
 	} {
 		f, _ := volumeRestoreFixture(t, templates.Kubeadm)
 		f.r.Workloads, f.r.ReceiverImage = nil, tc.image
@@ -276,22 +272,100 @@ func TestEtcdRestoreFromTheVolumeNeedsTheAPIServer(t *testing.T) {
 		if st.Phase != RestoreFailed || !strings.Contains(st.Message, "restore by hand") {
 			t.Errorf("%s: status %+v", name, st)
 		}
-		checkEtcdUntouched(t, f, name)
+		if runs := f.guests.runs(); slices.ContainsFunc(runs, func(r string) bool { return strings.HasSuffix(r, " stop") }) {
+			t.Errorf("%s: etcd was stopped without a way for the snapshot: %v", name, runs)
+		}
+		checkFailedEvent(t, f, name)
 	}
 }
 
-func checkEtcdUntouched(t *testing.T, f *restoreFixture, name string) {
-	t.Helper()
-	if runs := f.guests.runs(); slices.ContainsFunc(runs, func(r string) bool { return strings.HasSuffix(r, " stop") || strings.HasSuffix(r, " restore") }) {
-		t.Errorf("%s: etcd was stopped without the snapshot: %v", name, runs)
+// A cluster that lost its quorum, whose API server does not answer, restores from the volume: the
+// first node comes up alone on its own data, its API server answers, and the snapshot streams in.
+// Then the restore runs as from a bucket, and the other control planes are replaced.
+func TestEtcdRestoreFromTheVolumeAfterTheQuorumIsLost(t *testing.T) {
+	t.Parallel()
+	for _, d := range []templates.Distribution{templates.Kubeadm, templates.RKE2, templates.K3s} {
+		f, _ := volumeRestoreFixture(t, d)
+		w := newFakeWorkloads(t, nil)
+		f.r.Workloads = w
+		f.apis.down = 1 << 20
+		f.guests.seen = func(_ int64, step, _ string) {
+			if step == stepStart {
+				f.apis.mu.Lock()
+				f.apis.down = 0
+				f.apis.mu.Unlock()
+			}
+		}
+		f.reconcile()
+		st := f.status()
+		if st.Phase != RestoreSucceeded || len(st.Replaced) != 2 {
+			t.Fatalf("%s: status %+v", d, st)
+		}
+		want := []string{"101 stop", "102 stop", "103 stop", "101 reset", "101 start", "101 fetch", "101 stop", "101 start"}
+		if runs := f.guests.runs(); !isSubsequence(want, runs) {
+			t.Errorf("%s: ran %v, want in order %v", d, runs, want)
+		}
+		if left := podsLeft(t, w); len(left) != 0 {
+			t.Errorf("%s: left %d pods", d, len(left))
+		}
 	}
+}
+
+// isSubsequence tells whether want comes in got, in order.
+func isSubsequence(want, got []string) bool {
+	i := 0
+	for _, g := range got {
+		if i < len(want) && g == want[i] {
+			i++
+		}
+	}
+	return i == len(want)
+}
+
+func checkFailedEvent(t *testing.T, f *restoreFixture, name string) {
+	t.Helper()
 	if e := f.event(); !strings.Contains(e, "EtcdRestoreFailed") {
 		t.Errorf("%s: event %q", name, e)
 	}
 }
 
+// checkRecovered holds a restore that failed after the first node came up alone to the restore
+// not run, and the other nodes started again.
+func checkRecovered(t *testing.T, f *restoreFixture, name string) {
+	t.Helper()
+	runs := f.guests.runs()
+	if slices.ContainsFunc(runs, func(r string) bool { return strings.HasSuffix(r, " restore") }) {
+		t.Errorf("%s: etcd was restored without the snapshot: %v", name, runs)
+	}
+	if !slices.ContainsFunc(runs, func(r string) bool { return strings.HasSuffix(r, " start as it was") }) {
+		t.Errorf("%s: the control plane was not started again: %v", name, runs)
+	}
+	checkFailedEvent(t, f, name)
+}
+
+// An API server that never answers, or a cluster without a kubeconfig, fails the restore once the
+// first node was to come up alone, and the control plane is started again.
+func TestEtcdRestoreFromTheVolumeWithoutAnAPIServer(t *testing.T) {
+	t.Parallel()
+	for name, w := range map[string]*handOverAPI{
+		"no kubeconfig": {found: false},
+		"API server down": newFakeWorkloads(t, &interceptor.Funcs{Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
+			return errors.New("dial tcp 10.0.0.10:6443: connect: connection refused")
+		}}),
+	} {
+		f, _ := volumeRestoreFixture(t, templates.Kubeadm)
+		f.r.Workloads = w
+		f.reconcile()
+		if st := f.status(); st.Phase != RestoreFailed || !strings.Contains(st.Message, "restore by hand") {
+			t.Errorf("%s: status %+v", name, st)
+		}
+		checkRecovered(t, f, name)
+	}
+}
+
 // A node without room for the snapshot refuses it before any of it is sent, and a stream cut short
-// fails its checksum. Either way etcd keeps running, and the pod goes.
+// fails its checksum. Either way etcd is not restored, the control plane starts again, and the pod
+// goes.
 func TestEtcdRestoreFromTheVolumeRefusesWhatTheNodeCannotTake(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -311,7 +385,7 @@ func TestEtcdRestoreFromTheVolumeRefusesWhatTheNodeCannotTake(t *testing.T) {
 		if st.Phase != RestoreFailed || !strings.Contains(st.Message, tc.want) {
 			t.Errorf("%s: status %+v", name, st)
 		}
-		checkEtcdUntouched(t, f, name)
+		checkRecovered(t, f, name)
 		if left := podsLeft(t, w); len(left) != 0 {
 			t.Errorf("%s: left %d pods", name, len(left))
 		}

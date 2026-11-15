@@ -49,6 +49,28 @@ var errVolumeUnreached = errors.New("the controller reaches no workload API serv
 // cluster's API server, the snapshot's way to the node, does not answer.
 var ErrHandOverAPIDown = errors.New("the cluster's API server does not answer, and a snapshot on the backup volume reaches the node only through it. Download the snapshot and restore by hand, or restore from a bucket target")
 
+// handOverAlone gets the snapshot to the first node whether or not the cluster kept its quorum and
+// its API server answers. It stops every control-plane node, resets etcd on the first to a cluster
+// of that node alone, which keeps the node's own data, and starts it, so its API server answers.
+// Then it streams the snapshot in, for the restore to replace that data. Should anything fail from
+// here on, the recovery finds etcd reset on the first node and replaces the others, as after a
+// reset.
+func (run *restoreRun) handOverAlone(ctx context.Context, password string) error {
+	if err := run.stop(ctx); err != nil {
+		return err
+	}
+	if err := run.on(ctx, run.nodes[0], "resetting etcd to this node alone", run.scripts.Reset); err != nil {
+		return err
+	}
+	if err := run.on(ctx, run.nodes[0], "starting the control plane alone", run.scripts.Start); err != nil {
+		return err
+	}
+	if err := run.answer(ctx); err != nil {
+		return err
+	}
+	return run.handOver(ctx, password)
+}
+
 // handOver streams the snapshot, encrypted with password, to the first node, and has the node check
 // and decrypt it. The pod and the file go afterwards, whatever happened.
 func (run *restoreRun) handOver(ctx context.Context, password string) error {

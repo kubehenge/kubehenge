@@ -603,7 +603,7 @@ func (run *restoreRun) fetch(ctx context.Context) error {
 		return err
 	}
 	if run.target.OnVolume() {
-		return run.handOver(ctx, password)
+		return run.handOverAlone(ctx, password)
 	}
 	id := make([]byte, restoreObjectID)
 	if _, err = rand.Read(id); err != nil {

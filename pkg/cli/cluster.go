@@ -124,7 +124,7 @@ decide what it may do, as they do for a user signed in to the interface.`,
 
 	cmd.AddCommand(slices.Concat([]*cobra.Command{
 		list, get, kubeconfig, o.createCommand(), o.exportCommand(), scale, o.upgradeCommand(), o.acceptUpgradeCommand(), o.timeoutsCommand(), deleteCmd,
-		o.poolCommand(), o.updateCommand(), o.machineCommand(), o.etcdCommand(),
+		o.poolCommand(), o.updateCommand(), o.machineCommand(), o.etcdCommand(), o.etcdSnapshotsCommand(),
 	}, o.addonCommands())...)
 	return cmd
 }
@@ -787,6 +787,21 @@ func (o *clusterOptions) clusterPath(ctx context.Context, name string) (string, 
 // call sends a request to the interface as the token's user and returns the answer's body, or the
 // interface's error.
 func (o *clusterOptions) call(ctx context.Context, method, path string, body any) ([]byte, error) {
+	res, err := o.open(ctx, method, path, body)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = res.Body.Close() }()
+	answer, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading the interface's answer: %w", err)
+	}
+	return answer, nil
+}
+
+// open sends a request and returns the answer, its body unread, once it says the request went
+// through. The caller closes the body.
+func (o *clusterOptions) open(ctx context.Context, method, path string, body any) (*http.Response, error) {
 	if o.url == "" {
 		return nil, errors.New("give the interface's address with --url or KUBEHENGE_URL")
 	}
@@ -817,12 +832,12 @@ func (o *clusterOptions) call(ctx context.Context, method, path string, body any
 	if err != nil {
 		return nil, fmt.Errorf("reaching the interface: %w", err)
 	}
-	defer func() { _ = res.Body.Close() }()
-	answer, err := io.ReadAll(res.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading the interface's answer: %w", err)
-	}
 	if res.StatusCode >= http.StatusBadRequest {
+		defer func() { _ = res.Body.Close() }()
+		answer, err := io.ReadAll(res.Body)
+		if err != nil {
+			return nil, fmt.Errorf("reading the interface's answer: %w", err)
+		}
 		var e struct {
 			Error string `json:"error"`
 		}
@@ -831,7 +846,7 @@ func (o *clusterOptions) call(ctx context.Context, method, path string, body any
 		}
 		return nil, fmt.Errorf("the interface answered %s", res.Status)
 	}
-	return answer, nil
+	return res, nil
 }
 
 func (o *clusterOptions) httpClient() (*http.Client, error) {
