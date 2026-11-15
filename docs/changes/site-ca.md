@@ -12,7 +12,8 @@
 - The interface accepts and refuses the same certificate bundles as the server.
 - A cluster's certificate bundles are stored as the certificates alone, also from kubectl and GitOps. Keep that form in Git for Argo CD ([clusters.md](clusters.md#authorities)).
 - The proxy and chart mirror authorities follow the same layout rule, up to 256 KiB, and are stored as the certificates alone.
+- A cluster's pod and service ranges are refused if changed after it is created, through the interface, kubectl and GitOps alike.
 
 ### Fixed
 
-- A cluster replaced with a manifest that names no pod or service ranges keeps its own. Before, a k3s cluster's nodes were replaced and other distributions' new nodes took their defaults.
+- A patch or `kubectl edit` that drops a cluster's pod or service ranges keeps its own, instead of clearing them.

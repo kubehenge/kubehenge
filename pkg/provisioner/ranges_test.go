@@ -10,6 +10,7 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -227,8 +228,33 @@ func TestValidatorChecksTheRangesOfNewClusters(t *testing.T) {
 	if _, err := v.ValidateCreate(context.Background(), c); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "overlaps the nodes' network") {
 		t.Errorf("a new cluster's pods over its nodes: %v", err)
 	}
-	// A running cluster's ranges are what they are. Changing them is Cluster API's to refuse.
+	// A running cluster's ranges are what they are: never checked again, and never changed.
 	if _, err := v.ValidateUpdate(context.Background(), c, c); err != nil && strings.Contains(err.Error(), "overlaps the nodes' network") {
 		t.Errorf("a running cluster held to its ranges again: %v", err)
+	}
+	running := networkCluster("10.0.0.1", 24)
+	running.Spec.ClusterNetwork.Pods.CIDRBlocks = []string{"10.42.0.0/16"}
+	running.Spec.ClusterNetwork.Services.CIDRBlocks = []string{"10.43.0.0/16"}
+	for name, tc := range map[string]struct {
+		change func(*clusterv1.Cluster)
+		fields []string
+	}{
+		"a new pod range":                     {func(c *clusterv1.Cluster) { c.Spec.ClusterNetwork.Pods.CIDRBlocks = []string{"172.20.0.0/16"} }, []string{"spec.clusterNetwork.pods.cidrBlocks"}},
+		"services onto the nodes' network":    {func(c *clusterv1.Cluster) { c.Spec.ClusterNetwork.Services.CIDRBlocks = []string{"10.0.0.0/24"} }, []string{"spec.clusterNetwork.services.cidrBlocks"}},
+		"both cleared":                        {func(c *clusterv1.Cluster) { c.Spec.ClusterNetwork = clusterv1.ClusterNetwork{} }, []string{"spec.clusterNetwork.pods.cidrBlocks", "spec.clusterNetwork.services.cidrBlocks"}},
+		"another worker, ranges as they were": {func(c *clusterv1.Cluster) { c.Spec.Topology.Workers.MachineDeployments[0].Replicas = new(int32(2)) }, nil},
+	} {
+		changed := running.DeepCopy()
+		tc.change(changed)
+		errs := validateRanges(running, changed, nil)
+		if len(errs) != len(tc.fields) {
+			t.Errorf("%s: %v, want refusals of %v", name, errs, tc.fields)
+			continue
+		}
+		for i, e := range errs {
+			if e.Field != tc.fields[i] || e.Type != field.ErrorTypeForbidden || e.Detail != "set when the cluster is created, and cannot change" {
+				t.Errorf("%s: %v, want %s refused as set on creation", name, e, tc.fields[i])
+			}
+		}
 	}
 }

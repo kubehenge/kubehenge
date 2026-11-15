@@ -2071,7 +2071,8 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
   - The ClusterClasses stay in `kubehenge-system`, which `topology.classRef.namespace` names. Every namespace therefore uses the same ones.
 - **Ranges** come from `spec.clusterNetwork`. Without it, Kubehenge picks them as the interface does ([Network](#network)).
   - Kubehenge refuses to create a cluster whose ranges overlap its nodes' network.
-  - An update that leaves them out, such as a `kubectl replace` of the manifest without them, keeps the cluster's.
+  - They are set when the cluster is created. Kubehenge refuses a change to them later.
+  - An update that leaves them out, such as `kubectl edit` deleting them or a merge patch setting `clusterNetwork` to null, keeps the cluster's.
 
 ### Pools and timeouts
 

@@ -56,4 +56,13 @@ func TestProxyAndChartMirrorAuthoritiesAreSavedAsCertificatesAlone(t *testing.T)
 	if err := refused.Validate(); err == nil || refused.Proxy.CABundle != damaged || refused.ChartRepositories.CABundle != damaged {
 		t.Errorf("a damaged authority: %v, proxy %q, chart mirror %q, want it refused and left as given", err, refused.Proxy.CABundle, refused.ChartRepositories.CABundle)
 	}
+	// Without a mirror the chart authority has one problem, whatever its text, and stays as given.
+	for _, bundle := range []string{damaged, messy} {
+		var p problems
+		alone := &ChartRepositories{CABundle: bundle}
+		alone.check(&p)
+		if err := p.err(); err == nil || err.Error() != "Chart mirror certificate authority: needs a mirror" || alone.CABundle != bundle {
+			t.Errorf("an authority without a mirror: %v, kept as given %v, want needs a mirror alone", err, alone.CABundle == bundle)
+		}
+	}
 }

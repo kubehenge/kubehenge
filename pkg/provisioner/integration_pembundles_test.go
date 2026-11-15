@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -81,37 +83,54 @@ func TestIntegrationHandKeptBundlesAreStoredAsCertificatesAlone(t *testing.T) { 
 	}
 }
 
-// TestIntegrationAReplacedClusterKeepsItsRanges replaces a cluster with the manifest it was created
-// from, as kubectl replace and a GitOps sync that replaces do. The manifest names no ranges, and the
-// cluster keeps the ones Kubehenge gave it, so its spec and generation stay as they were.
-func TestIntegrationAReplacedClusterKeepsItsRanges(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
+// TestIntegrationAClustersRangesAreSetOnCreation sends merge patches, as kubectl patch and edit do,
+// to a running cluster. One that leaves the ranges out keeps the ones Kubehenge gave it, with its
+// spec and generation as they were. One that changes a range, or moves it onto the nodes' network,
+// is refused naming the field. One that changes something else goes through.
+func TestIntegrationAClustersRangesAreSetOnCreation(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
 	api, _ := startClusterAPI(t, "testdata/clusterapi-values.yaml")
 	c := api.Client
 	ctx := context.Background()
 	integration.ApplyClassTemplates(t, c, classNamespace, "kubehenge-k3s", templatesKey)
 	integration.WaitReconciled(t, c, classNamespace, "kubehenge-k3s")
-	// A copy, since Create fills in what it sends. clusterOf orders the variables anew on each call.
-	manifest := clusterOf("kubehenge-k3s", "replaced", 30, nil)
-	if err := c.Create(ctx, manifest.DeepCopy()); err != nil {
+	if err := c.Create(ctx, clusterOf("kubehenge-k3s", "ranges", 30, nil)); err != nil {
 		t.Fatal(err)
 	}
-	key := client.ObjectKey{Namespace: "team-a", Name: "replaced"}
-	before := &clusterv1.Cluster{}
-	if err := c.Get(ctx, key, before); err != nil {
-		t.Fatal(err)
+	key := client.ObjectKey{Namespace: "team-a", Name: "ranges"}
+	get := func() *clusterv1.Cluster {
+		t.Helper()
+		got := &clusterv1.Cluster{}
+		if err := c.Get(ctx, key, got); err != nil {
+			t.Fatal(err)
+		}
+		return got
 	}
+	before := get()
 	if len(before.Spec.ClusterNetwork.Pods.CIDRBlocks) == 0 || len(before.Spec.ClusterNetwork.Services.CIDRBlocks) == 0 {
 		t.Fatalf("created with ranges %+v, want the ones Kubehenge gives", before.Spec.ClusterNetwork)
 	}
-	manifest.ResourceVersion = before.ResourceVersion
-	if err := c.Update(ctx, manifest); err != nil {
-		t.Fatalf("replacing the cluster with its manifest: %v", err)
+	patch := func(body string) error {
+		return c.Patch(ctx, get(), client.RawPatch(types.MergePatchType, []byte(body)))
 	}
-	after := &clusterv1.Cluster{}
-	if err := c.Get(ctx, key, after); err != nil {
-		t.Fatal(err)
+	if err := patch(`{"spec":{"clusterNetwork":null}}`); err != nil {
+		t.Fatalf("a patch that drops the ranges: %v", err)
 	}
-	if rangesString(after) != rangesString(before) || after.Generation != before.Generation {
-		t.Errorf("after the replace: ranges %s, generation %d, want %s and %d", rangesString(after), after.Generation, rangesString(before), before.Generation)
+	if after := get(); rangesString(after) != rangesString(before) || after.Generation != before.Generation {
+		t.Errorf("after a patch that drops the ranges: %s, generation %d, want %s and %d", rangesString(after), after.Generation, rangesString(before), before.Generation)
+	}
+	for name, tc := range map[string]struct{ body, field string }{
+		"a new pod range":                  {`{"spec":{"clusterNetwork":{"pods":{"cidrBlocks":["172.20.0.0/16"]}}}}`, "spec.clusterNetwork.pods.cidrBlocks"},
+		"services onto the nodes' network": {`{"spec":{"clusterNetwork":{"services":{"cidrBlocks":["10.0.30.0/24"]}}}}`, "spec.clusterNetwork.services.cidrBlocks"},
+	} {
+		err := patch(tc.body)
+		if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), tc.field+": Forbidden: set when the cluster is created, and cannot change") {
+			t.Errorf("%s: %v, want %s refused as set on creation", name, err, tc.field)
+		}
+	}
+	if err := patch(`{"spec":{"topology":{"controlPlane":{"replicas":3}}}}`); err != nil {
+		t.Errorf("a change beside the ranges: %v", err)
+	}
+	if after := get(); rangesString(after) != rangesString(before) {
+		t.Errorf("ranges after the refused patches: %s, want %s", rangesString(after), rangesString(before))
 	}
 }
