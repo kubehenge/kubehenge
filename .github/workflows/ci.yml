@@ -70,7 +70,8 @@ jobs:
             ~/.cache/uv
           key: >-
             ci-${{ matrix.cache }}-${{
-              hashFiles('go.sum', 'web/package-lock.json', 'scripts/lint/uv.lock') }}
+              hashFiles('go.sum', 'web/package-lock.json', 'scripts/lint/*.lock',
+                'scripts/lint/*.json') }}
           restore-keys: ci-${{ matrix.cache }}-
       # The tools by scripts/tools.sh's hash and the list named, downloaded only on a miss. Only
       # main saves, as above, and no job that publishes restores it.
