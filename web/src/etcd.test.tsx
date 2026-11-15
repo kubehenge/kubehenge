@@ -354,7 +354,8 @@ describe("a cluster's etcd snapshots", () => {
     render(<App />);
 
     await expect(screen.findByText("Every 6 hours from 00:00 (UTC), keeps 10, to store")).resolves.toBeInTheDocument();
-    expect(screen.getByText("Last snapshot").nextElementSibling).toHaveTextContent(/^Taken/u);
+    expect(screen.getByText("Kept on").nextElementSibling).toHaveTextContent(/^store$/u);
+    expect(screen.getByText("Last taken").nextElementSibling).toHaveTextContent(/ ago\)$/u);
     expect(screen.getByRole("link", { name: `Download ${snapshot.name}` })).toHaveAttribute(
       "href",
       `/api/clusters/clusters/web/etcd-snapshots/${encodeURIComponent(snapshot.name)}`,

@@ -1045,6 +1045,15 @@ export interface EtcdSnapshot {
   storedSize?: number;
 }
 
+/** A removed cluster whose etcd snapshots the backup volume still keeps. */
+export interface RemovedCluster {
+  namespace: string;
+  name: string;
+  snapshots: EtcdSnapshot[];
+  /** Set while the cluster's backup keys, which the snapshots open with, are kept. */
+  keys: boolean;
+}
+
 /** How the management cluster's etcd is backed up. */
 export interface ManagementBackupSettings {
   target: string;

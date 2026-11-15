@@ -16,6 +16,7 @@ import {
 } from "./Backups";
 import type { OptionRow } from "./ClusterOptions";
 import { CredentialField } from "./CredentialField";
+import { RemovedSnapshots } from "./RemovedSnapshots";
 import type { Cluster, ClusterEtcdSnapshots, EtcdRestorePlan, EtcdRestoreStatus, EtcdSnapshot } from "./types";
 import {
   Detail,
@@ -467,6 +468,8 @@ export function EtcdSnapshotsView({
         <SnapshotsTable cluster={c} view={v} noRestore={noRestore} onRestore={setRestoring} />
       )}
 
+      <RemovedSnapshots namespace={c.namespace} />
+
       {restoring !== undefined && (
         <EtcdRestoreDialog
           cluster={c}
@@ -490,7 +493,7 @@ function SnapshotsSummary({ cluster: c, view: v }: { cluster: Cluster; view: Clu
   const s = snapshotState(v);
   return (
     <dl className="summary">
-      <dt>Target</dt>
+      <dt>Kept on</dt>
       <dd>{filled(v.target) ? v.target : volumeName}</dd>
       <dt>Schedule</dt>
       <dd>{etcdSnapshotsText({ ...etcdSnapshotsOf(c.variables["etcdSnapshots"]), distributionUpload: false })}</dd>
@@ -500,12 +503,12 @@ function SnapshotsSummary({ cluster: c, view: v }: { cluster: Cluster; view: Clu
           <dd>In {c.distribution}-etcd, same schedule in UTC, restored by hand</dd>
         </>
       )}
-      <dt>Last snapshot</dt>
+      <dt>Last taken</dt>
       <dd>
-        <Status state={s.state} text={s.text} />
+        {v.last === undefined || s.state === "error" ? <Status state={s.state} text={s.text} /> : null}
         {v.last !== undefined && (
-          <span className="muted">
-            {" "}
+          <span className={s.state === "error" ? "muted" : undefined}>
+            {s.state === "error" ? " " : ""}
             {when(v.last.time)} ({age(v.last.time)} ago)
           </span>
         )}

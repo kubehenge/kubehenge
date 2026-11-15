@@ -474,7 +474,7 @@ describe("clusters", () => {
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "Delete" }));
     const dialog = screen.getByRole("dialog", { name: "Delete cluster web" });
-    const drop = within(dialog).getByRole("checkbox", { name: "Delete its etcd snapshots on the backup volume" });
+    const drop = within(dialog).getByRole("checkbox", { name: "Delete volume snapshots" });
     expect(drop).not.toBeChecked();
     await user.click(drop);
     await user.type(within(dialog).getByLabelText("Confirm name"), "web");
