@@ -233,6 +233,10 @@ func TestEtcdRestoreFromTheVolumeThroughTheAPIServer(t *testing.T) {
 			if left := podsLeft(t, workloads); len(left) != 0 || !removed {
 				t.Errorf("left %d pods in the cluster, file removed %v", len(left), removed)
 			}
+			// The restore holds the volume apart from the cluster's snapshots, which run beside it.
+			if want := "restore of " + f.cluster().Namespace + "/" + f.cluster().Name; len(vol.holders) == 0 || slices.ContainsFunc(vol.holders, func(h string) bool { return h != want }) {
+				t.Errorf("the volume was held by %q, want %q", vol.holders, want)
+			}
 			if vol.released == 0 {
 				t.Error("the restore did not let the volume go")
 			}

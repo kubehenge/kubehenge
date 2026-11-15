@@ -23,6 +23,8 @@ type fakeVolume struct {
 	released    int
 	roomErr     error
 	openedAwake int
+	// holders are those that opened the volume, in order.
+	holders []string
 }
 
 type volumeMem struct {
@@ -35,8 +37,9 @@ func (m volumeMem) Room(context.Context) (int64, int64, error) {
 	return m.v.free, m.v.size, m.v.roomErr
 }
 
-func (v *fakeVolume) Open(context.Context, string) (VolumeStore, error) { //nolint:ireturn // BackupVolume's own signature
+func (v *fakeVolume) Open(_ context.Context, holder string) (VolumeStore, error) { //nolint:ireturn // BackupVolume's own signature
 	v.opened++
+	v.holders = append(v.holders, holder)
 	if v.asleep {
 		return nil, ErrVolumeAsleep
 	}

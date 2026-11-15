@@ -158,6 +158,28 @@ func TestCheckedEtcdSnapshotRefusesADamagedDatabase(t *testing.T) {
 	}
 }
 
+// A database whose free list names a page in use reads without fault until bbolt's own check, which
+// finds the page both freed and reachable.
+func TestCheckedEtcdSnapshotRefusesAPageFreedInUse(t *testing.T) {
+	t.Parallel()
+	db := etcdTestDB(t, etcdTestRevisions)
+	// bbolt's layout: a 16-byte page header, then in each of the two meta pages the root bucket's
+	// page at 32 and the free list's page at 48. A free list holds its count at 10 and its pages
+	// from 16.
+	const pageSize, rootAt, freelistAt, countAt, idsAt = 4096, 32, 48, 10, 16
+	for meta := range 2 {
+		m := db[meta*pageSize:]
+		root, freelist := binary.LittleEndian.Uint64(m[rootAt:]), binary.LittleEndian.Uint64(m[freelistAt:])
+		f := db[freelist*pageSize:]
+		binary.LittleEndian.PutUint16(f[countAt:], 1)
+		binary.LittleEndian.PutUint64(f[idsAt:], root)
+	}
+	sum := sha256.Sum256(db)
+	if _, err := checkedEtcdSnapshot(t.TempDir(), bytes.NewReader(append(db, sum[:]...)), false); err == nil || !strings.Contains(err.Error(), "damaged") {
+		t.Errorf("err = %v, want it damaged", err)
+	}
+}
+
 func TestBumpedEtcdSnapshotRefuses(t *testing.T) {
 	t.Parallel()
 	tampered := etcdTestSnapshot(t)

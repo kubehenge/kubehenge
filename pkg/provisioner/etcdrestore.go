@@ -483,11 +483,22 @@ func (run *restoreRun) reach(ctx context.Context, n *RestoreNode) error {
 // volumeWakePoll is how often a restore looks whether the appliance has woken the backup volume.
 var volumeWakePoll = 5 * time.Second
 
+// restoreHolder is the restorer's hold on the backup volume, apart from the snapshotter's, which
+// runs beside it.
+const restoreHolder = "restore"
+
+// targets are r's targets, holding the volume as the restorer.
+func (r *EtcdRestorer) targets() *ClusterTargets {
+	t := *r.Targets
+	t.Holder = restoreHolder
+	return &t
+}
+
 // openTarget opens the restore's target. The backup volume is waited for while it sleeps, within
 // the restore's time.
 func (run *restoreRun) openTarget(ctx context.Context) (*ClusterTarget, error) {
 	for waited := false; ; waited = true {
-		t, err := run.r.Targets.Open(ctx, run.cluster, run.request.Target, false)
+		t, err := run.r.targets().Open(ctx, run.cluster, run.request.Target, false)
 		if !errors.Is(err, ErrVolumeAsleep) {
 			return t, err
 		}
@@ -864,7 +875,7 @@ func (run *restoreRun) removeTranscoded(ctx context.Context) error {
 	t := run.target
 	if t == nil {
 		var err error
-		if t, err = run.r.Targets.Open(ctx, run.cluster, run.request.Target, false); err != nil {
+		if t, err = run.r.targets().Open(ctx, run.cluster, run.request.Target, false); err != nil {
 			// Without its target, the restore stored nothing there either.
 			return nil
 		}
