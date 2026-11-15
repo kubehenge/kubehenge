@@ -214,7 +214,6 @@ export default defineConfig({
     },
   },
   themeConfig: {
-    logo: { src: "/logo.svg", alt: "" },
     nav: [
       { text: "Docs", link: "/docs/install" },
       { text: "Changelog", link: "/docs/changelog" },

@@ -270,8 +270,7 @@ html:has(.kh) {
     text-decoration: none;
   }
 
-  .brand img {
-    inline-size: 24px;
+  .brand .logo {
     block-size: 24px;
   }
 
@@ -1033,8 +1032,7 @@ html:has(.kh) {
     letter-spacing: 0.02em;
   }
 
-  .u-brand img {
-    inline-size: 1.4em;
+  .u-brand .logo {
     block-size: 1.4em;
   }
 

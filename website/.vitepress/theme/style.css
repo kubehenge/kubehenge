@@ -39,6 +39,17 @@
   --vp-code-color: #115e59;
 }
 
+/* The inline logo is square: its height is set where it sits, and the width follows. */
+.logo {
+  display: inline-flex;
+  aspect-ratio: 1;
+}
+
+.logo svg {
+  inline-size: 100%;
+  block-size: 100%;
+}
+
 .dark {
   --vp-c-brand-1: #2dd4bf;
   --vp-c-brand-2: #14b8a6;
