@@ -28,6 +28,7 @@ import (
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/rest"
@@ -251,6 +252,7 @@ func TestIntegrationControllerServesWhatTheChartNames(t *testing.T) {
 		// and fails closed while one does not.
 		provisioner.DefaultClusterPath:  refused,
 		provisioner.ValidateClusterPath: refused,
+		provisioner.PlaceWorkerPath:     func() error { return pinnedByKubehenge(ctx, c) },
 	}
 	for _, path := range paths {
 		check, ok := admitted[path]
@@ -332,6 +334,42 @@ func refusedByKubehenge(ctx context.Context, c client.Client, cluster *clusterv1
 	}
 	if !strings.Contains(err.Error(), `admission webhook "clusters.kubehenge.dev" denied the request`) || !strings.Contains(err.Error(), "at least 4 vCPUs") {
 		return err
+	}
+	return nil
+}
+
+// pinnedByKubehenge keeps a cluster whose volumes sit on pve2 and asks, as a dry run, for a worker
+// ProxmoxMachine of it. The placement webhook fails open, so only a worker pinned to pve2 shows that
+// the API server reached it.
+func pinnedByKubehenge(ctx context.Context, c client.Client) error {
+	cluster := &clusterv1.Cluster{
+		Namespace: "default", Name: "placed",
+		Annotations: map[string]string{provisioner.VolumeNodesAnnotation: "pve2", provisioner.OnlineNodesAnnotation: "pve1,pve2"},
+		// Paused, so that no controller acts on a cluster that is only a record of where volumes are.
+		Spec: clusterv1.ClusterSpec{Paused: new(true)},
+	}
+	if err := c.Create(ctx, cluster); err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	worker := &unstructured.Unstructured{}
+	worker.SetAPIVersion("infrastructure.cluster.x-k8s.io/v1alpha2")
+	worker.SetKind("ProxmoxMachine")
+	worker.SetNamespace("default")
+	worker.SetName("placed-md-0-a1b2c")
+	worker.SetLabels(map[string]string{
+		clusterv1.ClusterNameLabel:           "placed",
+		clusterv1.MachineDeploymentNameLabel: "md-0",
+		clusterv1.MachineSetNameLabel:        "md-0-x7k2p",
+	})
+	// What the CRD requires, as every pool's machine template carries it.
+	worker.Object["spec"] = map[string]any{
+		"sourceNode": "pve1", "templateID": int64(100), "network": map[string]any{"networkDevices": []any{}},
+	}
+	if err := c.Create(ctx, worker, client.DryRunAll); err != nil {
+		return err
+	}
+	if nodes, _, _ := unstructured.NestedStringSlice(worker.Object, "spec", "allowedNodes"); !slices.Equal(nodes, []string{"pve2"}) {
+		return fmt.Errorf("the worker may go to %v, want pve2", nodes)
 	}
 	return nil
 }

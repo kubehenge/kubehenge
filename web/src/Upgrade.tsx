@@ -284,7 +284,7 @@ export function volumesCheck(after: Cluster): Check | undefined {
     what: "Volumes",
     state: "warning",
     text,
-    detail: ["A pod starts only on a worker on its volume's node.", `Nodes with volumes: ${held.join(", ")}`],
+    detail: ["A pod starts only on its volume's node.", `Nodes with volumes: ${held.join(", ")}`],
   };
 }
 

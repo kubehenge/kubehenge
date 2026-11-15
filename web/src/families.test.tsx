@@ -12,7 +12,13 @@ const offered = { ha: false, csi: false, snapshots: false, haGroups: false };
 function familiesRow(network: Record<string, unknown>): OptionRow | undefined {
   // optionRows reads only the fields given here.
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion
-  const c = { namespace: "clusters", name: "web", distribution: "rke2", variables: { network } } as unknown as Cluster;
+  const c = {
+    namespace: "clusters",
+    name: "web",
+    distribution: "rke2",
+    variables: { network },
+    conditions: [],
+  } as unknown as Cluster;
   return optionRows(c, offered).find((r) => r.label === "Address families");
 }
 

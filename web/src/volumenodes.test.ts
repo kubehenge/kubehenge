@@ -32,7 +32,7 @@ describe("the change checks and the nodes holding volumes", () => {
       what: "Volumes",
       state: "warning",
       text: "On 3 nodes, 2 workers",
-      detail: ["A pod starts only on a worker on its volume's node.", "Nodes with volumes: pve1, pve2, pve3"],
+      detail: ["A pod starts only on its volume's node.", "Nodes with volumes: pve1, pve2, pve3"],
     });
     expect(scaleChecks(held, held, [])).toContainEqual(expect.objectContaining({ what: "Volumes", state: "warning" }));
   });
