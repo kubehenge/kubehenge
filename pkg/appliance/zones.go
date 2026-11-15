@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -48,7 +47,9 @@ func (a *Appliance) labelZones(ctx context.Context, admin []byte) ([]string, err
 // management VM runs there, since the store then has nowhere to start. Of the labels, only those
 // of nodes in or claiming that zone must be set for the store to land right.
 //
-// A node's VM is the one with its SMBIOS UUID (vmsByUUID), whatever the VM's name.
+// A node's VM is the one with its SMBIOS UUID (vmIndex), whatever the VM's name. A node whose VM
+// cannot be read, as on a Proxmox VE node that is down, is returned too. Two VMs with the node's
+// UUID fail the call.
 //
 // The label is all that goes stale. The plugin finds a node's VM by its ID or SMBIOS UUID at each
 // attach, and tells the kubelet the zone it reads from this label whenever it registers, so its
@@ -59,7 +60,7 @@ func (a *Appliance) followZones(ctx context.Context, kube kubernetes.Interface, 
 	if err != nil {
 		return nil, fmt.Errorf("the token that reads where the management VMs run: %w", err)
 	}
-	hosts, err := a.readVMHosts(ctx, string(secret.Data[zonesKey]))
+	vms, err := a.readVMHosts(ctx, string(secret.Data[zonesKey]))
 	if err != nil {
 		return nil, fmt.Errorf("reading where the management VMs run: %w", err)
 	}
@@ -71,7 +72,10 @@ func (a *Appliance) followZones(ctx context.Context, kube kubernetes.Interface, 
 	inZone := false
 	for i := range nodes.Items {
 		n := &nodes.Items[i]
-		host := hosts[strings.ToLower(n.Status.NodeInfo.SystemUUID)]
+		var host string
+		if host, err = a.hostOf(vms, n); err != nil {
+			return unknown, err
+		}
 		if host == "" {
 			unknown = append(unknown, n.Name)
 			continue
@@ -92,6 +96,18 @@ func (a *Appliance) followZones(ctx context.Context, kube kubernetes.Interface, 
 		return unknown, fmt.Errorf("no management VM runs on Proxmox VE node %s, which holds the backup volume", zone)
 	}
 	return unknown, nil
+}
+
+// hostOf is the Proxmox VE node that n's VM runs on, empty when no readable VM has n's UUID.
+func (a *Appliance) hostOf(vms *vmIndex, n *corev1.Node) (string, error) {
+	vm, ok, err := vms.find(n.Status.NodeInfo.SystemUUID)
+	if err != nil {
+		return "", fmt.Errorf("node %s: %w", n.Name, err)
+	}
+	if !ok && a.Log != nil && len(vms.unreadable) > 0 {
+		a.Log.Warn("a management node's zone label stays as it is", "node", n.Name, "error", vms.missing(n.Status.NodeInfo.SystemUUID))
+	}
+	return vm.Node, nil
 }
 
 // setZone labels node n with the Proxmox VE node host, the beta zone label too where it has one.
@@ -116,7 +132,7 @@ func (a *Appliance) setZone(ctx context.Context, kube kubernetes.Interface, n *c
 	return nil
 }
 
-func (a *Appliance) readVMHosts(ctx context.Context, token string) (map[string]string, error) {
+func (a *Appliance) readVMHosts(ctx context.Context, token string) (*vmIndex, error) {
 	if a.vmHosts != nil {
 		return a.vmHosts(ctx, token)
 	}
@@ -124,13 +140,5 @@ func (a *Appliance) readVMHosts(ctx context.Context, token string) (map[string]s
 	if err != nil {
 		return nil, err //nolint:wrapcheck // followZones says what it was for
 	}
-	vms, err := vmsByUUID(ctx, c)
-	if err != nil {
-		return nil, err
-	}
-	hosts := make(map[string]string, len(vms))
-	for uuid, vm := range vms {
-		hosts[uuid] = vm.Node
-	}
-	return hosts, nil
+	return readVMIndex(ctx, c)
 }

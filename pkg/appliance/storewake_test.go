@@ -59,13 +59,18 @@ var (
 )
 
 // hostsAt stands in for Proxmox VE, which says where each VM runs, and fails a token it never gave.
-func hostsAt(t *testing.T, hosts map[string]string) func(context.Context, string) (map[string]string, error) {
+// hosts maps each VM's SMBIOS UUID to its Proxmox VE node.
+func hostsAt(t *testing.T, hosts map[string]string) func(context.Context, string) (*vmIndex, error) {
 	t.Helper()
-	return func(_ context.Context, token string) (map[string]string, error) {
+	return func(_ context.Context, token string) (*vmIndex, error) {
 		if token != standInToken {
 			t.Errorf("Proxmox VE was asked with token %q, not the one in the chart's Secret", token)
 		}
-		return hosts, nil
+		index := &vmIndex{byUUID: map[string][]clusterVM{}}
+		for uuid, node := range hosts {
+			index.byUUID[strings.ToLower(uuid)] = []clusterVM{{Name: uuid, Node: node, Type: "qemu"}}
+		}
+		return index, nil
 	}
 }
 
@@ -119,9 +124,9 @@ func TestTheStoreStaysUpOnSharedStorage(t *testing.T) {
 	up := storeDeployment(1, "1")
 	up.Status.ReadyReplicas = 1
 	kube := fake.NewClientset(up)
-	a := &Appliance{vmHosts: func(context.Context, string) (map[string]string, error) {
+	a := &Appliance{vmHosts: func(context.Context, string) (*vmIndex, error) {
 		t.Error("a store on shared storage asked Proxmox VE where the node VMs run")
-		return map[string]string{}, nil
+		return &vmIndex{}, nil
 	}}
 	ctx := t.Context()
 	if err := a.wakeStore(ctx, kube); err != nil {

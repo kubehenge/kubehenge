@@ -96,6 +96,8 @@ type fakeVM struct {
 	description string
 	digest      int
 	drives      map[string]string
+	// offline answers every request as Proxmox VE does for a VM on a node that is down.
+	offline bool
 }
 
 // nodeVMs answers as Proxmox VE does for its VMs: it refuses to unlink a drive of a protected VM
@@ -176,6 +178,8 @@ func (f *nodeVMs) serve(t *testing.T, w http.ResponseWriter, r *http.Request) {
 	switch {
 	case v == nil:
 		http.NotFound(w, r)
+	case v.offline:
+		http.Error(w, "no route to host", 595)
 	case r.Method == http.MethodGet && op == "config":
 		config := map[string]any{"digest": strconv.Itoa(v.digest), "protection": v.protection, "smbios1": "uuid=" + v.uuid + ",manufacturer=UHJveG1veA==,base64=1"}
 		if v.description != "" {
@@ -452,6 +456,90 @@ func TestFollowZonesFindsTheVMByItsUUID(t *testing.T) {
 	}
 	if zone := n.Labels[corev1.LabelTopologyZone]; zone != "pve2" {
 		t.Fatalf("zone %q, want pve2, where the VM with the node's SMBIOS UUID runs", zone)
+	}
+}
+
+const offlineUUID = "99999999-8888-7777-6666-555555555555"
+
+func managementNode(name, uuid string) *corev1.Node {
+	return &corev1.Node{Name: name, Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{SystemUUID: strings.ToLower(uuid)}}}
+}
+
+func zonesTokenSecret() *corev1.Secret {
+	return &corev1.Secret{
+		Name: zonesSecret, Namespace: backupstore.Namespace,
+		Data: map[string][]byte{zonesKey: []byte("mgmt-management-zones@pve!zones=00000000-0000-0000-0000-000000000000")},
+	}
+}
+
+func zoneOf(t *testing.T, kube kubernetes.Interface, node string) string {
+	t.Helper()
+	n, err := kube.CoreV1().Nodes().Get(t.Context(), node, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n.Labels[corev1.LabelTopologyZone]
+}
+
+// A VM on a Proxmox VE node that is down leaves the nodes on healthy hosts working: their zone
+// labels follow, the store wakes and the backup volume is detached. Only the node on the host that
+// is down stays as it is, and a detach from it names the VM that could not be read.
+func TestAVMOnANodeThatIsDownLeavesTheOthersWorking(t *testing.T) {
+	t.Parallel()
+	f := withNodeVM(backupDisk)
+	f.vms = append(f.vms, &fakeVM{id: 1500, name: "mgmt-c", node: "pve3", uuid: offlineUUID, offline: true})
+	a := f.appliance(t)
+	store := storeDeployment(0, "0")
+	store.Annotations[volumeZone] = "pve2"
+	store.Status.ReadyReplicas = 1
+	kube := fake.NewClientset(managementNode("cp-0", nodeUUID), managementNode("cp-2", offlineUUID), zonesTokenSecret(), store)
+	ctx := t.Context()
+
+	unknown, err := a.followZones(ctx, kube, "pve2")
+	if err != nil || !slices.Equal(unknown, []string{"cp-2"}) {
+		t.Fatalf("unknown %v, error %v, want cp-2 alone and no error", unknown, err)
+	}
+	if zone := zoneOf(t, kube, "cp-0"); zone != "pve2" {
+		t.Fatalf("cp-0's zone %q, want pve2", zone)
+	}
+	if err = a.wakeStore(ctx, kube); err != nil {
+		t.Fatal(err)
+	}
+	if r := replicasOf(t, kube); r != 1 {
+		t.Fatalf("the store has %d replicas after the wake, want 1", r)
+	}
+	if err = f.detachHandle(t, "region/pve2/local-lvm/vm-9000-disk-0"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.callList(); !slices.Equal(got, detachedCalls) {
+		t.Fatalf("calls %v, want %v", got, detachedCalls)
+	}
+	err = a.detachVolume(ctx, ticket(), storeAttachment{Node: "cp-2", SystemUUID: offlineUUID, Volume: "region/pve3/local-lvm/vm-9000-disk-0"})
+	if err == nil || !strings.Contains(err.Error(), "VM 1500 (mgmt-c) on pve3 could not be read") {
+		t.Fatalf("error %v, want one naming VM 1500 as unreadable", err)
+	}
+}
+
+// Two VMs with the node's SMBIOS UUID, as a restore without a new UUID leaves, stop the detach and
+// the zone labels. The error names both VMs and the command that gives one a new UUID.
+func TestTwoVMsWithTheNodesUUIDFailLoudly(t *testing.T) {
+	t.Parallel()
+	f := withNodeVM(backupDisk)
+	f.vms = append(f.vms, &fakeVM{id: 1700, name: "mgmt-a-restored", node: "pve3", uuid: nodeUUID, drives: map[string]string{}})
+	kube := fake.NewClientset(managementNode("cp-0", nodeUUID), zonesTokenSecret())
+	_, zerr := f.appliance(t).followZones(t.Context(), kube, "")
+	derr := f.detachHandle(t, "region/pve2/local-lvm/vm-9000-disk-0")
+	for _, err := range []error{zerr, derr} {
+		if err == nil || !strings.Contains(err.Error(), "VM 1001 (mgmt-a) on pve2 and VM 1700 (mgmt-a-restored) on pve3") ||
+			!strings.Contains(err.Error(), "qm set <id> --smbios1 uuid=<new>") {
+			t.Fatalf("error %v, want both VMs and the fix named", err)
+		}
+	}
+	if got := f.callList(); len(got) > 0 {
+		t.Fatalf("calls %v with two VMs of one UUID, want none", got)
+	}
+	if zone := zoneOf(t, kube, "cp-0"); zone != "" {
+		t.Fatalf("cp-0 got zone %q with two VMs of its UUID", zone)
 	}
 }
 

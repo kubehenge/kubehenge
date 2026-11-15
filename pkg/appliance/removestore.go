@@ -196,13 +196,16 @@ func (a *Appliance) detachVolume(ctx context.Context, t *pve.Ticket, at storeAtt
 	if err != nil {
 		return fmt.Errorf("detaching %s from node %s's VM: %w", disk, at.Node, err)
 	}
-	vms, err := vmsByUUID(ctx, c)
+	vms, err := readVMIndex(ctx, c)
 	if err != nil {
 		return fmt.Errorf("detaching %s from node %s's VM: %w", disk, at.Node, err)
 	}
-	vm, ok := vms[strings.ToLower(at.SystemUUID)]
-	if !ok {
-		return fmt.Errorf("detaching %s from node %s's VM: no VM has SMBIOS UUID %s", disk, at.Node, at.SystemUUID)
+	vm, ok, err := vms.find(at.SystemUUID)
+	if err == nil && !ok {
+		err = vms.missing(at.SystemUUID)
+	}
+	if err != nil {
+		return fmt.Errorf("detaching %s from node %s's VM: %w", disk, at.Node, err)
 	}
 	if err := unlinkVolume(ctx, c, vm, disk); err != nil {
 		return fmt.Errorf("detaching %s from VM %d (%s): %w", disk, vm.VMID, vm.Name, err)
