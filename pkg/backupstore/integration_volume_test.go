@@ -115,6 +115,18 @@ func TestIntegrationInterfaceForwardsToTheStoreAlone(t *testing.T) { //nolint:pa
 	if err != nil {
 		t.Fatal(err)
 	}
+	// With the interface on a port-forward, the store's port admits the controller's pods alone.
+	nps, err := admin.NetworkingV1().NetworkPolicies(Namespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range nps.Items {
+		for _, rule := range nps.Items[i].Spec.Ingress {
+			if len(rule.From) != 1 || rule.From[0].PodSelector == nil || rule.From[0].PodSelector.MatchLabels["app.kubernetes.io/name"] != "kubehenge-controller" || rule.From[0].IPBlock != nil {
+				t.Errorf("NetworkPolicy %s admits %+v", nps.Items[i].Name, rule.From)
+			}
+		}
+	}
 	as := rest.CopyConfig(api.Config)
 	as.Impersonate = rest.ImpersonationConfig{
 		UserName: "system:serviceaccount:" + Namespace + ":kubehenge-interface",
