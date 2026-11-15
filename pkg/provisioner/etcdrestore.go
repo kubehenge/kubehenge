@@ -193,6 +193,9 @@ type EtcdRestorer struct {
 	// Workloads reaches the clusters' API servers, through which a snapshot on the backup volume
 	// reaches the node a kubeadm, RKE2 or k3s restore runs on. Nil restores those from buckets only.
 	Workloads WorkloadClients
+	// ReceiverImage is Kubehenge's own image by digest, which receives such a snapshot on the node.
+	// Empty restores those from buckets only.
+	ReceiverImage string
 	// poll is how often a restore looks at what it waits for. It is talosRestorePoll when 0.
 	poll time.Duration
 	// Events reports on a Cluster how its restore went. It may be nil.
@@ -502,7 +505,7 @@ func (run *restoreRun) readSnapshot(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if t.OnVolume() && !run.talos && run.r.Workloads == nil {
+	if t.OnVolume() && !run.talos && (run.r.Workloads == nil || run.r.ReceiverImage == "") {
 		_ = t.Release(ctx)
 		return errVolumeUnreached
 	}

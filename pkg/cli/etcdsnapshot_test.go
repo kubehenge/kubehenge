@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"filippo.io/age"
+
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
 func TestEtcdSnapshotDecrypt(t *testing.T) {
@@ -65,5 +67,47 @@ func TestEtcdSnapshotDecrypt(t *testing.T) {
 	}
 	if _, err := os.Stat(refused); !os.IsNotExist(err) {
 		t.Errorf("left a file behind: %v", err)
+	}
+}
+
+// receive runs `etcd-snapshot receive` on stdin.
+func receive(t *testing.T, stdin []byte, args ...string) (string, error) {
+	t.Helper()
+	root := NewRoot()
+	var out bytes.Buffer
+	root.SetIn(bytes.NewReader(stdin))
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs(append([]string{"etcd-snapshot", "receive"}, args...))
+	err := root.ExecuteContext(t.Context())
+	return out.String(), err
+}
+
+// The receiver writes what the controller streams, refuses a stream cut short, and refuses before
+// reading when the disk is too small.
+func TestEtcdSnapshotReceive(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	body := bytes.Repeat([]byte("sealed snapshot"), 1000)
+	var stream bytes.Buffer
+	if err := provisioner.SendEtcdSnapshot(&stream, bytes.NewReader(body)); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "received.enc")
+	if got, err := receive(t, stream.Bytes(), "--out", out, "--need", "1"); err != nil || !strings.Contains(got, "received 15000 bytes") {
+		t.Fatalf("receive: %v\n%s", err, got)
+	}
+	if written, err := os.ReadFile(out); err != nil || !bytes.Equal(written, body) { //nolint:gosec // the test's own temporary file
+		t.Errorf("wrote %d bytes: %v", len(written), err)
+	}
+	cut := filepath.Join(dir, "cut.enc")
+	if _, err := receive(t, stream.Bytes()[:stream.Len()-10], "--out", cut); err == nil || !strings.Contains(err.Error(), "cut short") {
+		t.Errorf("a stream cut short: %v", err)
+	}
+	if _, err := os.Stat(cut); !os.IsNotExist(err) {
+		t.Errorf("left a cut file behind: %v", err)
+	}
+	if _, err := receive(t, stream.Bytes(), "--out", filepath.Join(dir, "big.enc"), "--need", "9000000000000000000"); err == nil || !strings.Contains(err.Error(), "free at "+dir) {
+		t.Errorf("a disk too small: %v", err)
 	}
 }

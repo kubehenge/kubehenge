@@ -956,7 +956,7 @@ func TestRestoreScripts(t *testing.T) {
 			"restored": s.Restored, "clean": s.Clean,
 			"fetch":                        fetchScriptFor("https://s3.example.org/x?a=1&b='2'", "pass'word", "abc", "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n"),
 			"fetch without CA":             fetchScriptFor("https://s3.example.org/x", "password", "abc", ""),
-			"fetch through the API server": apiFetchScriptFor(adminKubeconfig(d), "kubehenge-restore-ab", 3, "pass'word", "abc"),
+			"fetch through the API server": receivedScriptFor(RestoreWorkDir+"/received-ab.enc", "pass'word", "abc"),
 		} {
 			if !strings.HasSuffix(body, "} </dev/null\n") {
 				t.Errorf("%s %s reads its standard input", d, name)

@@ -8,61 +8,51 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
 // WorkloadClients reaches the workload clusters' API servers. found is false until Cluster API has
 // made a cluster's kubeconfig.
 type WorkloadClients interface {
 	Client(ctx context.Context, cluster *clusterv1.Cluster) (client.Client, bool, error)
+	// Attach streams stdin to a container of a pod, through the cluster's API server.
+	Attach(ctx context.Context, cluster *clusterv1.Cluster, namespace, pod, container string, stdin io.Reader) error
 }
 
 // A snapshot on the backup volume reaches a kubeadm, RKE2 or k3s node through the cluster's own API
 // server, the way the controller pulls its snapshots: nothing on the management cluster opens to the
-// workload network. The controller writes it, encrypted for this restore, into Secrets in
-// kube-system, and the node reads them back with its admin kubeconfig before etcd stops. etcd's
-// images hold no shell, so no pod could take it in from an exec instead.
+// workload network. The controller starts a pod of Kubehenge's image on the node, attaches to its
+// stdin and streams the snapshot, encrypted for this restore, into a file the node's restore reads.
+// etcd's images hold no shell, so the snapshot cannot go in through etcd's own pods.
 const (
-	// handOverChunk is the bytes of the snapshot one Secret holds, well within a Secret's 1 MiB.
-	handOverChunk = 512 << 10
-	// maxHandOver bounds a snapshot handed over this way: its Secrets sit in the cluster's etcd
-	// beside what it holds, within a quarter of the distributions' default quota of 2 GiB.
-	maxHandOver = 512 << 20
-	// handOverLabel marks the Secrets of one hand-over, by its ID.
-	handOverLabel = "kubehenge.dev/etcd-restore"
-	handOverKey   = "chunk"
+	receiverContainer = "receive"
+	// receiverSpace is how many times the snapshot's size the node needs free: the received copy, the
+	// decrypted one and the restored data directory, which share the node's disk.
+	receiverSpace = 3
+	// receiverStart bounds the wait for the pod to start, its image pull included.
+	receiverStart = 5 * time.Minute
 )
 
+// receiverPoll is how often the controller looks at the receiving pod.
+var receiverPoll = 2 * time.Second
+
 // errVolumeUnreached refuses a kubeadm, RKE2 or k3s restore from the volume where the controller
-// reaches no workload API server.
+// reaches no workload API server, or has no image to receive the snapshot with.
 var errVolumeUnreached = errors.New("the controller reaches no workload API server, through which a snapshot on the backup volume gets to the node. Download it and restore by hand")
 
 // ErrHandOverAPIDown says why a kubeadm, RKE2 or k3s restore from the volume cannot start: the
 // cluster's API server, the snapshot's way to the node, does not answer.
 var ErrHandOverAPIDown = errors.New("the cluster's API server does not answer, and a snapshot on the backup volume reaches the node only through it. Download the snapshot and restore by hand, or restore from a bucket target")
 
-// adminKubeconfig is where a control-plane node keeps its distribution's admin kubeconfig.
-func adminKubeconfig(d templates.Distribution) string {
-	switch d {
-	case templates.RKE2:
-		return "/etc/rancher/rke2/rke2.yaml"
-	case templates.K3s:
-		return "/etc/rancher/k3s/k3s.yaml"
-	case templates.Kubeadm, templates.Talos:
-	}
-	return "/etc/kubernetes/admin.conf"
-}
-
-// handOver writes the snapshot, encrypted with password, into Secrets of the cluster, has the first
-// node read and check it, and deletes the Secrets again.
+// handOver streams the snapshot, encrypted with password, to the first node, and has the node check
+// and decrypt it. The pod and the file go afterwards, whatever happened.
 func (run *restoreRun) handOver(ctx context.Context, password string) error {
-	if run.r.Workloads == nil {
+	if run.r.Workloads == nil || run.r.ReceiverImage == "" {
 		return errVolumeUnreached
 	}
 	workload, found, err := run.r.Workloads.Client(ctx, run.cluster)
@@ -77,78 +67,125 @@ func (run *restoreRun) handOver(ctx context.Context, password string) error {
 		return fmt.Errorf("naming the hand-over: %w", err)
 	}
 	id := hex.EncodeToString(raw)
+	file := RestoreWorkDir + "/received-" + id + ".enc"
+	pod := receiverPod(id, run.nodes[0].Node, run.r.ReceiverImage, file, receiverSpace*run.snapshot.Size)
+	if err = workload.Create(ctx, pod); err != nil {
+		return fmt.Errorf("%w: %w", ErrHandOverAPIDown, err)
+	}
 	defer func() {
-		_ = workload.DeleteAllOf(context.WithoutCancel(ctx), &corev1.Secret{}, client.InNamespace(metav1.NamespaceSystem), client.MatchingLabels{handOverLabel: id})
+		after := context.WithoutCancel(ctx)
+		_ = workload.Delete(after, pod)
+		_ = run.on(after, run.nodes[0], "removing the received snapshot", "rm -f -- "+shellQuote(file))
 	}()
+	sum, err := run.receive(ctx, workload, pod, password)
+	if err != nil {
+		return err
+	}
+	return run.on(ctx, run.nodes[0], "decrypting the snapshot", receivedScriptFor(file, password, sum))
+}
+
+// receive starts the stream once the pod runs, and waits for the pod to check it. It returns the
+// SHA-256 the node checks the decrypted snapshot by.
+func (run *restoreRun) receive(ctx context.Context, workload client.Client, pod *corev1.Pod, password string) (string, error) {
+	started, err := waitForPod(ctx, workload, pod, func(p *corev1.Pod) bool {
+		return p.Status.Phase != corev1.PodPending
+	})
+	if err != nil {
+		return "", err
+	}
+	if started.Status.Phase != corev1.PodRunning {
+		return "", receiverRefusal(started)
+	}
 	sealed, err := run.sealedForNode(ctx, password)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer sealed.done()
-	count, err := writeChunks(ctx, workload, id, sealed.body)
-	if err != nil {
-		return err
+	r, w := io.Pipe()
+	go func() { w.CloseWithError(SendEtcdSnapshot(w, sealed.body)) }()
+	attachErr := run.r.Workloads.Attach(ctx, run.cluster, pod.Namespace, pod.Name, receiverContainer, r)
+	_ = r.Close()
+	ended, err := waitForPod(ctx, workload, pod, func(p *corev1.Pod) bool {
+		return p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed
+	})
+	switch {
+	case err != nil && attachErr != nil:
+		return "", fmt.Errorf("streaming the snapshot to %s: %w", run.nodes[0].Machine, attachErr)
+	case err != nil:
+		return "", err
+	case ended.Status.Phase != corev1.PodSucceeded:
+		return "", receiverRefusal(ended)
 	}
-	return run.on(ctx, run.nodes[0], "fetching the snapshot", apiFetchScriptFor(adminKubeconfig(distributionOf(run.cluster)), handOverName(id), count, password, sealed.sum))
+	return sealed.sum, nil
 }
 
-// handOverName is the start of the names of a hand-over's Secrets.
-func handOverName(id string) string { return "kubehenge-restore-" + id }
-
-// writeChunks stores body in Secrets of handOverChunk bytes, named handOverName(id)-0000 on, and
-// returns how many.
-func writeChunks(ctx context.Context, workload client.Client, id string, body io.Reader) (int, error) {
-	buf := make([]byte, handOverChunk)
-	total := 0
-	for i := 0; ; i++ {
-		n, err := io.ReadFull(body, buf)
-		if n > 0 {
-			total += n
-			if total > maxHandOver {
-				return 0, fmt.Errorf("the snapshot is over %d MiB, too large to pass through the cluster's API server. Download it and restore by hand", maxHandOver/bytesPerMiB)
-			}
-			s := &corev1.Secret{
-				Namespace: metav1.NamespaceSystem, Name: fmt.Sprintf("%s-%04d", handOverName(id), i),
-				Labels: map[string]string{handOverLabel: id},
-				Data:   map[string][]byte{handOverKey: append([]byte(nil), buf[:n]...)},
-			}
-			if cerr := workload.Create(ctx, s); cerr != nil {
-				return 0, fmt.Errorf("%w: %w", ErrHandOverAPIDown, cerr)
-			}
+// receiverRefusal is why the receiving pod failed, in its own words where it left them.
+func receiverRefusal(p *corev1.Pod) error {
+	for i := range p.Status.ContainerStatuses {
+		if t := p.Status.ContainerStatuses[i].State.Terminated; t != nil && t.Message != "" {
+			return fmt.Errorf("receiving the snapshot on node %s: %s", p.Spec.NodeName, t.Message)
 		}
-		switch {
-		case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
-			if n > 0 {
-				return i + 1, nil
-			}
-			return i, nil
-		case err != nil:
-			return 0, fmt.Errorf("reading the snapshot: %w", err)
+	}
+	return fmt.Errorf("receiving the snapshot on node %s: the pod ended %s", p.Spec.NodeName, p.Status.Phase)
+}
+
+// waitForPod reads the pod until done says so, for at most receiverStart.
+func waitForPod(ctx context.Context, workload client.Client, pod *corev1.Pod, done func(*corev1.Pod) bool) (*corev1.Pod, error) {
+	ctx, cancel := context.WithTimeout(ctx, receiverStart)
+	defer cancel()
+	for {
+		p := &corev1.Pod{}
+		if err := workload.Get(ctx, client.ObjectKeyFromObject(pod), p); err != nil {
+			return nil, fmt.Errorf("reading the receiving pod: %w", err)
+		}
+		if done(p) {
+			return p, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("the pod receiving the snapshot on node %s did not get going: %w", pod.Spec.NodeName, ctx.Err())
+		case <-time.After(receiverPoll):
 		}
 	}
 }
 
-// apiFetchScript reads a hand-over's Secrets through the cluster's API server with the node's admin
-// kubeconfig, then decrypts and checks the snapshot as fetchScript does.
-const apiFetchScript = `field() { sed -n "0,/^ *$1: /s/^ *$1: *//p" "$kubeconfig"; }
-server=$(field server)
-field certificate-authority-data | base64 -d >"$work/api-ca.pem"
-field client-certificate-data | base64 -d >"$work/api-cert.pem"
-field client-key-data | base64 -d >"$work/api-key.pem"
-: >"$work/snapshot.enc"
-for ((i = 0; i < count; i++)); do
-  curl -fsS --retry 3 --cacert "$work/api-ca.pem" --cert "$work/api-cert.pem" --key "$work/api-key.pem" \
-    "$server/api/v1/namespaces/kube-system/secrets/$(printf '%%s-%%04d' "$name" "$i")" |
-    sed -n 's/.*"chunk":"\([^"]*\)".*/\1/p' | base64 -d >>"$work/snapshot.enc"
-done
-rm -f "$work/api-ca.pem" "$work/api-cert.pem" "$work/api-key.pem"
-KUBEHENGE_PASSWORD="$password" openssl enc -d -aes-256-ctr -pbkdf2 -iter %d -md sha256 \
-  -pass env:KUBEHENGE_PASSWORD -in "$work/snapshot.enc" -out "$work/snapshot.db"
-rm -f "$work/snapshot.enc"
+// receiverPod runs `kubehenge etcd-snapshot receive` on node, writing to file in RestoreWorkDir.
+func receiverPod(id, node, image, file string, need int64) *corev1.Pod {
+	return &corev1.Pod{
+		Namespace: metav1.NamespaceSystem, Name: "kubehenge-restore-" + id,
+		Labels: map[string]string{"app.kubernetes.io/name": "kubehenge-restore"},
+		Spec: corev1.PodSpec{
+			NodeName:                     node,
+			RestartPolicy:                corev1.RestartPolicyNever,
+			AutomountServiceAccountToken: new(false),
+			Tolerations:                  []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
+			Containers: []corev1.Container{{
+				Name: receiverContainer, Image: image,
+				Args:                     []string{"etcd-snapshot", "receive", "--out", file, "--need", strconv.FormatInt(need, 10)},
+				Stdin:                    true,
+				StdinOnce:                true,
+				TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
+				SecurityContext: &corev1.SecurityContext{
+					RunAsUser: new(int64(0)), ReadOnlyRootFilesystem: new(true), AllowPrivilegeEscalation: new(false),
+					Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+				},
+				VolumeMounts: []corev1.VolumeMount{{Name: "restore", MountPath: RestoreWorkDir}},
+			}},
+			Volumes: []corev1.Volume{{Name: "restore", HostPath: &corev1.HostPathVolumeSource{
+				Path: RestoreWorkDir, Type: new(corev1.HostPathDirectoryOrCreate),
+			}}},
+		},
+	}
+}
+
+// receivedScript decrypts the received snapshot and checks it as fetchScript does.
+const receivedScript = `KUBEHENGE_PASSWORD="$password" openssl enc -d -aes-256-ctr -pbkdf2 -iter %d -md sha256 \
+  -pass env:KUBEHENGE_PASSWORD -in "$received" -out "$work/snapshot.db"
+rm -f "$received"
 echo "$sha256  $work/snapshot.db" | sha256sum -c --quiet -
-echo "fetched the snapshot through the API server: $(stat -c %%s "$work/snapshot.db") bytes"
+echo "received the snapshot through the API server: $(stat -c %%s "$work/snapshot.db") bytes"
 `
 
-func apiFetchScriptFor(kubeconfig, name string, count int, password, sum string) string {
-	return script(fmt.Sprintf(apiFetchScript, opensslIterations), "kubeconfig", kubeconfig, "name", name, "count", strconv.Itoa(count), "password", password, "sha256", sum)
+func receivedScriptFor(file, password, sum string) string {
+	return script(fmt.Sprintf(receivedScript, opensslIterations), "received", file, "password", password, "sha256", sum)
 }

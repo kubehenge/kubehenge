@@ -1656,7 +1656,7 @@ A snapshot that would leave less than a tenth of the volume free is refused. The
 
 On a node's own storage the volume sleeps between backups. The controller asks for it, and the appliance wakes it within a minute. Until then the condition reads `WaitingForVolume`.
 
-Every distribution restores from the volume through the interface, kubectl and the CLI. kubeadm, RKE2 and k3s nodes get the snapshot through the cluster's own API server, so it must answer. A snapshot over 512 MiB, or a cluster whose API server is down, is restored from a bucket or by hand from a downloaded snapshot. The distributions' own upload needs a bucket target.
+Every distribution restores from the volume through the interface, kubectl and the CLI. kubeadm, RKE2 and k3s nodes get the snapshot through the cluster's own API server, so it must answer. The controller starts a pod of Kubehenge's image on the first control-plane node and streams the snapshot to it. The node needs three times the snapshot's size free under `/var/lib/kubehenge-restore`, or the restore stops before etcd does. A cluster whose API server is down is restored from a bucket, or by hand from a downloaded snapshot. The distributions' own upload needs a bucket target.
 
 Removing a cluster keeps its snapshots on the volume and its backup keys. Tick **Delete its etcd snapshots on the backup volume** in the remove dialog, or add `--delete-etcd-snapshots` to `kubehenge cluster delete`. With kubectl or GitOps, set the annotation `kubehenge.dev/delete-etcd-snapshots: "true"` before the delete. The snapshots of removed clusters are listed under `GET /api/removed-etcd-snapshots/<namespace>`, and deleted with their keys by `DELETE` on `.../<name>` with the typed name.
 
