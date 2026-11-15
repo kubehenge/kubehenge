@@ -12,7 +12,7 @@ import (
 // IANA name. A site CA that passes is rewritten as the chart and the module take it.
 func (s *Settings) checkSiteDefaults(p *problems, now time.Time) {
 	if s.SiteCA != "" {
-		plain, err := provisioner.NormalizeCertificateBundle(s.SiteCA)
+		plain, err := provisioner.NormaliseCertificateBundle(s.SiteCA)
 		if err == nil {
 			err = provisioner.CheckCertificateBundle(plain, now)
 		}

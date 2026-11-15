@@ -246,7 +246,7 @@ func TestPEMBundleVariablesAreStoredAsCertificatesAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	curl := string(raw)
-	plain, err := NormalizeCertificateBundle(curl)
+	plain, err := NormaliseCertificateBundle(curl)
 	if err != nil || strings.Contains(plain, "#") || strings.Count(plain, "BEGIN CERTIFICATE") != strings.Count(curl, "BEGIN CERTIFICATE") {
 		t.Fatalf("the curl excerpt normalised to %q (%v)", plain, err)
 	}

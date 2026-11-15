@@ -177,7 +177,7 @@ func checkCertificates(bundle string, now time.Time) error {
 
 // PlainAuthorityBundle holds a bundle of at most maxBytes, such as the appliance's proxy authority,
 // to the layout and the certificates a cluster's bundles are held to, their validity aside. It
-// gives the bundle as NormalizeCertificateBundle writes it, so no text between the blocks is kept.
+// gives the bundle as NormaliseCertificateBundle writes it, so no text between the blocks is kept.
 func PlainAuthorityBundle(bundle string, maxBytes int) (string, error) {
 	blocks, err := certificatesWithin(bundle, maxBytes, time.Time{})
 	if err != nil {
@@ -235,9 +235,9 @@ func certificateBlocksWithin(bundle string, maxBytes int) ([]*pem.Block, error) 
 	return blocks, nil
 }
 
-// NormalizeCertificateBundle writes a bundle whose layout passes as the classes' schemas, the chart
+// NormaliseCertificateBundle writes a bundle whose layout passes as the classes' schemas, the chart
 // and the module take it: its certificates alone, with LF line ends and one after the last.
-func NormalizeCertificateBundle(bundle string) (string, error) {
+func NormaliseCertificateBundle(bundle string) (string, error) {
 	blocks, err := certificateBlocks(bundle)
 	if err != nil {
 		return "", err
@@ -262,7 +262,7 @@ var bundleMembers = map[string]string{
 	releaseMirrorVariable:   "caBundle",
 }
 
-// plainBundles writes the PEM bundles of a cluster's variables as NormalizeCertificateBundle does,
+// plainBundles writes the PEM bundles of a cluster's variables as NormaliseCertificateBundle does,
 // so that a bundle laid out as curl's cacert.pem or openssl's text output is taken from kubectl as
 // from the interface, and the classes' schemas, which Cluster API checks after this webhook, see
 // certificates alone. On an update only a variable that changes is rewritten. A bundle whose layout
@@ -328,7 +328,7 @@ func (b *bundleRewrite) plain(bundle any, path *field.Path) any {
 	if !isString || s == "" {
 		return bundle
 	}
-	out, err := NormalizeCertificateBundle(s)
+	out, err := NormaliseCertificateBundle(s)
 	if err != nil {
 		b.errs = append(b.errs, field.Invalid(path, nil, err.Error()))
 		return bundle

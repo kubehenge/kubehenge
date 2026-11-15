@@ -92,7 +92,7 @@ func checkHandKeptBundles(t *testing.T, b *browser, admin client.Client) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plain, err := provisioner.NormalizeCertificateBundle(string(raw))
+	plain, err := provisioner.NormaliseCertificateBundle(string(raw))
 	if err != nil {
 		t.Fatal(err)
 	}

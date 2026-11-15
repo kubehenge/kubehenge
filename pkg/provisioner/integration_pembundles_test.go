@@ -34,7 +34,7 @@ func TestIntegrationHandKeptBundlesAreStoredAsCertificatesAlone(t *testing.T) { 
 		t.Fatal(err)
 	}
 	curl := string(raw)
-	plain, err := NormalizeCertificateBundle(curl)
+	plain, err := NormaliseCertificateBundle(curl)
 	if err != nil {
 		t.Fatal(err)
 	}

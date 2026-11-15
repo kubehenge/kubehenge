@@ -93,7 +93,7 @@ func TestTalosNodesTrustTheSiteCAAndEveryClassTakesTheVariable(t *testing.T) {
 		if kind == "TalosConfigTemplate" {
 			role = machine.TypeWorker
 		}
-		docs := talosConfig(t, role, class.strategicPatches(t, kind, variablesOf(t, `{"siteCAs": [`+jsonString(site)+`]}`)))
+		docs := talosConfig(t, role, class.strategicPatches(t, kind, variablesOf(t, `{"controlPlaneEndpoint": "192.0.2.10", "siteCAs": [`+jsonString(site)+`]}`)))
 		roots, ok := docs["TrustedRootsConfig/kubehenge"]["certificates"].(string)
 		if !ok || !strings.Contains(roots, certificateBody(site)) {
 			t.Errorf("%s: trusted roots %v lack the site CA", kind, docs["TrustedRootsConfig/kubehenge"])

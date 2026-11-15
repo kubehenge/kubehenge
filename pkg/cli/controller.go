@@ -646,7 +646,7 @@ func (o *controllerOptions) parseReleaseMirror() error {
 		// clusters' upgrades, snapshots and deletions depend on. Each reconcile reports it on its
 		// cluster, and a damaged one reaches no node. A sound one is given as the classes' schemas
 		// take it, whatever is written between its certificates.
-		plain, err := provisioner.NormalizeCertificateBundle(string(ca))
+		plain, err := provisioner.NormaliseCertificateBundle(string(ca))
 		if err == nil {
 			err = provisioner.CheckCertificateBundle(plain, time.Time{})
 		}
