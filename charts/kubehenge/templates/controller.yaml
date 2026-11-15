@@ -626,7 +626,8 @@ spec:
 # storage. While the controller is away no cluster is created or its spec changed: one let through
 # then would keep what the check refuses. Nothing the management cluster needs to come up writes a
 # Cluster, and a cluster being deleted is never held up by it: the check leaves such a cluster
-# alone but for the name that abandons its deletion, which only the controller carries out anyway.
+# alone but for a change to its spec, which it refuses, and the name that abandons its deletion,
+# which only the controller carries out anyway.
 # An update that leaves the spec and the annotations the check reads as they were never calls it,
 # so a cluster can take kubehenge.dev/allow-deletion, and be deleted, while the controller is away.
 apiVersion: admissionregistration.k8s.io/v1
@@ -643,7 +644,7 @@ webhooks:
     matchConditions:
       - name: not-being-deleted-or-abandoned
         expression: >-
-          !has(object.metadata.deletionTimestamp) ||
+          !has(object.metadata.deletionTimestamp) || object.spec != oldObject.spec ||
           (has(object.metadata.annotations) && 'kubehenge.dev/abandon-deletion' in object.metadata.annotations &&
           !(has(oldObject.metadata.annotations) && 'kubehenge.dev/abandon-deletion' in oldObject.metadata.annotations &&
           oldObject.metadata.annotations['kubehenge.dev/abandon-deletion'] == object.metadata.annotations['kubehenge.dev/abandon-deletion']))

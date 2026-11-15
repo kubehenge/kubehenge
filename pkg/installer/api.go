@@ -333,7 +333,11 @@ func (n *Node) DecideCA(ctx context.Context, cfg *Config, apiURL string) (*CACho
 	// is asked.
 	fail := func(caFile string) error {
 		if connects && served[0].VerifyHostname(host) != nil {
-			return userErr(pve.NewCertificateNameError(host, served[0]).Error(), "Give a name or address it lists with --proxmox-url")
+			listed := "no name or address but loopback"
+			if names := pve.NewCertificateNameError(host, served[0]).Names; len(names) > 0 {
+				listed = strings.Join(names, ", ")
+			}
+			return userErr(fmt.Sprintf("Proxmox VE's certificate is valid for %s, not %s", listed, host), "Pass one of those with --proxmox-url")
 		}
 		return apiFailure(connects, apiURL, port, caFile)
 	}

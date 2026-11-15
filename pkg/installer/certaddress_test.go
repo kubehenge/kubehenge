@@ -20,19 +20,34 @@ func TestDecideCANamesWhatTheCertificateIsValidFor(t *testing.T) {
 		if refused == nil {
 			t.Fatalf("%s: an address the certificate lacks was accepted", name)
 		}
-		for _, want := range []string{"is valid for 192.0.2.10, pve1.example.com, not 192.0.2.99", "pvecm updatecerts --force", "--proxmox-url"} {
-			if !strings.Contains(refused.Error(), want) {
-				t.Errorf("%s: %q lacks %q", name, refused, want)
-			}
+		want := "Proxmox VE's certificate is valid for 192.0.2.10, pve1.example.com, not 192.0.2.99. Pass one of those with --proxmox-url"
+		if refused.Error() != want {
+			t.Errorf("%s: %q, want %q", name, refused, want)
 		}
 	}
 
 	_, err := h.node.DecideCA(ctx, &Config{}, "https://pve2.example.com:8006")
-	if err == nil || !strings.Contains(err.Error(), "not pve2.example.com") || !strings.Contains(err.Error(), "install a certificate for pve2.example.com") || strings.Contains(err.Error(), "pvecm") {
-		t.Errorf("a name the certificate lacks: %v, want a certificate of its own asked for, never pvecm", err)
+	if err == nil || err.Error() != "Proxmox VE's certificate is valid for 192.0.2.10, pve1.example.com, not pve2.example.com. Pass one of those with --proxmox-url" {
+		t.Errorf("a name the certificate lacks: %v", err)
 	}
 	if _, err = h.node.DecideCA(ctx, &Config{}, "https://192.0.2.10:8006"); err != nil {
 		t.Errorf("an address the certificate lists: %v", err)
+	}
+}
+
+func TestTheInteractiveSummaryShowsTheIPv6Caution(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{names: []string{"pve1.example.com"}, ips: []string{"2001:db8::10"}})
+	if err := os.Rename(filepath.Join(h.root, pveServedPEM), filepath.Join(h.root, pveNodePEM)); err != nil {
+		t.Fatal(err)
+	}
+	s := h.session(Config{IP: "dhcp", Bridge: "vmbr0", CTID: "105", APIHost: "2001:db8::10", ProxmoxURL: "https://[2001:db8::10]:8006"})
+	s.Facts = &Facts{Prefix: netip.MustParsePrefix("192.0.2.10/24")}
+	m := &Model{S: s}
+	s.noteAPIFamily()
+	out := m.summary()
+	if !strings.Contains(out, "Note") || !strings.Contains(out, "which clusters without IPv6 cannot") {
+		t.Errorf("the summary lacks the caution:\n%s", out)
 	}
 }
 
@@ -61,14 +76,14 @@ func TestAPIFamilyNote(t *testing.T) {
 		s.Facts = &Facts{Prefix: netip.MustParsePrefix("192.0.2.10/24")}
 		s.noteAPIFamily()
 		if !c.want {
-			if len(s.Notices) != 0 {
-				t.Errorf("%s: noted %q", c.name, s.Notices)
+			if len(s.Cautions) != 0 {
+				t.Errorf("%s: noted %q", c.name, s.Cautions)
 			}
 			continue
 		}
 		want := "does not list this node's address 192.0.2.10 on vmbr0, so the appliance and the clusters reach the API at 2001:db8::10, which clusters without IPv6 cannot. To use 192.0.2.10, make this node's name resolve to it first (/etc/hosts), run pvecm updatecerts --force and systemctl restart pveproxy, then: sh install.sh --upgrade --ctid 105 --proxmox-url https://192.0.2.10:8006"
-		if len(s.Notices) != 1 || !strings.Contains(s.Notices[0], want) {
-			t.Errorf("%s: noted %q, want it to contain %q", c.name, s.Notices, want)
+		if len(s.Cautions) != 1 || !strings.Contains(s.Cautions[0], want) {
+			t.Errorf("%s: noted %q, want it to contain %q", c.name, s.Cautions, want)
 		}
 	}
 }

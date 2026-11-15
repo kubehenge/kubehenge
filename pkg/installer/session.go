@@ -19,6 +19,9 @@ type Session struct {
 	CA    *CAChoice
 	// Notices are the one-line decisions made without asking, such as the storage picked.
 	Notices []string
+	// Cautions are what the person has to know before installing, shown in the summary as well as
+	// in the plain output: a choice that leaves part of what they run unable to reach the API.
+	Cautions []string
 
 	// vlanAware holds what routeVLANError read of each bridge, as a form checks on every key.
 	vlanAware map[string]bool
@@ -294,8 +297,8 @@ func (s *Session) noteAPIFamily() {
 		return
 	}
 	ctid := cmp.Or(s.Cfg.CTID, "<id>")
-	s.noticef("Proxmox VE's certificate does not list this node's address %[1]s on %[2]s, so the appliance and the clusters reach the API at %[3]s, which clusters without IPv6 cannot. To use %[1]s, make this node's name resolve to it first (/etc/hosts), run pvecm updatecerts --force and systemctl restart pveproxy, then: sh install.sh --upgrade --ctid %[4]s --proxmox-url https://%[1]s:8006",
-		bridge, s.Cfg.Bridge, s.Cfg.APIHost, ctid)
+	s.Cautions = append(s.Cautions, fmt.Sprintf("Proxmox VE's certificate does not list this node's address %[1]s on %[2]s, so the appliance and the clusters reach the API at %[3]s, which clusters without IPv6 cannot. To use %[1]s, make this node's name resolve to it first (/etc/hosts), run pvecm updatecerts --force and systemctl restart pveproxy, then: sh install.sh --upgrade --ctid %[4]s --proxmox-url https://%[1]s:8006",
+		bridge, s.Cfg.Bridge, s.Cfg.APIHost, ctid))
 }
 
 // checkRouteVLAN refuses the VLAN of the node's default route on its bridge, taken from the route

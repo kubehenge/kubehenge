@@ -254,7 +254,7 @@ A name counts as it resolves on this node. The appliance and the clusters' VMs m
 
 Proxmox VE's own certificate (`pve-ssl.pem`) lists one address of a node. In a cluster that is the node's cluster address. A node on its own gets the first address its name resolves to, on a dual-stack node usually the IPv6 one.
 
-- The installer then takes the node's name or its IPv6 address, and notes the missing IPv4 one.
+- The installer then takes the node's name or its IPv6 address, and says in its summary that the IPv4 one is missing.
 - The setup check refuses an IPv6 address for a management cluster without IPv6.
 - A `--proxmox-url` the certificate lacks stops the installer, which names what it lists.
 

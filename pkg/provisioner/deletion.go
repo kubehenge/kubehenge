@@ -136,8 +136,15 @@ const ClusterBeingDeleted = "the cluster is being deleted"
 
 // validateDeleting refuses a change of the spec of a cluster being deleted. Finalizers, annotations
 // and labels still change, as Cluster API and the controller write them while the deletion runs.
+// So do spec.paused, which the etcd restore and Cluster API write, and the control plane endpoint,
+// which Cluster API copies from the infrastructure cluster.
 func validateDeleting(old, c *clusterv1.Cluster) error {
-	if old == nil || equality.Semantic.DeepEqual(old.Spec, c.Spec) {
+	if old == nil {
+		return nil
+	}
+	was, is := old.Spec.DeepCopy(), c.Spec.DeepCopy()
+	is.Paused, is.ControlPlaneEndpoint = was.Paused, was.ControlPlaneEndpoint
+	if equality.Semantic.DeepEqual(was, is) {
 		return nil
 	}
 	return apierrors.NewInvalid(clusterv1.GroupVersion.WithKind("Cluster").GroupKind(), c.Name, //nolint:wrapcheck // made here, not passed on

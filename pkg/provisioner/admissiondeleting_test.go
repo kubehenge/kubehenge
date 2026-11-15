@@ -37,6 +37,30 @@ func TestAdmissionRefusesASpecChangeToAClusterBeingDeleted(t *testing.T) {
 	}
 }
 
+func TestAdmissionLeavesAClusterBeingDeletedToDeleteNotToTheCiliumCheck(t *testing.T) {
+	t.Parallel()
+	old := deleting(storedCluster("team-a", "web", "ceph"))
+	old.Annotations = map[string]string{CiliumClusterIDAnnotation: "7"}
+	h, _ := hooksFor(t, old)
+	c := old.DeepCopy()
+	c.Annotations = map[string]string{AbandonAnnotation: c.Name}
+	if err := updateOf(t, h, old, c); err != nil {
+		t.Errorf("abandon-deletion with the Cilium id dropped, on a cluster being deleted: %v", err)
+	}
+}
+
+func TestAdmissionAdmitsPausingAndTheEndpointOfAClusterBeingDeleted(t *testing.T) {
+	t.Parallel()
+	old := deleting(storedCluster("team-a", "web", "ceph"))
+	h, _ := hooksFor(t, old)
+	c := old.DeepCopy()
+	c.Spec.Paused = new(true)
+	c.Spec.ControlPlaneEndpoint = clusterv1.APIEndpoint{Host: "192.0.2.9", Port: 6443}
+	if err := updateOf(t, h, old, c); err != nil {
+		t.Errorf("pausing and the endpoint on a cluster being deleted: %v", err)
+	}
+}
+
 func TestAdmissionAdmitsWhatTheControllersWriteToAClusterBeingDeleted(t *testing.T) {
 	t.Parallel()
 	old := deleting(storedCluster("team-a", "web", "ceph"))

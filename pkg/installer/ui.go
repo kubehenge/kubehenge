@@ -812,6 +812,9 @@ func (m *Model) summary() string {
 		entry = optYes
 	}
 	b.WriteString(row("Proxmox VE entry", entry))
+	for _, n := range m.S.Cautions {
+		b.WriteString(row("Note", n))
+	}
 	b.WriteString("\n")
 	return b.String()
 }
