@@ -802,8 +802,67 @@ workers=$(kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${na
 if [ -z "${control_planes}" ] || [ -z "${workers}" ]; then
     fail "the cluster has control planes '${control_planes}' and workers '${workers}'"
 fi
-# shellcheck disable=SC2086 # one Machine per word
-boot_log=$(boot_logs "${ns}" "${name}" ${control_planes} ${workers})
+# expect <Machine> <log> <pattern>: one log the machine's boot log is to hold, checked below.
+expected=
+expect() {
+    expected="${expected}$1	$2	$3
+"
+}
+journal_line='\[[0-9]+\]: '
+if [ "${distribution}" = talos ]; then
+    for m in ${control_planes} ${workers}; do
+        expect "${m}" "kernel messages" .
+        for service in machined apid kubelet; do
+            expect "${m}" "${service}" .
+        done
+    done
+    for m in ${control_planes}; do
+        expect "${m}" trustd .
+        expect "${m}" etcd .
+    done
+else
+    for m in ${control_planes} ${workers}; do
+        expect "${m}" cloud-init-output.log '^Cloud-init v[.] '
+        expect "${m}" "journal of cloud-init" "${journal_line}"
+    done
+    case "${distribution}" in
+        kubeadm) server_unit=kubelet agent_unit=kubelet ;;
+        rke2) server_unit=rke2-server agent_unit=rke2-agent ;;
+        *) server_unit=k3s agent_unit=k3s-agent ;;
+    esac
+    for m in ${control_planes}; do
+        expect "${m}" "journal of ${server_unit}" "${journal_line}"
+    done
+    for m in ${workers}; do
+        expect "${m}" "journal of ${agent_unit}" "${journal_line}"
+    done
+    if [ "${distribution}" = kubeadm ]; then
+        for m in ${control_planes} ${workers}; do
+            expect "${m}" "journal of containerd" "${journal_line}"
+        done
+    fi
+fi
+# boot_logs_hold_all: reads every machine's boot log afresh into boot_log; whether each holds what
+# it is to.
+boot_logs_hold_all() {
+    # shellcheck disable=SC2086 # one Machine per word
+    boot_log=$(boot_logs "${ns}" "${name}" ${control_planes} ${workers})
+    printf '%s' "${expected}" | while IFS='	' read -r m log pattern; do
+        # shellcheck disable=SC2310 # a log it lacks is the answer, not an error.
+        boot_log_shows "${boot_log}" "${m}" "${log}" "${pattern}" || exit 1
+    done
+}
+# A node's copy of its journals is a snapshot: kubehenge-boot-log.timer writes it 15 s after the
+# last copy ends, and a copy on a small node busy starting its pods can take seconds more. A worker
+# read moments after it joined can have started its agent after the last copy, so the logs are read
+# again until each copy has caught up, for six of the timer's periods.
+caught_up=$(($(date +%s) + 90))
+# shellcheck disable=SC2310 # a copy that never catches up is reported below, log by log.
+until boot_logs_hold_all; do
+    now=$(date +%s)
+    [ "${now}" -lt "${caught_up}" ] || break
+    sleep 15
+done
 # expect_boot_log <Machine> <log> <pattern>: the machine's boot log holds the log with a line
 # matching the pattern; when not, what was read, and on a node with a guest agent that runs commands
 # what SELinux denied there, the likeliest reason its agent could not read a file, and how the timer
@@ -825,40 +884,11 @@ expect_boot_log() {
     fi
     fail "the boot log of $1 holds no $2 with a line matching '$3'"
 }
-journal_line='\[[0-9]+\]: '
-if [ "${distribution}" = talos ]; then
-    for m in ${control_planes} ${workers}; do
-        expect_boot_log "${m}" "kernel messages" .
-        for service in machined apid kubelet; do
-            expect_boot_log "${m}" "${service}" .
-        done
-    done
-    for m in ${control_planes}; do
-        expect_boot_log "${m}" trustd .
-        expect_boot_log "${m}" etcd .
-    done
-else
-    for m in ${control_planes} ${workers}; do
-        expect_boot_log "${m}" cloud-init-output.log '^Cloud-init v[.] '
-        expect_boot_log "${m}" "journal of cloud-init" "${journal_line}"
-    done
-    case "${distribution}" in
-        kubeadm) server_unit=kubelet agent_unit=kubelet ;;
-        rke2) server_unit=rke2-server agent_unit=rke2-agent ;;
-        *) server_unit=k3s agent_unit=k3s-agent ;;
-    esac
-    for m in ${control_planes}; do
-        expect_boot_log "${m}" "journal of ${server_unit}" "${journal_line}"
-    done
-    for m in ${workers}; do
-        expect_boot_log "${m}" "journal of ${agent_unit}" "${journal_line}"
-    done
-    if [ "${distribution}" = kubeadm ]; then
-        for m in ${control_planes} ${workers}; do
-            expect_boot_log "${m}" "journal of containerd" "${journal_line}"
-        done
-    fi
-fi
+while IFS='	' read -r m log pattern; do
+    [ -z "${m}" ] || expect_boot_log "${m}" "${log}" "${pattern}"
+done << EOF
+${expected}
+EOF
 
 step "the cluster's support bundle: the Cluster, its boot logs, no Secret and no secret"
 bundle=${work}/bundle.tar.gz
