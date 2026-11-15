@@ -41,6 +41,9 @@ const (
 	protected   protection = 1
 )
 
+// protectionOption is the protection flag's key in a VM's configuration.
+const protectionOption = "protection"
+
 // plannedChange is one resource's change in a plan, as `tofu show -json` prints it.
 type plannedChange struct {
 	Address string       `json:"address"`
@@ -174,7 +177,7 @@ func (a *Appliance) setProtection(ctx context.Context, t *pve.Ticket, vm managem
 		if value == unprotected {
 			return liftProtection(ctx, c, path)
 		}
-		if err := c.Put(ctx, path, map[string]any{"protection": int(value)}, nil); err != nil {
+		if err := c.Put(ctx, path, map[string]any{protectionOption: int(value)}, nil); err != nil {
 			return fmt.Errorf("setting protection=%d: %w", value, err)
 		}
 		return nil
@@ -198,7 +201,7 @@ func liftProtection(ctx context.Context, c *proxmox.Client, path string) error {
 		if err = c.Get(ctx, path, &config); err != nil {
 			return fmt.Errorf("reading the configuration: %w", err)
 		}
-		change := map[string]any{"protection": int(unprotected), "digest": config.Digest}
+		change := map[string]any{protectionOption: int(unprotected), "digest": config.Digest}
 		if strings.Contains(config.Description, csiLiftedMarker) {
 			description := strings.ReplaceAll(strings.ReplaceAll(config.Description, "\n"+csiLiftedMarker, ""), csiLiftedMarker, "")
 			if description == "" {
