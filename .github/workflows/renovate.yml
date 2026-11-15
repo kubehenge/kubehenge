@@ -68,7 +68,7 @@ jobs:
           git diff --stat
           echo "changed=true" >> "$GITHUB_OUTPUT"
           draft=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open \
-            --json isDraft --jq '.[0].isDraft // true')
+            --json isDraft --jq 'if length == 0 then true else .[0].isDraft end')
           if [ "$draft" = true ]; then
             tests=
           else
@@ -85,8 +85,9 @@ jobs:
           path: ${{ runner.temp }}/refresh.patch
           retention-days: 1
 
-  # Runs nothing from the branch: it applies the patch to the same commit, refuses one that touches
-  # anything but the refreshed files, and pushes only if the branch has not moved since.
+  # Runs nothing from the branch: it applies the patch to the same commit and refuses one that
+  # touches anything but the refreshed files. GitHub's API makes the commit, which the ruleset's
+  # signature rule needs, and refuses it once the branch has moved on from the refreshed commit.
   commit:
     name: Commit
     needs: refresh
@@ -94,7 +95,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
-      contents: write # to push the refreshed files to the branch
+      contents: write # to commit the refreshed files to the branch
       actions: write # to start the workflows of the required checks on the branch
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -116,17 +117,24 @@ jobs:
             echo "the patch changes files the refresh never writes" >&2
             exit 1
           fi
-          git apply --index "$patch"
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'Refresh the pins and fixtures the updates leave stale'
-          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          head=$(git ls-remote "$remote" "refs/heads/${BRANCH}" | cut -f1)
-          if [ "$head" != "$GITHUB_SHA" ]; then
-            echo "${BRANCH} moved to ${head} since ${GITHUB_SHA}; its own run refreshes it" >&2
-            exit 1
-          fi
-          git push "$remote" "HEAD:refs/heads/${BRANCH}"
+          git apply "$patch"
+          git diff --name-only | while read -r path; do
+            jq -n --arg path "$path" --arg contents "$(base64 -w0 "$path")" \
+              '{path: $path, contents: $contents}'
+          done | jq -s . > "$RUNNER_TEMP/additions.json"
+          jq -n --slurpfile additions "$RUNNER_TEMP/additions.json" \
+            --arg repo "$GITHUB_REPOSITORY" --arg branch "$BRANCH" --arg head "$GITHUB_SHA" '{
+              query: ("mutation($input: CreateCommitOnBranchInput!) {"
+                + " createCommitOnBranch(input: $input) { commit { oid } } }"),
+              variables: {input: {
+                branch: {repositoryNameWithOwner: $repo, branchName: $branch},
+                expectedHeadOid: $head,
+                message: {headline: "Refresh the pins and fixtures the updates leave stale"},
+                fileChanges: {additions: $additions[0]}
+              }}
+            }' > "$RUNNER_TEMP/commit.json"
+          gh api graphql --input "$RUNNER_TEMP/commit.json" \
+            --jq '.data.createCommitOnBranch.commit.oid'
           # The workflows of the ruleset's required checks: Test and Dependencies, CodeQL's, e2e.
           gh workflow run ci.yml --ref "$BRANCH"
           gh workflow run codeql.yml --ref "$BRANCH"
