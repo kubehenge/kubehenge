@@ -219,13 +219,7 @@ export function EtcdSnapshotFieldset({
   const update = (patch: Partial<EtcdSnapshotFields>): void => onChange({ ...value, ...patch });
   return (
     <>
-      <TargetScheduleFields
-        value={value}
-        update={update}
-        targets={targets}
-        problems={problems}
-        volume
-      />
+      <TargetScheduleFields value={value} update={update} targets={targets} problems={problems} volume />
       <Field label="Snapshots to keep" error={problems.keep}>
         {(id) => (
           <input
@@ -300,12 +294,7 @@ export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster;
       }
     >
       <label className="check">
-        <input
-          type="checkbox"
-          checked={enabled}
-          onChange={(e) => setEnabled(e.target.checked)}
-        />{" "}
-        Take etcd snapshots
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Take etcd snapshots
       </label>
       <Info about="etcd snapshots">{etcdSnapshotsInfo}</Info>
       {enabled && (

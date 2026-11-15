@@ -461,6 +461,29 @@ describe("clusters", () => {
     expect(deletion?.body).toStrictEqual({ confirm: "web" });
   });
 
+  it("deletes the etcd snapshots on the backup volume only when asked", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web");
+    const onVolume: Cluster = { ...web, variables: { ...web.variables, etcdSnapshots: { enabled: true } } };
+    const calls = fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": () => ({ body: onVolume }),
+      "DELETE /api/clusters/default/web": () => ({ status: 202 }),
+      "GET /api/clusters": () => ({ body: [] }),
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Delete" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete cluster web" });
+    const drop = within(dialog).getByRole("checkbox", { name: "Delete its etcd snapshots on the backup volume" });
+    expect(drop).not.toBeChecked();
+    await user.click(drop);
+    await user.type(within(dialog).getByLabelText("Confirm name"), "web");
+    await user.click(within(dialog).getByRole("button", { name: "Delete cluster" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
+    const deletion = calls.find((c) => c.key === "DELETE /api/clusters/default/web");
+    expect(deletion?.body).toStrictEqual({ confirm: "web", deleteEtcdSnapshots: true });
+  });
+
   it("says what runs the workloads of a cluster without workers", async () => {
     window.history.replaceState(null, "", "/clusters/default/web");
     const alone: Cluster = { ...web, workers: { desired: 0, ready: 0, available: 0, upToDate: 0 } };

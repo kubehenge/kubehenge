@@ -36,13 +36,18 @@ func (w *handOverAPI) Client(context.Context, *clusterv1.Cluster) (client.Client
 	return w.kube, w.found, nil
 }
 
-func newFakeWorkloads(t *testing.T, funcs interceptor.Funcs) *handOverAPI {
+// newFakeWorkloads is a workload API server, its calls changed by funcs where given.
+func newFakeWorkloads(t *testing.T, funcs *interceptor.Funcs) *handOverAPI {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	return &handOverAPI{kube: fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(funcs).Build(), found: true}
+	b := fake.NewClientBuilder().WithScheme(scheme)
+	if funcs != nil {
+		b = b.WithInterceptorFuncs(*funcs)
+	}
+	return &handOverAPI{kube: b.Build(), found: true}
 }
 
 // handOverSecrets lists the Secrets left of hand-overs.
@@ -57,7 +62,7 @@ func handOverSecrets(t *testing.T, w *handOverAPI) []corev1.Secret {
 
 var (
 	nameLine  = regexp.MustCompile(`(?m)^name='([^']+)'$`)
-	countLine = regexp.MustCompile(`(?m)^count='([0-9]+)'$`)
+	countLine = regexp.MustCompile(`(?m)^count='(\d+)'$`)
 )
 
 // volumeRestoreFixture is newRestoreFixture with the cluster's snapshots on the backup volume and
@@ -96,7 +101,7 @@ func TestEtcdRestoreFromTheVolumeThroughTheAPIServer(t *testing.T) {
 		t.Run(string(d), func(t *testing.T) {
 			t.Parallel()
 			f, vol := volumeRestoreFixture(t, d)
-			workloads := newFakeWorkloads(t, interceptor.Funcs{})
+			workloads := newFakeWorkloads(t, nil)
 			f.r.Workloads = workloads
 			fetched := false
 			f.guests.seen = func(_ int64, step, script string) {
@@ -159,7 +164,7 @@ func TestEtcdRestoreFromTheVolumeNeedsTheAPIServer(t *testing.T) {
 	t.Parallel()
 	for name, workloads := range map[string]*handOverAPI{
 		"no kubeconfig": {found: false},
-		"API server down": newFakeWorkloads(t, interceptor.Funcs{Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
+		"API server down": newFakeWorkloads(t, &interceptor.Funcs{Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
 			return errors.New("dial tcp 10.0.0.10:6443: connect: connection refused")
 		}}),
 	} {
@@ -184,7 +189,7 @@ func TestEtcdRestoreWaitsForTheVolume(t *testing.T) {
 	t.Parallel()
 	f, vol := volumeRestoreFixture(t, templates.Talos)
 	vol.asleep = true
-	f.r.Workloads = newFakeWorkloads(t, interceptor.Funcs{})
+	f.r.Workloads = newFakeWorkloads(t, nil)
 	run := &restoreRun{r: f.r, key: client.ObjectKey{Namespace: "team-a", Name: "web"}, cluster: f.cluster(), talos: true}
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -206,7 +211,7 @@ func TestEtcdRestoreWaitsForTheVolume(t *testing.T) {
 // Over maxHandOver the snapshot is refused rather than filling the cluster's etcd.
 func TestHandOverRefusesALargeSnapshot(t *testing.T) {
 	t.Parallel()
-	w := newFakeWorkloads(t, interceptor.Funcs{})
+	w := newFakeWorkloads(t, nil)
 	if _, err := writeChunks(context.Background(), w.kube, "id", bytes.NewReader(make([]byte, maxHandOver+1))); err == nil || !strings.Contains(err.Error(), "too large") {
 		t.Fatalf("a snapshot over the bound: %v", err)
 	}

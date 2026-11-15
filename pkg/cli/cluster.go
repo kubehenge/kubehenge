@@ -105,6 +105,7 @@ decide what it may do, as they do for a user signed in to the interface.`,
 	o.namespaceFlag(scale.Flags())
 
 	var yes bool
+	removal := clusterRemoval{}
 	deleteCmd := &cobra.Command{
 		Use:   "delete NAME --yes",
 		Short: "Delete a cluster, its VMs and its persistent volumes",
@@ -113,10 +114,12 @@ decide what it may do, as they do for a user signed in to the interface.`,
 			if !yes {
 				return errors.New("deleting a cluster cannot be undone: add --yes")
 			}
-			return o.delete(cmd.Context(), cmd.OutOrStdout(), args[0])
+			removal.Confirm = args[0]
+			return o.delete(cmd.Context(), cmd.OutOrStdout(), removal)
 		},
 	}
 	deleteCmd.Flags().BoolVar(&yes, "yes", false, "confirm the deletion, which cannot be undone")
+	deleteCmd.Flags().BoolVar(&removal.DeleteEtcdSnapshots, "delete-etcd-snapshots", false, "delete its etcd snapshots on the backup volume too")
 	o.namespaceFlag(deleteCmd.Flags())
 
 	cmd.AddCommand(slices.Concat([]*cobra.Command{
@@ -731,15 +734,22 @@ func (o *clusterOptions) change(ctx context.Context, out io.Writer, name string,
 	return nil
 }
 
-func (o *clusterOptions) delete(ctx context.Context, out io.Writer, name string) error {
-	path, err := o.clusterPath(ctx, name)
+// clusterRemoval is a deletion's request: the cluster's name, and whether its etcd snapshots on the
+// backup volume go too.
+type clusterRemoval struct {
+	Confirm             string `json:"confirm"`
+	DeleteEtcdSnapshots bool   `json:"deleteEtcdSnapshots,omitempty"`
+}
+
+func (o *clusterOptions) delete(ctx context.Context, out io.Writer, removal clusterRemoval) error {
+	path, err := o.clusterPath(ctx, removal.Confirm)
 	if err != nil {
 		return err
 	}
-	if _, err := o.call(ctx, http.MethodDelete, path, map[string]string{"confirm": name}); err != nil {
+	if _, err := o.call(ctx, http.MethodDelete, path, removal); err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(out, "cluster %s deleting\n", name)
+	_, _ = fmt.Fprintf(out, "cluster %s deleting\n", removal.Confirm)
 	return nil
 }
 

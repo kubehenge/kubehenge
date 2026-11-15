@@ -352,8 +352,11 @@ export interface Api {
   /** change is made against the cluster as its user was shown it. A newer generation refuses it. */
   change: (c: ClusterShown, req: ChangeRequest) => Promise<Cluster>;
   plan: (c: ClusterShown, req: ChangeRequest) => Promise<Plan>;
-  /** remove deletes the cluster. confirm is its name as the user typed it. */
-  remove: (ns: string, name: string, confirm: string) => Promise<void>;
+  /**
+   * remove deletes the cluster. confirm is its name as the user typed it. deleteEtcdSnapshots takes
+   * its snapshots on the backup volume too.
+   */
+  remove: (ns: string, name: string, typed: { confirm: string; deleteEtcdSnapshots: boolean }) => Promise<void>;
   backups: (ns: string, name: string) => Promise<ClusterBackups>;
   backUp: (ns: string, name: string) => Promise<BackupRun>;
   /** deleteBackup has Velero delete a backup before it runs out, once its name is typed to confirm. */
@@ -536,7 +539,8 @@ export const api: Api = {
     requestAgainst("PATCH", clusterPath(c.namespace, c.name), { body: req, generation: c.generation }),
   plan: (c, req) =>
     requestAgainst("POST", `${clusterPath(c.namespace, c.name)}/plan`, { body: req, generation: c.generation }),
-  remove: (ns, name, confirm) => act("DELETE", clusterPath(ns, name), { confirm }),
+  remove: (ns, name, { confirm, deleteEtcdSnapshots }) =>
+    act("DELETE", clusterPath(ns, name), deleteEtcdSnapshots ? { confirm, deleteEtcdSnapshots } : { confirm }),
   backups: (ns, name) => request("GET", `${clusterPath(ns, name)}/backups`),
   backUp: (ns, name) => request("POST", `${clusterPath(ns, name)}/backups`),
   deleteBackup: (ns, name, { backup, confirm }) =>

@@ -479,8 +479,14 @@ func (s *EtcdSnapshotter) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		}
 		return ctrl.Result{}, fmt.Errorf("reading the cluster: %w", err)
 	}
-	if !Owns(cluster, s.ClassNamespace) || !cluster.DeletionTimestamp.IsZero() {
+	if !Owns(cluster, s.ClassNamespace) {
 		return ctrl.Result{}, nil
+	}
+	if !cluster.DeletionTimestamp.IsZero() {
+		return s.removed(ctx, cluster)
+	}
+	if err := s.holdDeletion(ctx, cluster); err != nil {
+		return ctrl.Result{}, err
 	}
 	settings, err := EtcdSnapshotsOf(cluster)
 	if err != nil {

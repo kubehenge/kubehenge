@@ -619,28 +619,35 @@ func (run *restoreRun) fetch(ctx context.Context) error {
 	return run.on(ctx, run.nodes[0], "fetching the snapshot", fetchScriptFor(link, password, sum, run.target.CACertificate))
 }
 
-// sealedForNode is the snapshot as the node gets it, encrypted with password, and the SHA-256 the
-// node checks it by. done lets go of what it reads from.
-func (run *restoreRun) sealedForNode(ctx context.Context, password string) (io.Reader, string, func(), error) {
+// sealedSnapshot is the snapshot as the node gets it, and the SHA-256 the node checks it by. done
+// lets go of what it reads from.
+type sealedSnapshot struct {
+	body io.Reader
+	sum  string
+	done func()
+}
+
+// sealedForNode is the snapshot encrypted with password.
+func (run *restoreRun) sealedForNode(ctx context.Context, password string) (sealedSnapshot, error) {
 	var plain io.ReadCloser
 	sum := run.snapshot.SHA256
 	remove := func() {}
 	if run.scripts.Bumps {
 		r, err := run.target.OpenEtcdSnapshot(ctx, run.snapshot.Name)
 		if err != nil {
-			return nil, "", nil, err
+			return sealedSnapshot{}, err
 		}
 		plain = r
 	} else {
 		path, bumped, err := run.bumpedForNode(ctx)
 		if err != nil {
-			return nil, "", nil, err
+			return sealedSnapshot{}, err
 		}
 		remove = func() { _ = os.Remove(path) }
 		f, err := os.Open(path) //nolint:gosec // the controller's own file of the snapshot
 		if err != nil {
 			remove()
-			return nil, "", nil, fmt.Errorf("reading the snapshot: %w", err)
+			return sealedSnapshot{}, fmt.Errorf("reading the snapshot: %w", err)
 		}
 		plain, sum = f, bumped
 	}
@@ -648,24 +655,24 @@ func (run *restoreRun) sealedForNode(ctx context.Context, password string) (io.R
 	body, err := opensslSeal(plain, password)
 	if err != nil {
 		done()
-		return nil, "", nil, err
+		return sealedSnapshot{}, err
 	}
-	return body, sum, done, nil
+	return sealedSnapshot{body: body, sum: sum, done: done}, nil
 }
 
 // transcode stores the snapshot under key encrypted with password, and returns the SHA-256 the
 // node checks it by. Where the node's restore keeps the snapshot's revision, what is stored has its
 // revision moved on (bumpedForNode). Otherwise the snapshot is encrypted as it is read.
 func (run *restoreRun) transcode(ctx context.Context, key, password string) (string, error) {
-	body, sum, done, err := run.sealedForNode(ctx, password)
+	sealed, err := run.sealedForNode(ctx, password)
 	if err != nil {
 		return "", err
 	}
-	defer done()
-	if _, err := run.target.Store.Put(ctx, key, body, nil); err != nil {
+	defer sealed.done()
+	if _, err := run.target.Store.Put(ctx, key, sealed.body, nil); err != nil {
 		return "", fmt.Errorf("storing the transcoded snapshot: %w", err)
 	}
-	return sum, nil
+	return sealed.sum, nil
 }
 
 // bumpedForNode keeps the snapshot, checked against its checksum, in a file of ScratchDir with its

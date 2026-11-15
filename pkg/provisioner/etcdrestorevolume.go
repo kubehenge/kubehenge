@@ -54,9 +54,9 @@ func adminKubeconfig(d templates.Distribution) string {
 		return "/etc/rancher/rke2/rke2.yaml"
 	case templates.K3s:
 		return "/etc/rancher/k3s/k3s.yaml"
-	default:
-		return "/etc/kubernetes/admin.conf"
+	case templates.Kubeadm, templates.Talos:
 	}
+	return "/etc/kubernetes/admin.conf"
 }
 
 // handOver writes the snapshot, encrypted with password, into Secrets of the cluster, has the first
@@ -80,16 +80,16 @@ func (run *restoreRun) handOver(ctx context.Context, password string) error {
 	defer func() {
 		_ = workload.DeleteAllOf(context.WithoutCancel(ctx), &corev1.Secret{}, client.InNamespace(metav1.NamespaceSystem), client.MatchingLabels{handOverLabel: id})
 	}()
-	body, sum, done, err := run.sealedForNode(ctx, password)
+	sealed, err := run.sealedForNode(ctx, password)
 	if err != nil {
 		return err
 	}
-	defer done()
-	count, err := writeChunks(ctx, workload, id, body)
+	defer sealed.done()
+	count, err := writeChunks(ctx, workload, id, sealed.body)
 	if err != nil {
 		return err
 	}
-	return run.on(ctx, run.nodes[0], "fetching the snapshot", apiFetchScriptFor(adminKubeconfig(distributionOf(run.cluster)), handOverName(id), count, password, sum))
+	return run.on(ctx, run.nodes[0], "fetching the snapshot", apiFetchScriptFor(adminKubeconfig(distributionOf(run.cluster)), handOverName(id), count, password, sealed.sum))
 }
 
 // handOverName is the start of the names of a hand-over's Secrets.
@@ -105,14 +105,12 @@ func writeChunks(ctx context.Context, workload client.Client, id string, body io
 		if n > 0 {
 			total += n
 			if total > maxHandOver {
-				return 0, fmt.Errorf("the snapshot is over %d MiB, too large to pass through the cluster's API server. Download it and restore by hand", maxHandOver>>20)
+				return 0, fmt.Errorf("the snapshot is over %d MiB, too large to pass through the cluster's API server. Download it and restore by hand", maxHandOver/bytesPerMiB)
 			}
 			s := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Namespace: metav1.NamespaceSystem, Name: fmt.Sprintf("%s-%04d", handOverName(id), i),
-					Labels: map[string]string{handOverLabel: id},
-				},
-				Data: map[string][]byte{handOverKey: append([]byte(nil), buf[:n]...)},
+				Namespace: metav1.NamespaceSystem, Name: fmt.Sprintf("%s-%04d", handOverName(id), i),
+				Labels: map[string]string{handOverLabel: id},
+				Data:   map[string][]byte{handOverKey: append([]byte(nil), buf[:n]...)},
 			}
 			if cerr := workload.Create(ctx, s); cerr != nil {
 				return 0, fmt.Errorf("%w: %w", ErrHandOverAPIDown, cerr)

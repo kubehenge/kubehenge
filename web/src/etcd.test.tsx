@@ -148,7 +148,9 @@ describe("etcd snapshot settings", () => {
     // Without a target the snapshots go to the backup volume, which needs no key.
     expect(etcdFieldsOf({ enabled: true }).target).toBe(volumeTarget);
     expect(etcdProblems(etcdFieldsOf({ enabled: true }), offered, { backups: "store" })).toStrictEqual({});
-    expect(etcdSnapshotsText({ enabled: true })).toBe("Every 12 hours from 00:00 (UTC), keeps 14, to the backup volume");
+    expect(etcdSnapshotsText({ enabled: true })).toBe(
+      "Every 12 hours from 00:00 (UTC), keeps 14, to the backup volume",
+    );
   });
 
   it("keep the backup volume once chosen, and a bucket once chosen", () => {
@@ -162,36 +164,47 @@ describe("etcd snapshot settings", () => {
     expect(etcdSnapshotsVariable({ ...volume, target: "store" }).target).toBe("store");
   });
 
-  for (const [from, to, sent] of [
-    ["store", volumeName, undefined],
-    [volumeName, "store", "store"],
-  ] as const) {
-    it(`move from ${from} to ${to} in a cluster's options`, async () => {
-      window.history.replaceState(null, "", "/clusters/clusters/web/options");
-      const etcdSnapshots = from === "store" ? { enabled: true, target: "store" } : { enabled: true };
-      const calls = fakeServer({
-        ...signedIn,
-        "GET /api/clusters/clusters/web": { body: { ...cluster, variables: { ...cluster.variables, etcdSnapshots } } },
-        "GET /api/classes": { body: [rke2] },
-        "GET /api/clusters/clusters/web/credentials/backup": { body: { purpose: "backup", set: true, canChange: true } },
-        "PATCH /api/clusters/clusters/web": { body: snapshotting },
-      });
-      const user = userEvent.setup({ delay: null });
-      render(<App />);
-      await user.click(await screen.findByRole("button", { name: "Edit etcd snapshots" }));
-      const dialog = screen.getByRole("dialog", { name: "Edit etcd snapshots" });
-      const target = within(dialog).getByLabelText("Target");
-      expect(target).toHaveDisplayValue(from === "store" ? /^store:/u : volumeName);
-      await user.selectOptions(target, to === "store" ? "store" : volumeTarget);
-      await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
-      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-      await applyStaged(user);
-      const body = calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body as {
-        variables: { etcdSnapshots: Record<string, unknown> };
-      };
-      expect(body.variables.etcdSnapshots["target"]).toBe(sent);
+  it.each([
+    {
+      from: "store",
+      to: volumeName,
+      etcdSnapshots: { enabled: true, target: "store" },
+      shown: /^store:/u,
+      pick: volumeTarget,
+      sent: { enabled: true, keep: 14, schedule: "0 */12 * * *", timeZone: "UTC" },
+    },
+    {
+      from: volumeName,
+      to: "store",
+      etcdSnapshots: { enabled: true },
+      shown: volumeName,
+      pick: "store",
+      sent: { enabled: true, keep: 14, schedule: "0 */12 * * *", target: "store", timeZone: "UTC" },
+    },
+  ])("move from $from to $to in a cluster's options", async ({ etcdSnapshots, shown, pick, sent }) => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const calls = fakeServer({
+      ...signedIn,
+      "GET /api/clusters/clusters/web": { body: { ...cluster, variables: { ...cluster.variables, etcdSnapshots } } },
+      "GET /api/classes": { body: [rke2] },
+      "GET /api/clusters/clusters/web/credentials/backup": {
+        body: { purpose: "backup", set: true, canChange: true },
+      },
+      "PATCH /api/clusters/clusters/web": { body: snapshotting },
     });
-  }
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Edit etcd snapshots" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit etcd snapshots" });
+    const target = within(dialog).getByLabelText("Target");
+    expect(target).toHaveDisplayValue(shown);
+    await user.selectOptions(target, pick);
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
+    const body = calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body;
+    expect(body).toHaveProperty("variables.etcdSnapshots", sent);
+  });
 
   it("allow a restore only from a snapshot of the cluster's distribution and Kubernetes minor", () => {
     const c: Cluster = snapshotting;

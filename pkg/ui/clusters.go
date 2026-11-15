@@ -1545,6 +1545,8 @@ func setVariable(c *clusterv1.Cluster, name string, value json.RawMessage) {
 // confirmRequest names the cluster a request that cannot be undone is for, as its user typed it.
 type confirmRequest struct {
 	Confirm string `json:"confirm"`
+	// DeleteEtcdSnapshots has a deletion take the cluster's snapshots on the backup volume too.
+	DeleteEtcdSnapshots bool `json:"deleteEtcdSnapshots,omitempty"`
 }
 
 // confirmed tells whether a request that cannot be undone names the cluster it is for, and answers
@@ -1569,8 +1571,12 @@ func (s *Server) deleteCluster(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	// The typed name confirms the deletion as the annotation does for kubectl, so the chart's
 	// deletion guard is lifted here rather than asked of the user again.
-	allow := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q}}}`, provisioner.AllowDeletionAnnotation, u.ticket.Username)
-	if err := u.kube.Patch(r.Context(), c, client.RawPatch(types.MergePatchType, allow)); err != nil && !apierrors.IsNotFound(err) {
+	allow := client.MergeFrom(c.DeepCopy())
+	metav1.SetMetaDataAnnotation(&c.ObjectMeta, provisioner.AllowDeletionAnnotation, u.ticket.Username)
+	if req.DeleteEtcdSnapshots {
+		metav1.SetMetaDataAnnotation(&c.ObjectMeta, provisioner.DeleteEtcdSnapshotsAnnotation, "true")
+	}
+	if err := u.kube.Patch(r.Context(), c, allow); err != nil && !apierrors.IsNotFound(err) {
 		s.kubeError(w, r, err)
 		return
 	}

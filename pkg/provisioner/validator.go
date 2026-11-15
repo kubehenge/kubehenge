@@ -61,6 +61,9 @@ func (v *ClusterValidator) validateOf(ctx context.Context, old, c *clusterv1.Clu
 	if err := validateAbandon(old, c); err != nil || !c.DeletionTimestamp.IsZero() {
 		return nil, err
 	}
+	if errs := validateDeleteSnapshots(c); len(errs) > 0 {
+		return nil, invalid(c, errs)
+	}
 	// The spec checks read the clock, Proxmox VE and the class, so a cluster can fall short of them
 	// without a change. Annotations, labels and finalizers must still go through: deleting a cluster
 	// starts with an annotation.
