@@ -183,6 +183,69 @@ func TestIntegrationManifestsWithoutTheSiteCAsVariableApplyAndKeepIt(t *testing.
 	}
 }
 
+// TestIntegrationTheRolloutNoteIsTheControllers holds the note that paces the site CA to the
+// controller through the chart's webhook, also for updates that change no more than the note.
+func TestIntegrationTheRolloutNoteIsTheControllers(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
+	api, hooks := startClusterAPI(t, "testdata/clusterapi-values.yaml")
+	ctx := context.Background()
+	site := integrationAuthority(t, "site")
+	hooks.SiteCA = func() string { return site }
+	admin, controller := api.Client, asController(t, api.Config, api.Client.Scheme())
+	const planted = `{"at":"2099-01-01T00:00:00Z","generations":{"ControlPlane":999999}}`
+	key := client.ObjectKey{Namespace: "team-a", Name: "prod"}
+	note := func(c client.Client) string {
+		t.Helper()
+		var live clusterv1.Cluster
+		if err := c.Get(ctx, key, &live); err != nil {
+			t.Fatal(err)
+		}
+		return live.Annotations[SiteRollAnnotation]
+	}
+	patchNote := func(c client.Client, value string) error {
+		var live clusterv1.Cluster
+		if err := c.Get(ctx, key, &live); err != nil {
+			t.Fatal(err)
+		}
+		return c.Patch(ctx, &live, client.RawPatch(types.MergePatchType, []byte(`{"metadata":{"annotations":{"`+SiteRollAnnotation+`":`+value+`}}}`)))
+	}
+
+	created := clusterOf("kubehenge-k3s", "prod", 5, nil)
+	created.Annotations = map[string]string{SiteRollAnnotation: planted}
+	if err := admin.Create(ctx, created); err != nil {
+		t.Fatal(err)
+	}
+	if got := note(admin); got != "" {
+		t.Errorf("a create kept the note %q it carried", got)
+	}
+	if err := patchNote(admin, jsonOf(t, planted)); err != nil {
+		t.Fatalf("a user adding a note: %v", err)
+	}
+	if got := note(admin); got != "" {
+		t.Errorf("a user added the note %q", got)
+	}
+	written := `{"at":"2026-11-18T12:00:00Z","generations":{"ControlPlane":1}}`
+	if err := patchNote(controller, jsonOf(t, written)); err != nil {
+		t.Fatalf("the controller writing its note: %v", err)
+	}
+	if got := note(admin); got != written {
+		t.Fatalf("the controller's note = %q, want %q", got, written)
+	}
+	for name, value := range map[string]string{"dropping": "null", "changing": jsonOf(t, planted)} {
+		if err := patchNote(admin, value); err != nil {
+			t.Fatalf("a user %s the note: %v", name, err)
+		}
+		if got := note(admin); got != written {
+			t.Errorf("after a user %s the note: %q, want the controller's kept", name, got)
+		}
+	}
+	if err := patchNote(controller, "null"); err != nil {
+		t.Fatalf("the controller dropping its note: %v", err)
+	}
+	if got := note(admin); got != "" {
+		t.Errorf("the controller's removal left %q", got)
+	}
+}
+
 func jsonOf(t *testing.T, v any) string {
 	t.Helper()
 	raw, err := json.Marshal(v)

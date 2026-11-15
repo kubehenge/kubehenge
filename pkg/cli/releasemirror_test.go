@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestControllerRefusesABadReleaseMirror(t *testing.T) {
+func TestControllerRefusesABadReleaseMirrorAndReportsABadAuthority(t *testing.T) {
 	t.Parallel()
 	o := &controllerOptions{}
 	o.releaseMirror.URL = "https://mirror.example.org/"
@@ -20,8 +20,25 @@ func TestControllerRefusesABadReleaseMirror(t *testing.T) {
 	}
 	o = &controllerOptions{releaseMirrorCA: ca}
 	o.releaseMirror.URL = "https://mirror.example.org"
-	if err := o.parseReleaseMirror(); err == nil || !strings.Contains(err.Error(), "holds no PEM certificate") {
-		t.Errorf("an authority without a certificate gave %v", err)
+	// An authority without a certificate stops no controller. It is reported on each cluster instead.
+	if err := o.parseReleaseMirror(); err != nil || !strings.Contains(o.r.ReleaseMirrorProblem, "--release-mirror-ca") ||
+		!strings.Contains(o.r.ReleaseMirrorProblem, "holds no PEM certificate") {
+		t.Errorf("an authority without a certificate gave %v with the problem %q", err, o.r.ReleaseMirrorProblem)
+	}
+	o = &controllerOptions{releaseMirrorCA: ca}
+	o.releaseMirror.URL = "http://mirror.example.org"
+	if err := o.parseReleaseMirror(); err == nil || !strings.Contains(err.Error(), "https://") {
+		t.Errorf("an authority for an http:// mirror gave %v", err)
+	}
+	_, authority := authorityFile(t, "mirror")
+	kept := filepath.Join(t.TempDir(), "kept.crt")
+	if err := os.WriteFile(kept, []byte("# ---------- Mirror CA ----------\n"+authority), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	o = &controllerOptions{releaseMirrorCA: kept}
+	o.releaseMirror.URL = "https://mirror.example.org"
+	if err := o.parseReleaseMirror(); err != nil || o.r.ReleaseMirrorProblem != "" {
+		t.Errorf("a hand-kept bundle with a comment separator gave %v with the problem %q", err, o.r.ReleaseMirrorProblem)
 	}
 	o = &controllerOptions{releaseMirrorCA: filepath.Join(t.TempDir(), "missing")}
 	if err := o.parseReleaseMirror(); err == nil || !strings.Contains(err.Error(), "--release-mirror-ca") {

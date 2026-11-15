@@ -130,7 +130,7 @@ func TestNodeSiteSettingsAreHeldToCertificatesAndAddresses(t *testing.T) {
 		"a private key":            {mirrors: `[` + mirror("docker.io", `["https://a.example.org"]`, key) + `]`, want: "private key"},
 		"an expired authority":     {mirrors: `[` + mirror("docker.io", `["https://a.example.org"]`, expired) + `]`, want: "certificate 1 (old) expired on"},
 		"an authority not yet":     {mirrors: `[` + mirror("docker.io", `["https://a.example.org"]`, future) + `]`, want: "is valid only from"},
-		"text after a certificate": {mirrors: `[` + mirror("docker.io", `["https://a.example.org"]`, valid+"EOF\n") + `]`, want: "text besides"},
+		"text after a certificate": {mirrors: `[` + mirror("docker.io", `["https://a.example.org"]`, valid+"EOF\n") + `]`, want: "text after its last PEM block"},
 		"an authority for http":    {mirrors: `[` + mirror("docker.io", `["http://a.example.org"]`, valid) + `]`, want: "https:// endpoints"},
 		"one host, two authorities": {
 			mirrors: `[` + mirror("docker.io", `["https://a.example.org"]`, valid) + `,` + mirror("ghcr.io", `["https://a.example.org"]`, other) + `]`,

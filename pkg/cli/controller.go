@@ -619,8 +619,8 @@ func (o *controllerOptions) parseMirrors() error {
 	return o.parseReleaseMirror()
 }
 
-// parseReleaseMirror reads the release mirror and its authority, refusing either before a node
-// could fail on it.
+// parseReleaseMirror reads the release mirror, the site CA and the site time zone. It refuses a
+// mirror address or site CA a node could not be handed, and leaves the rest to each cluster's report.
 func (o *controllerOptions) parseReleaseMirror() error {
 	if o.releaseMirrorCA != "" {
 		ca, err := os.ReadFile(o.releaseMirrorCA)
@@ -648,8 +648,13 @@ func (o *controllerOptions) parseReleaseMirror() error {
 		// An authority that has run out is no reason to stop the controller, which the clusters'
 		// upgrades, snapshots and deletions depend on. Each reconcile reports it on its cluster.
 	}
-	if err := o.releaseMirror.Check(time.Now()); err != nil {
+	if err := o.releaseMirror.CheckAddress(); err != nil {
 		return fmt.Errorf("--release-mirror: %w", err)
+	}
+	// A damaged or lapsed authority is no reason to stop the controller either. Only the nodes'
+	// downloads from the mirror need it, and each reconcile reports it on its cluster.
+	if err := o.releaseMirror.CheckAuthority(time.Now()); err != nil {
+		o.r.ReleaseMirrorProblem = fmt.Sprintf("--release-mirror-ca: %v", err)
 	}
 	return nil
 }

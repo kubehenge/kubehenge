@@ -32,6 +32,11 @@ const (
 	SiteTimeZoneCondition = "SiteTimeZone"
 	// SiteTimeZoneInvalidReason is the reason of SiteTimeZoneCondition.
 	SiteTimeZoneInvalidReason = "TimeZoneInvalid"
+	// ReleaseMirrorCondition on a Cluster says the release mirror's authority the controller was
+	// given is damaged or not valid now.
+	ReleaseMirrorCondition = "ReleaseMirror"
+	// ReleaseMirrorAuthorityInvalidReason is the reason of ReleaseMirrorCondition.
+	ReleaseMirrorAuthorityInvalidReason = "AuthorityInvalid"
 
 	// siteRollSettle bounds how long a cluster waits for its control plane and MachineDeployments to
 	// show a new generation. A change that alters neither would otherwise hold its place for good.
@@ -154,7 +159,8 @@ func (r *Reconciler) siteRollNote(ctx context.Context, c *clusterv1.Cluster) (st
 // MachineDeployments have not yet taken it up and brought their machines up to date. Cluster API
 // marks such a cluster rolling only after those objects have changed, so without this a cluster
 // would free its place before its nodes are replaced. A cluster whose objects cannot be read counts
-// as settling for as long as a change that alters none of them would.
+// as settling for as long as a change that alters none of them would. A note dated later than now
+// is none the controller wrote, and would hold a place for good, so it counts for nothing.
 func SiteRollSettling(ctx context.Context, kube client.Client, clusters []clusterv1.Cluster, now time.Time) map[client.ObjectKey]bool {
 	settling := map[client.ObjectKey]bool{}
 	for i := range clusters {
@@ -164,7 +170,7 @@ func SiteRollSettling(ctx context.Context, kube client.Client, clusters []cluste
 			continue
 		}
 		var note siteRollNote
-		if json.Unmarshal([]byte(raw), &note) != nil {
+		if json.Unmarshal([]byte(raw), &note) != nil || note.At.After(now) {
 			continue
 		}
 		_, current, err := rolloutObjects(ctx, kube, kube.RESTMapper(), c)

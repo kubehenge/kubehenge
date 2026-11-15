@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -253,8 +254,8 @@ func TestSiteCAThatCannotBeGivenStopsNoOtherStepOrCluster(t *testing.T) {
 	}
 	other := siteCluster("other")
 	plan := PlanSiteRoll(r.SiteCA, SiteRollClusters([]clusterv1.Cluster{live, other}, r.ClassNamespace, nil), 1, siteNow)
-	if !slices.Equal(plan.Now, keys("other")) || plan.Skipped[client.ObjectKeyFromObject(c)] == nil {
-		t.Errorf("plan = %+v, want the failing cluster skipped and the other given the place", plan)
+	if !slices.Equal(plan.Now, keys("other")) || !slices.Contains(plan.Waiting, client.ObjectKeyFromObject(c)) {
+		t.Errorf("plan = %+v, want the other given the place and the failing cluster waiting behind it", plan)
 	}
 }
 
@@ -444,6 +445,36 @@ func TestADamagedBoundaryOutsideThePEMBlocksIsRefusedNamingItsLine(t *testing.T)
 			t.Errorf("%s: %v", name, err)
 		}
 	}
+	if err := checkCertificates(good+"-----END CERTIFICATE-----\n", siteNow); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("on line %d", lines+1)) {
+		t.Errorf("an END line again after the block: error %v, want one naming line %d", err, lines+1)
+	}
+}
+
+func TestHandKeptBundlesWithNamesAndCommentsBetweenTheBlocksPass(t *testing.T) {
+	t.Parallel()
+	good := siteAuthority(t) + "\n"
+	curl, err := os.ReadFile("testdata/curl-cacert.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "Microsoft RSA Root Certificate Authority 2017"
+	for label, bundle := range map[string]string{
+		"curl's cacert.pem":          string(curl),
+		"a long name underlined":     "\n" + name + "\n" + strings.Repeat("=", len(name)) + "\n" + good,
+		"comment separators":         "# ---------- Example Issuing CA 1 ----------\n" + good + "# ---------- Example Root CA ----------\n" + good,
+		"p11-kit names":              "# Example Issuing CA 1\n" + good + "# Example Root CA\n" + good,
+		"comments naming BEGIN, END": "# BEGIN of the chain\n" + good + "-- END of the chain --\n" + good,
+		"openssl pkcs7 -print_certs": "subject=C=CH, O=Example AG, CN=Example Root CA\nissuer=C=CH, O=Example AG, CN=Example Root CA\n" + good + "\n",
+		"no last newline":            strings.TrimSuffix(good+good, "\n"),
+	} {
+		if err := checkCertificates(bundle, siteNow); err != nil {
+			t.Errorf("%s: %v", label, err)
+		}
+		mirror := ReleaseMirror{URL: "https://mirror.example.org/github", CABundle: bundle}
+		if err := mirror.Check(siteNow); err != nil {
+			t.Errorf("%s as the release mirror's authority: %v", label, err)
+		}
+	}
 }
 
 func TestAdmissionLeavesTheSiteCAsVariableToTheDefaulterAndHoldsTheWindowToAKnownZone(t *testing.T) {
@@ -496,5 +527,152 @@ func TestSiteRollConditionGoesOnceTheClusterHasNothingToSay(t *testing.T) {
 		if meta.FindStatusCondition(live.Status.Conditions, SiteRollCondition) != nil {
 			t.Errorf("%s keeps the condition of a window that was fixed", name)
 		}
+	}
+}
+
+func TestTheRolloutNoteIsHeldToTheControllerAndANoteFromTheFutureHoldsNoPlace(t *testing.T) {
+	t.Parallel()
+	const controller = "system:serviceaccount:" + siteClassNamespace + ":kubehenge-controller"
+	const stored = `{"at":"2026-11-18T11:00:00Z","generations":{"ControlPlane":1}}`
+	const planted = `{"at":"2099-01-01T00:00:00Z","generations":{"ControlPlane":999999}}`
+	noted := func(c clusterv1.Cluster, note string) clusterv1.Cluster {
+		c.Annotations = map[string]string{SiteRollAnnotation: note}
+		return c
+	}
+	request := func(user string, op admissionv1.Operation, old *clusterv1.Cluster) context.Context {
+		var req admission.Request
+		req.Operation, req.UserInfo = op, authenticationv1.UserInfo{Username: user}
+		if old != nil {
+			raw, err := json.Marshal(old)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.OldObject.Raw = raw
+		}
+		return admission.NewContextWithRequest(t.Context(), req)
+	}
+	withNote, without := noted(siteCluster("web"), stored), siteCluster("web")
+	for name, tc := range map[string]struct {
+		ctx  context.Context //nolint:containedctx // a table of requests
+		in   clusterv1.Cluster
+		want string
+	}{
+		"a create carrying a note":         {request("alice", admissionv1.Create, nil), noted(unbuilt("web"), planted), ""},
+		"a user adding a note":             {request("alice", admissionv1.Update, &without), noted(siteCluster("web"), planted), ""},
+		"a user changing the note":         {request("alice", admissionv1.Update, &withNote), noted(siteCluster("web"), planted), stored},
+		"a user dropping the note":         {request("alice", admissionv1.Update, &withNote), siteCluster("web"), stored},
+		"the controller writing a note":    {request(controller, admissionv1.Update, &without), noted(siteCluster("web"), stored), stored},
+		"the controller dropping its note": {request(controller, admissionv1.Update, &withNote), siteCluster("web"), ""},
+		"a create read without a request":  {t.Context(), noted(unbuilt("web"), planted), ""},
+		"a user's update leaving it as is": {request("alice", admissionv1.Update, &withNote), noted(siteCluster("web"), stored), stored},
+		"a user's update, none stored":     {request("alice", admissionv1.Update, &without), siteCluster("web"), ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			d := &ClusterDefaulter{Hooks: &Hooks{ClassNamespace: siteClassNamespace, Now: func() time.Time { return siteNow }}}
+			c := tc.in.DeepCopy()
+			c.Spec.ClusterNetwork.Pods.CIDRBlocks, c.Spec.ClusterNetwork.Services.CIDRBlocks = []string{"10.42.0.0/16"}, []string{"10.43.0.0/16"}
+			if err := d.Default(tc.ctx, c); err != nil {
+				t.Fatal(err)
+			}
+			if got := c.Annotations[SiteRollAnnotation]; got != tc.want {
+				t.Errorf("rollout note = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	// A note dated ahead of now, as only a hand can write, holds no place.
+	kube, c := settleWorld(t, siteNow.Add(time.Hour), rolloutState{1, 1, 1, 1}, rolloutState{1, 1, 1, 1})
+	if SiteRollSettling(t.Context(), kube, []clusterv1.Cluster{c}, siteNow)[client.ObjectKeyFromObject(&c)] {
+		t.Error("a cluster whose note lies ahead counts as settling")
+	}
+	kube, c = settleWorld(t, siteNow, rolloutState{1, 1, 1, 1}, rolloutState{1, 1, 1, 1})
+	if !SiteRollSettling(t.Context(), kube, []clusterv1.Cluster{c}, siteNow)[client.ObjectKeyFromObject(&c)] {
+		t.Error("a cluster given the site CA just now does not count as settling")
+	}
+}
+
+// reconcileFor reads the cluster of name as its reconcile finds it.
+func reconcileFor(t *testing.T, kube client.Client, name string) *clusterv1.Cluster {
+	t.Helper()
+	var live clusterv1.Cluster
+	if err := kube.Get(t.Context(), client.ObjectKey{Namespace: "team-a", Name: name}, &live); err != nil {
+		t.Fatal(err)
+	}
+	return &live
+}
+
+func TestEveryClusterPlansTheSameWhenOneFailedToTakeTheSiteCA(t *testing.T) {
+	t.Parallel()
+	failed := metav1.Condition{Type: SiteRollCondition, Status: metav1.ConditionFalse, Reason: SiteCANotGivenReason, Message: "writing the site CA of team-a/a: timeout"}
+	names := []string{"a", "b", "c", "d", "e"}
+	objs := make([]client.Object, 0, len(names))
+	for _, n := range names {
+		c := siteCluster(n)
+		if n == "a" {
+			c.Status.Conditions = append(c.Status.Conditions, failed)
+		}
+		objs = append(objs, &c)
+	}
+	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).WithStatusSubresource(&clusterv1.Cluster{}).Build()
+	r := &Reconciler{Client: kube, Reader: kube, ClassNamespace: siteClassNamespace, SiteCA: siteAuthority(t), Now: func() time.Time { return siteNow }}
+	// The concurrent reconciles of all five plan from the same clusters.
+	gives := 0
+	for _, n := range names {
+		plan, err := r.planSiteRoll(t.Context(), siteNow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if slices.Contains(plan.Now, keys(n)[0]) {
+			gives++
+		}
+	}
+	if gives > SiteRollLimit {
+		t.Errorf("%d clusters give themselves the site CA from one snapshot, more than the limit of %d", gives, SiteRollLimit)
+	}
+	// The failed cluster waits behind the others and keeps the failure noted while it waits.
+	if _, err := r.rollSiteCA(t.Context(), reconcileFor(t, kube, "a")); err != nil {
+		t.Fatal(err)
+	}
+	live := reconcileFor(t, kube, "a")
+	if cond := meta.FindStatusCondition(live.Status.Conditions, SiteRollCondition); appliedSiteCA(live) != "" || cond == nil || cond.Reason != SiteCANotGivenReason {
+		t.Errorf("a waiting cluster that failed before: given %v, condition %+v, want it waiting with the failure kept", appliedSiteCA(live) != "", cond)
+	}
+}
+
+func TestAClusterWhoseGiveFailedTriesAgainOnItsNextReconcile(t *testing.T) {
+	t.Parallel()
+	c := siteCluster("a")
+	c.Status.Conditions = append(c.Status.Conditions, metav1.Condition{Type: SiteRollCondition, Status: metav1.ConditionFalse, Reason: SiteCANotGivenReason, Message: "writing the site CA of team-a/a: timeout"})
+	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(&c).WithStatusSubresource(&clusterv1.Cluster{}).Build()
+	ca := siteAuthority(t)
+	r := &Reconciler{Client: kube, Reader: kube, ClassNamespace: siteClassNamespace, SiteCA: ca, Now: func() time.Time { return siteNow }}
+	if _, err := r.rollSiteCA(t.Context(), reconcileFor(t, kube, "a")); err != nil {
+		t.Fatal(err)
+	}
+	live := reconcileFor(t, kube, "a")
+	if cond := meta.FindStatusCondition(live.Status.Conditions, SiteRollCondition); appliedSiteCA(live) != ca || cond != nil {
+		t.Errorf("next reconcile: given %v, condition %+v, want the site CA given and the failure gone", appliedSiteCA(live) == ca, cond)
+	}
+}
+
+func TestAReleaseMirrorAuthorityProblemIsReportedOnEveryClusterUntilItGoes(t *testing.T) {
+	t.Parallel()
+	c := siteCluster("web")
+	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(&c).WithStatusSubresource(&clusterv1.Cluster{}).Build()
+	recorder := events.NewFakeRecorder(10)
+	r := &Reconciler{Client: kube, Reader: kube, ClassNamespace: siteClassNamespace, Events: recorder, Now: func() time.Time { return siteNow }, ReleaseMirrorProblem: "--release-mirror-ca: the release mirror's authority holds no PEM certificate"}
+	if _, err := r.rollSiteCA(t.Context(), reconcileFor(t, kube, "web")); err != nil {
+		t.Fatal(err)
+	}
+	cond := meta.FindStatusCondition(reconcileFor(t, kube, "web").Status.Conditions, ReleaseMirrorCondition)
+	if cond == nil || cond.Reason != ReleaseMirrorAuthorityInvalidReason || !strings.Contains(cond.Message, "--release-mirror-ca") || len(recorder.Events) != 1 {
+		t.Errorf("condition %+v with %d events, want the authority's problem in both", cond, len(recorder.Events))
+	}
+	r.ReleaseMirrorProblem = ""
+	if _, err := r.rollSiteCA(t.Context(), reconcileFor(t, kube, "web")); err != nil {
+		t.Fatal(err)
+	}
+	if cond := meta.FindStatusCondition(reconcileFor(t, kube, "web").Status.Conditions, ReleaseMirrorCondition); cond != nil {
+		t.Errorf("condition %+v kept once the authority was fixed", cond)
 	}
 }

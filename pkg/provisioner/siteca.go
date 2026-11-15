@@ -111,10 +111,11 @@ const controllerAccount = "kubehenge-controller"
 
 // holdSiteCAs keeps the siteCAs variable and the rollout note the controller's. The variable is what
 // the controller's pacing and windows decide, and a value written elsewhere would replace the nodes
-// outside them with an authority no administrator chose. A new cluster gets the site CA a new
-// cluster takes now, whatever it carries, such as a value exported from another cluster. A change by
-// anyone else keeps what is stored, whether it changes the variable or leaves it out, so that a
-// manifest without it can be applied or replaced. The controller's own changes pass as they are.
+// outside them with an authority no administrator chose, and a note written elsewhere would hold or
+// free a place in the pacing. A new cluster gets the site CA a new cluster takes now and no note,
+// whatever it carries, such as values exported from another cluster. A change by anyone else keeps
+// what is stored, whether it changes, adds or leaves out either, so that a manifest without them can
+// be applied or replaced. The controller's own changes pass as they are.
 func (d *ClusterDefaulter) holdSiteCAs(ctx context.Context, c *clusterv1.Cluster) error {
 	req, err := admission.RequestFromContext(ctx)
 	if err == nil && req.UserInfo.Username == "system:serviceaccount:"+d.Hooks.ClassNamespace+":"+controllerAccount {
@@ -125,6 +126,7 @@ func (d *ClusterDefaulter) holdSiteCAs(ctx context.Context, c *clusterv1.Cluster
 		if d.Hooks.SiteCA != nil && siteCALapse(d.Hooks.SiteCA(), d.Hooks.now()) == "" {
 			ca = d.Hooks.SiteCA()
 		}
+		delete(c.Annotations, SiteRollAnnotation)
 		return putSiteCAs(c, ca)
 	}
 	var old clusterv1.Cluster
@@ -147,6 +149,8 @@ func (d *ClusterDefaulter) holdSiteCAs(ctx context.Context, c *clusterv1.Cluster
 			c.Annotations = map[string]string{}
 		}
 		c.Annotations[SiteRollAnnotation] = note
+	} else {
+		delete(c.Annotations, SiteRollAnnotation)
 	}
 	return nil
 }
@@ -229,7 +233,8 @@ type SiteRollCluster struct {
 	// Policy is the cluster's upgrade policy, nil when it sets none.
 	Policy *UpgradePolicy
 	// NotGiven says why the controller could not write the site CA into the cluster when it last
-	// tried. Other clusters' plans skip it, so that it holds no place while it keeps failing.
+	// tried. Plans rank it after every other cluster, so that it takes only a place no other needs
+	// while it keeps failing.
 	NotGiven string
 }
 
@@ -310,7 +315,7 @@ func wrapCluster(key client.ObjectKey, err error) error {
 // alone. A cluster with an upgrade window rolls only inside it, and a paused one waits for its
 // unpause. At most limit clusters roll at the same time, those already rolling or settling after
 // being given a site CA counting. A cluster whose window cannot be read is skipped and reported,
-// so that it stops no other cluster.
+// so that it stops no other cluster. One that failed to take the site CA comes after the rest.
 func PlanSiteRoll(want string, clusters []SiteRollCluster, limit int, now time.Time) SiteRollPlan {
 	plan := SiteRollPlan{Skipped: map[client.ObjectKey]error{}}
 	free := limit
@@ -322,7 +327,15 @@ func PlanSiteRoll(want string, clusters []SiteRollCluster, limit int, now time.T
 		}
 	}
 	ordered := slices.Clone(clusters)
-	slices.SortFunc(ordered, func(a, b SiteRollCluster) int { return strings.Compare(a.Key.String(), b.Key.String()) })
+	slices.SortFunc(ordered, func(a, b SiteRollCluster) int {
+		if failedA, failedB := a.NotGiven != "", b.NotGiven != ""; failedA != failedB {
+			if failedA {
+				return 1
+			}
+			return -1
+		}
+		return strings.Compare(a.Key.String(), b.Key.String())
+	})
 	for _, c := range ordered {
 		if !c.Inherits || !c.Built {
 			continue
@@ -342,15 +355,11 @@ func PlanSiteRoll(want string, clusters []SiteRollCluster, limit int, now time.T
 }
 
 // holdBack puts a cluster that may not take the site CA now where it waits or is skipped, and
-// tells whether it did: a paused cluster waits, one that failed to take it before or whose window
-// cannot be read is skipped, and one whose window is closed waits for it.
+// tells whether it did: a paused cluster waits, one whose window cannot be read is skipped, and one
+// whose window is closed waits for it.
 func (plan *SiteRollPlan) holdBack(c *SiteRollCluster, now time.Time) bool {
 	if c.Paused {
 		plan.Waiting = append(plan.Waiting, c.Key)
-		return true
-	}
-	if c.NotGiven != "" {
-		plan.Skipped[c.Key] = wrapCluster(c.Key, errors.New(c.NotGiven))
 		return true
 	}
 	opens, closed, err := c.windowOpens(now)
@@ -365,6 +374,44 @@ func (plan *SiteRollPlan) holdBack(c *SiteRollCluster, now time.Time) bool {
 	return true
 }
 
+// reportSiteSettings reports on the cluster each site setting the controller was given that it
+// cannot use, and takes the report off once the setting is fixed.
+func (r *Reconciler) reportSiteSettings(ctx context.Context, cluster *clusterv1.Cluster) error {
+	for _, issue := range []struct{ condType, reason, problem string }{
+		{SiteTimeZoneCondition, SiteTimeZoneInvalidReason, r.SiteTimeZoneProblem},
+		{ReleaseMirrorCondition, ReleaseMirrorAuthorityInvalidReason, r.ReleaseMirrorProblem},
+	} {
+		var err error
+		if issue.problem != "" {
+			err = r.reportSiteIssue(ctx, cluster, issue.condType, issue.reason, issue.problem)
+		} else {
+			err = r.clearSiteIssue(ctx, cluster, issue.condType)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// giveSiteCANow gives the cluster the site CA, as the plan names it. A failure is noted on the
+// cluster, and a give that succeeds takes off what SiteRollCondition said before.
+func (r *Reconciler) giveSiteCANow(ctx context.Context, cluster *clusterv1.Cluster) error {
+	if err := r.giveSiteCA(ctx, client.ObjectKeyFromObject(cluster), r.SiteCA); err != nil {
+		return errors.Join(err, r.reportSiteIssue(ctx, cluster, SiteRollCondition, SiteCANotGivenReason, err.Error()))
+	}
+	return r.clearSiteRollBlocked(ctx, cluster)
+}
+
+// clearSiteRollWaiting takes SiteRollCondition off a cluster that waits for its turn, unless it
+// notes a failed give. Every cluster's plan ranks the cluster by that note until a give succeeds.
+func (r *Reconciler) clearSiteRollWaiting(ctx context.Context, cluster *clusterv1.Cluster) error {
+	if cond := meta.FindStatusCondition(cluster.Status.Conditions, SiteRollCondition); cond != nil && cond.Reason == SiteCANotGivenReason {
+		return nil
+	}
+	return r.clearSiteRollBlocked(ctx, cluster)
+}
+
 // rollSiteCA gives an inheriting cluster the site CA when the plan lets it. A cluster that sets
 // trustedCAs of its own is kept current at once, as its nodes ignore the variable. It returns when to look again, 0 for the usual resync.
 func (r *Reconciler) rollSiteCA(ctx context.Context, cluster *clusterv1.Cluster) (time.Duration, error) {
@@ -374,11 +421,7 @@ func (r *Reconciler) rollSiteCA(ctx context.Context, cluster *clusterv1.Cluster)
 	if lapse != "" && r.Events != nil {
 		r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, "SiteCAInvalid", "RollSiteCA", "the site CA %s", lapse)
 	}
-	if r.SiteTimeZoneProblem != "" {
-		if err := r.reportSiteIssue(ctx, cluster, SiteTimeZoneCondition, SiteTimeZoneInvalidReason, r.SiteTimeZoneProblem); err != nil {
-			return 0, err
-		}
-	} else if err := r.clearSiteIssue(ctx, cluster, SiteTimeZoneCondition); err != nil {
+	if err := r.reportSiteSettings(ctx, cluster); err != nil {
 		return 0, err
 	}
 	if appliedSiteCA(cluster) == r.SiteCA || lapse != "" {
@@ -393,7 +436,7 @@ func (r *Reconciler) rollSiteCA(ctx context.Context, cluster *clusterv1.Cluster)
 		return 0, r.setSiteCA(ctx, key, r.SiteCA)
 	}
 	now := r.now()
-	plan, err := r.planSiteRoll(ctx, key, now)
+	plan, err := r.planSiteRoll(ctx, now)
 	if err != nil {
 		return 0, err
 	}
@@ -401,15 +444,10 @@ func (r *Reconciler) rollSiteCA(ctx context.Context, cluster *clusterv1.Cluster)
 		return 0, r.reportSiteRollBlocked(ctx, cluster, why)
 	}
 	if slices.Contains(plan.Now, key) {
-		if err := r.giveSiteCA(ctx, key, r.SiteCA); err != nil {
-			return 0, errors.Join(err, r.reportSiteIssue(ctx, cluster, SiteRollCondition, SiteCANotGivenReason, err.Error()))
-		}
+		return 0, r.giveSiteCANow(ctx, cluster)
 	}
-	if err := r.clearSiteRollBlocked(ctx, cluster); err != nil {
+	if err := r.clearSiteRollWaiting(ctx, cluster); err != nil {
 		return 0, err
-	}
-	if slices.Contains(plan.Now, key) {
-		return 0, nil
 	}
 	for _, w := range plan.Windows {
 		if w.Key == key {
@@ -419,19 +457,14 @@ func (r *Reconciler) rollSiteCA(ctx context.Context, cluster *clusterv1.Cluster)
 	return waitInterval, nil
 }
 
-// planSiteRoll plans the site CA's rollout over every cluster, as the cluster of key sees it.
-func (r *Reconciler) planSiteRoll(ctx context.Context, key client.ObjectKey, now time.Time) (SiteRollPlan, error) {
+// planSiteRoll plans the site CA's rollout over every cluster. Every cluster's reconcile plans the
+// same from the same clusters, so that their gives together stay within the limit.
+func (r *Reconciler) planSiteRoll(ctx context.Context, now time.Time) (SiteRollPlan, error) {
 	var all clusterv1.ClusterList
 	if err := r.Client.List(ctx, &all); err != nil {
 		return SiteRollPlan{}, fmt.Errorf("listing clusters for the site CA: %w", err)
 	}
 	clusters := SiteRollClusters(all.Items, r.ClassNamespace, SiteRollSettling(ctx, r.Client, all.Items, now))
-	for i := range clusters {
-		if clusters[i].Key == key {
-			// The cluster's own reconcile tries again what failed before.
-			clusters[i].NotGiven = ""
-		}
-	}
 	return PlanSiteRoll(r.SiteCA, clusters, SiteRollLimit, now), nil
 }
 

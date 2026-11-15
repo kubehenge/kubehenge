@@ -79,6 +79,9 @@ type Reconciler struct {
 	// SiteTimeZoneProblem is why the site time zone the controller was given is no time zone, which
 	// leaves schedules that name none in UTC. Each cluster reports it.
 	SiteTimeZoneProblem string
+	// ReleaseMirrorProblem is why the release mirror's authority the controller was given is no
+	// certificate valid now, which fails the nodes' downloads from the mirror. Each cluster reports it.
+	ReleaseMirrorProblem string
 	// Registrar removes clusters from Rancher before Rancher itself is switched off.
 	Registrar *Registrar
 	// Remotes reaches the workload clusters, to take their workloads out of the mesh before Istio

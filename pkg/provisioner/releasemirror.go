@@ -58,6 +58,14 @@ func (m ReleaseMirror) Enabled() bool { return m.URL != "" }
 // Check refuses a mirror that is no address a node can be handed, and an authority that is no
 // certificate valid now. The address is left out of the messages: it may hold a password.
 func (m ReleaseMirror) Check(now time.Time) error {
+	if err := m.CheckAddress(); err != nil {
+		return err
+	}
+	return m.CheckAuthority(now)
+}
+
+// CheckAddress is Check without the authority's certificates.
+func (m ReleaseMirror) CheckAddress() error {
 	if m.URL == "" {
 		if m.CABundle != "" {
 			return errors.New("the release mirror's authority needs a release mirror")
@@ -82,6 +90,14 @@ func (m ReleaseMirror) Check(now time.Time) error {
 	}
 	if u.Scheme != schemeHTTPS {
 		return errors.New("the release mirror's authority is for an https:// mirror")
+	}
+	return nil
+}
+
+// CheckAuthority refuses an authority that is no certificate valid now.
+func (m ReleaseMirror) CheckAuthority(now time.Time) error {
+	if m.CABundle == "" {
+		return nil
 	}
 	if err := checkCertificates(m.CABundle, now); err != nil {
 		return fmt.Errorf("the release mirror's authority %w", err)

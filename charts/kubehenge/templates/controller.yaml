@@ -710,8 +710,9 @@ webhooks:
 # (pkg/provisioner's ClusterDefaulter), as the interface's clusters get them: the distributions read
 # them from the Cluster. Only on creation, since changing a running cluster's ranges replaces its
 # nodes, and the same as the validating webhook while the controller is away.
-# The siteCAs variable is the controller's: a new cluster gets the site CA, and a change of the spec
-# by anyone else keeps the stored value, so that applying or replacing a manifest without it works.
+# The siteCAs variable and the kubehenge.dev/site-ca-roll note are the controller's: a new cluster
+# gets the site CA and no note, and a change of either by anyone else keeps the stored ones, so that
+# applying or replacing a manifest without them works.
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
@@ -725,8 +726,13 @@ webhooks:
     failurePolicy: Fail
     reinvocationPolicy: Never
     matchConditions:
-      - name: created-or-spec-changed
-        expression: request.operation == 'CREATE' || object.spec != oldObject.spec
+      - name: created-or-spec-or-note-changed
+        expression: >-
+          request.operation == 'CREATE' || object.spec != oldObject.spec ||
+          ['kubehenge.dev/site-ca-roll'].filter(k, has(object.metadata.annotations) &&
+          k in object.metadata.annotations).map(k, object.metadata.annotations[k]) !=
+          ['kubehenge.dev/site-ca-roll'].filter(k, has(oldObject.metadata.annotations) &&
+          k in oldObject.metadata.annotations).map(k, oldObject.metadata.annotations[k])
     timeoutSeconds: 5
     clientConfig:
       service:
