@@ -983,12 +983,9 @@ function proxyProblems(f: SetupForm): SetupProblems {
   if (wrong !== undefined) {
     p.proxyExceptions = `${wrong} is no host, domain, address or network.`;
   }
-  if (filled(f.proxyCA)) {
-    if (f.proxyCA.includes("PRIVATE KEY")) {
-      p.proxyCA = "Paste certificates only, no private key.";
-    } else if (!f.proxyCA.includes("-----BEGIN CERTIFICATE-----")) {
-      p.proxyCA = "Paste PEM certificates.";
-    }
+  const caProblem = filled(f.proxyCA) ? bundleProblem(f.proxyCA, applianceAuthorityKiB) : undefined;
+  if (caProblem !== undefined) {
+    p.proxyCA = caProblem;
   }
   return p;
 }
@@ -1032,12 +1029,12 @@ function chartMirrorProblems(f: SetupForm): SetupProblems {
     p.chartMirrors = `${bad} is not in the form host=oci://mirror.example/path.`;
   }
   if (filled(f.chartMirrorCA)) {
-    if (f.chartMirrorCA.includes("PRIVATE KEY")) {
-      p.chartMirrorCA = "Paste certificates only, no private key.";
-    } else if (!f.chartMirrorCA.includes("-----BEGIN CERTIFICATE-----")) {
-      p.chartMirrorCA = "Paste PEM certificates.";
-    } else if (mirrorLines(f.chartMirrors).length === 0) {
-      p.chartMirrorCA = "Add a chart mirror first.";
+    const problem =
+      mirrorLines(f.chartMirrors).length === 0
+        ? "Add a chart mirror first."
+        : bundleProblem(f.chartMirrorCA, applianceAuthorityKiB);
+    if (problem !== undefined) {
+      p.chartMirrorCA = problem;
     }
   }
   return p;
@@ -1078,8 +1075,11 @@ function siteDefaultProblems(f: SetupForm): SetupProblems {
 }
 
 // bundleProblem is what the server says of the layout of a bundle as it is saved, as an error.
-function bundleProblem(bundle: string): string | undefined {
-  const problem = certificateBundleProblem(`${bundle.trim()}\n`);
+// The appliance's limit of the proxy's and the chart mirrors' authorities.
+const applianceAuthorityKiB = 256;
+
+function bundleProblem(bundle: string, maxKiB?: number): string | undefined {
+  const problem = certificateBundleProblem(`${bundle.trim()}\n`, maxKiB);
   return problem === undefined ? undefined : `${sentence(problem)}.`;
 }
 

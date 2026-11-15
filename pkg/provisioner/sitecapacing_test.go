@@ -215,7 +215,16 @@ func TestSiteCABundleIsWrittenAsTheChartTakesIt(t *testing.T) {
 	t.Parallel()
 	crlf := "Bag Attributes\r\nsubject=CN=site\r\n-----BEGIN CERTIFICATE-----\r\nMIIB\r\n-----END CERTIFICATE-----\r\n"
 	want := "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
-	if got := NormalizeCertificateBundle(crlf); got != want {
-		t.Errorf("normalised to %q, want %q", got, want)
+	if got, err := NormalizeCertificateBundle(crlf); got != want || err != nil {
+		t.Errorf("normalised to %q (%v), want %q", got, err, want)
+	}
+	// Blocks joined on one line both stay, and a damaged block is refused rather than dropped.
+	joined := "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE----------BEGIN CERTIFICATE-----\nMIIC\n-----END CERTIFICATE-----"
+	if got, err := NormalizeCertificateBundle(joined); err != nil || strings.Count(got, "BEGIN CERTIFICATE") != 2 {
+		t.Errorf("joined blocks normalised to %q (%v), want both", got, err)
+	}
+	damaged := "----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n" + want
+	if got, err := NormalizeCertificateBundle(damaged); err == nil || !strings.Contains(err.Error(), "line 1") {
+		t.Errorf("a damaged block beside a good one normalised to %q (%v), want it refused on line 1", got, err)
 	}
 }

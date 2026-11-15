@@ -713,10 +713,14 @@ webhooks:
 # The siteCAs variable and the kubehenge.dev/site-ca-roll note are the controller's: a new cluster
 # gets the site CA and no note, and a change of either by anyone else keeps the stored ones, so that
 # applying or replacing a manifest without them works.
+# The PEM bundles of trustedCAs, registryMirrors and releaseMirror are written as certificates alone,
+# which the classes' schemas hold them to. The API server calls mutating webhooks in the order of
+# their configurations' names, and Cluster API's (capi-mutating-webhook-configuration) checks the
+# variables against the schemas, so this configuration's name sorts before it.
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
-  name: kubehenge
+  name: 00-kubehenge-clusters
   annotations:
     cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ $extension }}
 webhooks:
@@ -745,6 +749,14 @@ webhooks:
         apiVersions: [v1beta2]
         operations: [CREATE, UPDATE]
         resources: [clusters]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: kubehenge
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ $extension }}
+webhooks:
   # A new worker of a cluster on storage local to each node goes to a node whose volumes have no
   # worker (pkg/provisioner's WorkerPlacement). While the controller is away a worker goes where
   # capmox puts it, which is better than none.

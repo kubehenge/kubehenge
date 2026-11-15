@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -183,8 +184,9 @@ func rangeSizeProblems(what string, p netip.Prefix) []string {
 // candidates, and for a cluster that runs Cilium, which may join a Cluster Mesh later, ranges clear
 // of every other cluster's too, since a peer's pod addresses must not be taken for its own pods' or
 // services'. The distributions read the ranges from the Cluster, kubeadm's podSubnet among them,
-// which the Tigera operator does not install Calico without. It also holds the siteCAs variable to
-// the controller (holdSiteCAs).
+// which the Tigera operator does not install Calico without. It also writes the variables' PEM
+// bundles as certificates alone (plainBundles) and holds the siteCAs variable to the controller
+// (holdSiteCAs).
 type ClusterDefaulter struct {
 	Hooks *Hooks
 }
@@ -195,6 +197,9 @@ var _ admission.Defaulter[*clusterv1.Cluster] = &ClusterDefaulter{}
 func (d *ClusterDefaulter) Default(ctx context.Context, c *clusterv1.Cluster) error {
 	if !Owns(c, d.Hooks.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
 		return nil
+	}
+	if err := plainBundlesOf(ctx, c); err != nil {
+		return err
 	}
 	if err := d.holdSiteCAs(ctx, c); err != nil {
 		return err
@@ -228,6 +233,22 @@ func (d *ClusterDefaulter) Default(ctx context.Context, c *clusterv1.Cluster) er
 			field.ErrorList{field.Invalid(field.NewPath("spec", "clusterNetwork"), n, err.Error())})
 	}
 	n.Pods.CIDRBlocks, n.Services.CIDRBlocks = pods, services
+	return nil
+}
+
+// plainBundlesOf runs plainBundles on the cluster of an admission request, against the stored one
+// on an update.
+func plainBundlesOf(ctx context.Context, c *clusterv1.Cluster) error {
+	var old *clusterv1.Cluster
+	if req, err := admission.RequestFromContext(ctx); err == nil && req.Operation == admissionv1.Update {
+		old = &clusterv1.Cluster{}
+		if err = json.Unmarshal(req.OldObject.Raw, old); err != nil {
+			return fmt.Errorf("reading the stored cluster: %w", err)
+		}
+	}
+	if errs := plainBundles(old, c); len(errs) > 0 {
+		return apierrors.NewInvalid(clusterv1.GroupVersion.WithKind("Cluster").GroupKind(), c.Name, errs) //nolint:wrapcheck // made here, not passed on
+	}
 	return nil
 }
 

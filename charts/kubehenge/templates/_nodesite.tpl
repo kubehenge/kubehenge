@@ -10,7 +10,10 @@ the schema carries none for the lists. The schemas below keep every value to cha
 read the same way, since the values reach the nodes' boot script.
 */}}
 
-{{/* A PEM bundle: certificates only, base64 lines with no carriage returns. */}}
+{{/*
+A PEM bundle: certificates only, base64 lines with no carriage returns. The mutating webhook writes a
+bundle with names, comments or CRLF line ends this way before Cluster API checks it.
+*/}}
 {{- define "kubehenge.pemSchema" -}}
 type: string
 minLength: 64

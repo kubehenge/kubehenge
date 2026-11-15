@@ -457,6 +457,8 @@ type pemBundleCase struct {
 	Lines          []string `json:"lines"`
 	LineEnd        string   `json:"lineEnd"`
 	NoFinalLineEnd bool     `json:"noFinalLineEnd"`
+	Repeat         int      `json:"repeat"`
+	MaxKiB         int      `json:"maxKiB"`
 	Problem        string   `json:"problem"`
 }
 
@@ -478,8 +480,9 @@ func TestCertificateBundlesGetTheVerdictsTheInterfaceSharesWithTheServer(t *test
 		if !tc.NoFinalLineEnd {
 			bundle += end
 		}
+		bundle = strings.Repeat(bundle, max(tc.Repeat, 1))
 		got := ""
-		if _, err := certificateBlocks(bundle); err != nil {
+		if _, err := certificateBlocksWithin(bundle, cmp.Or(tc.MaxKiB, maxNodePEMBytes/kibibyte)*kibibyte); err != nil {
 			got = err.Error()
 		}
 		if got != tc.Problem {

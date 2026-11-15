@@ -8,5 +8,7 @@
 ### Changed
 
 - A release mirror certificate that is damaged or expired is reported on each cluster and no longer stops the controller.
-- A certificate bundle refuses a damaged BEGIN or END line, naming its line. Names, comments and openssl's text between the blocks are kept, as in curl's `cacert.pem`.
+- A certificate bundle refuses a damaged BEGIN or END line, naming its line. Names, comments and openssl's text between the blocks are accepted, as in curl's `cacert.pem`.
 - The interface accepts and refuses the same certificate bundles as the server.
+- A cluster's certificate bundles are stored as plain certificates on every path, kubectl and GitOps included. Names and comments between the blocks are dropped.
+- The proxy and chart mirror authorities follow the same layout rule, up to 256 KiB.

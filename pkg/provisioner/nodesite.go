@@ -3,6 +3,7 @@ package provisioner
 import (
 	"bytes"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -170,10 +171,17 @@ func mirrorAddress(endpoint string) (*url.URL, error) {
 // as Talos and the nodes' trust stores would otherwise refuse it only after a node was built. A zero
 // now leaves the validity unchecked.
 func checkCertificates(bundle string, now time.Time) error {
-	if len(bundle) > maxNodePEMBytes {
-		return fmt.Errorf("at most %d KiB", maxNodePEMBytes/kibibyte)
-	}
-	blocks, err := certificateBlocks(bundle)
+	return checkCertificatesWithin(bundle, maxNodePEMBytes, now)
+}
+
+// CheckAuthorityBundle holds a bundle of at most maxBytes, such as the appliance's proxy authority,
+// to the layout and the certificates a cluster's bundles are held to, their validity aside.
+func CheckAuthorityBundle(bundle string, maxBytes int) error {
+	return checkCertificatesWithin(bundle, maxBytes, time.Time{})
+}
+
+func checkCertificatesWithin(bundle string, maxBytes int, now time.Time) error {
+	blocks, err := certificateBlocksWithin(bundle, maxBytes)
 	if err != nil {
 		return err
 	}
@@ -197,6 +205,13 @@ func checkCertificates(bundle string, now time.Time) error {
 // The interface checks the same layout (web/src/pem.ts), and web/src/testdata/pem-bundles.json
 // holds both to the same verdicts.
 func certificateBlocks(bundle string) ([]*pem.Block, error) {
+	return certificateBlocksWithin(bundle, maxNodePEMBytes)
+}
+
+func certificateBlocksWithin(bundle string, maxBytes int) ([]*pem.Block, error) {
+	if len(bundle) > maxBytes {
+		return nil, fmt.Errorf("at most %d KiB", maxBytes/kibibyte)
+	}
 	blocks, err := pemBlocks(bundle)
 	if err != nil {
 		return nil, err
@@ -210,6 +225,103 @@ func certificateBlocks(bundle string) ([]*pem.Block, error) {
 		return nil, errors.New("holds no PEM certificate")
 	}
 	return blocks, nil
+}
+
+// NormalizeCertificateBundle writes a bundle whose layout passes as the classes' schemas, the chart
+// and the module take it: its certificates alone, with LF line ends and one after the last.
+func NormalizeCertificateBundle(bundle string) (string, error) {
+	blocks, err := certificateBlocks(bundle)
+	if err != nil {
+		return "", err
+	}
+	var out strings.Builder
+	for _, block := range blocks {
+		out.Write(pem.EncodeToMemory(&pem.Block{Type: certificateBlock, Bytes: block.Bytes}))
+	}
+	return out.String(), nil
+}
+
+// bundleMembers are the cluster variables that hold PEM bundles, each with the member of the
+// variable, or of each of its items, that holds one. "" is the item itself.
+var bundleMembers = map[string]string{
+	trustedCAsVariable:      "",
+	registryMirrorsVariable: "caBundle",
+	releaseMirrorVariable:   "caBundle",
+}
+
+// plainBundles writes the PEM bundles of a cluster's variables as NormalizeCertificateBundle does,
+// so that a bundle laid out as curl's cacert.pem or openssl's text output is taken from kubectl as
+// from the interface, and the classes' schemas, which Cluster API checks after this webhook, see
+// certificates alone. On an update only a variable that changes is rewritten. A bundle whose layout
+// is refused is named by its line, never repeated in the message.
+func plainBundles(old, c *clusterv1.Cluster) field.ErrorList {
+	variables := field.NewPath("spec", "topology", "variables")
+	var errs field.ErrorList
+	for i := range c.Spec.Topology.Variables {
+		v := &c.Spec.Topology.Variables[i]
+		member, ok := bundleMembers[v.Name]
+		if ok && (old == nil || variableChanged(old, c, v.Name)) {
+			errs = append(errs, plainVariable(v, member, variables.Key(v.Name))...)
+		}
+	}
+	return errs
+}
+
+// plainVariable rewrites the bundles of one variable, at member of it or of each of its items.
+func plainVariable(v *clusterv1.ClusterVariable, member string, path *field.Path) field.ErrorList {
+	var value any
+	if json.Unmarshal(v.Value.Raw, &value) != nil {
+		// The schema refuses it.
+		return nil
+	}
+	var b bundleRewrite
+	if items, isList := value.([]any); isList {
+		for j := range items {
+			items[j] = b.at(items[j], member, path.Index(j))
+		}
+	} else {
+		value = b.at(value, member, path)
+	}
+	if !b.changed {
+		return b.errs
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return append(b.errs, field.InternalError(path, err))
+	}
+	v.Value.Raw = raw
+	return b.errs
+}
+
+// bundleRewrite is what plainVariable has found: the bundles it refused and whether it rewrote one.
+type bundleRewrite struct {
+	errs    field.ErrorList
+	changed bool
+}
+
+// at rewrites the bundle that value is, or holds at member.
+func (b *bundleRewrite) at(value any, member string, path *field.Path) any {
+	if member == "" {
+		return b.plain(value, path)
+	}
+	if object, isObject := value.(map[string]any); isObject && object[member] != nil {
+		object[member] = b.plain(object[member], path.Child(member))
+	}
+	return value
+}
+
+func (b *bundleRewrite) plain(bundle any, path *field.Path) any {
+	s, isString := bundle.(string)
+	if !isString || s == "" {
+		return bundle
+	}
+	out, err := NormalizeCertificateBundle(s)
+	if err != nil {
+		b.errs = append(b.errs, field.Invalid(path, nil, err.Error()))
+		return bundle
+	}
+	b.changed = b.changed || out != s
+	return out
 }
 
 var (

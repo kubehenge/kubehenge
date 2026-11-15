@@ -372,11 +372,21 @@ describe("setup", () => {
     expect(accepted).toStrictEqual([]);
     expect(problems({ chartMirrors: `${ok}\nbroken` }).chartMirrors).toMatch(/^broken is not/u);
     expect(problems({ chartMirrors: ok, chartMirrorCA: pem })).toStrictEqual({});
-    expect(problems({ chartMirrors: ok, chartMirrorCA: "junk" }).chartMirrorCA).toBe("Paste PEM certificates.");
+    expect(problems({ chartMirrors: ok, chartMirrorCA: "junk" }).chartMirrorCA).toBe("Holds no PEM certificate.");
     expect(problems({ chartMirrors: ok, chartMirrorCA: "-----BEGIN PRIVATE KEY-----\nx" }).chartMirrorCA).toBe(
-      "Paste certificates only, no private key.",
+      "Block 1 is no complete PEM block.",
     );
     expect(problems({ chartMirrorCA: pem }).chartMirrorCA).toBe("Add a chart mirror first.");
+    // The appliance's rule: the layout of a cluster's bundles, up to 256 KiB.
+    const authority = (chartMirrorCA: string): string | undefined =>
+      problems({ chartMirrors: ok, chartMirrorCA }).chartMirrorCA;
+    expect(
+      authority(`##\n## Bundle of CA Root Certificates\n##\n\nISRG Root X1\n============\n${pem}`),
+    ).toBeUndefined();
+    expect(authority(`${pem}\n`.repeat(2000))).toBeUndefined();
+    expect(authority(`${pem}\n`.repeat(5000))).toBe("At most 256 KiB.");
+    expect(authority(`${pem.slice(1)}\n${pem}`)).toBe("Has a damaged BEGIN or END line on line 1.");
+    expect(authority("# -----BEGIN CERTIFICATE----- follows")).toBe("Block 1 is no complete PEM block.");
   });
 
   it("sends the release mirror and its authority only when set, and reads them back", () => {
@@ -532,10 +542,17 @@ describe("setup", () => {
     expect(problems({ proxyURL: "http://p.example", proxyExceptions: ".corp, 10.0.0.0/8, [::1]" })).not.toHaveProperty(
       "proxyExceptions",
     );
-    expect(problems({ proxyURL: "http://p.example", proxyCA: "junk" }).proxyCA).toBe("Paste PEM certificates.");
+    expect(problems({ proxyURL: "http://p.example", proxyCA: "junk" }).proxyCA).toBe("Holds no PEM certificate.");
     expect(problems({ proxyURL: "http://p.example", proxyCA: "-----BEGIN PRIVATE KEY-----\nx" }).proxyCA).toBe(
-      "Paste certificates only, no private key.",
+      "Block 1 is no complete PEM block.",
     );
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n";
+    const authority = (proxyCA: string): string | undefined =>
+      problems({ proxyURL: "http://p.example", proxyCA }).proxyCA;
+    expect(authority(`subject=CN=proxy\n${pem}`)).toBeUndefined();
+    expect(authority(pem.repeat(2000))).toBeUndefined();
+    expect(authority(pem.repeat(5000))).toBe("At most 256 KiB.");
+    expect(authority(`${pem.slice(1)}${pem}`)).toBe("Has a damaged BEGIN or END line on line 1.");
   });
 
   it("asks for Proxmox VE HA only when it is switched on", () => {

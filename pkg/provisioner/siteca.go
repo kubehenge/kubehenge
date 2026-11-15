@@ -67,24 +67,6 @@ func CheckCertificateBundle(bundle string, now time.Time) error {
 	return checkCertificates(bundle, now)
 }
 
-// NormalizeCertificateBundle writes a PEM bundle's certificates as the chart and the module take
-// them: LF line ends and nothing between the blocks, so that CRLF files and openssl's text output
-// are accepted the same everywhere.
-func NormalizeCertificateBundle(bundle string) string {
-	var out strings.Builder
-	rest := []byte(bundle)
-	for {
-		var block *pem.Block
-		block, rest = pem.Decode(rest)
-		if block == nil {
-			return out.String()
-		}
-		if block.Type == certificateBlock {
-			out.Write(pem.EncodeToMemory(&pem.Block{Type: certificateBlock, Bytes: block.Bytes}))
-		}
-	}
-}
-
 // siteCALapse says which certificate of the bundle has expired or is not yet valid at now, empty
 // when none is. A certificate that does not parse is left to the checks that refuse it.
 func siteCALapse(bundle string, now time.Time) string {

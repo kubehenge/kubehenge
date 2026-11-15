@@ -644,11 +644,16 @@ func (o *controllerOptions) parseReleaseMirror() error {
 		}
 		// A damaged authority, or one that has run out, is no reason to stop the controller, which the
 		// clusters' upgrades, snapshots and deletions depend on. Each reconcile reports it on its
-		// cluster, and a damaged one reaches no node.
-		if err = provisioner.CheckCertificateBundle(string(ca), time.Time{}); err != nil {
+		// cluster, and a damaged one reaches no node. A sound one is given as the classes' schemas
+		// take it, whatever is written between its certificates.
+		plain, err := provisioner.NormalizeCertificateBundle(string(ca))
+		if err == nil {
+			err = provisioner.CheckCertificateBundle(plain, time.Time{})
+		}
+		if err != nil {
 			o.r.SiteCAProblem = fmt.Sprintf("--site-ca: the authority %v", err)
 		} else {
-			o.r.SiteCA = strings.TrimSpace(string(ca))
+			o.r.SiteCA = strings.TrimSpace(plain)
 		}
 	}
 	if err := o.releaseMirror.CheckAddress(); err != nil {

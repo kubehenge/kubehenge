@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"golang.org/x/net/http/httpproxy"
+
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
 // Limits on what the proxy setting may hold, so that it stays a setting and not a file store.
@@ -156,13 +158,8 @@ func checkProxySetting(p *Proxy, pr *problems) {
 	}
 	checkProxyExceptions(p, pr)
 	if p.CABundle != "" {
-		switch {
-		case len(p.CABundle) > maxProxyCABundle:
-			pr.addf("Proxy certificate authority: at most %d KiB", maxProxyCABundle/kibibyte)
-		case strings.Contains(p.CABundle, "PRIVATE KEY"):
-			pr.addf("Proxy certificate authority: certificates only, no private key")
-		case !x509.NewCertPool().AppendCertsFromPEM([]byte(p.CABundle)):
-			pr.addf("Proxy certificate authority: holds no PEM certificate")
+		if err := provisioner.CheckAuthorityBundle(p.CABundle, maxProxyCABundle); err != nil {
+			pr.addf("Proxy certificate authority: %s", err)
 		}
 	}
 }

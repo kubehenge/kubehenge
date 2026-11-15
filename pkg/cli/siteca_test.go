@@ -138,6 +138,13 @@ func TestControllerReportsABadSiteCAAndTimeZoneAndRefusesAMissingFile(t *testing
 	if err := o.parseReleaseMirror(); err == nil || !strings.Contains(err.Error(), "--site-ca") {
 		t.Errorf("a missing file gave %v", err)
 	}
+	// A hand-kept bundle, as a ConfigMap edited by hand holds it, is given as certificates alone,
+	// which the classes' schemas take.
+	o = &controllerOptions{siteCAFile: filepath.Join("..", "provisioner", "testdata", "curl-cacert.txt")}
+	if err := o.parseReleaseMirror(); err != nil || o.r.SiteCAProblem != "" || strings.Contains(o.r.SiteCA, "#") ||
+		!strings.HasPrefix(o.r.SiteCA, "-----BEGIN CERTIFICATE-----\n") || !strings.HasSuffix(o.r.SiteCA, "\n-----END CERTIFICATE-----") {
+		t.Errorf("a hand-kept bundle gave %v, problem %q, site CA %q", err, o.r.SiteCAProblem, o.r.SiteCA)
+	}
 	// A zone that is none stops no controller. It is reported on each cluster instead.
 	o = &controllerOptions{timeZone: "Mars/Olympus"}
 	if err := o.parseReleaseMirror(); err != nil || !strings.Contains(o.r.SiteTimeZoneProblem, "--time-zone") {

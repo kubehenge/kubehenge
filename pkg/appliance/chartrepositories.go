@@ -1,10 +1,8 @@
 package appliance
 
 import (
-	"crypto/x509"
 	"maps"
 	"slices"
-	"strings"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
@@ -48,15 +46,10 @@ func (c *ChartRepositories) check(p *problems) {
 	if c.CABundle == "" {
 		return
 	}
-	switch {
-	case len(c.Mirrors) == 0:
+	if len(c.Mirrors) == 0 {
 		p.addf("Chart mirror certificate authority: needs a mirror")
-	case len(c.CABundle) > maxChartCABundle:
-		p.addf("Chart mirror certificate authority: at most %d KiB", maxChartCABundle/kibibyte)
-	case strings.Contains(c.CABundle, "PRIVATE KEY"):
-		p.addf("Chart mirror certificate authority: holds a private key. Give the authority's certificate only")
-	case !x509.NewCertPool().AppendCertsFromPEM([]byte(c.CABundle)):
-		p.addf("Chart mirror certificate authority: holds no PEM certificate")
+	} else if err := provisioner.CheckAuthorityBundle(c.CABundle, maxChartCABundle); err != nil {
+		p.addf("Chart mirror certificate authority: %s", err)
 	}
 }
 

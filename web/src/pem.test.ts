@@ -8,6 +8,8 @@ interface BundleCase {
   lines: string[];
   lineEnd?: string;
   noFinalLineEnd?: boolean;
+  repeat?: number;
+  maxKiB?: number;
   problem: string;
 }
 
@@ -22,16 +24,20 @@ const cases = (
     : []
 ).map((c) => {
   const lineEnd = c.lineEnd ?? "\n";
-  const bundle = c.lines.join(lineEnd) + (c.noFinalLineEnd === true ? "" : lineEnd);
-  return [c.name, bundle, c.problem === "" ? undefined : c.problem] as const;
+  const once = c.lines.join(lineEnd) + (c.noFinalLineEnd === true ? "" : lineEnd);
+  return [
+    c.name,
+    { bundle: once.repeat(c.repeat ?? 1), maxKiB: c.maxKiB },
+    c.problem === "" ? undefined : c.problem,
+  ] as const;
 });
 
 describe("the layout check of a certificate bundle", () => {
   it("reads every case of the shared table", () => {
-    expect(cases.length).toBeGreaterThan(30);
+    expect(cases.length).toBeGreaterThan(40);
   });
 
-  it.each(cases)("gives the server's verdict: %s", (_, bundle, problem) => {
-    expect(certificateBundleProblem(bundle)).toBe(problem);
+  it.each(cases)("gives the server's verdict: %s", (_, { bundle, maxKiB }, problem) => {
+    expect(certificateBundleProblem(bundle, maxKiB)).toBe(problem);
   });
 });

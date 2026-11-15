@@ -65,6 +65,50 @@ func checkProxy(p *Proxy) error {
 	return pr.err()
 }
 
+// TestProxyAndChartMirrorAuthoritiesTakeTheClustersLayoutRule holds the proxy's and the chart
+// mirrors' authorities to the layout rule of a cluster's bundles, which the interface checks too,
+// with their own limit of 256 KiB: a hand-kept bundle passes, and a damaged block beside a good one
+// or a BEGIN line inside a comment is refused, never dropped.
+func TestProxyAndChartMirrorAuthoritiesTakeTheClustersLayoutRule(t *testing.T) {
+	t.Parallel()
+	ca := certificatePEM(t)
+	curl, err := os.ReadFile("../provisioner/testdata/curl-cacert.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chartCheck := func(bundle string) error {
+		s := settings("pve1")
+		s.ChartRepositories = &ChartRepositories{Mirrors: map[string]string{"ghcr.io": "oci://r.example.org"}, CABundle: bundle}
+		return s.Validate()
+	}
+	proxyCheck := func(bundle string) error {
+		return checkProxy(&Proxy{URL: "http://proxy.example.com", CABundle: bundle})
+	}
+	for name, bundle := range map[string]string{
+		"curl's layout":            string(curl),
+		"over 64 KiB, under 256":   strings.Repeat(ca, 100*kibibyte/len(ca)+1),
+		"openssl's text before it": "subject=CN=proxy\nissuer=CN=proxy\n" + ca,
+	} {
+		if proxy, chart := proxyCheck(bundle), chartCheck(bundle); proxy != nil || chart != nil {
+			t.Errorf("%s: proxy %v, chart mirror %v", name, proxy, chart)
+		}
+	}
+	for name, tc := range map[string]struct{ bundle, want string }{
+		"a damaged block beside a good one": {strings.Replace(ca, "-----BEGIN", "----BEGIN", 1) + ca, "has a damaged BEGIN or END line on line 1"},
+		"a BEGIN line inside a comment":     {"# -----BEGIN CERTIFICATE----- follows\n", "block 1 is no complete PEM block"},
+		"a body that is no certificate":     {"-----BEGIN CERTIFICATE-----\nMIIBAA==\n-----END CERTIFICATE-----\n", "certificate 1 is no valid X.509 certificate"},
+		"over 256 KiB":                      {strings.Repeat(ca, maxProxyCABundle/len(ca)+1), "at most 256 KiB"},
+	} {
+		proxy, chart := proxyCheck(tc.bundle), chartCheck(tc.bundle)
+		if proxy == nil || !strings.Contains(proxy.Error(), "Proxy certificate authority: "+tc.want) {
+			t.Errorf("%s: proxy %v, want %q", name, proxy, tc.want)
+		}
+		if chart == nil || !strings.Contains(chart.Error(), "Chart mirror certificate authority: "+tc.want) {
+			t.Errorf("%s: chart mirror %v, want %q", name, chart, tc.want)
+		}
+	}
+}
+
 func TestProxyValidation(t *testing.T) {
 	t.Parallel()
 	ca := certificatePEM(t)

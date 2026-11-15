@@ -12,10 +12,14 @@ import (
 // IANA name. A site CA that passes is rewritten as the chart and the module take it.
 func (s *Settings) checkSiteDefaults(p *problems, now time.Time) {
 	if s.SiteCA != "" {
-		if err := provisioner.CheckCertificateBundle(s.SiteCA, now); err != nil {
+		plain, err := provisioner.NormalizeCertificateBundle(s.SiteCA)
+		if err == nil {
+			err = provisioner.CheckCertificateBundle(plain, now)
+		}
+		if err != nil {
 			p.addf("Site CA: the authority %s", err)
 		} else {
-			s.SiteCA = provisioner.NormalizeCertificateBundle(s.SiteCA)
+			s.SiteCA = plain
 		}
 	}
 	if s.TimeZone != "" {

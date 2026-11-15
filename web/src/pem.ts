@@ -12,6 +12,15 @@ const labelLine = /\b(?:BEGIN|END) [A-Z][A-Z0-9 ]*[A-Z0-9](?:-|$)/u;
 // bodyLine is a line of base64 as long as most of a block's lines.
 const bodyLine = /^[A-Za-z0-9+/=]{40,}$/u;
 const base64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
+// The server's limit of a cluster's bundles. The appliance's proxy and chart mirror authorities
+// take 256.
+const nodeKiB = 64;
+// space is what the server trims (Go's unicode.IsSpace), which differs from String.prototype.trim:
+// it takes U+0085 and leaves U+FEFF.
+const space = String.raw`\t\n\v\f\r \x85\xA0\u{1680}\u{2000}-\u{200A}\u{2028}\u{2029}\u{202F}\u{205F}\u{3000}`;
+const kibibyte = 1024;
+const outerSpace = new RegExp(`^[${space}]+|[${space}]+$`, "gu");
+const trim = (s: string): string => s.replaceAll(outerSpace, "");
 
 interface NumberedLine {
   n: number;
@@ -47,13 +56,14 @@ function blockType(block: string[]): string | undefined {
   while (body[0]?.includes(":") === true) {
     body = body.slice(1);
   }
-  const data = body.join("").replaceAll(/[ \t]/gu, "");
+  // The server's decoder passes over carriage returns as well.
+  const data = body.join("").replaceAll(/[ \t\r]/gu, "");
   return tail === `${end}${type}${dashes}` && base64.test(data) ? type : undefined;
 }
 
 // outsideProblem is what is wrong with line n, which lies outside the blocks.
 function outsideProblem(text: string, n: number): string | undefined {
-  const line = text.trim();
+  const line = trim(text);
   if (labelLine.test(line) || (line.includes("--") && line.includes("CERTIFICATE"))) {
     return `has a damaged BEGIN or END line on line ${n}`;
   }
@@ -93,7 +103,7 @@ function blockTypes(bundle: string): string[] | string {
   if (open !== undefined) {
     return `block ${types.length + 1} is no complete PEM block`;
   }
-  const trailing = all.slice(after).find((l) => l.text.trim() !== "");
+  const trailing = all.slice(after).find((l) => trim(l.text) !== "");
   if (types.length > 0 && trailing !== undefined) {
     return `has text after its last PEM block on line ${trailing.n}`;
   }
@@ -101,7 +111,11 @@ function blockTypes(bundle: string): string[] | string {
 }
 
 /** certificateBundleProblem says what is wrong with the layout of a bundle, in the server's words, or nothing. */
-export function certificateBundleProblem(bundle: string): string | undefined {
+export function certificateBundleProblem(bundle: string, maxKiB = nodeKiB): string | undefined {
+  // The server counts UTF-8 bytes.
+  if (new TextEncoder().encode(bundle).length > maxKiB * kibibyte) {
+    return `at most ${maxKiB} KiB`;
+  }
   const types = blockTypes(bundle);
   if (typeof types === "string") {
     return types;
