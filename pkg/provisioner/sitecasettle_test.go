@@ -312,3 +312,54 @@ func TestACertificateBundleWithABrokenBlockIsRefusedWholeNamingTheBlock(t *testi
 		t.Errorf("two good blocks: %v", err)
 	}
 }
+
+func TestAdmissionHoldsTheSiteCAsVariableToTheControllerAndTheWindowToAKnownZone(t *testing.T) {
+	t.Parallel()
+	old := storedCluster("team-a", "web", "ceph", variableOf("controlPlaneEndpoint", `"192.0.2.10"`))
+	h, _ := hooksFor(t, old)
+	validator := &ClusterValidator{Hooks: h}
+	withCAs := changedVariable(old, SiteCAsVariable, `["x"]`)
+	if _, err := validator.ValidateUpdate(t.Context(), old, withCAs); err == nil || !strings.Contains(err.Error(), SiteCAsVariable) {
+		t.Errorf("a user setting %s: %v", SiteCAsVariable, err)
+	}
+	var req admission.Request
+	req.UserInfo = authenticationv1.UserInfo{Username: "system:serviceaccount:" + h.ClassNamespace + ":" + controllerAccount}
+	if _, err := validator.ValidateUpdate(admission.NewContextWithRequest(t.Context(), req), old, withCAs); err != nil {
+		t.Errorf("the controller setting %s: %v", SiteCAsVariable, err)
+	}
+	window := changedVariable(old, upgradesVariable, `{"mode":"patch","window":{"timeZone":"Mars/Olympus"}}`)
+	if _, err := validator.ValidateUpdate(t.Context(), old, window); err == nil || !strings.Contains(err.Error(), "timeZone") {
+		t.Errorf("a window in Mars/Olympus: %v", err)
+	}
+}
+
+func TestSiteRollConditionGoesOnceTheClusterHasNothingToSay(t *testing.T) {
+	t.Parallel()
+	stale := metav1.Condition{Type: SiteRollCondition, Status: metav1.ConditionFalse, Reason: UpgradeWindowInvalidReason}
+	raw, err := json.Marshal([]string{siteCAPEM})
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied := siteCluster("applied", jsonVar(SiteCAsVariable, string(raw)))
+	waiting := siteCluster("waiting")
+	for _, c := range []*clusterv1.Cluster{&applied, &waiting} {
+		c.Status.Conditions = append(c.Status.Conditions, stale)
+	}
+	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(&applied, &waiting).WithStatusSubresource(&clusterv1.Cluster{}).Build()
+	r := &Reconciler{Client: kube, Reader: kube, ClassNamespace: siteClassNamespace, SiteCA: siteCAPEM, Now: func() time.Time { return siteNow }}
+	for _, name := range []string{"applied", "waiting"} {
+		var live clusterv1.Cluster
+		if err := kube.Get(t.Context(), client.ObjectKey{Namespace: "team-a", Name: name}, &live); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := r.rollSiteCA(t.Context(), &live); err != nil {
+			t.Fatal(err)
+		}
+		if err := kube.Get(t.Context(), client.ObjectKey{Namespace: "team-a", Name: name}, &live); err != nil {
+			t.Fatal(err)
+		}
+		if meta.FindStatusCondition(live.Status.Conditions, SiteRollCondition) != nil {
+			t.Errorf("%s keeps the condition of a window that was fixed", name)
+		}
+	}
+}

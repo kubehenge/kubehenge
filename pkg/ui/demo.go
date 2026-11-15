@@ -244,7 +244,7 @@ func demoRead(r *http.Request) bool {
 		return true
 	case r.Method != http.MethodPost:
 		return false
-	case p == "/api/release-pins/check":
+	case p == "/api/release-pins/check", p == "/api/setup/time-zone", p == "/api/setup/site-ca-roll":
 		return true
 	case p == "/api/clusters":
 		return r.URL.Query().Get("dryRun") == "All"
