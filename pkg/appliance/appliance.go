@@ -273,6 +273,9 @@ func (a *Appliance) Remove(passphrase string, backups BackupsOnRemove, ticket *p
 		if err := a.init(ctx, j, env); err != nil {
 			return err
 		}
+		if err := a.stopBackupStore(ctx, j, env); err != nil {
+			return err
+		}
 		if err := release(ctx, j, env); err != nil {
 			return err
 		}
