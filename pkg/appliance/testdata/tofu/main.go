@@ -96,6 +96,25 @@ func run(dir string, args []string) int {
 			fmt.Println(`{"@level":"error","@message":"Error: no such node","type":"diagnostic","diagnostic":{"summary":"Error","detail":"node fail does not exist"}}`)
 			return 1
 		}
+	case "plan":
+		for _, arg := range args {
+			if out, ok := strings.CutPrefix(arg, "-out="); ok {
+				if err := os.WriteFile(filepath.Join(dir, out), []byte("plan"), 0o600); err != nil {
+					return 3
+				}
+			}
+		}
+	case "show":
+		// A test leaves the plan as `tofu show -json` prints it in <dir>/../plan.json.
+		if _, err := os.Stat(filepath.Join(dir, args[len(args)-1])); err != nil {
+			fmt.Fprintln(os.Stderr, "Error: no saved plan")
+			return 1
+		}
+		shown, err := os.ReadFile(filepath.Join(dir, "..", "plan.json"))
+		if err != nil {
+			shown = []byte(`{"resource_changes":[]}`)
+		}
+		fmt.Print(string(shown))
 	case "state":
 		// A test lists what the state holds in <dir>/../state-list.
 		if len(args) > 1 && args[1] == "list" {

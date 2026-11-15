@@ -392,8 +392,8 @@ func TestApply(t *testing.T) {
 		t.Fatal(err)
 	}
 	runs := strings.Split(strings.TrimSpace(string(log)), "\n")
-	// init, apply, and the outputs kubeconfig, api_endpoint and talosconfig.
-	if len(runs) != 5 {
+	// init, plan, show, apply, and the outputs kubeconfig, api_endpoint and talosconfig.
+	if len(runs) != 7 {
 		t.Fatalf("tofu ran %d times: %s", len(runs), log)
 	}
 	for _, run := range runs {
@@ -518,7 +518,7 @@ func TestRemove(t *testing.T) {
 		t.Fatalf("remove: job %+v, before %d, gone %d, ready %v", j, before, gone, a.Ready())
 	}
 	log, err := os.ReadFile(filepath.Join(a.Dir, "fake-tofu.log"))
-	if err != nil || !strings.Contains(string(log), `"destroy"`) {
+	if err != nil || !strings.Contains(string(log), `"-destroy"]`) || !strings.Contains(string(log), `["apply","-auto-approve","-input=false","-json","`+planFile+`"]`) {
 		t.Fatalf("tofu destroy did not run: %v", err)
 	}
 	if !strings.Contains(string(log), `["state","list"]`) || strings.Contains(string(log), "protection=false") {

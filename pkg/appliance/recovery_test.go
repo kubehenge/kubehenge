@@ -329,12 +329,13 @@ func (f *tracedTalos) Restore(ctx context.Context, admin []byte, nodes []string,
 	return f.fakeManagementTalos.Restore(ctx, admin, nodes, open, log)
 }
 
-// appliesIn lists the applies the fake OpenTofu was asked for, in order.
+// appliesIn lists the applies the fake OpenTofu was asked for, in order, by the plan each runs,
+// which carries its targets.
 func appliesIn(log string) []string {
 	raw, _ := os.ReadFile(filepath.Clean(log))
 	var out []string
 	for line := range strings.SplitSeq(string(raw), "\n") {
-		if strings.HasPrefix(line, `{"args":["apply"`) {
+		if strings.HasPrefix(line, `{"args":["plan"`) {
 			out = append(out, line)
 		}
 	}

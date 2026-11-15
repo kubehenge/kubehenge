@@ -30,11 +30,11 @@ On the Administration page, **Remove Kubehenge** takes the state passphrase and 
 
 - deletes the VM templates in the template pool, `kubehenge-templates`.
 - switches automatic upgrades of the management cluster off ([upgrading.md](upgrading.md#automatically-after-kubehenge)). It deletes what the appliance kept for them and the user `kubehenge-upgrader@pve` with its token.
-- destroys the management cluster with OpenTofu, with every Proxmox VE object its module made ([below](#what-the-module-made)).
+- destroys the management cluster with OpenTofu, with every Proxmox VE object its module made ([below](#what-the-module-made)). It lifts the protection of the management VMs first.
 - switches the [backups of its etcd](install.md#back-up-the-management-clusters-etcd) off and deletes the access key and talosconfig the appliance kept for them. The snapshots stay in the target.
 - keeps the backup volume: the VM `kubehenge-backups`, tagged `backups`, with its one disk. It is protected and sits in no pool. Ask for everything to go (`removeBackups`) and the removal lifts its protection and deletes it too.
 
-A removal that stopped part way can be run again. When the management cluster no longer answers, the removal goes on if Proxmox VE holds none of its VMs (the pool `kubehenge-management`). Otherwise it names the VMs and refuses. Start them, or remove them in Proxmox VE.
+A removal that stopped part way can be run again. When the management cluster no longer answers, the removal goes on if Proxmox VE holds none of its VMs (the pool `kubehenge-management`). Otherwise it names the VMs and refuses. Start them, or remove them in Proxmox VE after `qm set <vmid> --protection 0` on each.
 
 ### After removal in the appliance
 
@@ -42,9 +42,12 @@ The page follows the log. The appliance stays and returns to its first run with 
 
 ### With Terraform/OpenTofu
 
-Delete the clusters first. Then delete the templates in the template pool (`kubehenge template delete`, or delete the VMs), because Proxmox VE refuses to delete a pool that still holds VMs. Then:
+Delete the clusters first. Then delete the templates in the template pool (`kubehenge template delete`, or delete the VMs), because Proxmox VE refuses to delete a pool that still holds VMs.
+
+The management VMs are protected, so Proxmox VE refuses to destroy them. Lift it on each VM in the pool `kubehenge-management`, in the shell of its node as root, then destroy:
 
 ```sh
+qm set <vmid> --protection 0
 tofu destroy
 ```
 

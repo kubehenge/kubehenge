@@ -222,8 +222,9 @@ func TestRemovingAPartMadeClusterAppliesNothing(t *testing.T) {
 	if j := waitFor(t, a); j.State != StateSucceeded {
 		t.Fatalf("remove: %+v", j)
 	}
+	// The destroy is the one plan, and the one apply runs it.
 	for _, args := range tofuCalls(t, a)[applied:] {
-		if args[0] == "apply" {
+		if args[0] == "plan" && !slices.Contains(args, "-destroy") || args[0] == "apply" && args[len(args)-1] != planFile {
 			t.Errorf("the removal ran tofu %q", args)
 		}
 	}
