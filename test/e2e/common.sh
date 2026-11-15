@@ -600,6 +600,23 @@ management_credentials() {
     kubeconfig_field client-key-data | base64 -d > "${work}/management.key"
     management_api=$(kubeconfig_field server)
 }
+# keep_management_credentials: the management cluster's admin kubeconfig and talosconfig, as the
+# appliance gives them, in $KUBEHENGE_E2E_KEEP. The job reads its nodes and their etcd with them,
+# since the appliance alone holds the cluster's state. A credential it cannot give is left out.
+keep_management_credentials() {
+    [ -n "${KUBEHENGE_E2E_KEEP:-}" ] || return 0
+    (umask 077 && mkdir -p "${KUBEHENGE_E2E_KEEP}")
+    for name in kubeconfig talosconfig; do
+        asked=$(jq -nc --arg p "${passphrase}" --arg n "${name}" '{name: $n, passphrase: $p}')
+        post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup/credential" "${asked}" || true
+        kept_status=$(cat "${work}/status" 2> /dev/null || true)
+        if [ "${kept_status}" = 200 ]; then
+            (umask 077 && cp "${work}/body" "${KUBEHENGE_E2E_KEEP}/${name}")
+        else
+            rm -f "${KUBEHENGE_E2E_KEEP}/${name}"
+        fi
+    done
+}
 kubeconfig_field() {
     sed -n "s/^ *$1: *//p" "${work}/management.kubeconfig" | head -n 1
 }
