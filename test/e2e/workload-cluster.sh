@@ -827,11 +827,71 @@ workers=$(kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${na
 if [ -z "${control_planes}" ] || [ -z "${workers}" ]; then
     fail "the cluster has control planes '${control_planes}' and workers '${workers}'"
 fi
-# shellcheck disable=SC2086 # one Machine per word
-boot_log=$(boot_logs "${ns}" "${name}" ${control_planes} ${workers})
+# expect <Machine> <log> <pattern>: one log the machine's boot log is to hold, checked below.
+expected=
+expect() {
+    expected="${expected}$1	$2	$3
+"
+}
+journal_line='\[[0-9]+\]: '
+if [ "${distribution}" = talos ]; then
+    for m in ${control_planes} ${workers}; do
+        expect "${m}" "kernel messages" .
+        for service in machined apid kubelet; do
+            expect "${m}" "${service}" .
+        done
+    done
+    for m in ${control_planes}; do
+        expect "${m}" trustd .
+        expect "${m}" etcd .
+    done
+else
+    for m in ${control_planes} ${workers}; do
+        expect "${m}" cloud-init-output.log '^Cloud-init v[.] '
+        expect "${m}" "journal of cloud-init" "${journal_line}"
+    done
+    case "${distribution}" in
+        kubeadm) server_unit=kubelet agent_unit=kubelet ;;
+        rke2) server_unit=rke2-server agent_unit=rke2-agent ;;
+        *) server_unit=k3s agent_unit=k3s-agent ;;
+    esac
+    for m in ${control_planes}; do
+        expect "${m}" "journal of ${server_unit}" "${journal_line}"
+    done
+    for m in ${workers}; do
+        expect "${m}" "journal of ${agent_unit}" "${journal_line}"
+    done
+    if [ "${distribution}" = kubeadm ]; then
+        for m in ${control_planes} ${workers}; do
+            expect "${m}" "journal of containerd" "${journal_line}"
+        done
+    fi
+fi
+# boot_logs_hold_all: reads every machine's boot log afresh into boot_log; whether each holds what
+# it is to.
+boot_logs_hold_all() {
+    # shellcheck disable=SC2086 # one Machine per word
+    boot_log=$(boot_logs "${ns}" "${name}" ${control_planes} ${workers})
+    printf '%s' "${expected}" | while IFS='	' read -r m log pattern; do
+        # shellcheck disable=SC2310 # a log it lacks is the answer, not an error.
+        boot_log_shows "${boot_log}" "${m}" "${log}" "${pattern}" || exit 1
+    done
+}
+# A node's copy of its journals is a snapshot: kubehenge-boot-log.timer writes it 15 s after the
+# last copy ends, and a copy on a small node busy starting its pods can take seconds more. A worker
+# read moments after it joined can have started its agent after the last copy, so the logs are read
+# again until each copy has caught up, for six of the timer's periods.
+caught_up=$(($(date +%s) + 90))
+# shellcheck disable=SC2310 # a copy that never catches up is reported below, log by log.
+until boot_logs_hold_all; do
+    now=$(date +%s)
+    [ "${now}" -lt "${caught_up}" ] || break
+    sleep 15
+done
 # expect_boot_log <Machine> <log> <pattern>: the machine's boot log holds the log with a line
 # matching the pattern; when not, what was read, and on a node with a guest agent that runs commands
-# what SELinux denied there, the likeliest reason its agent could not read a file.
+# what SELinux denied there, the likeliest reason its agent could not read a file, and how the timer
+# that writes the boot log has run.
 expect_boot_log() {
     # shellcheck disable=SC2310 # its failure is reported below.
     if boot_log_shows "${boot_log}" "$@"; then
@@ -843,43 +903,17 @@ expect_boot_log() {
         echo "SELinux's denials on $1:" >&2
         # shellcheck disable=SC2310 # what the node says is printed whether or not anything was denied.
         on_machines "$1" "journalctl -b -k -o cat --no-pager | grep -F 'avc:  denied'; ausearch -m AVC -ts boot 2> /dev/null" >&2 || true
+        echo "The boot log's timer and service on $1:" >&2
+        # shellcheck disable=SC2310 # printed whatever state the units are in.
+        on_machines "$1" "date -u +%FT%TZ; ls -l --time-style=full-iso /var/log/kubehenge; systemctl status --no-pager --full kubehenge-boot-log.timer kubehenge-boot-log.service; systemctl list-timers --all --no-pager kubehenge-boot-log.timer; journalctl -b --no-pager -o short-iso-precise -u kubehenge-boot-log.service -u kubehenge-boot-log.timer | tail -n 60" >&2 || true
     fi
     fail "the boot log of $1 holds no $2 with a line matching '$3'"
 }
-journal_line='\[[0-9]+\]: '
-if [ "${distribution}" = talos ]; then
-    for m in ${control_planes} ${workers}; do
-        expect_boot_log "${m}" "kernel messages" .
-        for service in machined apid kubelet; do
-            expect_boot_log "${m}" "${service}" .
-        done
-    done
-    for m in ${control_planes}; do
-        expect_boot_log "${m}" trustd .
-        expect_boot_log "${m}" etcd .
-    done
-else
-    for m in ${control_planes} ${workers}; do
-        expect_boot_log "${m}" cloud-init-output.log '^Cloud-init v[.] '
-        expect_boot_log "${m}" "journal of cloud-init" "${journal_line}"
-    done
-    case "${distribution}" in
-        kubeadm) server_unit=kubelet agent_unit=kubelet ;;
-        rke2) server_unit=rke2-server agent_unit=rke2-agent ;;
-        *) server_unit=k3s agent_unit=k3s-agent ;;
-    esac
-    for m in ${control_planes}; do
-        expect_boot_log "${m}" "journal of ${server_unit}" "${journal_line}"
-    done
-    for m in ${workers}; do
-        expect_boot_log "${m}" "journal of ${agent_unit}" "${journal_line}"
-    done
-    if [ "${distribution}" = kubeadm ]; then
-        for m in ${control_planes} ${workers}; do
-            expect_boot_log "${m}" "journal of containerd" "${journal_line}"
-        done
-    fi
-fi
+while IFS='	' read -r m log pattern; do
+    [ -z "${m}" ] || expect_boot_log "${m}" "${log}" "${pattern}"
+done << EOF
+${expected}
+EOF
 
 step "the cluster's support bundle: the Cluster, its boot logs, no Secret and no secret"
 bundle=${work}/bundle.tar.gz
@@ -3049,7 +3083,7 @@ EOF
         # renovate: datasource=docker depName=docker.io/internetsystemsconsortium/bind9
         bind_image=docker.io/internetsystemsconsortium/bind9:9.20@sha256:66092edb53c081fa11b1fa8219e99065b0f497cb38f568ba789702a4c10e2590
         # renovate: datasource=docker depName=ghcr.io/letsencrypt/pebble
-        pebble_image=ghcr.io/letsencrypt/pebble:2.10.1@sha256:ddf230642b1a584f519f32e347de1b05a6e4c1f6c35c1863b33effeab5f78199
+        pebble_image=ghcr.io/letsencrypt/pebble:2.10.3@sha256:0c81f05db371f436c97fb894bd6d2ab8fc9c8e2ce40f8bef8a8e15941bcd75ef
         # Pebble refuses an account without an external account binding, as ZeroSSL or Sectigo do. Its key
         # and cert-manager's are base64url without padding.
         eab_key_id=e2e-eab

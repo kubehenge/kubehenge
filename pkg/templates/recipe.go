@@ -238,7 +238,8 @@ const hostClockCheck = `f=/etc/chrony.d/99-kubehenge-bake.conf; listed() { for _
 const iptablesCheck = "iptables --version | grep -q nf_tables"
 
 // avcDenied finds no denial of SELinux in the kernel's log or the audit log, whichever has them.
-const avcDenied = `! journalctl -b -k -o cat --no-pager | grep -qF 'avc:  denied' && ! grep -qsF 'avc:  denied' /var/log/audit/audit.log`
+// It prints the denials it finds, which the failed bake's error then names.
+const avcDenied = `! journalctl -b -k -o cat --no-pager | grep -F 'avc:  denied' && ! grep -sF 'avc:  denied' /var/log/audit/audit.log`
 
 // nodeChecks prove a node's boot as a clone's goes: cloud-init finishes without warnings, which
 // Cluster API's Proxmox VE provider counts as a failed boot, the root is read-only, SELinux enforces

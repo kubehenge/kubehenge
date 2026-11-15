@@ -343,8 +343,8 @@ func (b *Builder) Create(ctx context.Context, t *Template) (_ int, err error) {
 	if err != nil {
 		return 0, fmt.Errorf("reading node %s: %w", b.Node, err)
 	}
-	importStorage, err := node.Storage(ctx, b.ImportStorage)
-	if err != nil {
+	importStorage := node.StorageRef(b.ImportStorage)
+	if err = importStorage.Ping(ctx); err != nil {
 		return 0, fmt.Errorf("reading storage %s: %w", b.ImportStorage, err)
 	}
 	volume := fmt.Sprintf("%s:import/%s", b.ImportStorage, image.FileName)
@@ -1209,10 +1209,8 @@ func (b *Builder) bootNodeImage(ctx context.Context, node *proxmox.Node, vm *pro
 // removeSeed deletes the cloud-init ISO from its storage.
 func (b *Builder) removeSeed(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, isoStorage string) {
 	iso := fmt.Sprintf("iso/"+proxmox.UserDataISOFormat, vm.VMID)
-	if storage, err := node.Storage(ctx, isoStorage); err == nil {
-		if derr := deleteVolume(ctx, storage, isoStorage+":"+iso); derr != nil {
-			b.logf("could not remove the cloud-init ISO: %v", derr)
-		}
+	if err := deleteVolume(ctx, node.StorageRef(isoStorage), isoStorage+":"+iso); err != nil {
+		b.logf("could not remove the cloud-init ISO: %v", err)
 	}
 }
 

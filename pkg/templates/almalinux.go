@@ -29,7 +29,7 @@ func (almaLinux) Releases() []Release {
 		// The build of AlmaLinux 10's GenericCloud image for x86-64-v2, which the bake boots to
 		// build the node image in, named by its file on repo.almalinux.org.
 		// renovate: datasource=custom.almalinux-cloud-images depName=almalinux-10
-		Build: "10.2-20261012.0",
+		Build: "10.2-20261109.0",
 		Mode:  ImageMode,
 		FIPS:  true,
 	}}

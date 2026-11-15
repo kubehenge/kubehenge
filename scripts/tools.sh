@@ -98,13 +98,13 @@ NODE_SHA256=5848553868b402d3fabb5b09270649977780a390f832155721025a08b5104455
 tree node "https://nodejs.org/dist/v${NODE}/node-v${NODE}-linux-x64.tar.gz" "${NODE_SHA256}" bin node npm npx
 
 # renovate: datasource=github-release-attachments depName=astral-sh/uv
-UV=0.13.7
-UV_SHA256=c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83
+UV=0.13.8
+UV_SHA256=5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91
 tree uv "https://github.com/astral-sh/uv/releases/download/${UV}/uv-x86_64-unknown-linux-gnu.tar.gz" "${UV_SHA256}" . uv
 
 # renovate: datasource=github-release-attachments depName=opentofu/opentofu
-TOFU=v1.13.2
-TOFU_SHA256=ac05d9952662c7db28dd57e93f0a68018837bfdf9342384ec0987977c16a9645
+TOFU=v1.13.9
+TOFU_SHA256=b34b327cc1ef07178207b6f2cd1f5276537d3e5b7be316500f6dac50d4c0a857
 release tofu opentofu/opentofu "${TOFU}" "tofu_${TOFU#v}_linux_amd64.tar.gz" "${TOFU_SHA256}" tofu
 
 # renovate: datasource=github-releases depName=helm/helm
@@ -113,8 +113,8 @@ HELM_SHA256=0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b
 tool helm "https://get.helm.sh/helm-${HELM}-linux-amd64.tar.gz" "${HELM_SHA256}" linux-amd64/helm
 
 # renovate: datasource=github-release-attachments depName=terraform-linters/tflint
-TFLINT=v0.65.0
-TFLINT_SHA256=d4c545ed2e29d6338604b586f34f544f380f70f243aa72f7b484713835eaec61
+TFLINT=v0.66.0
+TFLINT_SHA256=22be11cadc25cd02401e94c0ccc91aa63467debb8485c2a755d98f4c0a9d1e2e
 release tflint terraform-linters/tflint "${TFLINT}" tflint_linux_amd64.zip "${TFLINT_SHA256}" \
     tflint.zip
 
@@ -132,8 +132,8 @@ tool kubectl "https://dl.k8s.io/release/${KUBECTL}/bin/linux/amd64/kubectl" "${K
 
 # The end-to-end tests reach Talos nodes through their API with it.
 # renovate: datasource=github-release-attachments depName=siderolabs/talos
-TALOSCTL=v1.14.5
-TALOSCTL_SHA256=ff432b68986709e6b69c563a08a2ced4232d5196b0dccd6d2e783e9d714d7d7d
+TALOSCTL=v1.14.6
+TALOSCTL_SHA256=11acde7f7578ffe9cbe6fb8349b34595065f597de0842615982e350b365de987
 release talosctl siderolabs/talos "${TALOSCTL}" talosctl-linux-amd64 "${TALOSCTL_SHA256}"
 
 # renovate: datasource=github-release-attachments depName=rhysd/actionlint
@@ -160,15 +160,15 @@ HADOLINT_SHA256=c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507
 release hadolint hadolint/hadolint "${HADOLINT}" hadolint-linux-x86_64 "${HADOLINT_SHA256}"
 
 # renovate: datasource=github-release-attachments depName=crate-ci/typos
-TYPOS=v1.52.0
-TYPOS_SHA256=6155d4114f9a0f5b8f6d4fda96266c9d5f6add71df80da7f684ee5e72eb14588
+TYPOS=v1.52.2
+TYPOS_SHA256=3b13d1291281d39d01822e54035636487a7a0f228e70097899b1e33aeb0e7e93
 release typos crate-ci/typos "${TYPOS}" "typos-${TYPOS}-x86_64-unknown-linux-musl.tar.gz" "${TYPOS_SHA256}" ./typos
 
 # `alloy validate` proves that the Alloy configurations the controller generates parse, and that
 # their components and arguments exist. It is the release the charts run: TestAlloyToolIsTheChartsRelease holds the two together.
 # renovate: datasource=github-release-attachments depName=grafana/alloy
-ALLOY=v1.21.3
-ALLOY_SHA256=50d23af2d0f98c00beac6ce9a365693e60f87fb76b6cad6fe1d161e80588af6d
+ALLOY=v1.22.0
+ALLOY_SHA256=62d177feb18c9b6ffd636c8273aa82a6afc75a507d096ff951749df23c3176f9
 release alloy grafana/alloy "${ALLOY}" alloy-linux-amd64.zip "${ALLOY_SHA256}" alloy-linux-amd64.zip
 
 # The nightly link check runs it (make links).
@@ -186,6 +186,6 @@ release cosign sigstore/cosign "${COSIGN}" cosign-linux-amd64 "${COSIGN_SHA256}"
 
 # The release writes the SBOMs of its archive and images with it (scripts/sbom.sh).
 # renovate: datasource=github-release-attachments depName=anchore/syft
-SYFT=v1.56.0
-SYFT_SHA256=1c2493cfcf52d3367d6cb25780d9190c111c2219c34c820574c43e8bae15c528
+SYFT=v1.57.1
+SYFT_SHA256=bf52519eb57f675d47c07d43213cb6dff6449f3d6d1147ff6701ed91f44eef0c
 release syft anchore/syft "${SYFT}" "syft_${SYFT#v}_linux_amd64.tar.gz" "${SYFT_SHA256}" syft

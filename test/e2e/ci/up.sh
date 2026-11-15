@@ -27,7 +27,7 @@ work=${1:?usage: $0 <work directory>}
 script=$(readlink -f "$0")
 here=$(dirname "${script}")
 # renovate: datasource=docker depName=registry
-REGISTRY_IMAGE=registry:3.1.2@sha256:d4032d4cc323c1731c707931ecada07a53076eac38e3b61ae57533f170f2c6c3
+REGISTRY_IMAGE=registry:3.1.2@sha256:82f6ff4a7f982960c8aa51617fea3aabc485df6e55cce80d22deb1de36f1bc3c
 
 mkdir -p "${work}/vz"
 work=$(readlink -f "${work}")
