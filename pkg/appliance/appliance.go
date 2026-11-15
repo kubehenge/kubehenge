@@ -84,6 +84,9 @@ type Appliance struct {
 	// vmHosts reads with token which Proxmox VE node each VM it may see runs on, by VM name. Nil
 	// asks the Proxmox VE API.
 	vmHosts func(ctx context.Context, token string) (map[string]string, error)
+	// protect sets or lifts a management VM's protection with the ticket. Nil asks the Proxmox VE
+	// API.
+	protect func(ctx context.Context, t *pve.Ticket, vm managementVM, value protection) error
 	Now     func() time.Time
 	// KeyWorkFactor is the scrypt work factor the passphrase seals the snapshots' key with, age's
 	// own when 0. Opening the key reads it from the sealed key.
@@ -274,7 +277,7 @@ func (a *Appliance) Remove(passphrase string, backups BackupsOnRemove, ticket *p
 			return err
 		}
 		j.Add("Destroying the management cluster")
-		if err := a.tofu(ctx, j, env, jsonMessage, "destroy", "-auto-approve", "-input=false", "-json"); err != nil {
+		if err := a.applyPlanned(ctx, j, env, ticket, "-destroy"); err != nil {
 			return err
 		}
 		if err := forget(); err != nil {

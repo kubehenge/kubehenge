@@ -247,6 +247,15 @@ run "backup_volume_on_local_storage_stays_on_its_node" {
   }
 }
 
+run "node_vms_are_protected" {
+  command = plan
+
+  assert {
+    condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : vm.protection]) && proxmox_virtual_environment_vm.backups.protection
+    error_message = "every management VM must carry Proxmox VE's protection, so that no one destroys it by accident"
+  }
+}
+
 run "backup_volume_protection_off" {
   command = plan
 

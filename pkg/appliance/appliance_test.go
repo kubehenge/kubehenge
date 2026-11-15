@@ -392,8 +392,8 @@ func TestApply(t *testing.T) {
 		t.Fatal(err)
 	}
 	runs := strings.Split(strings.TrimSpace(string(log)), "\n")
-	// init, apply, and the outputs kubeconfig, api_endpoint and talosconfig.
-	if len(runs) != 5 {
+	// init, plan, show, apply, and the outputs kubeconfig, api_endpoint and talosconfig.
+	if len(runs) != 7 {
 		t.Fatalf("tofu ran %d times: %s", len(runs), log)
 	}
 	for _, run := range runs {
@@ -510,6 +510,7 @@ func TestRemove(t *testing.T) {
 		t.Fatalf("wrong passphrase: job %+v, before %d, gone %d", j, before, gone)
 	}
 
+	ran := len(tofuCalls(t, a))
 	if err := a.Remove("correct horse battery staple", KeepBackups, ticket(), step, func() { gone++ }); err != nil {
 		t.Fatal(err)
 	}
@@ -517,9 +518,10 @@ func TestRemove(t *testing.T) {
 	if j.State != "succeeded" || before != 1 || gone != 1 || a.Ready() {
 		t.Fatalf("remove: job %+v, before %d, gone %d, ready %v", j, before, gone, a.Ready())
 	}
+	destroyApplied(t, tofuCalls(t, a)[ran:])
 	log, err := os.ReadFile(filepath.Join(a.Dir, "fake-tofu.log"))
-	if err != nil || !strings.Contains(string(log), `"destroy"`) {
-		t.Fatalf("tofu destroy did not run: %v", err)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if !strings.Contains(string(log), `["state","list"]`) || strings.Contains(string(log), "protection=false") {
 		t.Fatalf("a removal that keeps the backup volume did not look for it in the state, or lifted its protection:\n%s", log)

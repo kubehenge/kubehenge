@@ -194,6 +194,15 @@ remove_ha_rule() {
     ha_vmid=
 }
 
+# lift_management_protection <node> <vmid>: checks that a management VM carries the protection the
+# setup gives it, then lifts it. A step that loses a VM by accident stands for an administrator who
+# lifted it first, since Proxmox VE refuses to delete a protected VM.
+lift_management_protection() {
+    pvesh get "/nodes/$1/qemu/$2/config" --output-format json < /dev/null | jq -e '.protection == 1' > /dev/null ||
+        fail "management VM $2 is not protected"
+    pvesh set "/nodes/$1/qemu/$2/config" --protection 0 < /dev/null > /dev/null
+}
+
 # rules_offered <node>: whether the user without privileges on / is offered the test's HA rule, by
 # its name and node alone.
 rules_offered() {
@@ -486,6 +495,7 @@ pvesh get /cluster/resources --type vm --output-format json |
 lost=$(jq -r 'last | "\(.node) \(.vmid)"' "${work}/management-vms")
 [ -n "${lost}" ] && [ "${lost}" != "null null" ] || fail "no management node VM to delete"
 lost_node=${lost% *} lost_vmid=${lost#* }
+lift_management_protection "${lost_node}" "${lost_vmid}"
 pvesh create "/nodes/${lost_node}/qemu/${lost_vmid}/status/stop" > /dev/null
 pvesh delete "/nodes/${lost_node}/qemu/${lost_vmid}" --purge 1 > /dev/null
 # Two members left keep etcd's quorum, so an apply makes the VM again and it rejoins. A cluster of
@@ -712,6 +722,7 @@ lose_management_vms() {
             > "${work}/lost"
     [ -s "${work}/lost" ] || fail "no management node VM to delete"
     while read -r lost_node lost_vmid; do
+        lift_management_protection "${lost_node}" "${lost_vmid}"
         pvesh create "/nodes/${lost_node}/qemu/${lost_vmid}/status/stop" > /dev/null
         pvesh delete "/nodes/${lost_node}/qemu/${lost_vmid}" --purge 1 > /dev/null
     done < "${work}/lost"
