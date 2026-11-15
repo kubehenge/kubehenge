@@ -239,6 +239,9 @@ type clusterView struct {
 	Pool         string                     `json:"pool"`
 	Allowed      allowedView                `json:"allowed"`
 	Machines     []machineView              `json:"machines,omitempty"`
+	// VolumeNodes are the Proxmox VE nodes that hold the cluster's volumes on storage local to each
+	// node, each of which needs a worker for its volumes' pods to start.
+	VolumeNodes []string `json:"volumeNodes,omitempty"`
 	// ControlPlaneTimeouts are the control planes' own waits for a removed machine's node, where
 	// they do not take the class's.
 	ControlPlaneTimeouts provisioner.NodeTimeouts `json:"controlPlaneTimeouts"`
@@ -425,6 +428,9 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 		Pods:         c.Spec.ClusterNetwork.Pods.CIDRBlocks,
 		Services:     c.Spec.ClusterNetwork.Services.CIDRBlocks,
 		Allowed:      allowedView{Change: ours && privs.Has(privChange), Kubeconfig: ours && privs.Has(privKubeconfig)},
+	}
+	if nodes := c.Annotations[provisioner.VolumeNodesAnnotation]; nodes != "" {
+		v.VolumeNodes = strings.Split(nodes, ",")
 	}
 	if s.Headlamp != nil && ours {
 		v.Headlamp = headlampContext(c.Namespace, c.Name)

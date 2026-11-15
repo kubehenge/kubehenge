@@ -23,11 +23,17 @@ const (
 )
 
 // AdmissionWebhooks are the controller's admission webhooks by path: ClusterDefaulter, then
-// ClusterAdmission, as the API server calls them for every Cluster.
+// ClusterAdmission, as the API server calls them for every Cluster, and WorkerPlacement for every
+// new worker's ProxmoxMachine.
 func AdmissionWebhooks(scheme *runtime.Scheme, hooks *Hooks) map[string]http.Handler {
+	reader := hooks.Classes
+	if reader == nil {
+		reader = hooks.Reader
+	}
 	return map[string]http.Handler{
 		DefaultClusterPath:  admission.WithDefaulter(scheme, &ClusterDefaulter{Hooks: hooks}),
 		ValidateClusterPath: admission.WithValidator(scheme, &ClusterAdmission{Hooks: hooks}),
+		PlaceWorkerPath:     &admission.Webhook{Handler: &WorkerPlacement{Reader: reader}},
 	}
 }
 

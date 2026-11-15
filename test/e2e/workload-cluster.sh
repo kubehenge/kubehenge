@@ -1426,6 +1426,11 @@ owned() {
     first_node=$(pve_get nodes | jq -r '.data[0].node')
     pve_get "nodes/${first_node}/storage/${KUBEHENGE_E2E_STORAGE}/content?content=images&vmid=${owner}" | jq '.data | length'
 }
+# volume_node_is <node>: the cluster records the node as holding one of its volumes.
+volume_node_is() {
+    kubectl -n "${ns}" get "cluster/${name}" -o json |
+        jq -e --arg n "$1" '(.metadata.annotations["kubehenge.dev/volume-nodes"] // "") | split(",") | index($n) != null' > /dev/null
+}
 # persistent_volume: a pod writes to a volume of its own, which goes again with its claim.
 persistent_volume() {
     wl apply -f - << 'EOF'
@@ -1475,6 +1480,16 @@ EOF
     pv=$(wl -n default get pvc e2e -o jsonpath='{.spec.volumeName}')
     volume=$(wl get pv "${pv}" -o jsonpath='{.spec.csi.volumeHandle}')
     printf 'volume %s\n' "${volume}"
+    # On storage local to each node the cluster records the volume's node, where it keeps a worker.
+    storage_config=$(pve_get "storage/${KUBEHENGE_E2E_STORAGE}")
+    shared=$(printf '%s' "${storage_config}" | jq '.data.shared // 0')
+    if [ "${shared}" = 0 ]; then
+        zone=$(printf '%s' "${volume}" | cut -d/ -f2)
+        until_true 120 "${zone} recorded as holding a volume" volume_node_is "${zone}"
+        without=$(kubectl -n "${ns}" get "cluster/${name}" -o json |
+            jq -r '.status.conditions[]? | select(.type == "VolumesWithoutWorker") | .message')
+        [ -z "${without}" ] || fail "the volume's node has no worker: ${without}"
+    fi
     owned_volumes=$(owned)
     [ "${owned_volumes}" -ge 1 ] || fail "no volume owned by the volume owner VM ${owner}"
     wl -n default delete pod/e2e pvc/e2e --wait --timeout=5m

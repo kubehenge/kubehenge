@@ -158,21 +158,46 @@ func (p *Proxmox) readNetworks(ctx context.Context, s *Sites) {
 // level its templates run at, where its storage is available and its bridge exists, and from which
 // its templates can be cloned.
 func (s *Sites) Hosts(c *clusterv1.Cluster, online []Node, fallbackLevel int) []string {
-	hosts := nodesFor(online, cpuNeed(s, c, fallbackLevel))
+	hosts, _ := hostsWhy(s, c, online, fallbackLevel)
+	return hosts
+}
+
+// hostsWhy are the Sites' Hosts, and why each online node it leaves out is left out, by node.
+func hostsWhy(s *Sites, c *clusterv1.Cluster, online []Node, fallbackLevel int) ([]string, map[string]leftOut) {
+	why := map[string]leftOut{}
+	need := cpuNeed(s, c, fallbackLevel)
+	hosts := nodesFor(online, need)
+	for _, n := range online {
+		if !slices.Contains(hosts, n.Name) {
+			why[n.Name] = cpuLeftOut(need)
+		}
+	}
+	drop := func(reason leftOut, out func(string) bool) {
+		hosts = slices.DeleteFunc(hosts, func(n string) bool {
+			if out(n) {
+				why[n] = reason
+				return true
+			}
+			return false
+		})
+	}
 	if storage, _, err := optionalVariable[string](c, "storage"); err == nil && storage != "" {
 		if site, ok := s.Storages[storage]; ok {
+			// The volume report names inactive storage from the site itself.
 			hosts = slices.DeleteFunc(hosts, func(n string) bool { return !slices.Contains(site.Active, n) })
 		}
 	}
 	if bridge := clusterBridge(c); bridge != "" {
-		hosts = slices.DeleteFunc(hosts, func(n string) bool { return !s.hasBridge(bridge, n) })
+		drop(leftOut{"which has no bridge or VNet " + bridge, "Add " + bridge + " to the node."},
+			func(n string) bool { return !s.hasBridge(bridge, n) })
 	}
 	for _, line := range templateLines(c) {
 		if reach, _, constrained := lineReach(s, line); constrained {
-			hosts = slices.DeleteFunc(hosts, func(n string) bool { return !slices.Contains(reach, n) })
+			drop(leftOut{"which the cluster's templates cannot be cloned to", "Build the cluster's templates on shared storage."},
+				func(n string) bool { return !slices.Contains(reach, n) })
 		}
 	}
-	return hosts
+	return hosts, why
 }
 
 // Refusal says why the cluster has no node among allowed to run on, for its storage or for its

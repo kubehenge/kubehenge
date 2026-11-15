@@ -811,6 +811,9 @@ func (o *controllerOptions) addPlacement(mgr manager.Manager, extensions *server
 		Events:         mgr.GetEventRecorder("kubehenge"),
 		WorkloadPool:   o.r.WorkloadPool,
 	}
+	if hooks.Registrar != nil {
+		placer.Workload = hooks.Registrar.Remotes.Workload
+	}
 	if err := mgr.Add(placer); err != nil {
 		return fmt.Errorf("the placer: %w", err)
 	}

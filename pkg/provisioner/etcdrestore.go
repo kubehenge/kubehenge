@@ -928,7 +928,7 @@ func (run *restoreRun) saveFinal(ctx context.Context) error {
 	ops, err := json.Marshal([]map[string]string{
 		{"op": "test", "path": restoreRequestPath, "value": asked},
 		{"op": "remove", "path": restoreRequestPath},
-		{"op": "add", "path": restoreStatusPath, "value": string(raw)},
+		{"op": jsonPatchAdd, "path": restoreStatusPath, "value": string(raw)},
 	})
 	if err != nil {
 		return fmt.Errorf("recording the restore: %w", err)
