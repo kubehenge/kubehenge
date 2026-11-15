@@ -4,14 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"net/netip"
 	"slices"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 )
 
@@ -137,7 +135,16 @@ func TestCheckedStaysOnTheNetwork(t *testing.T) {
 
 func TestAnswered(t *testing.T) {
 	t.Parallel()
-	refused := &net.OpError{Op: "dial", Net: "tcp4", Err: fmt.Errorf("connect: %w", syscall.ECONNREFUSED)}
+	// A port just closed refuses, with the error each platform reports for it.
+	l, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := l.Addr().String()
+	if err = l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, refused := net.Dial("tcp4", closed)
 	timeout := &net.OpError{Op: "dial", Net: "tcp4", Err: errors.New("i/o timeout")}
 	if !answered(nil) || !answered(refused) || answered(timeout) || answered(context.DeadlineExceeded) {
 		t.Fatal("answered tells a refused or made connection from one that reached no host wrongly")

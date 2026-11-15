@@ -112,6 +112,7 @@ func fillDemo(s *Server, clock func() time.Time, dir string, raw []byte) error {
 	s.OpenStore = func(*provisioner.BackupTarget, map[string][]byte) (provisioner.ObjectStore, error) {
 		return nil, errors.New("the demo has no backup target")
 	}
+	s.Volume = demoVolume{}
 	s.NewKube = func([]byte) (client.Client, error) { return nil, errDemo }
 	s.NewClientset = nil
 	s.MakeTemplate = func(context.Context, *pve.Ticket, templates.Builder, *templates.Template) (int, error) {
@@ -341,4 +342,39 @@ func demoChannelList(suffix string) string {
 	list.Data = append(list.Data, map[string]string{"id": "stable", "latest": "v1.36.99+" + suffix})
 	raw, _ := json.Marshal(list) //nolint:errchkjson // maps of strings always encode
 	return string(raw)
+}
+
+// demoVolume is the demo's backup volume: awake and empty, as a new management cluster's is, so the
+// Backups view lists no removed clusters. It takes nothing, as the rest of the demo.
+type demoVolume struct{}
+
+// demoVolumeSize is the demo volume's size, the storage chart's default of 20 GB.
+const demoVolumeSize = 20 << 30
+
+func (demoVolume) Open(context.Context, string) (provisioner.VolumeStore, error) { //nolint:ireturn // BackupVolume's own signature
+	return demoVolume{}, nil
+}
+
+func (demoVolume) Done(context.Context, string) error { return nil }
+
+func (demoVolume) Room(context.Context) (free, size int64, err error) {
+	return demoVolumeSize, demoVolumeSize, nil
+}
+
+func (demoVolume) List(context.Context, string) ([]provisioner.StoredObject, error) { return nil, nil }
+
+func (demoVolume) Put(context.Context, string, io.Reader, map[string]string) (int64, error) {
+	return 0, errDemo
+}
+
+func (demoVolume) Stat(context.Context, string) (provisioner.StoredObject, error) {
+	return provisioner.StoredObject{}, errDemo
+}
+
+func (demoVolume) Get(context.Context, string) (io.ReadCloser, error) { return nil, errDemo }
+
+func (demoVolume) Remove(context.Context, string) error { return errDemo }
+
+func (demoVolume) PresignGet(context.Context, string, time.Duration) (string, error) {
+	return "", errDemo
 }
