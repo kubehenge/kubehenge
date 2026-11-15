@@ -72,11 +72,9 @@ func (run *restoreRun) handOverAlone(ctx context.Context, password string) error
 }
 
 // handOver streams the snapshot, encrypted with password, to the first node, and has the node check
-// and decrypt it. The pod and the file go afterwards, whatever happened.
+// and decrypt it. The pod and the file go afterwards, whatever happened. readSnapshot has made
+// sure of the workload clients and the receiver's image.
 func (run *restoreRun) handOver(ctx context.Context, password string) error {
-	if run.r.Workloads == nil || run.r.ReceiverImage == "" {
-		return errVolumeUnreached
-	}
 	workload, found, err := run.r.Workloads.Client(ctx, run.cluster)
 	if err != nil {
 		return fmt.Errorf("reaching the cluster's API server: %w", err)

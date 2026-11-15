@@ -35,6 +35,9 @@ func (f *etcdSnapshotsAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `{}`)
 	case "GET /api/clusters/clusters/web/etcd-snapshots/b.db.age":
 		_, _ = io.WriteString(w, "etcd database")
+	case "GET /api/clusters/clusters/web/etcd-snapshots/cut.db.age":
+		w.Header().Set("Content-Length", "4096")
+		_, _ = io.WriteString(w, "etcd")
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(w, `{"error":"no such snapshot"}`)
@@ -78,6 +81,13 @@ func TestClusterEtcdSnapshots(t *testing.T) {
 	}
 	if _, err := os.Stat(missing); !os.IsNotExist(err) {
 		t.Errorf("left a file for a missing snapshot: %v", err)
+	}
+	cut := filepath.Join(t.TempDir(), "cut.db")
+	if _, err := runCluster(t, srv.URL, token, "etcd-snapshots", "download", "web", "cut.db.age", "--out", cut, "-n", "clusters"); err == nil {
+		t.Error("took a download cut short")
+	}
+	if _, err := os.Stat(cut); !os.IsNotExist(err) {
+		t.Errorf("left a file for a download cut short: %v", err)
 	}
 	if _, err := runCluster(t, srv.URL, token, "etcd-snapshots", "restore", "web", "a.db.age", "-n", "clusters"); err == nil {
 		t.Error("restored without --yes")
