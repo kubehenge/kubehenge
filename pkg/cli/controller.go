@@ -217,7 +217,7 @@ chart's PodTemplate, the only pod that mounts that token.`,
 	f.StringVar(&o.podSecurityExempt, "pod-security-exempt", "{}", "namespaces exempt from pod security, in Kyverno's policies and the ClusterClasses' Pod Security Admission alike, as a JSON object of lists keyed by what runs there: always, calico, monitoring, logs, backups, istio, metallb, rancher, rancherAgent")
 	f.StringArrayVar(&o.classProviders, "class-providers", nil, "namespaces of the Cluster API providers that only one ClusterClass's clusters use, as <class>=<namespace>,<namespace>. They run only while such a cluster exists (repeatable)")
 	f.BoolVar(&o.offerHARules, "offer-ha-rules", false, "offer Proxmox VE's HA node-affinity rules, their names and nodes only, to those who may create a cluster but not read the rules, through the ConfigMap "+provisioner.HARulesName)
-	f.StringSliceVar(&o.managementAddrs, "management-addresses", nil, "the management cluster's node addresses, which the firewall of every cluster with security groups accepts beside the appliance's (comma-separated)")
+	f.StringSliceVar(&o.managementAddrs, "management-addresses", nil, "the management cluster's node addresses, which the firewall of every firewalled cluster accepts beside the appliance's (comma-separated)")
 	f.StringSliceVar(&o.headlampSignIn, "headlamp-sign-in-namespaces", nil, "the interface's namespaces whose clusters the appliance's shared Headlamp signs users in to as cluster-admin, if they may download the admin kubeconfig (comma-separated). Empty signs nobody in and removes the identities")
 	f.DurationVar(&o.upgradeInterval, "upgrade-interval", defaultUpgradeInterval, "how often clusters are checked for an automatic upgrade due in their window")
 	f.DurationVar(&o.nodeImageSoak, "node-image-soak", provisioner.DefaultNodeImageSoak, "how old a template build must be before clusters move to it, as the template refresh's --soak")
@@ -367,7 +367,7 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	}
 	remotes := &provisioner.Remotes{Reader: mgr.GetClient()}
 	registrar := &provisioner.Registrar{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Remotes: remotes}
-	if err = o.setUpControllers(mgr, registrar, distributions); err != nil {
+	if err = o.setUpControllers(mgr, registrar, distributions, cloud); err != nil {
 		return err
 	}
 	if err = o.addReclaimer(mgr, conn, cloud, remotes); err != nil {
@@ -707,7 +707,7 @@ func (o *controllerOptions) newManager(scheme *runtime.Scheme, extensions *serve
 // registrar, what taints control-plane nodes, what approves kubeadm kubelets' serving
 // certificates, what keeps the identities in the clusters, what runs their autoscalers and, when
 // some distribution's providers run only while used, the controller that starts and stops them.
-func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *provisioner.Registrar, distributions *provisioner.Distributions) error {
+func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *provisioner.Registrar, distributions *provisioner.Distributions, cloud *provisioner.Proxmox) error {
 	o.r.Client = mgr.GetClient()
 	o.r.Reader = mgr.GetAPIReader()
 	o.r.Registrar = registrar
@@ -748,7 +748,8 @@ func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *pro
 	}
 	firewall := &provisioner.FirewallSources{
 		Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Namespace: o.r.ClassNamespace,
-		Management: o.managementAddrs, Interval: firewallSourcesInterval,
+		Management: o.managementAddrs, Interval: firewallSourcesInterval, Datacenter: cloud,
+		Events: mgr.GetEventRecorder("kubehenge"),
 	}
 	if err = mgr.Add(firewall); err != nil {
 		return fmt.Errorf("the firewall sources: %w", err)

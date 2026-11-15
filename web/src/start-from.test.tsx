@@ -39,6 +39,7 @@ const rke2: ClusterClass = {
     "namespaceLabels",
     "useExisting",
     "securityGroups",
+    "firewall",
   ].map((name) => ({ name, required: false, schema: object })),
 };
 
@@ -82,6 +83,8 @@ const chosen: Form = {
   searchDomains: "corp.example, example.org",
   ntpServers: "ntp.example.org, 192.0.2.5",
   securityGroups: "k8s, corp-base",
+  firewallServing: false,
+  firewallPorts: "tcp/8443",
   loadBalancer: "metallb",
   loadBalancerAddresses: "10.1.0.40-10.1.0.49",
   loadBalancerMode: "bgp",

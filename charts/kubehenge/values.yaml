@@ -244,7 +244,7 @@ kubeVip: ghcr.io/kube-vip/kube-vip:v1.3.1@sha256:1962f9daf226503f7e6b107f595cb28
 managementEndpoint: ""
 
 # The addresses, without prefix lengths, of the management cluster's nodes; the management
-# cluster's module sets them. A workload cluster's firewall (the securityGroups variable) accepts
+# cluster's module sets them. A workload cluster's firewall (the firewall variable) accepts
 # them and the appliance's alongside the cluster's own addresses. The controller writes them onto
 # each cluster's ProxmoxCluster, so a change replaces no node.
 managementAddresses: []

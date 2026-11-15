@@ -55,9 +55,11 @@ describe("the create wizard's defaults", () => {
 
   it("shows the firewall's state on Confirm", () => {
     const rows = Object.fromEntries(summary({ ...newForm(), name: "web" }, withTarget));
-    expect(rows["Firewall"]).toBe("Off, no security groups");
+    expect(rows["Firewall"]).toBe("On, serving ports open");
     const grouped = Object.fromEntries(summary({ ...newForm(), name: "web", securityGroups: "web, db" }, withTarget));
-    expect(grouped["Firewall"]).toBe("Security groups web, db");
+    expect(grouped["Firewall"]).toBe("On, serving ports open, security groups web, db");
+    const off = Object.fromEntries(summary({ ...newForm(), name: "web", firewall: false }, withTarget));
+    expect(off["Firewall"]).toBe("Off");
   });
 });
 

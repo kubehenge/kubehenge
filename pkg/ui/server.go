@@ -275,6 +275,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/proxmox/nodes/{node}/dns", s.signedIn(s.dns))
 	mux.HandleFunc("POST /api/proxmox/nodes/{node}/bridges/{bridge}/free", s.signedIn(s.freeAddresses))
 	mux.HandleFunc("GET /api/proxmox/ha-rules", s.signedIn(s.haRules))
+	mux.HandleFunc("GET /api/proxmox/datacenter-firewall", s.signedIn(s.datacenterFirewall))
 
 	s.applianceRoutes(mux)
 

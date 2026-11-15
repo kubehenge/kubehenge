@@ -45,6 +45,7 @@ import {
 } from "./create-form";
 import { ConfirmStep, useCreateCheck } from "./CreateCheck";
 import { GeneralStep, IdentityStep, MachinesStep, NetworkStep, useClassTalos, useFreeAddresses } from "./CreateSteps";
+import { useDatacenterFirewall } from "./Firewall";
 import { useFleet } from "./fleet";
 import { offersHA, offersHAGroups, useHARules } from "./Placement";
 import { navigate } from "./router";
@@ -206,6 +207,7 @@ export function CreateCluster({
   const [sharedKeys, setSharedKeys] = useState<Record<string, boolean>>({});
   const [sessionNamespace, setSessionNamespace] = useState<string>();
   const rules = useHARules();
+  const datacenterFirewall = useDatacenterFirewall();
   const [step, setStep] = useState<Step>("General");
   const [error, setError] = useState<string>();
   // The server's own words for the credentials that were not stored, behind the error's Detail.
@@ -536,6 +538,7 @@ export function CreateCluster({
                 network6={network6}
                 free={free}
                 checked={typed}
+                datacenter={datacenterFirewall}
               />
             )}
             {step === "Machines" && (
@@ -589,6 +592,7 @@ export function CreateCluster({
                   csi: csi.offered,
                   snapshots: snapshots.offered,
                   haGroups,
+                  datacenterFirewall,
                 })}
               />
             )}

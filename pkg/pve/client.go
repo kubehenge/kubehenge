@@ -98,10 +98,33 @@ func Reason(err error) string {
 	return err.Error()
 }
 
+// RefusedError is Proxmox VE refusing a request: a 401 for credentials it does not accept, a 403
+// for privileges the account lacks. It is a proxmox.ErrNotAuthorized as well, the error go-proxmox
+// gives both.
+type RefusedError struct {
+	// StatusCode is the answer's status, http.StatusUnauthorized or http.StatusForbidden.
+	StatusCode int
+}
+
+func (e *RefusedError) Error() string {
+	return fmt.Sprintf("HTTP %d: %s", e.StatusCode, proxmox.ErrNotAuthorized.Error())
+}
+
+func (*RefusedError) Unwrap() error { return proxmox.ErrNotAuthorized }
+
+// Unauthenticated tells whether Proxmox VE refused a request's credentials, as for an API token that
+// expired, was revoked or is wrong, rather than a privilege the account lacks.
+func Unauthenticated(err error) bool {
+	var refused *RefusedError
+	return (errors.As(err, &refused) && refused.StatusCode == http.StatusUnauthorized) || errors.Is(err, ErrAuthentication)
+}
+
 // statusChecked turns into an error every answer go-proxmox would take as success without
-// looking. go-proxmox fails only on 400, 500 and 501 and maps 401 and 403 to ErrNotAuthorized, so a
-// 502 to 504 from a proxy in front of the API, or a 595 or 596 when pveproxy cannot reach the node
-// a call is forwarded to, would otherwise read as a write that happened.
+// looking. go-proxmox fails only on 400, 500 and 501, so a 502 to 504 from a proxy in front of the
+// API, or a 595 or 596 when pveproxy cannot reach the node a call is forwarded to, would otherwise
+// read as a write that happened. go-proxmox maps 401 and 403 alike to ErrNotAuthorized, so they
+// become a RefusedError that keeps the status. Kubehenge's clients sign in with a token or a ticket,
+// for which go-proxmox makes no new session on a 401.
 type statusChecked struct{ next http.RoundTripper }
 
 func (s statusChecked) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -110,9 +133,11 @@ func (s statusChecked) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err //nolint:wrapcheck // a RoundTripper passes its transport's error on; http.Client adds the method and URL
 	}
 	switch c := resp.StatusCode; {
-	case c >= 200 && c < 300, c == http.StatusBadRequest, c == http.StatusUnauthorized, c == http.StatusForbidden,
-		c == http.StatusInternalServerError, c == http.StatusNotImplemented:
+	case c >= 200 && c < 300, c == http.StatusBadRequest, c == http.StatusInternalServerError, c == http.StatusNotImplemented:
 		return resp, nil
+	case c == http.StatusUnauthorized, c == http.StatusForbidden:
+		_ = resp.Body.Close()
+		return nil, &RefusedError{StatusCode: c}
 	}
 	_ = resp.Body.Close()
 	return nil, &APIError{Method: req.Method, Path: req.URL.Path, Status: resp.Status}

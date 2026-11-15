@@ -278,6 +278,7 @@ const create: Record<string, Route> = {
   "GET /api/versions/kubeadm": { body: { versions: ["v1.36.1", "v1.36.0"], stable: "v1.36.1" } },
   "GET /api/template-builds": { body: { allowed: true, requested: [], building: [] } },
   "GET /api/proxmox/ha-rules": { body: { readable: true, rules: [] } },
+  "GET /api/proxmox/datacenter-firewall": { body: { state: "off" } },
   ...nodes,
   ...storages,
 };

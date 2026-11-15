@@ -1519,6 +1519,35 @@ func TestHARulesOfferPlaces(t *testing.T) {
 	}
 }
 
+// The wizard learns whether the datacenter firewall is on through the user's own session, and a user
+// who may not read it learns that it is unknown.
+func TestDatacenterFirewallState(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		reach *pve.APIReach
+		err   error
+		want  string
+	}{
+		{"on", &pve.APIReach{Enabled: true}, nil, `{"state":"on"}`},
+		{"off", &pve.APIReach{}, nil, `{"state":"off"}`},
+		{"unreadable", nil, fmt.Errorf("reading the datacenter firewall's options: %w", pve.ErrForbidden), `{"state":"unknown"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			h.accounts.reach, h.accounts.reachErr = tc.reach, tc.err
+			admin := h.browser()
+			admin.signIn("admin@pve")
+			rec := admin.do("GET", "/api/proxmox/datacenter-firewall", "")
+			expect(t, rec, http.StatusOK)
+			if got := strings.TrimSpace(rec.Body.String()); got != tc.want {
+				t.Fatalf("state = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
 func offeredRules(data string) *corev1.ConfigMap {
 	cm := &corev1.ConfigMap{Data: map[string]string{provisioner.HARulesKey: data}}
 	cm.Namespace, cm.Name = "kubehenge-system", provisioner.HARulesName

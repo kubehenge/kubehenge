@@ -96,7 +96,8 @@
 # release the cluster starts on and a newer one its nodes are upgraded to in place, both with a
 # template in the template pool. Talos has no SSH, no systemd and no guest agent that runs commands:
 # the steps that read a node from inside read it through Talos's API, with talosctl and the
-# cluster's talosconfig, or are left out.
+# cluster's talosconfig, or are left out. The datacenter firewall is on while talosctl reads the nodes
+# after they start and after their upgrade, so the class's default firewall is what lets it in.
 # KUBEHENGE_E2E_PART runs part of the test, for a machine whose memory holds the guests of only one:
 # lifecycle sizes the nodes at the least the class lets them have with the add-ons a cluster starts
 # with, and switches on no other; addons-a, addons-b, addons-c but on k3s and addons-d on RKE2 each
@@ -256,6 +257,8 @@ cleanup() {
     [ -z "${health_pid}" ] || kill "${health_pid}" 2> /dev/null || true
     # shellcheck disable=SC2310 # each removal is tried, whatever happened to those before it
     remove_ha_rule || true
+    # shellcheck disable=SC2310 # best effort: a failed restore must not hide the run's own status.
+    [ -z "${datacenter_before:-}" ] || datacenter_firewall "${datacenter_before}" 2> /dev/null || true
     [ "${status}" -eq 0 ] || seaweedfs_errors "${work}"
     if [ "${status}" -ne 0 ] && [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
         printf '\nleaving cluster %s/%s for inspection; delete it with: kubectl -n %s annotate cluster %s kubehenge.dev/allow-deletion=true && kubectl -n %s delete cluster %s\n' "${ns}" "${name}" "${ns}" "${name}" "${ns}" "${name}"
@@ -278,6 +281,13 @@ pve_post() {
     pve -X POST "$@" "${KUBEHENGE_PROXMOX_URL}/api2/json/${api_path}" > /dev/null
 }
 pve_delete() { pve -X DELETE "${KUBEHENGE_PROXMOX_URL}/api2/json/$1" > /dev/null; }
+# datacenter_firewall <0|1>: switches Proxmox VE's datacenter firewall, keeping in datacenter_before
+# the state before the first switch, which cleanup puts back.
+datacenter_before=
+datacenter_firewall() {
+    [ -n "${datacenter_before}" ] || datacenter_before=$(pve_get cluster/firewall/options | jq -r '.data.enable // 0')
+    pve -X PUT -d "enable=$1" "${KUBEHENGE_PROXMOX_URL}/api2/json/cluster/firewall/options" > /dev/null
+}
 # remove_ha_rule: takes the HA rule the nodes are labelled with, its resource and guest away again,
 # in the order Proxmox VE allows.
 remove_ha_rule() {
@@ -762,8 +772,22 @@ if [ "${distribution}" = talos ]; then
     talos_annotation() {
         kubectl -n "${ns}" get "cluster/${name}" -o json | jq -r --arg a "kubehenge.dev/$1" '.metadata.annotations[$a] // ""'
     }
+    # trustd_dropped <address>: whether the runner's connection to trustd's port times out, as the
+    # firewall's drop does. trustd is for the nodes alone, so the firewall keeps it closed.
+    trustd_dropped() {
+        trustd_host=$1
+        case ${trustd_host} in *:*) trustd_host="[${trustd_host}]" ;; *) ;; esac
+        trustd_rc=0
+        curl -s --connect-timeout 4 -o /dev/null "http://${trustd_host}:50001/" || trustd_rc=$?
+        seen="curl exit ${trustd_rc}"
+        [ "${trustd_rc}" -eq 28 ]
+    }
 
-    step "the nodes run Talos ${talos_from}, reached through Talos's API with the cluster's talosconfig"
+    step "the nodes run Talos ${talos_from}, reached through Talos's API with the cluster's talosconfig behind the firewall"
+    datacenter_firewall 1
+    first_talos_address=$(talos_addresses | head -n 1)
+    [ -n "${first_talos_address}" ] || fail "no machine has an address"
+    until_true 120 "the firewall drops trustd's port from the runner" trustd_dropped "${first_talos_address}"
     talos_image=$(talos_annotation talos-image)
     [ "${talos_image}" = "${talos_from}" ] || fail "the cluster's machines boot Talos '${talos_image}', not ${talos_from}"
     # shellcheck disable=SC2310 # a failed read fails the step.
@@ -783,6 +807,7 @@ if [ "${distribution}" = talos ]; then
         release=$(talos_release "${address}") || fail "the Talos API of ${address} does not answer with the talosconfig"
         [ "${release}" = "${talos_from}" ] || fail "the Talos API of ${address} reports '${release}', not ${talos_from}"
     done
+    datacenter_firewall "${datacenter_before}"
 fi
 
 step "Kubehenge reports the cluster reconciled and its machines settled"
@@ -3697,11 +3722,16 @@ if [ "${distribution}" = talos ]; then
     done
     cordoned=$(wl get nodes -o json | jq -r '[.items[] | select(.spec.unschedulable == true) | .metadata.name] | join(" ")')
     [ -z "${cordoned}" ] || fail "nodes left cordoned after their upgrade: ${cordoned}"
+    datacenter_firewall 1
+    first_talos_address=$(talos_addresses | head -n 1)
+    [ -n "${first_talos_address}" ] || fail "no machine has an address"
+    until_true 120 "the firewall drops trustd's port from the runner" trustd_dropped "${first_talos_address}"
     for address in $(talos_addresses); do
         # shellcheck disable=SC2310 # a node that does not answer fails the step.
         release=$(talos_release "${address}") || fail "the Talos API of ${address} does not answer"
         [ "${release}" = "${talos_to}" ] || fail "the Talos API of ${address} reports '${release}', not ${talos_to}"
     done
+    datacenter_firewall "${datacenter_before}"
     # Machines made before the next Kubernetes upgrade still boot the release before, and the
     # controller upgrades them in turn.
     talos_image=$(talos_annotation talos-image)

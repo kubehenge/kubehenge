@@ -181,10 +181,11 @@ locals {
   # delete does, is requeued every 10 seconds until the Cluster is deleted. Upstream returns without
   # a requeue, and the Cluster watch never passes a Cluster that gains its deletion timestamp, so
   # the deletion waited for the 10-hour resync. A machine annotated with Proxmox VE security groups
-  # gets its VM firewall before the first start: an IPSet of the cluster's own addresses and the
-  # ProxmoxCluster's further sources, a rule accepting it, the groups, the firewall flag on every
-  # interface and the VM's firewall on. A change of the ProxmoxCluster rewrites the IPSet of every
-  # running VM. Upstream has no setting for the interface's firewall flag. The build runs on the
+  # or serving ports gets its VM firewall before the first start, with input policy DROP: an IPSet
+  # of the cluster's own addresses and the ProxmoxCluster's further sources, an IPSet of its
+  # load-balancer addresses, and rules in that order: its own sources, the groups, its load-balancer
+  # addresses, a rule per port. Then the firewall flag on every interface and the VM's firewall on. A change of the ProxmoxCluster rewrites both IPSets of
+  # every running VM. Upstream has no setting for the interface's firewall flag. The build runs on the
   # release's own manifests.
   # scripts/provider-image.sh builds it reproducibly, and a release publishes it only when it comes out with this digest. It applies
   # only while capmox is at `release`.
@@ -196,7 +197,7 @@ locals {
     # capmox's own image is built with Go 1.26 on distroless static.
     go         = "go1.26.10"
     base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
-    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:43fb02325db12d0b8bc8689027eadae89b13f1859ffb26ea7405ec2213715273"
+    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:d3742946ec101d4c541ab43157660f5e305d83bb1880348eab0ac1e798071042"
   }
 
   # The Add-on Provider for Helm creates a cluster's HelmReleaseProxy under a generated name and
