@@ -431,6 +431,30 @@ func TestDetachVolumeFindsTheVMByItsUUID(t *testing.T) {
 	}
 }
 
+// A node's zone is where the VM with its SMBIOS UUID runs, not a VM of its name.
+func TestFollowZonesFindsTheVMByItsUUID(t *testing.T) {
+	t.Parallel()
+	f := withNodeVM(backupDisk)
+	kube := fake.NewClientset(
+		&corev1.Node{Name: "cp-0", Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{SystemUUID: strings.ToLower(nodeUUID)}}},
+		&corev1.Secret{
+			Name: zonesSecret, Namespace: backupstore.Namespace,
+			Data: map[string][]byte{zonesKey: []byte("mgmt-management-zones@pve!zones=00000000-0000-0000-0000-000000000000")},
+		},
+	)
+	unknown, err := f.appliance(t).followZones(t.Context(), kube, "")
+	if err != nil || len(unknown) > 0 {
+		t.Fatalf("unknown %v, error %v", unknown, err)
+	}
+	n, err := kube.CoreV1().Nodes().Get(t.Context(), "cp-0", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if zone := n.Labels[corev1.LabelTopologyZone]; zone != "pve2" {
+		t.Fatalf("zone %q, want pve2, where the VM with the node's SMBIOS UUID runs", zone)
+	}
+}
+
 // A lift that takes effect but loses its answer still ends with the protection set again. When
 // that fails too, the error says how to set it.
 func TestDetachVolumeSetsProtectionAgainWhenTheLiftsAnswerIsLost(t *testing.T) {

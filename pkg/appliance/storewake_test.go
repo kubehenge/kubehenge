@@ -39,9 +39,13 @@ func zonesToken() *corev1.Secret {
 // it too, base64.
 const standInToken = "fake"
 
-// zoned is a management node in the region with the zone labels given, each set to zone.
+// zoned is a management node in the region with the zone labels given, each set to zone. Its
+// SMBIOS UUID is its name, so that hostsAt's keys name the nodes.
 func zoned(name, zone string, labels ...string) *corev1.Node {
-	n := &corev1.Node{Name: name, Labels: map[string]string{corev1.LabelTopologyRegion: "kubehenge"}}
+	n := &corev1.Node{
+		Name: name, Labels: map[string]string{corev1.LabelTopologyRegion: "kubehenge"},
+		Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{SystemUUID: name}},
+	}
 	for _, l := range labels {
 		n.Labels[l] = zone
 	}

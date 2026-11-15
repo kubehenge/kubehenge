@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"strings"
 	"time"
 
@@ -197,59 +196,18 @@ func (a *Appliance) detachVolume(ctx context.Context, t *pve.Ticket, at storeAtt
 	if err != nil {
 		return fmt.Errorf("detaching %s from node %s's VM: %w", disk, at.Node, err)
 	}
-	vm, err := nodeVM(ctx, c, at)
+	vms, err := vmsByUUID(ctx, c)
 	if err != nil {
 		return fmt.Errorf("detaching %s from node %s's VM: %w", disk, at.Node, err)
+	}
+	vm, ok := vms[strings.ToLower(at.SystemUUID)]
+	if !ok {
+		return fmt.Errorf("detaching %s from node %s's VM: no VM has SMBIOS UUID %s", disk, at.Node, at.SystemUUID)
 	}
 	if err := unlinkVolume(ctx, c, vm, disk); err != nil {
 		return fmt.Errorf("detaching %s from VM %d (%s): %w", disk, vm.VMID, vm.Name, err)
 	}
 	return nil
-}
-
-// clusterVM is a VM as /cluster/resources lists it.
-type clusterVM struct {
-	VMID int    `json:"vmid"`
-	Name string `json:"name"`
-	Node string `json:"node"`
-	Type string `json:"type"`
-}
-
-func (v clusterVM) path() string {
-	return fmt.Sprintf("/nodes/%s/qemu/%d", url.PathEscape(v.Node), v.VMID)
-}
-
-// nodeVM finds the qemu VM whose SMBIOS UUID is the node's.
-func nodeVM(ctx context.Context, c *proxmox.Client, at storeAttachment) (clusterVM, error) {
-	var vms []clusterVM
-	if err := c.Get(ctx, "/cluster/resources?type=vm", &vms); err != nil {
-		return clusterVM{}, fmt.Errorf("listing the VMs: %w", err)
-	}
-	for _, v := range vms {
-		if v.Type != "qemu" {
-			continue
-		}
-		var config struct {
-			SMBIOS1 string `json:"smbios1"`
-		}
-		if err := c.Get(ctx, v.path()+"/config", &config); err != nil {
-			return clusterVM{}, fmt.Errorf("reading VM %d's configuration: %w", v.VMID, err)
-		}
-		if strings.EqualFold(smbiosUUID(config.SMBIOS1), at.SystemUUID) {
-			return v, nil
-		}
-	}
-	return clusterVM{}, fmt.Errorf("no VM has SMBIOS UUID %s", at.SystemUUID)
-}
-
-// smbiosUUID reads the uuid of a VM's smbios1 setting.
-func smbiosUUID(smbios1 string) string {
-	for option := range strings.SplitSeq(smbios1, ",") {
-		if uuid, ok := strings.CutPrefix(option, "uuid="); ok {
-			return uuid
-		}
-	}
-	return ""
 }
 
 // unlinkVolume unlinks disk from vm. A protected VM's protection is lifted for the unlink alone.
