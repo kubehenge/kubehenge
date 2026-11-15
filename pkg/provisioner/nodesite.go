@@ -173,32 +173,43 @@ func checkCertificates(bundle string, now time.Time) error {
 	if len(bundle) > maxNodePEMBytes {
 		return fmt.Errorf("at most %d KiB", maxNodePEMBytes/kibibyte)
 	}
-	blocks, err := pemBlocks(bundle)
+	blocks, err := certificateBlocks(bundle)
 	if err != nil {
 		return err
 	}
-	found := 0
-	for _, block := range blocks {
-		if block.Type != certificateBlock {
-			return fmt.Errorf("holds a %s. Give certificates only", strings.ToLower(block.Type))
-		}
+	for i, block := range blocks {
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
-			return fmt.Errorf("certificate %d is no valid X.509 certificate", found+1)
+			return fmt.Errorf("certificate %d is no valid X.509 certificate", i+1)
 		}
 		switch {
 		case now.IsZero():
 		case now.After(cert.NotAfter):
-			return fmt.Errorf("certificate %d (%s) expired on %s", found+1, cert.Subject.CommonName, cert.NotAfter.UTC().Format(time.DateOnly))
+			return fmt.Errorf("certificate %d (%s) expired on %s", i+1, cert.Subject.CommonName, cert.NotAfter.UTC().Format(time.DateOnly))
 		case now.Before(cert.NotBefore):
-			return fmt.Errorf("certificate %d (%s) is valid only from %s", found+1, cert.Subject.CommonName, cert.NotBefore.UTC().Format(time.DateOnly))
+			return fmt.Errorf("certificate %d (%s) is valid only from %s", i+1, cert.Subject.CommonName, cert.NotBefore.UTC().Format(time.DateOnly))
 		}
-		found++
-	}
-	if found == 0 {
-		return errors.New("holds no PEM certificate")
 	}
 	return nil
+}
+
+// certificateBlocks splits a bundle into its PEM blocks and holds them to one or more certificates.
+// The interface checks the same layout (web/src/pem.ts), and web/src/testdata/pem-bundles.json
+// holds both to the same verdicts.
+func certificateBlocks(bundle string) ([]*pem.Block, error) {
+	blocks, err := pemBlocks(bundle)
+	if err != nil {
+		return nil, err
+	}
+	for _, block := range blocks {
+		if block.Type != certificateBlock {
+			return nil, fmt.Errorf("holds a %s. Give certificates only", strings.ToLower(block.Type))
+		}
+	}
+	if len(blocks) == 0 {
+		return nil, errors.New("holds no PEM certificate")
+	}
+	return blocks, nil
 }
 
 var (

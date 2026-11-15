@@ -74,8 +74,11 @@ type Reconciler struct {
 	// own go through.
 	Egress Egress
 	// SiteCA is the PEM authority every cluster without trustedCAs of its own trusts. Empty when
-	// the site sets none.
+	// the site sets none, or when the one it sets is damaged.
 	SiteCA string
+	// SiteCAProblem is why the site CA the controller was given is no PEM certificate bundle. Each
+	// cluster reports it, and keeps the site CA it holds until the authority is fixed.
+	SiteCAProblem string
 	// SiteTimeZoneProblem is why the site time zone the controller was given is no time zone, which
 	// leaves schedules that name none in UTC. Each cluster reports it.
 	SiteTimeZoneProblem string

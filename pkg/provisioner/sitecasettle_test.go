@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -450,6 +451,43 @@ func TestADamagedBoundaryOutsideThePEMBlocksIsRefusedNamingItsLine(t *testing.T)
 	}
 }
 
+// pemBundleCase is a case of web/src/testdata/pem-bundles.json, which the interface's tests read too.
+type pemBundleCase struct {
+	Name           string   `json:"name"`
+	Lines          []string `json:"lines"`
+	LineEnd        string   `json:"lineEnd"`
+	NoFinalLineEnd bool     `json:"noFinalLineEnd"`
+	Problem        string   `json:"problem"`
+}
+
+func TestCertificateBundlesGetTheVerdictsTheInterfaceSharesWithTheServer(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("../../web/src/testdata/pem-bundles.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table struct {
+		Cases []pemBundleCase `json:"cases"`
+	}
+	if err = json.Unmarshal(raw, &table); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range table.Cases {
+		end := cmp.Or(tc.LineEnd, "\n")
+		bundle := strings.Join(tc.Lines, end)
+		if !tc.NoFinalLineEnd {
+			bundle += end
+		}
+		got := ""
+		if _, err := certificateBlocks(bundle); err != nil {
+			got = err.Error()
+		}
+		if got != tc.Problem {
+			t.Errorf("%s: %q, want %q", tc.Name, got, tc.Problem)
+		}
+	}
+}
+
 func TestHandKeptBundlesWithNamesAndCommentsBetweenTheBlocksPass(t *testing.T) {
 	t.Parallel()
 	good := siteAuthority(t) + "\n"
@@ -674,5 +712,32 @@ func TestAReleaseMirrorAuthorityProblemIsReportedOnEveryClusterUntilItGoes(t *te
 	}
 	if cond := meta.FindStatusCondition(reconcileFor(t, kube, "web").Status.Conditions, ReleaseMirrorCondition); cond != nil {
 		t.Errorf("condition %+v kept once the authority was fixed", cond)
+	}
+}
+
+func TestADamagedSiteCAIsReportedOnEveryClusterAndChangesNoClustersSiteCA(t *testing.T) {
+	t.Parallel()
+	given := siteCluster("given", jsonVar(SiteCAsVariable, `["held"]`))
+	fresh := unbuilt("fresh")
+	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(&given, &fresh).WithStatusSubresource(&clusterv1.Cluster{}).Build()
+	recorder := events.NewFakeRecorder(10)
+	r := &Reconciler{Client: kube, Reader: kube, ClassNamespace: siteClassNamespace, Events: recorder, Now: func() time.Time { return siteNow }, SiteCAProblem: "--site-ca: the authority holds no PEM certificate"}
+	for name, want := range map[string]string{"given": "held", "fresh": ""} {
+		if _, err := r.rollSiteCA(t.Context(), reconcileFor(t, kube, name)); err != nil {
+			t.Fatal(err)
+		}
+		live := reconcileFor(t, kube, name)
+		cond := meta.FindStatusCondition(live.Status.Conditions, SiteCACondition)
+		if appliedSiteCA(live) != want || cond == nil || cond.Reason != SiteCAInvalidReason || !strings.Contains(cond.Message, "--site-ca") {
+			t.Errorf("%s: site CA %q, condition %+v, want %q kept and the authority's problem reported", name, appliedSiteCA(live), cond, want)
+		}
+	}
+	r.SiteCAProblem, r.SiteCA = "", siteAuthority(t)
+	if _, err := r.rollSiteCA(t.Context(), reconcileFor(t, kube, "fresh")); err != nil {
+		t.Fatal(err)
+	}
+	live := reconcileFor(t, kube, "fresh")
+	if cond := meta.FindStatusCondition(live.Status.Conditions, SiteCACondition); cond != nil || appliedSiteCA(live) != r.SiteCA {
+		t.Errorf("once fixed: condition %+v, site CA given %v, want the report gone and the site CA given", cond, appliedSiteCA(live) == r.SiteCA)
 	}
 }

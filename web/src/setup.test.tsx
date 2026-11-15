@@ -408,7 +408,7 @@ describe("setup", () => {
     expect(accepted).toStrictEqual([]);
     expect(problems({ releaseMirror: "https://m.example", releaseMirrorCA: pem })).toStrictEqual({});
     expect(problems({ releaseMirror: "https://m.example", releaseMirrorCA: "junk" }).releaseMirrorCA).toBe(
-      "Paste PEM certificates.",
+      "Holds no PEM certificate.",
     );
     expect(problems({ releaseMirror: "http://m.example", releaseMirrorCA: pem }).releaseMirrorCA).toBe(
       "A certificate needs an https:// mirror.",
@@ -433,8 +433,20 @@ describe("setup", () => {
     const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
     expect(problems({ siteCA: pem, timeZone: "Europe/Zurich" })).toStrictEqual({});
     expect(problems({ timeZone: "UTC" })).toStrictEqual({});
-    expect(problems({ siteCA: "junk" }).siteCA).toBe("Paste PEM certificates.");
-    expect(problems({ siteCA: "-----BEGIN PRIVATE KEY-----" }).siteCA).toBe("Paste certificates only, no private key.");
+    expect(problems({ siteCA: "junk" }).siteCA).toBe("Holds no PEM certificate.");
+    // A key block made from the certificate's, so that no key text sits in the source.
+    const keyBlock = pem.replaceAll("CERTIFICATE", "PRIVATE KEY");
+    const keyHead = keyBlock.slice(0, keyBlock.indexOf("\n"));
+    expect(problems({ siteCA: keyHead }).siteCA).toBe("Block 1 is no complete PEM block.");
+    expect(problems({ siteCA: keyBlock }).siteCA).toBe("Holds a private key. Give certificates only.");
+    // What the server accepts and refuses, curl's cacert.pem layout among it.
+    const curl = `##\n## Bundle of CA Root Certificates\n##\n\nISRG Root X1\n============\n${pem}\n# ---------- Example Root CA ----------\n${pem}`;
+    expect(problems({ siteCA: curl })).toStrictEqual({});
+    expect(problems({ releaseMirror: "https://m.example", releaseMirrorCA: curl })).toStrictEqual({});
+    expect(problems({ siteCA: `${pem}\nextra` }).siteCA).toBe("Has text after its last PEM block on line 4.");
+    expect(problems({ siteCA: pem.replace("-----BEGIN", "----BEGIN") }).siteCA).toBe(
+      "Has a damaged BEGIN or END line on line 1.",
+    );
     // The server's time zone database judges a zone, so no name is refused here.
     for (const zone of ["Mars/Olympus", "Europe/zurich", "Factory", "Europe/Kyiv", "Etc/GMT+1"]) {
       expect(problems({ timeZone: zone })).toStrictEqual({});

@@ -121,15 +121,18 @@ func TestServedReleaseMirrorFollowsTheSavedSiteCA(t *testing.T) {
 	}
 }
 
-func TestControllerRefusesABadSiteCAAndTimeZone(t *testing.T) {
+func TestControllerReportsABadSiteCAAndTimeZoneAndRefusesAMissingFile(t *testing.T) {
 	t.Parallel()
 	bad := filepath.Join(t.TempDir(), "bad.crt")
 	if err := os.WriteFile(bad, []byte("not a certificate"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// A file without a certificate stops no controller. It is reported on each cluster and reaches
+	// no node.
 	o := &controllerOptions{siteCAFile: bad}
-	if err := o.parseReleaseMirror(); err == nil || !strings.Contains(err.Error(), "--site-ca") || !strings.Contains(err.Error(), "holds no PEM certificate") {
-		t.Errorf("a file without a certificate gave %v", err)
+	if err := o.parseReleaseMirror(); err != nil || o.r.SiteCA != "" || !strings.Contains(o.r.SiteCAProblem, "--site-ca") ||
+		!strings.Contains(o.r.SiteCAProblem, "holds no PEM certificate") {
+		t.Errorf("a file without a certificate gave %v, site CA %q, problem %q", err, o.r.SiteCA, o.r.SiteCAProblem)
 	}
 	o = &controllerOptions{siteCAFile: filepath.Join(t.TempDir(), "missing")}
 	if err := o.parseReleaseMirror(); err == nil || !strings.Contains(err.Error(), "--site-ca") {

@@ -36,6 +36,7 @@ import {
   type FamilyChoice,
 } from "./network";
 import { OIDCProviders, cleanProviders, oidcProblems } from "./OIDCProviders";
+import { certificateBundleProblem, sentence } from "./pem";
 import { nodeNote } from "./Placement";
 import type {
   BackupTarget,
@@ -1053,10 +1054,9 @@ function releaseMirrorProblems(f: SetupForm): SetupProblems {
     p.releaseMirror = "Use an http:// or https:// address with no trailing slash, query or credentials.";
   }
   if (filled(f.releaseMirrorCA)) {
-    if (f.releaseMirrorCA.includes("PRIVATE KEY")) {
-      p.releaseMirrorCA = "Paste certificates only, no private key.";
-    } else if (!f.releaseMirrorCA.includes("-----BEGIN CERTIFICATE-----")) {
-      p.releaseMirrorCA = "Paste PEM certificates.";
+    const problem = bundleProblem(f.releaseMirrorCA);
+    if (problem !== undefined) {
+      p.releaseMirrorCA = problem;
     } else if (address === "") {
       p.releaseMirrorCA = "Add a release mirror first.";
     } else if (!address.startsWith("https://")) {
@@ -1070,14 +1070,17 @@ function releaseMirrorProblems(f: SetupForm): SetupProblems {
 // time zone database, as useTimeZoneProblem asks it.
 function siteDefaultProblems(f: SetupForm): SetupProblems {
   const p: SetupProblems = {};
-  if (filled(f.siteCA)) {
-    if (f.siteCA.includes("PRIVATE KEY")) {
-      p.siteCA = "Paste certificates only, no private key.";
-    } else if (!f.siteCA.includes("-----BEGIN CERTIFICATE-----")) {
-      p.siteCA = "Paste PEM certificates.";
-    }
+  const problem = filled(f.siteCA) ? bundleProblem(f.siteCA) : undefined;
+  if (problem !== undefined) {
+    p.siteCA = problem;
   }
   return p;
+}
+
+// bundleProblem is what the server says of the layout of a bundle as it is saved, as an error.
+function bundleProblem(bundle: string): string | undefined {
+  const problem = certificateBundleProblem(`${bundle.trim()}\n`);
+  return problem === undefined ? undefined : `${sentence(problem)}.`;
 }
 
 // useTimeZoneProblem asks the server whether it knows the time zone, once the typing has paused.

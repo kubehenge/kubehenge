@@ -32,6 +32,11 @@ const (
 	SiteTimeZoneCondition = "SiteTimeZone"
 	// SiteTimeZoneInvalidReason is the reason of SiteTimeZoneCondition.
 	SiteTimeZoneInvalidReason = "TimeZoneInvalid"
+	// SiteCACondition on a Cluster says the site CA the controller was given is damaged, so that no
+	// cluster's site CA changes until it is fixed.
+	SiteCACondition = "SiteCA"
+	// SiteCAInvalidReason is the reason of SiteCACondition.
+	SiteCAInvalidReason = "AuthorityInvalid"
 	// ReleaseMirrorCondition on a Cluster says the release mirror's authority the controller was
 	// given is damaged or not valid now.
 	ReleaseMirrorCondition = "ReleaseMirror"

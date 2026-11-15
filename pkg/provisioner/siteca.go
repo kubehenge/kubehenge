@@ -379,6 +379,7 @@ func (plan *SiteRollPlan) holdBack(c *SiteRollCluster, now time.Time) bool {
 func (r *Reconciler) reportSiteSettings(ctx context.Context, cluster *clusterv1.Cluster) error {
 	for _, issue := range []struct{ condType, reason, problem string }{
 		{SiteTimeZoneCondition, SiteTimeZoneInvalidReason, r.SiteTimeZoneProblem},
+		{SiteCACondition, SiteCAInvalidReason, r.SiteCAProblem},
 		{ReleaseMirrorCondition, ReleaseMirrorAuthorityInvalidReason, r.ReleaseMirrorProblem},
 	} {
 		var err error
@@ -424,7 +425,7 @@ func (r *Reconciler) rollSiteCA(ctx context.Context, cluster *clusterv1.Cluster)
 	if err := r.reportSiteSettings(ctx, cluster); err != nil {
 		return 0, err
 	}
-	if appliedSiteCA(cluster) == r.SiteCA || lapse != "" {
+	if appliedSiteCA(cluster) == r.SiteCA || lapse != "" || r.SiteCAProblem != "" {
 		return 0, r.clearSiteRollBlocked(ctx, cluster)
 	}
 	if !InheritsSiteCA(cluster) {
