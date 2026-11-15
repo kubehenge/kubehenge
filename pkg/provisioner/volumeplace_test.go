@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -113,7 +117,7 @@ func workloadOf(t *testing.T, volumes ...client.Object) client.Client {
 // volumePlacer is a Placer of the clusters on local-lvm, or on storage as site describes it, whose
 // workload clusters all hold volumes, with three nodes in the Proxmox VE cluster of which online
 // are up.
-func volumePlacer(t *testing.T, clusters []client.Object, site StorageSite, online *fakeNodes, volumes []client.Object, objs ...client.Object) (*Placer, client.Client, *int) {
+func volumePlacer(t *testing.T, clusters []client.Object, site StorageSite, online Nodes, volumes []client.Object, objs ...client.Object) (*Placer, client.Client, *int) {
 	t.Helper()
 	class := &clusterv1.ClusterClass{Name: "kubehenge-rke2", Namespace: "kubehenge-system"}
 	c := fake.NewClientBuilder().WithScheme(volumeScheme(t)).WithObjects(slices.Concat([]client.Object{class}, clusters, objs)...).
@@ -383,13 +387,117 @@ func TestNoWorkerAdviceLeavesOutNodesThatTakeNoVM(t *testing.T) {
 	if cond == nil || cond.Reason != reasonStorageInactive || cond.Message != want {
 		t.Errorf("with the storage inactive on pve2, the condition is %+v", cond)
 	}
-	weak := &fakeNodes{online: []string{"pve1", "pve2", "pve3"}, levels: map[string]int{"pve2": 0}}
-	p, c, _ = volumePlacer(t, []client.Object{volumeCluster(t)}, StorageSite{}, weak, volumes,
-		worker("web-a", "ms-1", "pve1"), worker("web-b", "ms-1", "pve3"))
-	placeRound(t, p)
-	cond = volumesCondition(t, c)
-	if cond == nil || cond.Reason != reasonNodeUnavailable {
-		t.Errorf("with pve2 out of the placement for its CPU, the condition is %+v", cond)
+}
+
+// copyObjects are copies of objs, for subtests that run beside each other to build clients of.
+func copyObjects(t *testing.T, objs []client.Object) []client.Object {
+	t.Helper()
+	out := make([]client.Object, 0, len(objs))
+	for _, o := range objs {
+		c, ok := o.DeepCopyObject().(client.Object)
+		if !ok {
+			t.Fatalf("a copy of %T is no object", o)
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// machineSizes give the cluster's machines their size, its workers 8 GiB of memory.
+func machineSizes(t *testing.T) []clusterv1.ClusterVariable {
+	t.Helper()
+	return []clusterv1.ClusterVariable{
+		clusterVariable(t, "controlPlaneMachine", map[string]int{"cores": 2, "memoryMiB": 4096, "diskGiB": 30}),
+		clusterVariable(t, "workerMachine", map[string]int{"cores": 2, "memoryMiB": 8192, "diskGiB": 30}),
+	}
+}
+
+// nodeList are online nodes as Proxmox VE reports them.
+type nodeList []Node
+
+func (n nodeList) OnlineNodes(context.Context) ([]Node, error) { return slices.Clone(n), nil }
+
+// threeUp are pve1 to pve3 online, pve2 as change makes it.
+func threeUp(change func(*Node)) nodeList {
+	nodes := nodeList{{Name: "pve1", CPULevel: 3}, {Name: "pve2", CPULevel: 3}, {Name: "pve3", CPULevel: 3}}
+	change(&nodes[1])
+	return nodes
+}
+
+// For each thing that keeps the cluster's new VMs off a node with volumes, the condition names it
+// and its fix.
+func TestVolumesWithoutWorkerSayWhatKeepsTheVMsOffTheirNode(t *testing.T) {
+	t.Parallel()
+	volumes := []client.Object{
+		localVolume("data-0", "pve1", "local-lvm"), localVolume("data-1", "pve1", "local-lvm"), localVolume("data-2", "pve2", "local-lvm"),
+	}
+	all := []string{"pve1", "pve2", "pve3"}
+	big := machineSizes(t)
+	for _, tc := range []struct {
+		name      string
+		variables []clusterv1.ClusterVariable
+		nodes     Nodes
+		sites     func(*clusterv1.Cluster, *Sites)
+		reason    string
+		want      string
+	}{
+		{
+			name: "offline", nodes: &fakeNodes{online: []string{"pve1", "pve3"}}, reason: reasonNodeOffline,
+			want: "which is offline. Bring pve2 back online.",
+		},
+		{
+			name: "maintenance", nodes: &fakeNodes{online: all, maintenance: []string{"pve2"}}, reason: reasonNodeMaintenance,
+			want: "which is in maintenance. Their pods start once pve2 leaves maintenance.",
+		},
+		{
+			name: "CPU level", nodes: &fakeNodes{online: all, levels: map[string]int{"pve2": 0}}, reason: reasonNodeUnavailable,
+			want: "whose CPU does not reach x86-64-v2, which the cluster's VMs need. Move it with pvecsictl migrate.",
+		},
+		{
+			name: "bridge", variables: []clusterv1.ClusterVariable{clusterVariable(t, networkVariable, map[string]string{"bridge": "vmbr1"})},
+			nodes: allUp(), reason: reasonNodeUnavailable,
+			sites: func(_ *clusterv1.Cluster, s *Sites) {
+				s.Bridges = map[string][]string{"pve1": {"vmbr1"}, "pve2": {"vmbr0"}, "pve3": {"vmbr1"}}
+			},
+			want: "which has no bridge or VNet vmbr1. Add vmbr1 to the node.",
+		},
+		{
+			name: "template reach", nodes: allUp(), reason: reasonNodeUnavailable,
+			sites: func(c *clusterv1.Cluster, s *Sites) {
+				s.Templates = []TemplateSite{templateSiteOf(t, c, "pve1", "", "local-lvm")}
+			},
+			want: "which the cluster's templates cannot be cloned to. Build the cluster's templates on shared storage.",
+		},
+		{
+			name: "memory", variables: big, reason: reasonNodeUnavailable,
+			nodes: threeUp(func(n *Node) { n.FreeMiB, n.MemoryKnown = 2048, true }),
+			want:  "which has 2 GiB of memory free, too little for the cluster's largest machine. Free memory on the node.",
+		},
+		{
+			name: "newer major release", reason: reasonNodeUnavailable,
+			nodes: nodeList{{Name: "pve1", CPULevel: 3, Major: 8}, {Name: "pve2", CPULevel: 3, Major: 9}, {Name: "pve3", CPULevel: 3, Major: 8}},
+			want:  "which runs Proxmox VE 9 while nodes of an older release have room. Upgrade the other nodes to Proxmox VE 9.",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			web := volumeCluster(t, tc.variables...)
+			p, c, _ := volumePlacer(t, []client.Object{web}, StorageSite{}, tc.nodes, copyObjects(t, volumes),
+				worker("web-a", "ms-1", "pve1"), worker("web-b", "ms-1", "pve3"))
+			if tc.sites != nil {
+				sites, ok := p.Sites.(fakeSites)
+				if !ok {
+					t.Fatalf("sites are a %T", p.Sites)
+				}
+				tc.sites(web, sites.sites)
+			}
+			placeRound(t, p)
+			cond := volumesCondition(t, c)
+			want := "Volume db/data-2 is on node pve2, " + tc.want
+			if cond == nil || cond.Reason != tc.reason || cond.Message != want {
+				t.Errorf("the condition is %+v, want %s: %q", cond, tc.reason, want)
+			}
+		})
 	}
 }
 
@@ -526,5 +634,131 @@ func TestWorkerPlacementPassesOverWorkersOnTheirWayOut(t *testing.T) {
 		if got := placeWorker(t, web, created, tc.objs...); !slices.Equal(got, tc.want) {
 			t.Errorf("%s on pve2: kept to %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+// While a worker is on its way out, the advice names only a machine whose replacement the webhook
+// sends to the node it names, and otherwise says what it waits for.
+func TestNoWorkerAdviceFollowsTheWebhookWhileWorkersLeave(t *testing.T) {
+	t.Parallel()
+	volumes := []client.Object{
+		localVolume("data-0", "pve1", "local-lvm"), localVolume("data-1", "pve1", "local-lvm"), localVolume("data-2", "pve2", "local-lvm"),
+	}
+	outdated := testCondition(clusterv1.MachineUpToDateCondition, metav1.ConditionFalse)
+	remediated := testCondition(clusterv1.MachineOwnerRemediatedCondition, metav1.ConditionFalse)
+	other := poolWorker("web-a", "web-md-1", "ms-9", "pve1")
+	top := worker("web-a", "ms-1", "pve1")
+	spare := worker("web-b", "ms-1", "pve3")
+	waits := "Volume db/data-2 is on node pve2, which has no worker. Machine web-a is on its way out. The fix shows here once it is replaced or gone."
+	for _, tc := range []struct {
+		name string
+		objs []client.Object
+		want string
+		// named is the machine the advice names, and node where its replacement goes.
+		named, node string
+	}{
+		{"another pool's worker out of date on the top node", []client.Object{other, machineOf(other, outdated), spare, machineOf(spare)}, waits, "", ""},
+		{"a worker marked for remediation on the top node", []client.Object{top, machineOf(top, remediated), spare, machineOf(spare)}, waits, "", ""},
+		{
+			"a worker marked for remediation on a node without volumes",
+			[]client.Object{
+				worker("web-a", "ms-1", "pve1"), spare, machineOf(spare, remediated), worker("web-c", "ms-1", "pve3"),
+			},
+			"Volume db/data-2 is on node pve2, which has no worker. Delete machine web-c on node pve3, and its replacement goes to pve2.",
+			"web-c", "pve2",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			own := func() []client.Object { return copyObjects(t, tc.objs) }
+			p, c, _ := volumePlacer(t, []client.Object{volumeCluster(t)}, StorageSite{}, allUp(), copyObjects(t, volumes), own()...)
+			placeRound(t, p)
+			got := readCluster(t, c, "web")
+			cond := meta.FindStatusCondition(got.Status.Conditions, VolumesWithoutWorkerCondition)
+			if cond == nil || cond.Reason != reasonNoWorker || cond.Message != tc.want {
+				t.Fatalf("the condition is %+v, want %q", cond, tc.want)
+			}
+			// Where the advice waits, the webhook sends the spare's replacement to the top node.
+			gone := own()
+			name, node := tc.named, tc.node
+			if name == "" {
+				name, node = "web-b", "pve1"
+			}
+			gone = append(gone, deleting(machineOf(worker(name, "ms-1", ""))))
+			gone = slices.DeleteFunc(gone, func(o client.Object) bool {
+				_, isMachine := o.(*clusterv1.Machine)
+				return isMachine && o.GetName() == name && o.GetDeletionTimestamp().IsZero()
+			})
+			if pinned := placeWorker(t, got, worker("web-new", "ms-1", ""), gone...); !slices.Equal(pinned, []string{node}) {
+				t.Errorf("the replacement of %s is kept to %v, want %s", name, pinned, node)
+			}
+		})
+	}
+}
+
+// A pin outlives the record of the nodes with volumes: once its node is offline it is taken off,
+// whatever the record holds.
+func TestPlacerUnpinsWhateverTheVolumeRecordHolds(t *testing.T) {
+	t.Parallel()
+	web := volumeCluster(t)
+	web.Annotations = map[string]string{OnlineNodesAnnotation: "pve1,pve2,pve3", VolumeNodesAnnotation: "pve2"}
+	waiting := worker("web-b", "ms-1", "")
+	_ = unstructured.SetNestedStringSlice(waiting.Object, []string{"pve2"}, "spec", "allowedNodes")
+	waiting.SetAnnotations(map[string]string{VolumePinAnnotation: "pve2"})
+	nodes := allUp()
+	p, c, _ := volumePlacer(t, []client.Object{web}, StorageSite{}, nodes, nil, worker("web-a", "ms-1", "pve1"), waiting)
+	read := func() *unstructured.Unstructured {
+		pm := &unstructured.Unstructured{}
+		pm.SetGroupVersionKind(proxmoxMachineGVK)
+		if err := c.Get(t.Context(), client.ObjectKey{Namespace: "team-a", Name: "web-b"}, pm); err != nil {
+			t.Fatal(err)
+		}
+		return pm
+	}
+	placeRound(t, p)
+	if v, has := readCluster(t, c, "web").Annotations[VolumeNodesAnnotation]; has {
+		t.Fatalf("with no volumes the record holds %q", v)
+	}
+	if pin := read().GetAnnotations()[VolumePinAnnotation]; pin != "pve2" {
+		t.Fatalf("with pve2 online the pin is %q", pin)
+	}
+	nodes.online = []string{"pve1", "pve3"}
+	placeRound(t, p)
+	pm := read()
+	if allowed, found, _ := unstructured.NestedStringSlice(pm.Object, "spec", "allowedNodes"); found {
+		t.Errorf("pinned to %v while pve2 is offline", allowed)
+	}
+	if pin, has := pm.GetAnnotations()[VolumePinAnnotation]; has {
+		t.Errorf("the pin %q stays", pin)
+	}
+}
+
+// A cluster deleted while its volumes are read logs no error.
+func TestPlacerSaysNothingOfAClusterDeletedDuringItsRead(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var errs []string
+	log := funcr.New(func(prefix, args string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if strings.Contains(args, `"error"`) {
+			errs = append(errs, prefix+args)
+		}
+	}, funcr.Options{})
+	web := volumeCluster(t, machineSizes(t)...)
+	p, c, _ := volumePlacer(t, []client.Object{web}, StorageSite{}, allUp(), nil, worker("web-a", "ms-1", "pve1"))
+	workload := workloadOf(t, localVolume("data-0", "pve2", "local-lvm"))
+	p.Workload = func(ctx context.Context, cluster *clusterv1.Cluster) (client.Reader, bool, error) {
+		if err := c.Delete(ctx, cluster.DeepCopy()); err != nil {
+			return nil, false, err
+		}
+		return workload, true, nil
+	}
+	p.placeAll(logr.NewContext(t.Context(), log))
+	p.volumes.Wait()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(errs) != 0 {
+		t.Errorf("logged %v", errs)
 	}
 }

@@ -1377,9 +1377,9 @@ When a volume's node has no worker, the cluster's `VolumesWithoutWorker` conditi
 | `NodeOffline`, `NodeInMaintenance` | Bring the node back. |
 | `NodeNotAllowed` | Add the node to `allowedNodes`, or move the volumes. |
 | `StorageInactive` | Activate the cluster's storage on the node. |
-| `NodeUnavailable` | The cluster's VMs cannot go to the node now. The cluster's other conditions say why. |
+| `NodeUnavailable` | The condition says what keeps the cluster's VMs off the node and how to fix it. That is the node's CPU level, a missing bridge, templates it cannot clone, too little free memory or a newer Proxmox VE major release. |
 | `TooFewWorkers` | Add workers, at least one per node with volumes. |
-| `NoWorker` | Delete the machine the condition names. Its replacement goes to the node with volumes. |
+| `NoWorker` | Delete the machine the condition names. Its replacement goes to the node with volumes. While a worker is on its way out, the condition names it, and the fix follows once it is replaced or gone. |
 | `NodeGone` | The node left the Proxmox VE cluster. Restore the volumes from a backup or delete their claims. |
 
 The create wizard and the change checks warn when a cluster has fewer workers than nodes its volumes are on. An autoscaled pool counts at its minimum.

@@ -164,12 +164,17 @@ func (p *Placer) place(ctx context.Context, c *clusterv1.Cluster, online []Node,
 	hosts, _ := nodesToPlace(online, level, nil, storage)
 	_, blocked := nodesToPlace(online, level, chosen, storage)
 	usable := placeable(online, storage)
+	// why says, for the volumes on a node left out, what keeps the cluster's VMs off it.
+	why := map[string]leftOut{}
 	if sites != nil {
-		hosts = sites.Hosts(c, usable, level)
+		hosts, why = hostsWhy(sites, c, usable, level)
 	}
+	offered, fitted := hosts, hosts
 	hosts, short, newer := preferOldest(online, hosts, func(h []string) ([]string, *roomOn) {
+		fitted = h
 		return fitMemory(ctx, p.Client, p.ClassNamespace, c, usable, h)
 	})
+	narrowedWhy(online, offered, fitted, hosts, why)
 	p.markShort(ctx, c, short)
 	if sites != nil {
 		p.markDisks(ctx, c, sites.Space, nodeNames(usable, chosen))
@@ -180,8 +185,8 @@ func (p *Placer) place(ctx context.Context, c *clusterv1.Cluster, online []Node,
 		p.clearNewer(c)
 	}
 	p.record(ctx, c, hosts, refusedForFaults(blocked, hosts, skipped))
-	p.unpinStale(ctx, c, placement(chosen, hosts))
-	return &volumeJob{cluster: c, chosen: chosen, storage: storage, hosts: placement(chosen, hosts)}
+	p.unpinStale(ctx, c, pinnable(chosen, hosts))
+	return &volumeJob{cluster: c, chosen: chosen, storage: storage, hosts: pinnable(chosen, hosts), leftOut: why}
 }
 
 // nodeNames are the names of the nodes, kept to chosen where the cluster chose any.
