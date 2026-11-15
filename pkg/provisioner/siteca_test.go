@@ -157,6 +157,33 @@ func TestSiteTimeZoneIsTheDefaultOfSchedules(t *testing.T) { //nolint:parallelte
 	}
 }
 
+// Not parallel: it sets the process's default time zone.
+func TestUpgradeWindowNamingNoZoneOpensInTheSiteTimeZone(t *testing.T) { //nolint:paralleltest // sets the process's default time zone
+	t.Cleanup(func() { _ = SetDefaultTimeZone(DefaultTimeZone) })
+	// 02:00 in Tokyo is 17:00 UTC the day before.
+	tokyoTwo := time.Date(2026, time.November, 17, 17, 30, 0, 0, time.UTC)
+	for zone, open := range map[string]bool{"Asia/Tokyo": true, "": false} {
+		if zone != "" {
+			if err := SetDefaultTimeZone(zone); err != nil {
+				t.Fatal(err)
+			}
+		}
+		w := Window{Start: "02:00", DurationMinutes: 60}
+		got, err := w.Open(tokyoTwo)
+		if err != nil || got != open {
+			t.Errorf("site zone %q: open = %v (%v), want %v", zone, got, err, open)
+		}
+		if zone == "" {
+			continue
+		}
+		// An unknown site zone is refused, so the window stays in the last good one or UTC.
+		if err = SetDefaultTimeZone("Mars/Olympus"); err == nil {
+			t.Error("an unknown site zone was accepted")
+		}
+		_ = SetDefaultTimeZone(DefaultTimeZone)
+	}
+}
+
 func TestSiteCAIsWrittenOnlyWhereThePlanLetsIt(t *testing.T) {
 	t.Parallel()
 	a, own, windowed := siteCluster("a"), siteCluster("own", jsonVar(trustedCAsVariable, `["x"]`), jsonVar(SiteCAsVariable, `["old"]`)), siteCluster("windowed", jsonVar(upgradesVariable, mondayWindow))

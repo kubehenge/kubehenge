@@ -107,6 +107,8 @@ type Hooks struct {
 	SysAuditGroup string
 	// VolumeSnapshots is what lets a cluster's CSI plugin take volume snapshots.
 	VolumeSnapshots VolumeSnapshots
+	// SiteCA is the site CA a new cluster is given. Nil, a new cluster gets none.
+	SiteCA func() string
 }
 
 // BeforeClusterUpgrade holds Rancher's cluster at the Kubernetes versions Rancher runs on, holds

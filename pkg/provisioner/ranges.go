@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	admissionv1 "k8s.io/api/admission/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -182,7 +183,8 @@ func rangeSizeProblems(what string, p netip.Prefix) []string {
 // candidates, and for a cluster that runs Cilium, which may join a Cluster Mesh later, ranges clear
 // of every other cluster's too, since a peer's pod addresses must not be taken for its own pods' or
 // services'. The distributions read the ranges from the Cluster, kubeadm's podSubnet among them,
-// which the Tigera operator does not install Calico without.
+// which the Tigera operator does not install Calico without. It also holds the siteCAs variable to
+// the controller (holdSiteCAs).
 type ClusterDefaulter struct {
 	Hooks *Hooks
 }
@@ -191,8 +193,18 @@ var _ admission.Defaulter[*clusterv1.Cluster] = &ClusterDefaulter{}
 
 // Default implements admission.Defaulter.
 func (d *ClusterDefaulter) Default(ctx context.Context, c *clusterv1.Cluster) error {
+	if !Owns(c, d.Hooks.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
+		return nil
+	}
+	if err := d.holdSiteCAs(ctx, c); err != nil {
+		return err
+	}
+	// The ranges are given on creation alone: changing a running cluster's replaces its nodes.
+	if req, err := admission.RequestFromContext(ctx); err == nil && req.Operation == admissionv1.Update {
+		return nil
+	}
 	n := &c.Spec.ClusterNetwork
-	if !Owns(c, d.Hooks.ClassNamespace) || !c.DeletionTimestamp.IsZero() || len(n.Pods.CIDRBlocks) > 0 && len(n.Services.CIDRBlocks) > 0 {
+	if len(n.Pods.CIDRBlocks) > 0 && len(n.Services.CIDRBlocks) > 0 {
 		return nil
 	}
 	class, err := d.Hooks.classOf(c)(ctx)

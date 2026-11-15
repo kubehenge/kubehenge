@@ -25,6 +25,7 @@ import {
   Status,
   age,
   browserZone,
+  type SiteZone,
   useSiteZone,
   bytes,
   distributionName,
@@ -100,12 +101,12 @@ export interface EtcdSnapshotFields {
 }
 
 /** etcdFieldsOf are the fields of a cluster's settings. What it leaves unset is the chart's default. */
-export function etcdFieldsOf(v: EtcdSnapshotsValue, zone = browserZone()): EtcdSnapshotFields {
+export function etcdFieldsOf(v: EtcdSnapshotsValue, zone = browserZone(), inEffect = "UTC"): EtcdSnapshotFields {
   return {
     target: v.target ?? "",
     schedule: v.schedule ?? defaultEtcdSchedule,
-    // What is in effect: UTC when snapshots name none. Snapshots switched on start in zone, the site's.
-    timeZone: v.timeZone ?? (v.enabled ? "UTC" : zone),
+    // What is in effect: inEffect when snapshots name none. Snapshots switched on start in zone.
+    timeZone: v.timeZone ?? (v.enabled ? inEffect : zone),
     keep: String(v.keep ?? defaultEtcdKeep),
     upload: v.distributionUpload === true,
   };
@@ -266,14 +267,14 @@ function EtcdSnapshotsForm({
   onClose,
 }: {
   cluster: Cluster;
-  zone: string;
+  zone: SiteZone;
   onClose: () => void;
 }): JSX.Element {
   const current = etcdSnapshotsOf(c.variables["etcdSnapshots"]);
   const offered = useClassTargets(c.class);
   const targets = offered ?? [];
   const [enabled, setEnabled] = useState(current.enabled);
-  const [typed, setTyped] = useState<EtcdSnapshotFields>(() => etcdFieldsOf(current, zone));
+  const [typed, setTyped] = useState<EtcdSnapshotFields>(() => etcdFieldsOf(current, zone.start, zone.inEffect));
   const { busy, error, send } = useChange(c, onClose);
   const hint = useId();
   const backups = backupsOf(c.variables["backups"]);

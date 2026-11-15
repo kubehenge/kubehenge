@@ -91,6 +91,11 @@ rules:
   - apiGroups: [controlplane.cluster.x-k8s.io]
     resources: [kubeadmcontrolplanes, rke2controlplanes, kthreescontrolplanes, taloscontrolplanes]
     verbs: [list, patch, delete]
+  # The site CA's rollout reads a cluster's control plane for the generation it starts from, and
+  # holds the cluster's place until the control plane has taken it up.
+  - apiGroups: [controlplane.cluster.x-k8s.io]
+    resources: [kubeadmcontrolplanes, rke2controlplanes, kthreescontrolplanes, taloscontrolplanes]
+    verbs: [get]
   - apiGroups: [bootstrap.cluster.x-k8s.io]
     resources: [kubeadmconfigs, rke2configs, kthreesconfigs, talosconfigs]
     verbs: [list, patch, delete]
@@ -705,6 +710,8 @@ webhooks:
 # (pkg/provisioner's ClusterDefaulter), as the interface's clusters get them: the distributions read
 # them from the Cluster. Only on creation, since changing a running cluster's ranges replaces its
 # nodes, and the same as the validating webhook while the controller is away.
+# The siteCAs variable is the controller's: a new cluster gets the site CA, and a change of the spec
+# by anyone else keeps the stored value, so that applying or replacing a manifest without it works.
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
@@ -717,6 +724,9 @@ webhooks:
     sideEffects: None
     failurePolicy: Fail
     reinvocationPolicy: Never
+    matchConditions:
+      - name: created-or-spec-changed
+        expression: request.operation == 'CREATE' || object.spec != oldObject.spec
     timeoutSeconds: 5
     clientConfig:
       service:
@@ -727,7 +737,7 @@ webhooks:
     rules:
       - apiGroups: [cluster.x-k8s.io]
         apiVersions: [v1beta2]
-        operations: [CREATE]
+        operations: [CREATE, UPDATE]
         resources: [clusters]
   # A new worker of a cluster on storage local to each node goes to a node whose volumes have no
   # worker (pkg/provisioner's WorkerPlacement). While the controller is away a worker goes where

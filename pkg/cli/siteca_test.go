@@ -135,8 +135,9 @@ func TestControllerRefusesABadSiteCAAndTimeZone(t *testing.T) {
 	if err := o.parseReleaseMirror(); err == nil || !strings.Contains(err.Error(), "--site-ca") {
 		t.Errorf("a missing file gave %v", err)
 	}
+	// A zone that is none stops no controller. It is reported on each cluster instead.
 	o = &controllerOptions{timeZone: "Mars/Olympus"}
-	if err := o.parseReleaseMirror(); err == nil || !strings.Contains(err.Error(), "--time-zone") {
-		t.Errorf("a time zone that is none gave %v", err)
+	if err := o.parseReleaseMirror(); err != nil || !strings.Contains(o.r.SiteTimeZoneProblem, "--time-zone") {
+		t.Errorf("a time zone that is none gave %v with the problem %q", err, o.r.SiteTimeZoneProblem)
 	}
 }

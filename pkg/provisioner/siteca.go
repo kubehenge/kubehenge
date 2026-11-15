@@ -6,18 +6,21 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/util/retry"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/cluster-api/util/annotations"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
@@ -106,21 +109,62 @@ func siteCALapse(bundle string, now time.Time) string {
 // controllerAccount is the name of the controller's service account in the class namespace.
 const controllerAccount = "kubehenge-controller"
 
-// validateSiteCAsOwner refuses a change of the siteCAs variable from anyone but the controller. The
-// variable is what the controller's pacing and windows decide, and a value written elsewhere would
-// replace the nodes outside them with an authority no administrator chose.
-func validateSiteCAsOwner(ctx context.Context, old, c *clusterv1.Cluster, classNamespace string) field.ErrorList {
-	if old != nil && !variableChanged(old, c, SiteCAsVariable) {
+// holdSiteCAs keeps the siteCAs variable and the rollout note the controller's. The variable is what
+// the controller's pacing and windows decide, and a value written elsewhere would replace the nodes
+// outside them with an authority no administrator chose. A new cluster gets the site CA a new
+// cluster takes now, whatever it carries, such as a value exported from another cluster. A change by
+// anyone else keeps what is stored, whether it changes the variable or leaves it out, so that a
+// manifest without it can be applied or replaced. The controller's own changes pass as they are.
+func (d *ClusterDefaulter) holdSiteCAs(ctx context.Context, c *clusterv1.Cluster) error {
+	req, err := admission.RequestFromContext(ctx)
+	if err == nil && req.UserInfo.Username == "system:serviceaccount:"+d.Hooks.ClassNamespace+":"+controllerAccount {
 		return nil
 	}
-	if _, set, err := optionalVariable[json.RawMessage](c, SiteCAsVariable); old == nil && err == nil && !set {
+	if err != nil || req.Operation != admissionv1.Update {
+		ca := ""
+		if d.Hooks.SiteCA != nil && siteCALapse(d.Hooks.SiteCA(), d.Hooks.now()) == "" {
+			ca = d.Hooks.SiteCA()
+		}
+		return putSiteCAs(c, ca)
+	}
+	var old clusterv1.Cluster
+	if err = json.Unmarshal(req.OldObject.Raw, &old); err != nil {
+		return fmt.Errorf("reading the stored cluster: %w", err)
+	}
+	isSiteCAs := func(v clusterv1.ClusterVariable) bool { return v.Name == SiteCAsVariable }
+	stored, now := slices.IndexFunc(old.Spec.Topology.Variables, isSiteCAs), slices.IndexFunc(c.Spec.Topology.Variables, isSiteCAs)
+	switch {
+	case stored < 0:
+		c.Spec.Topology.Variables = slices.DeleteFunc(c.Spec.Topology.Variables, isSiteCAs)
+	case now < 0:
+		c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, old.Spec.Topology.Variables[stored])
+	default:
+		// In place, so that an update that leaves it as stored is not changed at all.
+		c.Spec.Topology.Variables[now] = old.Spec.Topology.Variables[stored]
+	}
+	if note, ok := old.Annotations[SiteRollAnnotation]; ok {
+		if c.Annotations == nil {
+			c.Annotations = map[string]string{}
+		}
+		c.Annotations[SiteRollAnnotation] = note
+	}
+	return nil
+}
+
+// putSiteCAs sets the cluster's siteCAs variable to ca, or takes it away when ca is empty.
+func putSiteCAs(c *clusterv1.Cluster, ca string) error {
+	c.Spec.Topology.Variables = slices.DeleteFunc(c.Spec.Topology.Variables, func(v clusterv1.ClusterVariable) bool {
+		return v.Name == SiteCAsVariable
+	})
+	if ca == "" {
 		return nil
 	}
-	if req, err := admission.RequestFromContext(ctx); err == nil && req.UserInfo.Username == "system:serviceaccount:"+classNamespace+":"+controllerAccount {
-		return nil
+	raw, err := json.Marshal([]string{ca})
+	if err != nil {
+		return fmt.Errorf("encoding the site CA: %w", err)
 	}
-	return field.ErrorList{field.Forbidden(field.NewPath("spec", "topology", "variables").Key(SiteCAsVariable),
-		"the controller sets this from the site CA, set the site CA instead")}
+	c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{Name: SiteCAsVariable, Value: apiextensionsv1.JSON{Raw: raw}})
+	return nil
 }
 
 // validateUpgradeWindow refuses an upgrade window whose time zone or start the controller cannot
@@ -184,6 +228,9 @@ type SiteRollCluster struct {
 	Built bool
 	// Policy is the cluster's upgrade policy, nil when it sets none.
 	Policy *UpgradePolicy
+	// NotGiven says why the controller could not write the site CA into the cluster when it last
+	// tried. Other clusters' plans skip it, so that it holds no place while it keeps failing.
+	NotGiven string
 }
 
 // SiteRollClusters reads the state of the live clusters of Kubehenge's classes for PlanSiteRoll,
@@ -206,7 +253,10 @@ func SiteRollClusters(clusters []clusterv1.Cluster, classNamespace string, settl
 			Rolling:  meta.IsStatusConditionTrue(c.Status.Conditions, clusterv1.ClusterRollingOutCondition),
 			Built:    clusterBuilt(c),
 			Settling: settling[key],
-			Paused:   c.Spec.Paused != nil && *c.Spec.Paused,
+			Paused:   annotations.IsPaused(c, c),
+		}
+		if cond := meta.FindStatusCondition(c.Status.Conditions, SiteRollCondition); cond != nil && cond.Reason == SiteCANotGivenReason {
+			sc.NotGiven = cond.Message
 		}
 		if err == nil && set && (policy.Mode == upgradePatch || policy.Mode == upgradeMinor || policy.RefreshesNodeImages()) {
 			sc.Policy = &policy
@@ -278,20 +328,7 @@ func PlanSiteRoll(want string, clusters []SiteRollCluster, limit int, now time.T
 			continue
 		}
 		plan.Inherits++
-		if c.Applied == want {
-			continue
-		}
-		if c.Paused {
-			plan.Waiting = append(plan.Waiting, c.Key)
-			continue
-		}
-		opens, closed, err := c.windowOpens(now)
-		if err != nil {
-			plan.Skipped[c.Key] = err
-			continue
-		}
-		if closed {
-			plan.Windows = append(plan.Windows, WindowWait{Key: c.Key, Opens: opens})
+		if c.Applied == want || plan.holdBack(&c, now) {
 			continue
 		}
 		if free <= 0 {
@@ -304,13 +341,28 @@ func PlanSiteRoll(want string, clusters []SiteRollCluster, limit int, now time.T
 	return plan
 }
 
-// ensureNodeSite keeps the cluster's node customisation revision and site CA current. It returns
-// when to look again, 0 for the usual resync.
-func (r *Reconciler) ensureNodeSite(ctx context.Context, cluster *clusterv1.Cluster) (time.Duration, error) {
-	if err := r.ensureNodeCustomisation(ctx, cluster); err != nil {
-		return 0, err
+// holdBack puts a cluster that may not take the site CA now where it waits or is skipped, and
+// tells whether it did: a paused cluster waits, one that failed to take it before or whose window
+// cannot be read is skipped, and one whose window is closed waits for it.
+func (plan *SiteRollPlan) holdBack(c *SiteRollCluster, now time.Time) bool {
+	if c.Paused {
+		plan.Waiting = append(plan.Waiting, c.Key)
+		return true
 	}
-	return r.rollSiteCA(ctx, cluster)
+	if c.NotGiven != "" {
+		plan.Skipped[c.Key] = wrapCluster(c.Key, errors.New(c.NotGiven))
+		return true
+	}
+	opens, closed, err := c.windowOpens(now)
+	switch {
+	case err != nil:
+		plan.Skipped[c.Key] = err
+	case closed:
+		plan.Windows = append(plan.Windows, WindowWait{Key: c.Key, Opens: opens})
+	default:
+		return false
+	}
+	return true
 }
 
 // rollSiteCA gives an inheriting cluster the site CA when the plan lets it. A cluster that sets
@@ -340,21 +392,24 @@ func (r *Reconciler) rollSiteCA(ctx context.Context, cluster *clusterv1.Cluster)
 	if !clusterBuilt(cluster) {
 		return 0, r.setSiteCA(ctx, key, r.SiteCA)
 	}
-	var all clusterv1.ClusterList
-	if err := r.Client.List(ctx, &all); err != nil {
-		return 0, fmt.Errorf("listing clusters for the site CA: %w", err)
-	}
 	now := r.now()
-	settling := SiteRollSettling(ctx, r.Client, all.Items, now)
-	plan := PlanSiteRoll(r.SiteCA, SiteRollClusters(all.Items, r.ClassNamespace, settling), SiteRollLimit, now)
+	plan, err := r.planSiteRoll(ctx, key, now)
+	if err != nil {
+		return 0, err
+	}
 	if why, skipped := plan.Skipped[key]; skipped {
 		return 0, r.reportSiteRollBlocked(ctx, cluster, why)
+	}
+	if slices.Contains(plan.Now, key) {
+		if err := r.giveSiteCA(ctx, key, r.SiteCA); err != nil {
+			return 0, errors.Join(err, r.reportSiteIssue(ctx, cluster, SiteRollCondition, SiteCANotGivenReason, err.Error()))
+		}
 	}
 	if err := r.clearSiteRollBlocked(ctx, cluster); err != nil {
 		return 0, err
 	}
 	if slices.Contains(plan.Now, key) {
-		return 0, r.giveSiteCA(ctx, key, r.SiteCA)
+		return 0, nil
 	}
 	for _, w := range plan.Windows {
 		if w.Key == key {
@@ -362,6 +417,22 @@ func (r *Reconciler) rollSiteCA(ctx context.Context, cluster *clusterv1.Cluster)
 		}
 	}
 	return waitInterval, nil
+}
+
+// planSiteRoll plans the site CA's rollout over every cluster, as the cluster of key sees it.
+func (r *Reconciler) planSiteRoll(ctx context.Context, key client.ObjectKey, now time.Time) (SiteRollPlan, error) {
+	var all clusterv1.ClusterList
+	if err := r.Client.List(ctx, &all); err != nil {
+		return SiteRollPlan{}, fmt.Errorf("listing clusters for the site CA: %w", err)
+	}
+	clusters := SiteRollClusters(all.Items, r.ClassNamespace, SiteRollSettling(ctx, r.Client, all.Items, now))
+	for i := range clusters {
+		if clusters[i].Key == key {
+			// The cluster's own reconcile tries again what failed before.
+			clusters[i].NotGiven = ""
+		}
+	}
+	return PlanSiteRoll(r.SiteCA, clusters, SiteRollLimit, now), nil
 }
 
 // setSiteCA writes the site CA into the cluster's siteCAs variable, or takes the variable away
@@ -398,15 +469,8 @@ func (r *Reconciler) writeSiteCA(ctx context.Context, key client.ObjectKey, ca s
 		if appliedSiteCA(&live) == ca {
 			return nil
 		}
-		live.Spec.Topology.Variables = slices.DeleteFunc(live.Spec.Topology.Variables, func(v clusterv1.ClusterVariable) bool {
-			return v.Name == SiteCAsVariable
-		})
-		if ca != "" {
-			raw, err := json.Marshal([]string{ca})
-			if err != nil {
-				return fmt.Errorf("encoding the site CA: %w", err)
-			}
-			live.Spec.Topology.Variables = append(live.Spec.Topology.Variables, clusterv1.ClusterVariable{Name: SiteCAsVariable, Value: apiextensionsv1.JSON{Raw: raw}})
+		if err := putSiteCAs(&live, ca); err != nil {
+			return err
 		}
 		if annotate != nil {
 			if err := annotate(ctx, &live); err != nil {

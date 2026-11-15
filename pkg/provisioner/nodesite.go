@@ -173,17 +173,12 @@ func checkCertificates(bundle string, now time.Time) error {
 	if len(bundle) > maxNodePEMBytes {
 		return fmt.Errorf("at most %d KiB", maxNodePEMBytes/kibibyte)
 	}
-	// Each BEGIN line opens a block. Decoding the whole bundle at once would pass over a damaged block
-	// and keep the next, so each is decoded on its own and a damaged one refuses the bundle.
-	const begin = "-----BEGIN "
+	blocks, err := pemBlocks(bundle)
+	if err != nil {
+		return err
+	}
 	found := 0
-	var rest []byte
-	for n, segment := range strings.Split(bundle, begin)[1:] {
-		var block *pem.Block
-		block, rest = pem.Decode([]byte(begin + segment))
-		if block == nil {
-			return fmt.Errorf("block %d is no complete PEM block", n+1)
-		}
+	for _, block := range blocks {
 		if block.Type != certificateBlock {
 			return fmt.Errorf("holds a %s. Give certificates only", strings.ToLower(block.Type))
 		}
@@ -200,11 +195,78 @@ func checkCertificates(bundle string, now time.Time) error {
 		}
 		found++
 	}
-	switch {
-	case found == 0:
+	if found == 0 {
 		return errors.New("holds no PEM certificate")
-	case len(bytes.TrimSpace(rest)) > 0:
-		return errors.New("holds text besides its certificates")
 	}
 	return nil
+}
+
+var (
+	// pemBoundaryWord finds what is left of a BEGIN or END line that lost its dashes.
+	pemBoundaryWord = regexp.MustCompile(`\b(BEGIN|END)\b`)
+	// pemBodyLine is a line of base64 as long as most of a PEM block's lines, which openssl's own
+	// text (attributes, subject, hex dumps with colons) never holds.
+	pemBodyLine = regexp.MustCompile(`^[A-Za-z0-9+/=]{40,}$`)
+)
+
+// pemBlocks splits a bundle into its PEM blocks, line by line. Decoding the whole bundle at once
+// would pass over a block whose BEGIN or END line is damaged and keep the next. Text outside the
+// blocks is kept for openssl's output, which people paste with its attributes and text, but a line
+// that looks like a damaged boundary or a certificate's body refuses the bundle, naming its line.
+func pemBlocks(bundle string) ([]*pem.Block, error) {
+	type numbered struct {
+		n    int
+		text string
+	}
+	var lines []numbered
+	for i, line := range strings.Split(bundle, "\n") {
+		line = strings.TrimRight(line, "\r")
+		// A block may start on the line another ends on, as when bundles are joined without a break.
+		for j := strings.Index(line[min(1, len(line)):], "-----BEGIN "); j >= 0; j = strings.Index(line[1:], "-----BEGIN ") {
+			lines = append(lines, numbered{i + 1, line[:j+1]})
+			line = line[j+1:]
+		}
+		lines = append(lines, numbered{i + 1, line})
+	}
+	var blocks []*pem.Block
+	var open []string
+	inBlock := false
+	// trailing is the first line of text since the last block ended, 0 for none.
+	trailing := 0
+	for _, l := range lines {
+		line := l.text
+		switch {
+		case inBlock && strings.HasPrefix(line, "-----BEGIN "):
+			return nil, fmt.Errorf("block %d is no complete PEM block", len(blocks)+1)
+		case inBlock:
+			open = append(open, line)
+			if !strings.HasPrefix(line, "-----END ") {
+				continue
+			}
+			block, rest := pem.Decode([]byte(strings.Join(open, "\n") + "\n"))
+			if block == nil || len(bytes.TrimSpace(rest)) > 0 {
+				return nil, fmt.Errorf("block %d is no complete PEM block", len(blocks)+1)
+			}
+			blocks, open, inBlock = append(blocks, block), nil, false
+		case strings.HasPrefix(line, "-----BEGIN "):
+			open, inBlock = []string{line}, true
+		case strings.Contains(line, "-----") || pemBoundaryWord.MatchString(line):
+			return nil, fmt.Errorf("has a damaged BEGIN or END line on line %d", l.n)
+		case pemBodyLine.MatchString(strings.TrimSpace(line)):
+			return nil, fmt.Errorf("has certificate text without its BEGIN line on line %d", l.n)
+		case strings.TrimSpace(line) != "" && trailing == 0:
+			trailing = l.n
+		}
+		if inBlock {
+			trailing = 0
+		}
+	}
+	switch {
+	case inBlock:
+		return nil, fmt.Errorf("block %d is no complete PEM block", len(blocks)+1)
+	case trailing > 0 && len(blocks) > 0:
+		// openssl writes its text before each block, so text after the last one is no part of it.
+		return nil, fmt.Errorf("has text after its last PEM block on line %d", trailing)
+	}
+	return blocks, nil
 }

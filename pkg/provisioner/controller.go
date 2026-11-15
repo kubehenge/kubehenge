@@ -189,10 +189,19 @@ func (r *Reconciler) reconcileCluster(ctx context.Context, cluster *clusterv1.Cl
 	if err = r.ensureEncryption(ctx, cluster); err != nil {
 		return ctrl.Result{}, err
 	}
-	siteCAAgain, err := r.ensureNodeSite(ctx, cluster)
-	if err != nil {
+	if err = r.ensureNodeCustomisation(ctx, cluster); err != nil {
 		return ctrl.Result{}, err
 	}
+	// The site CA's rollout reads other objects and waits on other clusters, so a failure there
+	// stops none of the cluster's own steps. It is returned once they have run.
+	siteCAAgain, siteErr := r.rollSiteCA(ctx, cluster)
+	result, err := r.reconcileAddons(ctx, cluster, access, creds, siteCAAgain)
+	return result, errors.Join(err, siteErr)
+}
+
+// reconcileAddons applies the cluster's add-ons and what comes after them, and marks the cluster
+// ready.
+func (r *Reconciler) reconcileAddons(ctx context.Context, cluster *clusterv1.Cluster, access Access, creds Credentials, siteCAAgain time.Duration) (ctrl.Result, error) {
 	addons, rancherRefused, err := r.addons(ctx, cluster)
 	if err != nil {
 		return ctrl.Result{}, err

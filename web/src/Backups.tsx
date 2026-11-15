@@ -16,6 +16,7 @@ import {
   Status,
   age,
   browserZone,
+  type SiteZone,
   useSiteZone,
   errorMessage,
   filled,
@@ -263,12 +264,12 @@ export const newBackupFields = (zone = browserZone()): BackupFields => ({
 });
 
 /** backupFieldsOf are the fields of a cluster's settings. What it leaves unset is the chart's default. */
-export function backupFieldsOf(b: BackupsValue, zone = browserZone()): BackupFields {
+export function backupFieldsOf(b: BackupsValue, zone = browserZone(), inEffect = "UTC"): BackupFields {
   return {
     target: b.target ?? "",
     schedule: b.schedule ?? defaultSchedule,
-    // What is in effect: UTC when backups name none. Backups switched on start in zone, the site's.
-    timeZone: b.timeZone ?? (b.enabled ? "UTC" : zone),
+    // What is in effect: inEffect when backups name none. Backups switched on start in zone.
+    timeZone: b.timeZone ?? (b.enabled ? inEffect : zone),
     retention: String(b.retentionDays ?? defaultRetentionDays),
     volumes: b.volumes ?? "all",
     readFrom: b.readFrom ?? [],
@@ -568,14 +569,14 @@ function BackupsForm({
   onClose,
 }: {
   cluster: Cluster;
-  zone: string;
+  zone: SiteZone;
   onClose: () => void;
 }): JSX.Element {
   const current = backupsOf(c.variables["backups"]);
   const offered = useClassTargets(c.class);
   const targets = offered ?? [];
   const [enabled, setEnabled] = useState(current.enabled);
-  const [typed, setTyped] = useState<BackupFields>(() => backupFieldsOf(current, zone));
+  const [typed, setTyped] = useState<BackupFields>(() => backupFieldsOf(current, zone.start, zone.inEffect));
   const { busy, error, send } = useChange(c, onClose);
   const hint = useId();
   const fields = withTarget(typed, targets);

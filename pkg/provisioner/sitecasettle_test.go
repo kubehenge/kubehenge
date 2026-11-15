@@ -3,12 +3,15 @@ package provisioner
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	admissionv1 "k8s.io/api/admission/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -103,15 +106,18 @@ func TestSiteCAPlaceStaysTakenUntilControlPlaneAndWorkersHaveTakenItUp(t *testin
 	}
 }
 
-func TestSiteRollSettlingHoldsAClusterWhoseObjectsCannotBeRead(t *testing.T) {
+func TestSiteRollSettlingHoldsAClusterWhoseObjectsCannotBeReadForTheSettleTimeAlone(t *testing.T) {
 	t.Parallel()
 	c := siteCluster("web")
 	c.Spec.ControlPlaneRef = clusterv1.ContractVersionedObjectReference{APIGroup: siteControlGVK.Group, Kind: siteControlGVK.Kind, Name: "web-cp"}
 	c.Annotations = map[string]string{SiteRollAnnotation: `{"at":"2026-11-18T12:00:00Z","generations":{"ControlPlane":1}}`}
 	// The kind is not mapped, so the control plane cannot be read.
 	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(&c).Build()
-	if got := SiteRollSettling(t.Context(), kube, []clusterv1.Cluster{c}, siteNow); !got[client.ObjectKeyFromObject(&c)] {
-		t.Errorf("settling = %v, want the cluster to keep its place", got)
+	if got := SiteRollSettling(t.Context(), kube, []clusterv1.Cluster{c}, siteNow.Add(time.Minute)); !got[client.ObjectKeyFromObject(&c)] {
+		t.Errorf("a minute in: settling = %v, want the cluster to keep its place", got)
+	}
+	if got := SiteRollSettling(t.Context(), kube, []clusterv1.Cluster{c}, siteNow.Add(siteRollSettle+time.Minute)); got[client.ObjectKeyFromObject(&c)] {
+		t.Errorf("past the settle time: settling = %v, want an unreadable cluster to hold no place for good", got)
 	}
 }
 
@@ -204,39 +210,127 @@ func TestPausedClusterMidRollHoldsNoPlaceAndTakesOneAgainWhenUnpaused(t *testing
 	}
 }
 
-func TestOnlyTheControllerMaySetTheSiteCAsVariable(t *testing.T) {
+func TestClusterPausedByTheAnnotationHoldsNoPlaceAndTakesNoSiteCA(t *testing.T) {
 	t.Parallel()
-	as := func(user string) context.Context {
+	paused := siteCluster("a-paused")
+	paused.Annotations = map[string]string{clusterv1.PausedAnnotation: ""}
+	rolling := paused.DeepCopy()
+	rolling.Status.Conditions = append(rolling.Status.Conditions, metav1.Condition{Type: clusterv1.ClusterRollingOutCondition, Status: metav1.ConditionTrue})
+	b := siteCluster("b")
+	plan := PlanSiteRoll("new", SiteRollClusters([]clusterv1.Cluster{*rolling, b}, siteClassNamespace, nil), 1, siteNow)
+	if !slices.Equal(plan.Now, keys("b")) || plan.Rolling != 0 {
+		t.Errorf("paused mid-roll: plan = %+v, want b to roll, the paused cluster holding no place", plan)
+	}
+	plan = PlanSiteRoll("new", SiteRollClusters([]clusterv1.Cluster{paused}, siteClassNamespace, nil), 1, siteNow)
+	if len(plan.Now) != 0 || !slices.Equal(plan.Waiting, keys("a-paused")) {
+		t.Errorf("paused, not rolling: plan = %+v, want it to wait for its unpause", plan)
+	}
+}
+
+func TestSiteCAThatCannotBeGivenStopsNoOtherStepOrCluster(t *testing.T) {
+	t.Parallel()
+	c := storageCluster()
+	c.Status.Conditions = []metav1.Condition{{Type: clusterv1.ClusterControlPlaneInitializedCondition, Status: metav1.ConditionTrue}}
+	// The fake API server knows no control-plane kind, so the rollout cannot be read.
+	c.Spec.ControlPlaneRef = clusterv1.ContractVersionedObjectReference{APIGroup: siteControlGVK.Group, Kind: siteControlGVK.Kind, Name: "web-cp"}
+	r, kube := newReconciler(t, &fakeCloud{}, c)
+	r.Reader, r.SiteCA, r.Now = kube, siteAuthority(t), func() time.Time { return siteNow }
+	if err := reconcile(t, r, c); err == nil || !strings.Contains(err.Error(), "site CA") {
+		t.Errorf("reconcile: %v, want the site CA's failure returned", err)
+	}
+	hcp := &unstructured.Unstructured{}
+	hcp.SetGroupVersionKind(helmChartProxyGVK)
+	if err := kube.Get(t.Context(), client.ObjectKey{Namespace: c.Namespace, Name: "web-proxmox-ccm"}, hcp); err != nil {
+		t.Errorf("the add-ons were not applied after the site CA failed: %v", err)
+	}
+	var live clusterv1.Cluster
+	if err := kube.Get(t.Context(), client.ObjectKeyFromObject(c), &live); err != nil {
+		t.Fatal(err)
+	}
+	cond := meta.FindStatusCondition(live.Status.Conditions, SiteRollCondition)
+	if cond == nil || cond.Reason != SiteCANotGivenReason {
+		t.Fatalf("condition %+v, want %s", cond, SiteCANotGivenReason)
+	}
+	other := siteCluster("other")
+	plan := PlanSiteRoll(r.SiteCA, SiteRollClusters([]clusterv1.Cluster{live, other}, r.ClassNamespace, nil), 1, siteNow)
+	if !slices.Equal(plan.Now, keys("other")) || plan.Skipped[client.ObjectKeyFromObject(c)] == nil {
+		t.Errorf("plan = %+v, want the failing cluster skipped and the other given the place", plan)
+	}
+}
+
+func TestTheSiteCAsVariableIsHeldToTheControllerWithoutRefusingAnyone(t *testing.T) {
+	t.Parallel()
+	ca := siteAuthority(t)
+	const controller = "system:serviceaccount:" + siteClassNamespace + ":kubehenge-controller"
+	const topology = "system:serviceaccount:capi-system:capi-manager"
+	const note = `{"at":"2026-11-18T12:00:00Z","generations":{"ControlPlane":1}}`
+	given := siteCluster("web", jsonVar(SiteCAsVariable, `["stored"]`))
+	given.Annotations = map[string]string{SiteRollAnnotation: note}
+	request := func(user string, op admissionv1.Operation, old *clusterv1.Cluster) context.Context {
 		var req admission.Request
-		req.UserInfo = authenticationv1.UserInfo{Username: user}
+		req.Operation, req.UserInfo = op, authenticationv1.UserInfo{Username: user}
+		if old != nil {
+			raw, err := json.Marshal(old)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.OldObject.Raw = raw
+		}
 		return admission.NewContextWithRequest(t.Context(), req)
 	}
-	without := siteCluster("web")
-	with := siteCluster("web", jsonVar(SiteCAsVariable, `["x"]`))
-	other := siteCluster("web", jsonVar(SiteCAsVariable, `["y"]`))
-	const controller = "system:serviceaccount:" + siteClassNamespace + ":kubehenge-controller"
+	create := func(user string) context.Context { return request(user, admissionv1.Create, nil) }
+	update := func(user string) context.Context { return request(user, admissionv1.Update, &given) }
+	withNote := func(c clusterv1.Cluster) clusterv1.Cluster {
+		c.Annotations = map[string]string{SiteRollAnnotation: note}
+		return c
+	}
 	for name, tc := range map[string]struct {
-		ctx      context.Context //nolint:containedctx // a table of requests
-		old, now *clusterv1.Cluster
-		refused  bool
+		ctx     context.Context //nolint:containedctx // a table of requests
+		in      clusterv1.Cluster
+		now     time.Time
+		want    string
+		keepsNo bool
 	}{
-		"a user adds it":                                   {as("alice"), &without, &with, true},
-		"a user creates a cluster with it":                 {as("alice"), nil, &with, true},
-		"a user changes it":                                {as("alice"), &with, &other, true},
-		"a user removes it":                                {as("alice"), &with, &without, true},
-		"a user leaves it as it is":                        {as("alice"), &with, &with, false},
-		"a user creates one without it":                    {as("alice"), nil, &without, false},
-		"the controller adds it":                           {as(controller), &without, &with, false},
-		"another service account in a different namespace": {as("system:serviceaccount:elsewhere:kubehenge-controller"), &without, &with, true},
-		"no request":                                       {t.Context(), &without, &with, true},
+		"a new cluster without it gets the site CA":               {create("alice"), unbuilt("web"), siteNow, ca, false},
+		"a recovery create with an old value gets the site CA":    {create("alice"), withNote(unbuilt("web", jsonVar(SiteCAsVariable, `["old"]`))), siteNow, ca, false},
+		"a new cluster gets no site CA that has lapsed":           {create("alice"), unbuilt("web", jsonVar(SiteCAsVariable, `["old"]`)), siteNow.Add(2 * time.Hour), "", false},
+		"a create read without a request gets the site CA":        {t.Context(), unbuilt("web"), siteNow, ca, false},
+		"client-side apply without the field keeps the stored":    {update("alice"), siteCluster("web"), siteNow, "stored", true},
+		"replace with a stale value keeps the stored":             {update("alice"), siteCluster("web", jsonVar(SiteCAsVariable, `["stale"]`)), siteNow, "stored", true},
+		"another account of that name elsewhere keeps the stored": {update("system:serviceaccount:elsewhere:kubehenge-controller"), siteCluster("web"), siteNow, "stored", true},
+		"the topology controller's update passes untouched":       {update(topology), withNote(siteCluster("web", jsonVar(SiteCAsVariable, `["stored"]`))), siteNow, "stored", true},
+		"the controller's write passes as it is":                  {update(controller), siteCluster("web", jsonVar(SiteCAsVariable, `["new"]`)), siteNow, "new", false},
+		"the controller's removal passes as it is":                {update(controller), siteCluster("web"), siteNow, "", false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			errs := validateSiteCAsOwner(tc.ctx, tc.old, tc.now, siteClassNamespace)
-			if (len(errs) > 0) != tc.refused {
-				t.Errorf("refused = %v (%v), want %v", len(errs) > 0, errs, tc.refused)
+			d := &ClusterDefaulter{Hooks: &Hooks{ClassNamespace: siteClassNamespace, SiteCA: func() string { return ca }, Now: func() time.Time { return tc.now }}}
+			c := tc.in.DeepCopy()
+			c.Spec.ClusterNetwork.Pods.CIDRBlocks, c.Spec.ClusterNetwork.Services.CIDRBlocks = []string{"10.42.0.0/16"}, []string{"10.43.0.0/16"}
+			if err := d.Default(tc.ctx, c); err != nil {
+				t.Fatal(err)
+			}
+			if got := appliedSiteCA(c); got != tc.want {
+				t.Errorf("siteCAs = %q, want %q", got, tc.want)
+			}
+			if tc.keepsNo && c.Annotations[SiteRollAnnotation] != note {
+				t.Errorf("rollout note = %q, want the stored one kept", c.Annotations[SiteRollAnnotation])
+			}
+			if !tc.keepsNo && tc.in.Annotations[SiteRollAnnotation] == "" && c.Annotations[SiteRollAnnotation] != "" {
+				t.Errorf("rollout note %q appeared", c.Annotations[SiteRollAnnotation])
 			}
 		})
+	}
+	// The topology controller's own update that leaves the variable as stored is not changed at all.
+	c := given.DeepCopy()
+	c.Spec.ClusterNetwork.Pods.CIDRBlocks, c.Spec.ClusterNetwork.Services.CIDRBlocks = []string{"10.42.0.0/16"}, []string{"10.43.0.0/16"}
+	before := c.DeepCopy()
+	d := &ClusterDefaulter{Hooks: &Hooks{ClassNamespace: siteClassNamespace, SiteCA: func() string { return ca }, Now: func() time.Time { return siteNow }}}
+	if err := d.Default(update(topology), c); err != nil {
+		t.Fatal(err)
+	}
+	if !equality.Semantic.DeepEqual(before, c) {
+		t.Errorf("the topology controller's update was changed:\n%+v\nwant\n%+v", c.Spec.Topology.Variables, before.Spec.Topology.Variables)
 	}
 }
 
@@ -313,14 +407,55 @@ func TestACertificateBundleWithABrokenBlockIsRefusedWholeNamingTheBlock(t *testi
 	}
 }
 
-func TestAdmissionHoldsTheSiteCAsVariableToTheControllerAndTheWindowToAKnownZone(t *testing.T) {
+func TestADamagedBoundaryOutsideThePEMBlocksIsRefusedNamingItsLine(t *testing.T) {
+	t.Parallel()
+	good := siteAuthority(t) + "\n"
+	lines := strings.Count(good, "\n")
+	noBegin := good[strings.Index(good, "\n")+1:]
+	for name, tc := range map[string]struct {
+		bundle string
+		line   int
+	}{
+		"first BEGIN line lost a dash":      {strings.Replace(good, "-----BEGIN", "----BEGIN", 1) + good, 1},
+		"first BEGIN line lost a letter":    {strings.Replace(good, "BEGIN", "BEGN", 1) + good, 1},
+		"first BEGIN line lost its dashes":  {strings.Replace(good, "-----BEGIN CERTIFICATE-----", "BEGIN CERTIFICATE", 1) + good, 1},
+		"first BEGIN line missing":          {noBegin + good, 1},
+		"second BEGIN line lost a dash":     {good + strings.Replace(good, "-----BEGIN", "----BEGIN", 1), lines + 1},
+		"second BEGIN line lost a letter":   {good + strings.Replace(good, "BEGIN", "BEGN", 1), lines + 1},
+		"second BEGIN line missing":         {good + "subject=CN=site\n" + noBegin, lines + 2},
+		"after openssl's attributes, a gap": {"Bag Attributes\n    friendlyName: site\n" + noBegin, 3},
+		"text after the last block":         {good + "\nextra\n", lines + 2},
+	} {
+		err := checkCertificates(tc.bundle, siteNow)
+		if want := fmt.Sprintf("on line %d", tc.line); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: error %v, want one naming %q", name, err, want)
+		}
+	}
+	text := "Certificate:\n    Data:\n        Version: 3 (0x2)\n        Serial Number: 1 (0x1)\n" +
+		"        Signature Algorithm: ecdsa-with-SHA256\n            30:45:02:21:00:d3:5c:9b:7e:61:aa:10:42:8f:2e:91:0c:3b:77:52:\n"
+	for name, bundle := range map[string]string{
+		"CRLF":                     strings.ReplaceAll(good+good, "\n", "\r\n"),
+		"blank lines":              "\n\n" + good + "\n  \n" + good + "\n",
+		"openssl pkcs12 -nokeys":   "Bag Attributes\n    friendlyName: site\n    localKeyID: 01 02 03\nsubject=CN=site\nissuer=CN=site\n" + good,
+		"openssl x509 -text":       text + good,
+		"attributes of each block": "subject=CN=site\nissuer=CN=site\n" + good + "subject=CN=site\nissuer=CN=site\n" + good,
+	} {
+		if err := checkCertificates(bundle, siteNow); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+func TestAdmissionLeavesTheSiteCAsVariableToTheDefaulterAndHoldsTheWindowToAKnownZone(t *testing.T) {
 	t.Parallel()
 	old := storedCluster("team-a", "web", "ceph", variableOf("controlPlaneEndpoint", `"192.0.2.10"`))
 	h, _ := hooksFor(t, old)
 	validator := &ClusterValidator{Hooks: h}
 	withCAs := changedVariable(old, SiteCAsVariable, `["x"]`)
-	if _, err := validator.ValidateUpdate(t.Context(), old, withCAs); err == nil || !strings.Contains(err.Error(), SiteCAsVariable) {
-		t.Errorf("a user setting %s: %v", SiteCAsVariable, err)
+	// The defaulter has put the stored value back by the time a user's change is validated, so
+	// refusing it here would only refuse what ClusterDefaulter lets through.
+	if _, err := validator.ValidateUpdate(t.Context(), old, withCAs); err != nil {
+		t.Errorf("a change carrying %s: %v", SiteCAsVariable, err)
 	}
 	var req admission.Request
 	req.UserInfo = authenticationv1.UserInfo{Username: "system:serviceaccount:" + h.ClassNamespace + ":" + controllerAccount}

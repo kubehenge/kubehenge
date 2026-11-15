@@ -131,14 +131,14 @@ func TestControllerGetsTheSiteCAAndTimeZone(t *testing.T) {
 	}
 }
 
-func TestNoSiteTimeZoneLeavesTheWizardTheBrowsersAndSchedulesInUTC(t *testing.T) {
+func TestNoSiteTimeZoneLeavesTheWizardTheBrowsersAndSchedulesToTheController(t *testing.T) {
 	t.Parallel()
 	out := helmTemplateWith(t, "templates/rke2.yaml", map[string]any{})
 	if strings.Contains(out, "kubehenge.dev/time-zone") {
 		t.Error("the class names a site time zone nobody set")
 	}
-	if got := strings.Count(out, `default: "UTC"`); got != 3 {
-		t.Errorf("%d schedule defaults are UTC, want 3", got)
+	if got := strings.Count(out, `default: "UTC"`); got != 0 {
+		t.Errorf("%d schedule defaults are UTC, want none: the controller reads a schedule naming no zone in the site's", got)
 	}
 }
 
@@ -161,13 +161,17 @@ func TestOwnCAsStandAloneSoDroppingTheSiteCAChangesNothing(t *testing.T) {
 	}
 }
 
-func TestSchedulesInTheClassDefaultToTheSiteTimeZone(t *testing.T) {
+func TestSchedulesInTheClassTakeNoSiteTimeZoneTheControllerCannotCheck(t *testing.T) {
 	t.Parallel()
-	out := helmTemplateWith(t, "templates/rke2.yaml", map[string]any{"timeZone": "Pacific/Auckland"})
-	// The backups, etcd snapshots and upgrade window schedules each default to the site's zone.
-	if got := strings.Count(out, `default: "Pacific/Auckland"`); got != 3 {
-		t.Errorf("%d schedule defaults name the site time zone, want 3", got)
+	// An unknown zone in the class defaults would have admission refuse every cluster with a
+	// schedule. The controller resolves a schedule naming none at run time, UTC for an unknown zone.
+	for _, zone := range []string{"Pacific/Auckland", "Mars/Olympus"} {
+		out := helmTemplateWith(t, "templates/rke2.yaml", map[string]any{"timeZone": zone})
+		if got := strings.Count(out, `default: "`+zone+`"`); got != 0 {
+			t.Errorf("%d schedule defaults name the site time zone %s, want none", got, zone)
+		}
 	}
+	out := helmTemplateWith(t, "templates/rke2.yaml", map[string]any{"timeZone": "Pacific/Auckland"})
 	if !strings.Contains(out, `kubehenge.dev/time-zone: "Pacific/Auckland"`) {
 		t.Error("the class does not name the site time zone for the interface")
 	}

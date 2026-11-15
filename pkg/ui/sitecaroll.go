@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -24,9 +25,16 @@ type siteCARoll struct {
 }
 
 // siteCARollOf plans the rollout of the site CA ca over the clusters, settling being the clusters
-// still taking up an earlier one.
-func siteCARollOf(ca, classNamespace string, clusters []clusterv1.Cluster, settling map[client.ObjectKey]bool, now time.Time) siteCARoll {
-	plan := provisioner.PlanSiteRoll(strings.TrimSpace(ca), provisioner.SiteRollClusters(clusters, classNamespace, settling), provisioner.SiteRollLimit, now)
+// still taking up an earlier one. An upgrade window that names no zone opens in zone, the site's,
+// as the controller reads it.
+func siteCARollOf(ca, zone, classNamespace string, clusters []clusterv1.Cluster, settling map[client.ObjectKey]bool, now time.Time) siteCARoll {
+	rolls := provisioner.SiteRollClusters(clusters, classNamespace, settling)
+	for i := range rolls {
+		if p := rolls[i].Policy; p != nil && p.Window.TimeZone == "" {
+			p.Window.TimeZone = zone
+		}
+	}
+	plan := provisioner.PlanSiteRoll(strings.TrimSpace(ca), rolls, provisioner.SiteRollLimit, now)
 	out := siteCARoll{Inherits: plan.Inherits, Now: len(plan.Now), Windows: len(plan.Windows), Waiting: len(plan.Waiting)}
 	for _, w := range plan.Windows {
 		if out.Opens == nil || w.Opens.Before(*out.Opens) {
@@ -35,6 +43,17 @@ func siteCARollOf(ca, classNamespace string, clusters []clusterv1.Cluster, settl
 		}
 	}
 	return out
+}
+
+// siteZone is the time zone the controller runs schedules naming none in: the saved site time zone
+// when it is one, else UTC.
+func (s *Server) siteZone() string {
+	if s.Appliance != nil {
+		if saved := s.Appliance.SavedSettings(); saved != nil && provisioner.CheckTimeZone(saved.TimeZone) == nil {
+			return saved.TimeZone
+		}
+	}
+	return provisioner.DefaultTimeZone
 }
 
 // timeZoneCheck answers whether the server's time zone database knows a time zone name, which is
@@ -53,8 +72,8 @@ func (s *Server) timeZoneCheck(w http.ResponseWriter, r *http.Request, u user) {
 	if !s.require(w, r, u, "/", setupPrivileges...) {
 		return
 	}
-	if err := provisioner.CheckTimeZone(req.TimeZone); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+	if provisioner.CheckTimeZone(req.TimeZone) != nil {
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("Unknown time zone %q. Use an IANA name, such as Europe/Zurich.", req.TimeZone))
 		return
 	}
 	writeJSON(w, http.StatusOK, struct{}{})
@@ -92,5 +111,5 @@ func (s *Server) siteCARollPreview(w http.ResponseWriter, r *http.Request, u use
 		}
 		settling = provisioner.SiteRollSettling(r.Context(), kube, list.Items, now)
 	}
-	writeJSON(w, http.StatusOK, siteCARollOf(check.SiteCA, s.ClassNamespace, list.Items, settling, now))
+	writeJSON(w, http.StatusOK, siteCARollOf(check.SiteCA, s.siteZone(), s.ClassNamespace, list.Items, settling, now))
 }

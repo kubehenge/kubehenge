@@ -78,9 +78,9 @@ func (w *Window) Open(now time.Time) (bool, error) {
 }
 
 // zoneAndStart is the window's time zone and the time of day it opens, with the defaults for
-// either left unset.
+// either left unset: the site time zone and 02:00.
 func (w *Window) zoneAndStart() (*time.Location, time.Time, error) {
-	loc, err := time.LoadLocation(cmp.Or(w.TimeZone, "UTC"))
+	loc, err := time.LoadLocation(cmp.Or(w.TimeZone, siteZone()))
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("window time zone: %w", err)
 	}

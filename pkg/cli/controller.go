@@ -420,6 +420,7 @@ func (o *controllerOptions) newHooks(mgr ctrl.Manager, registrar *provisioner.Re
 		Client:            mgr.GetClient(),
 		Soak:              o.nodeImageSoak,
 		Now:               time.Now,
+		SiteCA:            func() string { return o.r.SiteCA },
 	}
 }
 

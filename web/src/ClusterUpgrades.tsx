@@ -6,6 +6,7 @@ import {
   ErrorBox,
   Field,
   Info,
+  type SiteZone,
   browserZone,
   stageLabel,
   timeZones,
@@ -149,7 +150,7 @@ interface PolicyFields {
   timeZone: string;
 }
 
-export function fieldsOf(current: UpgradePolicy, zone = browserZone()): PolicyFields {
+export function fieldsOf(current: UpgradePolicy, zone = browserZone(), inEffect = "UTC"): PolicyFields {
   const w = current.window ?? {};
   const nodeImages = refreshesNodes(current);
   const active = (current.mode !== undefined && current.mode !== "off") || nodeImages;
@@ -160,8 +161,8 @@ export function fieldsOf(current: UpgradePolicy, zone = browserZone()): PolicyFi
     monthDays: (w.monthDays ?? []).join(", "),
     start: w.start ?? defaultStart,
     hours: String((w.durationMinutes ?? defaultMinutes) / minutesPerHour),
-    // What is in effect: UTC when a policy names none. A new policy starts in zone, the site's.
-    timeZone: w.timeZone ?? (active ? "UTC" : zone),
+    // What is in effect: inEffect when a policy names none. A new policy starts in zone.
+    timeZone: w.timeZone ?? (active ? inEffect : zone),
   };
 }
 
@@ -200,10 +201,10 @@ function UpgradesForm({
   onClose,
 }: {
   cluster: Cluster;
-  zone: string;
+  zone: SiteZone;
   onClose: () => void;
 }): JSX.Element {
-  const initial = fieldsOf(upgradePolicy(c.variables["upgrades"]), zone);
+  const initial = fieldsOf(upgradePolicy(c.variables["upgrades"]), zone.start, zone.inEffect);
   const talos = c.distribution === "talos";
   const [mode, setMode] = useState<UpgradeMode>(initial.mode);
   const [nodeImages, setNodeImages] = useState(initial.nodeImages);

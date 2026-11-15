@@ -24,6 +24,9 @@ const (
 	SiteRollCondition = "SiteCARoll"
 	// UpgradeWindowInvalidReason is the reason of SiteRollCondition for a window that cannot be read.
 	UpgradeWindowInvalidReason = "UpgradeWindowInvalid"
+	// SiteCANotGivenReason is the reason of SiteRollCondition for a site CA the controller could
+	// not write into the cluster.
+	SiteCANotGivenReason = "SiteCANotGiven"
 	// SiteTimeZoneCondition on a Cluster says the site time zone is not a time zone, so that
 	// schedules naming none run in UTC.
 	SiteTimeZoneCondition = "SiteTimeZone"
@@ -151,7 +154,7 @@ func (r *Reconciler) siteRollNote(ctx context.Context, c *clusterv1.Cluster) (st
 // MachineDeployments have not yet taken it up and brought their machines up to date. Cluster API
 // marks such a cluster rolling only after those objects have changed, so without this a cluster
 // would free its place before its nodes are replaced. A cluster whose objects cannot be read counts
-// as settling.
+// as settling for as long as a change that alters none of them would.
 func SiteRollSettling(ctx context.Context, kube client.Client, clusters []clusterv1.Cluster, now time.Time) map[client.ObjectKey]bool {
 	settling := map[client.ObjectKey]bool{}
 	for i := range clusters {
@@ -165,7 +168,11 @@ func SiteRollSettling(ctx context.Context, kube client.Client, clusters []cluste
 			continue
 		}
 		_, current, err := rolloutObjects(ctx, kube, kube.RESTMapper(), c)
-		settling[client.ObjectKeyFromObject(c)] = err != nil || note.pending(now, current)
+		if err != nil {
+			settling[client.ObjectKeyFromObject(c)] = now.Sub(note.At) < siteRollSettle
+			continue
+		}
+		settling[client.ObjectKeyFromObject(c)] = note.pending(now, current)
 	}
 	return settling
 }

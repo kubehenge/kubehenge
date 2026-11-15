@@ -1098,7 +1098,8 @@ export function useTimeZoneProblem(timeZone: string): string | undefined {
         }
       } catch (err) {
         if (current) {
-          setVerdict({ zone, problem: errorMessage(err) });
+          // A field error carries no request id, which only ErrorBox shows.
+          setVerdict({ zone, problem: err instanceof Error ? err.message : String(err) });
         }
       }
     }

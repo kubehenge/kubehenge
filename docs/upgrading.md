@@ -214,7 +214,7 @@ Kubehenge reads both as the cluster's health identity, which may read `/metrics`
 | Days of the month | `window.monthDays` | Such as `1, 15`. A day listed here or in Days counts. Every day when both are empty. |
 | From | `window.start` | When the window opens, `HH:MM`. `02:00` by default. |
 | Duration (hours) | `window.durationMinutes` | How long it stays open, 30 minutes to 24 hours in half hours. Four hours by default. A window may run past midnight. |
-| Time zone | `window.timeZone` | An IANA time zone, such as `Europe/Berlin`. The variable defaults to `UTC`. Switching automatic upgrades on in the dialog, or in the create wizard, starts from the browser's zone. |
+| Time zone | `window.timeZone` | An IANA time zone, such as `Europe/Berlin`. Without one the window opens in the site time zone, else `UTC`. Switching automatic upgrades on in the dialog, or in the create wizard, starts from the site time zone, else the browser's. |
 
 #### When it starts
 

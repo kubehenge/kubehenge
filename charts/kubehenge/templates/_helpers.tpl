@@ -779,8 +779,7 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           description: When to back up, as a cron expression of five fields or a descriptor such as @weekly.
         timeZone:
           type: string
-          default: {{ .Values.timeZone | default "UTC" | quote }}
-          description: IANA time zone the schedule is read in, such as Europe/Berlin.
+          description: IANA time zone the schedule is read in, such as Europe/Berlin. Without one, the site time zone, else UTC.
         retentionDays:
           type: integer
           minimum: 1
@@ -851,8 +850,7 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           description: When to take a snapshot, as a cron expression of five fields or a descriptor such as @daily.
         timeZone:
           type: string
-          default: {{ .Values.timeZone | default "UTC" | quote }}
-          description: IANA time zone the schedule is read in, such as Europe/Berlin.
+          description: IANA time zone the schedule is read in, such as Europe/Berlin. Without one, the site time zone, else UTC.
         keep:
           type: integer
           minimum: 1
@@ -2435,8 +2433,7 @@ reads it.
               default: 240
             timeZone:
               type: string
-              default: {{ .Values.timeZone | default "UTC" | quote }}
-              description: IANA time zone of start, such as Europe/Berlin.
+              description: IANA time zone of start, such as Europe/Berlin. Without one, the site time zone, else UTC.
 {{- end -}}
 
 {{/*

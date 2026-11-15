@@ -45,6 +45,18 @@ const classes = [
   },
 ];
 
+// on is the cluster with these variables.
+const on = (variables: Cluster["variables"]): Cluster => ({ ...cluster, variables });
+
+// zoneIn opens a dialog and reads its time zone.
+async function zoneIn(dialog: JSX.Element): Promise<string> {
+  const { unmount } = render(dialog);
+  const field = await screen.findByLabelText("Time zone");
+  const zone = "value" in field ? String(field.value) : "";
+  unmount();
+  return zone;
+}
+
 describe("a page that starts a schedule", () => {
   it("starts it in the site's zone, read from the server, whatever page was open before", async () => {
     const user = userEvent.setup({ delay: null });
@@ -63,5 +75,27 @@ describe("a page that starts a schedule", () => {
     await expect(screen.findByLabelText("Upgrade automatically")).resolves.toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText("Upgrade automatically"), "patch");
     expect(screen.getByLabelText("Time zone")).toHaveValue(siteZone);
+  });
+
+  it("shows a schedule that names no zone in the site's, where it runs", async () => {
+    fakeServer({ "GET /api/classes": { body: classes } });
+    const close = vi.fn<() => void>();
+    const etcd = on({ etcdSnapshots: { enabled: true, target: "store" } });
+    const backups = on({ backups: { enabled: true, target: "store" } });
+    const upgrades = on({ upgrades: { mode: "patch", window: { start: "02:00" } } });
+    await expect(zoneIn(<EtcdSnapshotsDialog cluster={etcd} onClose={close} />)).resolves.toBe(siteZone);
+    await expect(zoneIn(<BackupsDialog cluster={backups} onClose={close} />)).resolves.toBe(siteZone);
+    await expect(zoneIn(<UpgradesDialog cluster={upgrades} onClose={close} />)).resolves.toBe(siteZone);
+  });
+
+  it("shows a schedule that names no zone in UTC where the site set none", async () => {
+    fakeServer({ "GET /api/classes": { body: [{ ...classes[0], annotations: {} }] } });
+    render(
+      <BackupsDialog
+        cluster={{ ...cluster, variables: { backups: { enabled: true, target: "store" } } }}
+        onClose={vi.fn<() => void>()}
+      />,
+    );
+    await expect(screen.findByLabelText("Time zone")).resolves.toHaveValue("UTC");
   });
 });

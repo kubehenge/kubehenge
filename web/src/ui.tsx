@@ -567,13 +567,20 @@ export const browserZone = (): string => new Intl.DateTimeFormat().resolvedOptio
 export const siteZoneOf = (classes: { annotations?: Record<string, string> | undefined }[]): string =>
   classes.map((c) => c.annotations?.["kubehenge.dev/time-zone"] ?? "").find((zone) => zone !== "") ?? "";
 
+/** SiteZone is where a cluster's schedules start and run when they name no zone. */
+export interface SiteZone {
+  /** start is the zone a new schedule starts in: the site's, else the browser's. */
+  start: string;
+  /** inEffect is the zone a schedule naming none runs in: the site's, else UTC. */
+  inEffect: string;
+}
+
 /**
- * useSiteZone is the time zone a new schedule starts in: the site's, read from the server, else the
- * browser's. It is undefined until the server has answered, so that a form never starts in a zone
- * it has to leave.
+ * useSiteZone reads the site time zone from the server. It is undefined until the server has
+ * answered, so that a form never starts in a zone it has to leave.
  */
-export function useSiteZone(): string | undefined {
-  const [zone, setZone] = useState<string>();
+export function useSiteZone(): SiteZone | undefined {
+  const [zone, setZone] = useState<SiteZone>();
   useEffect(() => {
     let current = true;
     async function load(): Promise<void> {
@@ -584,7 +591,7 @@ export function useSiteZone(): string | undefined {
         // The browser's zone serves where the classes cannot be read.
       }
       if (current) {
-        setZone(zoneRead || browserZone());
+        setZone({ start: zoneRead || browserZone(), inEffect: zoneRead || "UTC" });
       }
     }
     void load();

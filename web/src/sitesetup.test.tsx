@@ -86,16 +86,16 @@ describe("the site settings in Setup", () => {
   });
 
   it("let the server judge a time zone, as saving does", async () => {
-    const calls = fakeServer({
-      "POST /api/setup/time-zone": {
-        status: 422,
-        body: { error: 'time zone "Europe/zurich" is not an IANA time zone' },
-      },
-    });
+    const refusal = 'Unknown time zone "Europe/zurich". Use an IANA name, such as Europe/Zurich.';
+    const calls = fakeServer(
+      { "POST /api/setup/time-zone": { status: 422, body: { error: refusal } } },
+      { "X-Request-Id": "5698a75970c120c4" },
+    );
     const { result, rerender } = renderHook(({ zone }) => useTimeZoneProblem(zone), { initialProps: { zone: "" } });
     expect(result.current).toBeUndefined();
     rerender({ zone: "Europe/zurich" });
-    await waitFor(() => expect(result.current).toBe('time zone "Europe/zurich" is not an IANA time zone'));
+    // The field shows the server's words without the request id.
+    await waitFor(() => expect(result.current).toBe(refusal));
     expect(calls.map((c) => c.body)).toStrictEqual([{ timeZone: "Europe/zurich" }]);
     fakeServer({ "POST /api/setup/time-zone": { body: {} } });
     rerender({ zone: "Factory" });

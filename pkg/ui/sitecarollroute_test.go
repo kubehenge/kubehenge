@@ -74,6 +74,10 @@ func TestTimeZoneRouteAnswersAsTheServersTimeZoneDatabaseDoes(t *testing.T) {
 	} {
 		expect(t, b.do("POST", "/api/setup/time-zone", `{"timeZone":"`+zone+`"}`), want)
 	}
+	// The refusal names the zone, then the fix, as the interface shows it under the field.
+	if rec := b.do("POST", "/api/setup/time-zone", `{"timeZone":"Europe/zurich"}`); !strings.Contains(rec.Body.String(), `"Unknown time zone \"Europe/zurich\". Use an IANA name, such as Europe/Zurich."`) {
+		t.Errorf("refused with %s", rec.Body.String())
+	}
 	viewer := h.browser()
 	viewer.signIn("viewer@pve")
 	expect(t, viewer.do("POST", "/api/setup/time-zone", `{"timeZone":"UTC"}`), http.StatusForbidden)
