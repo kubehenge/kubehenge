@@ -71,13 +71,14 @@ func TestValidatorHoldsOnlySecurityGroupsToTheLockoutCheck(t *testing.T) {
 }
 
 // Cluster API's defaulting adds the class's firewall to the first change of a cluster made before
-// the variable existed. A worker scale-up then passes, with groups or without, and the groups are
-// not read again, while the datacenter firewall is on and the management side would be cut.
+// the variable existed. A worker scale-up then passes, with groups or without, while the datacenter
+// firewall is on and the management side would be cut: the lockout check is not asked. Groups that
+// exist are listed, as for any firewall change.
 func TestValidatorPassesAnOlderClusterGainingTheDefaultFirewall(t *testing.T) {
 	t.Parallel()
-	for _, groups := range []string{"", `["k8s"]`} {
+	for groups, lists := range map[string]int{"": 0, `["k8s"]`: 1} {
 		hooks, _ := hooksFor(t)
-		listed := &fakeSecurityGroups{readable: true}
+		listed := &fakeSecurityGroups{groups: []string{"k8s"}, readable: true}
 		hooks.SecurityGroups = listed
 		reach := localReach()
 		reach.Enabled = true
@@ -93,8 +94,11 @@ func TestValidatorPassesAnOlderClusterGainingTheDefaultFirewall(t *testing.T) {
 		if _, err := v.ValidateUpdate(context.Background(), running, scaled); err != nil {
 			t.Errorf("groups %q: refused the scale-up: %v", groups, err)
 		}
-		if read.asked != 0 || listed.asked != 0 {
-			t.Errorf("groups %q: read the firewall for a change that leaves the groups alone", groups)
+		if read.asked != 0 {
+			t.Errorf("groups %q: held a change that leaves the groups alone to the lockout check", groups)
+		}
+		if listed.asked != lists {
+			t.Errorf("groups %q: listed the groups %d times, want %d", groups, listed.asked, lists)
 		}
 	}
 }

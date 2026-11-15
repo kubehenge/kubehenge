@@ -9261,34 +9261,6 @@
                   "op": "add",
                   "path": "/spec",
                   "valueFrom": {
-                    "template": "{{ .talosVersion }}"
-                  }
-                }
-              ],
-              "selector": {
-                "apiVersion": "v1",
-                "kind": "Reach",
-                "matchResources": {
-                  "controlPlane": true,
-                  "machineDeploymentClass": {
-                    "names": [
-                      "worker"
-                    ]
-                  }
-                }
-              }
-            }
-          ],
-          "name": "reach-talosVersion"
-        },
-        {
-          "definitions": [
-            {
-              "jsonPatches": [
-                {
-                  "op": "add",
-                  "path": "/spec",
-                  "valueFrom": {
                     "template": "{{ .workerMachine }}"
                   }
                 }

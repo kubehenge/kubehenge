@@ -95,6 +95,38 @@ func TestNodeCustomisationReplacesEveryNode(t *testing.T) {
 	}
 }
 
+// Talos's upgrade runs in place, so no patch of the Talos class reads talosVersion: a new release
+// replaces no machine, also where the firewall serves Talos's API. The firewall reaches every node.
+func TestTalosVersionReplacesNoNode(t *testing.T) {
+	t.Parallel()
+	cmd := exec.CommandContext(t.Context(), "helm", "template", "kubehenge", "../../charts/kubehenge", "--namespace", "kubehenge-system",
+		"--values", "../provisioner/testdata/integration-values.yaml", "--show-only", "templates/talos.yaml")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("helm template: %v: %s", err, stderr.String())
+	}
+	seen := 0
+	for doc := range strings.SplitSeq(strings.ReplaceAll(string(out), "\r\n", "\n"), "\n---\n") {
+		var class clusterv1.ClusterClass
+		if err := yaml.Unmarshal([]byte(doc), &class); err != nil || class.Kind != "ClusterClass" {
+			continue
+		}
+		seen++
+		reach := provisioner.VariableReach(&class)
+		if got := effectOf(reach["talosVersion"]); got != effectNone {
+			t.Errorf("%s: a change of talosVersion replaces %q, want none", class.Name, got)
+		}
+		if got := effectOf(reach[provisioner.FirewallVariable]); got != effectAll {
+			t.Errorf("%s: a change of the firewall replaces %q, want all", class.Name, got)
+		}
+	}
+	if seen != 1 {
+		t.Errorf("%d Talos classes read", seen)
+	}
+}
+
 // The server compares its client with the one it watches, which panics for a type that cannot be
 // compared.
 func TestDemoClientCanBeCompared(t *testing.T) {

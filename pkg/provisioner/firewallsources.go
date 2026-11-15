@@ -20,6 +20,8 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
 const (
@@ -266,6 +268,8 @@ const (
 	datacenterOff
 	// datacenterRefused is Proxmox VE refusing the read for want of Sys.Audit on /.
 	datacenterRefused
+	// datacenterTokenRefused is Proxmox VE refusing the controller's token itself.
+	datacenterTokenRefused
 	// datacenterHeld is a read that got no answer, too few runs in a row to say so: each cluster
 	// keeps what it holds, so a flaky read neither flips the condition nor records events.
 	datacenterHeld
@@ -288,6 +292,8 @@ func (f *FirewallSources) datacenter(ctx context.Context, clusters []clusterv1.C
 		f.unreached = 0
 	}
 	switch {
+	case pve.Unauthenticated(err):
+		return datacenterTokenRefused
 	case refused(err):
 		return datacenterRefused
 	case err != nil:
@@ -304,19 +310,26 @@ func (f *FirewallSources) datacenter(ctx context.Context, clusters []clusterv1.C
 }
 
 // inactiveCondition is FirewallInactiveCondition for a firewalled cluster in the datacenter state
-// given, nil where it has none.
+// given, nil where it has none. Each cause of an unknown state has a reason of its own, so a new
+// cause records an event.
 func inactiveCondition(datacenter datacenterState) *metav1.Condition {
 	switch datacenter {
 	case datacenterOff:
 		return &metav1.Condition{Status: metav1.ConditionTrue, Reason: "DatacenterFirewallOff", Message: FirewallInactiveMessage}
 	case datacenterRefused:
 		return &metav1.Condition{
-			Status: metav1.ConditionUnknown, Reason: "FirewallStateUnknown",
+			Status: metav1.ConditionUnknown, Reason: "SysAuditMissing",
 			Message: "Kubehenge cannot read whether Proxmox VE's datacenter firewall is on, which needs Sys.Audit on /",
+		}
+	case datacenterTokenRefused:
+		return &metav1.Condition{
+			Status: metav1.ConditionUnknown, Reason: "TokenRefused",
+			Message: "Proxmox VE refused Kubehenge's API token, which may have expired, been revoked or be wrong. " +
+				"Make a new token, or apply the management cluster again",
 		}
 	case datacenterUnreached:
 		return &metav1.Condition{
-			Status: metav1.ConditionUnknown, Reason: "FirewallStateUnknown",
+			Status: metav1.ConditionUnknown, Reason: "ProxmoxUnreachable",
 			Message: "Kubehenge cannot reach Proxmox VE to read whether its datacenter firewall is on",
 		}
 	case datacenterUnasked, datacenterOn, datacenterHeld:

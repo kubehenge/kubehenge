@@ -3,6 +3,8 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -251,6 +253,10 @@ func TestFirewallSourcesWarnWhileTheDatacenterFirewallIsOff(t *testing.T) {
 		return meta.FindStatusCondition(got.Status.Conditions, FirewallInactiveCondition)
 	}
 	timeout := fmt.Errorf("reading the Proxmox VE firewall: %w", context.DeadlineExceeded)
+	// What the controller's go-proxmox client gives for a 401 and a 403, as Proxmox.APIReach wraps it.
+	revoked := fmt.Errorf("reading the Proxmox VE firewall: %w", &url.Error{Op: "Get", URL: "https://pve", Err: &pve.RefusedError{StatusCode: http.StatusUnauthorized}})
+	denied := fmt.Errorf("reading the Proxmox VE firewall: %w", &url.Error{Op: "Get", URL: "https://pve", Err: &pve.RefusedError{StatusCode: http.StatusForbidden}})
+	const sysAudit = "Kubehenge cannot read whether Proxmox VE's datacenter firewall is on, which needs Sys.Audit on /"
 	for _, step := range []struct {
 		name     string
 		reach    *pve.APIReach
@@ -265,13 +271,18 @@ func TestFirewallSourcesWarnWhileTheDatacenterFirewallIsOff(t *testing.T) {
 		events  int
 	}{
 		{name: "datacenter off", reach: &pve.APIReach{}, readable: true, want: metav1.ConditionTrue, reason: "DatacenterFirewallOff", message: FirewallInactiveMessage, events: 1},
-		{name: "refused", want: metav1.ConditionUnknown, reason: "FirewallStateUnknown", message: "Kubehenge cannot read whether Proxmox VE's datacenter firewall is on, which needs Sys.Audit on /", events: 1},
+		{name: "refused", want: metav1.ConditionUnknown, reason: "SysAuditMissing", message: sysAudit, events: 1},
+		{
+			name: "a 401", err: revoked, want: metav1.ConditionUnknown, reason: "TokenRefused", events: 1,
+			message: "Proxmox VE refused Kubehenge's API token, which may have expired, been revoked or be wrong. Make a new token, or apply the management cluster again",
+		},
+		{name: "a 403", err: denied, want: metav1.ConditionUnknown, reason: "SysAuditMissing", message: sysAudit, events: 1},
 		{name: "datacenter on", reach: &pve.APIReach{Enabled: true}, readable: true},
 		{name: "a flaky read", err: timeout},
 		{name: "datacenter on again", reach: &pve.APIReach{Enabled: true}, readable: true},
 		{name: "datacenter off again", reach: &pve.APIReach{}, readable: true, want: metav1.ConditionTrue, reason: "DatacenterFirewallOff", message: FirewallInactiveMessage, events: 1},
 		{name: "a flaky read while off", err: timeout, want: metav1.ConditionTrue, reason: "DatacenterFirewallOff", message: FirewallInactiveMessage},
-		{name: "no answer", err: timeout, runs: unreachedRuns, want: metav1.ConditionUnknown, reason: "FirewallStateUnknown", message: "Kubehenge cannot reach Proxmox VE to read whether its datacenter firewall is on", events: 1},
+		{name: "no answer", err: timeout, runs: unreachedRuns, want: metav1.ConditionUnknown, reason: "ProxmoxUnreachable", message: "Kubehenge cannot reach Proxmox VE to read whether its datacenter firewall is on", events: 1},
 	} {
 		reach.reach, reach.ok, reach.err = step.reach, step.readable, step.err
 		runs := step.runs

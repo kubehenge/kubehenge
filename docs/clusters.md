@@ -120,7 +120,7 @@ Kubehenge sets both ranges on every cluster it creates. It takes those you give,
 
 Every node's VM and interface get the Proxmox VE firewall, on by default. It drops inbound traffic that no rule below accepts.
 
-- **Datacenter firewall.** The VMs' rules act only while it is on (Datacenter, Firewall, Options). Kubehenge never turns it on. While it is off, the wizard, the cluster's options, `kubehenge cluster list` and the cluster's `FirewallInactive` condition say so, and a warning event is recorded. Where Proxmox VE refuses the read, the condition is Unknown with reason `FirewallStateUnknown`, and the wizard shows the state as unknown. A cluster with its firewall off gets neither. Nothing is held for it.
+- **Datacenter firewall.** The VMs' rules act only while it is on (Datacenter, Firewall, Options). Kubehenge never turns it on. While it is off, the wizard, the cluster's options, `kubehenge cluster list` and the cluster's `FirewallInactive` condition say so, and a warning event is recorded. Where the state cannot be read, the condition is Unknown, and the wizard shows the state as unknown. Its reason is `SysAuditMissing` when the token lacks Sys.Audit on `/`, and `TokenRefused` when Proxmox VE refuses the token itself. It is `ProxmoxUnreachable` after three reads in a row get no answer. A cluster with its firewall off gets neither. Nothing is held for it.
 - **Off.** Clear **Firewall** in the wizard or the cluster's options, or set `firewall.enabled: false`. The nodes then get no VM firewall.
 - **Serving ports closed.** Clear **Serving ports open**, or set `firewall.servingPorts: false`. The nodes then accept only the cluster's own traffic, the management side, the security groups and the further ports.
 - **When.** Each VM's rules are written before it first starts. Switching the firewall, its serving ports, its further ports or its groups replaces every node, one at a time.
@@ -148,10 +148,10 @@ Make a security group that lets SSH in from your administrators' network, then n
 
 ```sh
 pvesh create /cluster/firewall/groups --group ssh
-pvesh create /cluster/firewall/groups/ssh --type in --action ACCEPT --proto tcp --dport 22 --source 192.0.2.0/24
+pvesh create /cluster/firewall/groups/ssh --type in --action ACCEPT --proto tcp --dport 22 --source 192.0.2.0/24 --enable 1
 ```
 
-In the web interface, that is Datacenter, Firewall, Security Group, **Create** `ssh`, then a rule with direction `in`, action `ACCEPT`, protocol `tcp`, destination port `22` and source `192.0.2.0/24`. Talos nodes run no SSH.
+Without `--enable 1`, Proxmox VE stores the rule switched off. In the web interface, that is Datacenter, Firewall, Security Group, **Create** `ssh`, then a rule with direction `in`, action `ACCEPT`, protocol `tcp`, destination port `22`, source `192.0.2.0/24` and **Enable** ticked. Talos nodes run no SSH.
 
 ##### Lockout check
 

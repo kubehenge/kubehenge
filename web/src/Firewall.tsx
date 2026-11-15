@@ -27,11 +27,12 @@ export interface FirewallFields {
 
 /**
  * firewallOf reads the firewall variable. A cluster without it, made before it existed, has the
- * firewall its security groups give it, with no port open to anyone.
+ * firewall its security groups give it. Its serving ports are open as the class defaults them, as
+ * Cluster API's defaulting gives it at its next change.
  */
 export function firewallOf(v: unknown, groups: unknown): FirewallFields {
   if (v === undefined || v === null) {
-    return { on: (texts(groups) ?? []).length > 0, serving: false, ports: "" };
+    return { on: (texts(groups) ?? []).length > 0, serving: true, ports: "" };
   }
   const fw = record(v);
   const ports = Array.isArray(fw["ports"]) ? fw["ports"].map((p) => portText(record(p))) : [];

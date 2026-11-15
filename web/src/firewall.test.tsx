@@ -281,6 +281,30 @@ describe("a cluster's firewall in its options", () => {
     });
   });
 
+  it("opens the serving ports when it turns on the firewall of a cluster made before it", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const older = { ...cluster, variables: {} };
+    const calls = fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": { body: older },
+      "PATCH /api/clusters/clusters/web": { body: older },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Edit the firewall" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit firewall" });
+    await user.click(within(dialog).getByRole("checkbox", { name: "Firewall" }));
+    expect(within(dialog).getByRole("checkbox", { name: "Serving ports open" })).toBeChecked();
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await applyStaged(user);
+    // The class defaults servingPorts to true, so the variable without it opens them.
+    expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+      variables: { firewall: { enabled: true }, securityGroups: null },
+    });
+  });
+
   it("closes and opens the serving ports", async () => {
     window.history.replaceState(null, "", "/clusters/clusters/web/options");
     const held = {

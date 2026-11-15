@@ -51,10 +51,8 @@ func TestEveryClassDefaultsTheFirewallOn(t *testing.T) {
 		t.Run(file, func(t *testing.T) {
 			t.Parallel()
 			serving := "tcp/6443,tcp/80,tcp/443,tcp/30000:32767,udp/30000:32767,icmp/echo-request,ipv6-icmp/echo-request"
-			release := ""
 			if file == "talos.yaml" {
 				serving += ",tcp/50000"
-				release = `, "talosVersion": "v1.12.0"`
 			}
 			class := renderClass(t, file)
 			schema := class.variables["firewall"]
@@ -66,7 +64,7 @@ func TestEveryClassDefaultsTheFirewallOn(t *testing.T) {
 			}
 			annotations := func(extra string) any {
 				vars := variablesOf(t, `{"builtin": {"cluster": {"name": "c", "namespace": "n", "network": {"pods": ["10.244.0.0/16"]}}},
-					"controlPlaneEndpoint": "10.0.0.5", "network": `+ipv4Net+release+extra+`}`)
+					"controlPlaneEndpoint": "10.0.0.5", "network": `+ipv4Net+extra+`}`)
 				spec := asMap(t, field(t, class.patched(t, "ProxmoxMachineTemplate", vars), "spec", "template"))
 				if metadata, ok := spec["metadata"]; ok {
 					return asMap(t, metadata)["annotations"]

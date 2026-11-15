@@ -2558,6 +2558,7 @@ Call with the root context.
 # from anywhere are part of the machine, so a change replaces the nodes. capmox writes each VM's
 # rules before it first starts, in order: everything from the VM's IPSet kubehenge, the groups,
 # everything to its IPSet kubehenge-lb, then each port. So a group can drop or narrow a serving port.
+# The Talos class also serves Talos's API, which the chart writes in at TALOS_PORTS.
 # Inbound traffic no rule accepts is dropped. The ports annotation, even empty, turns the firewall
 # on. Rules without an address match both families, and ICMP echo has a rule per family. capmox keeps the IPSet
 # kubehenge at the cluster's own addresses: the control-plane endpoint, the node addresses and
@@ -2583,7 +2584,9 @@ Call with the root context.
           path: /spec/template/metadata
           valueFrom:
             template: |
-              {{- .Files.Get "files/proxmox-firewall.tpl" | nindent 14 }}
+              {{- /* Talos's API is mTLS, as the Kubernetes API is. The class, never a variable, decides it, so no variable's change reaches the firewall. */}}
+              {{- $talosPorts := ternary `"tcp/50000"` "" (hasSuffix "/talos.yaml" .Template.Name) }}
+              {{- .Files.Get "files/proxmox-firewall.tpl" | replace "TALOS_PORTS" $talosPorts | nindent 14 }}
 - name: proxmox-storage
   definitions:
     - selector:

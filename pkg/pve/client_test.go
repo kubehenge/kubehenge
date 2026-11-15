@@ -129,6 +129,7 @@ func TestConnectedClientFailsOnEveryErrorStatus(t *testing.T) {
 		"/api2/json/busy":      http.StatusServiceUnavailable,
 		"/api2/json/node-gone": 595,
 		"/api2/json/denied":    http.StatusForbidden,
+		"/api2/json/revoked":   http.StatusUnauthorized,
 		"/api2/json/missing":   http.StatusInternalServerError,
 	}
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -156,8 +157,12 @@ func TestConnectedClientFailsOnEveryErrorStatus(t *testing.T) {
 			t.Errorf("%s: got %v, want the status as an error", path, err)
 		}
 	}
-	if err := c.Delete(ctx, "/denied", nil); !proxmox.IsNotAuthorized(err) {
-		t.Errorf("a 403 gave %v, want go-proxmox's own not-authorised error", err)
+	// A 401 and a 403 are both go-proxmox's not-authorised error, and only the 401 is a refused token.
+	if err := c.Delete(ctx, "/denied", nil); !proxmox.IsNotAuthorized(err) || Unauthenticated(err) {
+		t.Errorf("a 403 gave %v, want go-proxmox's own not-authorised error for a missing privilege", err)
+	}
+	if err := c.Get(ctx, "/revoked", nil); !proxmox.IsNotAuthorized(err) || !Unauthenticated(err) {
+		t.Errorf("a 401 gave %v, want go-proxmox's own not-authorised error for refused credentials", err)
 	}
 	if err := c.Delete(ctx, "/missing", nil); err == nil || !strings.HasPrefix(err.Error(), "500") {
 		t.Errorf("a 500 gave %v, want go-proxmox's status line", err)

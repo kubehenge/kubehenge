@@ -15,7 +15,8 @@ import (
 )
 
 // SecurityGroupsVariable names the Proxmox VE security groups of the nodes' firewall, applied after
-// the firewall's own rules. On a cluster without FirewallVariable, groups alone turn it on.
+// the cluster's own traffic and before the serving ports. On a cluster without FirewallVariable,
+// groups alone turn it on.
 const SecurityGroupsVariable = "securityGroups"
 
 // SecurityGroups lists the security groups of Proxmox VE's firewall; *Proxmox is the real one.
@@ -104,11 +105,12 @@ func checkSecurityGroups(groups, existing []string) field.ErrorList {
 	return errs
 }
 
-// validateFirewall holds a cluster's security groups: they need the firewall on, checked whenever
-// either changes, and on create or when the groups change they must be ones Proxmox VE lists and
-// must not cost the management side the Proxmox VE API. The firewall alone is never held to that
-// check: a VM's firewall leaves the nodes' own untouched. So a change Cluster API's defaulting
-// makes, such as adding the firewall variable to an older cluster, passes.
+// validateFirewall holds a cluster's security groups whenever they or the firewall change: they
+// need the firewall on, and they must be ones Proxmox VE lists, since either change replaces the
+// nodes and Proxmox VE compiles a missing group as an empty one. Only on create or when the groups
+// change must they not cost the management side the Proxmox VE API. The firewall alone is never
+// held to that check: a VM's firewall leaves the nodes' own untouched. So a change Cluster API's
+// defaulting makes, such as adding the firewall variable to an older cluster, passes it.
 func (v *ClusterValidator) validateFirewall(ctx context.Context, old, c *clusterv1.Cluster) field.ErrorList {
 	groupsChanged := old == nil || variableChanged(old, c, SecurityGroupsVariable)
 	if !groupsChanged && !variableChanged(old, c, FirewallVariable) {
@@ -123,14 +125,14 @@ func (v *ClusterValidator) validateFirewall(ctx context.Context, old, c *cluster
 		path := field.NewPath("spec", "topology", "variables").Key(SecurityGroupsVariable)
 		return field.ErrorList{field.Forbidden(path, "Security groups need the firewall on")}
 	}
-	if !groupsChanged {
-		return nil
-	}
 	var errs field.ErrorList
 	if v.Hooks.SecurityGroups != nil {
 		if existing, readable := v.Hooks.SecurityGroups.SecurityGroups(ctx); readable {
 			errs = checkSecurityGroups(groups, existing)
 		}
+	}
+	if !groupsChanged {
+		return errs
 	}
 	return append(errs, v.validateAPIReach(ctx)...)
 }

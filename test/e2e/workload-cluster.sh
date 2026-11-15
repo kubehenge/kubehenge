@@ -3708,6 +3708,9 @@ if [ "${distribution}" = talos ]; then
     cordoned=$(wl get nodes -o json | jq -r '[.items[] | select(.spec.unschedulable == true) | .metadata.name] | join(" ")')
     [ -z "${cordoned}" ] || fail "nodes left cordoned after their upgrade: ${cordoned}"
     datacenter_firewall 1
+    first_talos_address=$(talos_addresses | head -n 1)
+    [ -n "${first_talos_address}" ] || fail "no machine has an address"
+    until_true 120 "the firewall drops trustd's port from the runner" trustd_dropped "${first_talos_address}"
     for address in $(talos_addresses); do
         # shellcheck disable=SC2310 # a node that does not answer fails the step.
         release=$(talos_release "${address}") || fail "the Talos API of ${address} does not answer"
