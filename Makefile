@@ -260,7 +260,7 @@ verify-talos-pins: web gateway-api
 lint: lint-go lint-gopls lint-other
 
 .PHONY: lint-other
-lint-other: lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-changelog lint-docker lint-typos
+lint-other: lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-changelog lint-docker lint-typos lint-renovate
 
 FILES = git ls-files --cached --others --exclude-standard
 SHELL_SCRIPTS := test/e2e/*.sh test/e2e/ci/*.sh test/integration/*.sh test/unit/*.sh appliance/*.sh appliance/pve-entry/*.sh scripts/*.sh website/*.sh pkg/installer/*.sh pkg/provisioner/*.sh pkg/templates/*/*.sh charts/kubehenge/files/*.sh
@@ -393,6 +393,18 @@ lint-yaml:
 .PHONY: lint-markdown
 lint-markdown: web/node_modules/.package-lock.json
 	$(MARKDOWNLINT) $$($(FILES) '*.md')
+
+# Renovate's own validator, which refuses an unknown option and a config that needs migrating.
+# re2, the regex engine Renovate runs, is the one package whose install script runs (allowScripts):
+# it fetches the binary whose SHA-256 its package lists, or builds it. Without it, regexes would be
+# checked by JavaScript's rules instead.
+scripts/lint/node_modules/.package-lock.json: scripts/lint/package-lock.json
+	npm --prefix scripts/lint ci --no-fund --no-audit --strict-allow-scripts
+	touch $@
+
+.PHONY: lint-renovate
+lint-renovate: scripts/lint/node_modules/.package-lock.json
+	npm --prefix scripts/lint exec --no -- renovate-config-validator --strict --no-global renovate.json
 
 # The fragments of docs/changes/ and the sections of docs/changelog.md (.github/CONTRIBUTING.md).
 .PHONY: lint-changelog
