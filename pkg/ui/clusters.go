@@ -994,7 +994,7 @@ func (s *Server) mayCreate(w http.ResponseWriter, r *http.Request, u user, class
 		return false
 	}
 	if !s.allowGitOps(w, r, u, s.workloadPoolPath(), req.Variables[gitopsVariable], nil) ||
-		!s.allowBackupSources(w, r, u, cmp.Or(req.Namespace, s.Namespace), req.Variables["backups"], nil) {
+		!s.allowBackupSources(w, r, u, req.Namespace, req.Variables["backups"], nil) {
 		return false
 	}
 	raw, ok := req.Variables[oidcVariable]
@@ -1040,15 +1040,10 @@ func (s *Server) mayUseNetwork(w http.ResponseWriter, r *http.Request, u user, c
 		return false
 	}
 	if vlan != "" && network.TagsTraffic() {
-		writeError(w, http.StatusUnprocessableEntity, vlanOnTaggedNetwork(bridge))
+		writeError(w, http.StatusUnprocessableEntity, pve.VLANOnTaggedNetwork(bridge))
 		return false
 	}
 	return s.require(w, r, u, bridgePath(network.Zone, bridge, vlan), privBridge)
-}
-
-// vlanOnTaggedNetwork is the refusal of a VLAN tag on a VNet whose zone tags its traffic already.
-func vlanOnTaggedNetwork(vnet string) string {
-	return "VNet " + vnet + " is in a VLAN zone and tags already. Leave the VLAN tag empty."
 }
 
 // allowedNodesVariable keeps a cluster's VMs to some of the Proxmox VE nodes.
@@ -1091,24 +1086,24 @@ func (s *Server) mayPlace(w http.ResponseWriter, r *http.Request, u user, raw, k
 	// Without a list of nodes there are none to keep.
 	_ = json.Unmarshal(kept, &old)
 	var nodes []string
-	if err := json.Unmarshal(raw, &nodes); err != nil || len(nodes) == 0 {
-		writeError(w, http.StatusUnprocessableEntity, "allowed nodes: choose at least one Proxmox VE node")
-		return false
+	if json.Unmarshal(raw, &nodes) != nil {
+		nodes = nil
 	}
-	visible, err := s.visibleNodes(r, u)
-	if err != nil {
-		s.proxmoxError(w, r, err)
-		return false
-	}
-	for i, node := range nodes {
-		if slices.Contains(nodes[:i], node) {
-			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("allowed nodes: %s is listed twice", node))
+	var visible []pve.Node
+	// An empty list is refused without asking Proxmox VE which nodes there are.
+	if len(nodes) > 0 {
+		var err error
+		if visible, err = s.visibleNodes(r, u); err != nil {
+			s.proxmoxError(w, r, err)
 			return false
 		}
-		if !slices.Contains(old, node) && !slices.ContainsFunc(visible, func(n pve.Node) bool { return n.Node == node }) {
-			writeError(w, http.StatusUnprocessableEntity, "allowed nodes: no Proxmox VE node "+node)
-			return false
-		}
+	}
+	known := func(node string) bool {
+		return slices.ContainsFunc(visible, func(n pve.Node) bool { return n.Node == node })
+	}
+	if msg := provisioner.AllowedNodesRefusal(nodes, old, known); msg != "" {
+		writeError(w, http.StatusUnprocessableEntity, msg)
+		return false
 	}
 	return true
 }
@@ -1297,7 +1292,7 @@ func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user, r
 		return nil, false
 	}
 	if !c.DeletionTimestamp.IsZero() {
-		writeError(w, http.StatusConflict, "the cluster is being deleted")
+		writeError(w, http.StatusConflict, provisioner.ClusterBeingDeleted)
 		return nil, false
 	}
 	if !unchangedSince(w, r, c) {
@@ -1438,8 +1433,8 @@ func setWorkerReplicas(c *clusterv1.Cluster, name string, n int32) bool {
 // the request when one fails.
 func (s *Server) applyVariables(w http.ResponseWriter, r *http.Request, u user, c *clusterv1.Cluster, access poolAccess, vars map[string]json.RawMessage) bool {
 	for name, value := range vars {
-		if !changeableVariables[name] {
-			writeError(w, http.StatusUnprocessableEntity, name+" cannot change after the cluster is created")
+		if provisioner.VariableFixed(name) || !changeableVariables[name] {
+			writeError(w, http.StatusUnprocessableEntity, provisioner.FixedVariableRefusal(name))
 			return false
 		}
 		if !s.allowVariable(w, r, u, c, access, name, value) {
@@ -1520,11 +1515,8 @@ func variableValue(c *clusterv1.Cluster, name string) json.RawMessage {
 
 // allowOIDC checks a change of the cluster's oidc variable from old to value against its class.
 func (s *Server) allowOIDC(w http.ResponseWriter, r *http.Request, u user, c *clusterv1.Cluster, access poolAccess, value, old json.RawMessage) bool {
-	class, ref := &clusterv1.ClusterClass{}, c.Spec.Topology.ClassRef
-	if ref.Namespace == "" {
-		ref.Namespace = c.Namespace
-	}
-	if err := u.kube.Get(r.Context(), client.ObjectKey{Namespace: ref.Namespace, Name: ref.Name}, class); err != nil {
+	class := &clusterv1.ClusterClass{}
+	if err := u.kube.Get(r.Context(), client.ObjectKey{Namespace: s.ClassNamespace, Name: c.Spec.Topology.ClassRef.Name}, class); err != nil {
 		s.kubeError(w, r, err)
 		return false
 	}
@@ -1690,11 +1682,9 @@ func (s *Server) kubeError(w http.ResponseWriter, r *http.Request, err error) {
 	case apierrors.IsConflict(err):
 		writeError(w, http.StatusConflict, clusterChanged)
 	case apierrors.IsInvalid(err) || apierrors.IsBadRequest(err):
-		if errors.As(err, &status) {
-			writeError(w, http.StatusUnprocessableEntity, status.Status().Message)
-			return
-		}
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		// Both predicates hold only for an error that carries an APIStatus.
+		_ = errors.As(err, &status)
+		writeError(w, http.StatusUnprocessableEntity, status.Status().Message)
 	default:
 		s.Log.ErrorContext(r.Context(), "management cluster request failed", "error", err)
 		writeError(w, http.StatusBadGateway, "the management cluster did not answer")

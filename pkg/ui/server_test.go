@@ -73,10 +73,9 @@ type fakeAccounts struct {
 	released []string
 	// loadReads records the VMs whose load was read.
 	loadReads []int
-	// users are the users made with an administrator token, by ID. usersDeleted counts deletions.
-	users        map[string]string
-	usersDeleted int
-	rebooted     []int
+	// users are the users made with an administrator token, by ID.
+	users    map[string]string
+	rebooted []int
 	// bridgeList, when set, replaces the default bridges.
 	bridgeList []pve.Bridge
 	// viaPool are privileges a user holds on a path only through a pool's members, which Proxmox VE
@@ -108,7 +107,6 @@ func (f *fakeAccounts) DeleteUser(_ context.Context, _ *pve.Ticket, userid strin
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.users, userid)
-	f.usersDeleted++
 	return nil
 }
 

@@ -131,7 +131,7 @@ func (p *Placer) placeAll(ctx context.Context) {
 	var jobs []volumeJob
 	for i := range clusters.Items {
 		c := &clusters.Items[i]
-		if Owns(c, p.ClassNamespace) && c.DeletionTimestamp.IsZero() {
+		if ownedAndLive(c, p.ClassNamespace) {
 			if job := p.place(ctx, c, online, sites, skipped); job != nil {
 				jobs = append(jobs, *job)
 			}

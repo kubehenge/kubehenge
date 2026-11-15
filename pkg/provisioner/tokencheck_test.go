@@ -287,10 +287,22 @@ func TestTokenErrorsAreClassifiedByMeaningNotDigits(t *testing.T) {
 		{errors.New("asking a token Job: not authorized to access endpoint"), TokenRefused},
 		{errors.New("asking a token Job: authentication failure"), TokenRefused},
 		{errors.New(`Get "https://pve:8006/": x509: certificate signed by unknown authority`), TokenCertificate},
+		{errors.New("reading permissions on /: Proxmox VE's certificate is valid for fd99:21:99::2, not 172.21.99.2"), TokenCertificate},
+		{errors.New("asking a token Job: Proxmox VE's certificate is valid for pve, not 172.21.99.2"), TokenCertificate},
 	} {
 		if got := classifyTokenError(c.err); got != c.want {
 			t.Errorf("%q is %s, want %s", c.err, got, c.want)
 		}
+	}
+}
+
+// Fails on a build whose Message blames the CA for a certificate that lacks the URL's address.
+func TestACertificateLackingTheAddressIsNotBlamedOnTheCA(t *testing.T) {
+	t.Parallel()
+	s := TokenState{Name: "Controller", Problem: TokenCertificate, Error: "Proxmox VE's certificate is valid for fd99:21:99::2, pve, not 172.21.99.2. Use a Proxmox VE URL with one of those"}
+	msg := s.Message()
+	if !strings.Contains(msg, "valid for fd99:21:99::2, pve, not 172.21.99.2") || strings.Contains(msg, "new CA") {
+		t.Errorf("message %q", msg)
 	}
 }
 

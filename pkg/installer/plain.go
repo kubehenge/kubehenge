@@ -124,7 +124,7 @@ func RunPlain(ctx context.Context, s *Session, newRunner func(emit func(Event)) 
 	if s.Cfg.PVEEntry == "" {
 		s.Cfg.PVEEntry = "no"
 	}
-	for _, n := range s.Notices {
+	for _, n := range append(append([]string(nil), s.Notices...), s.Cautions...) {
 		_, _ = fmt.Fprintln(out, "kubehenge: "+n)
 	}
 	runner := newRunner(nil)

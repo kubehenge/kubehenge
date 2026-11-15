@@ -161,6 +161,8 @@ func TestSetupCheckOfAnIPv6Bridge(t *testing.T) {
 	h.accounts.bridgeList = dualStackBridges()
 	taken := netip.MustParseAddr("2001:db8:0:2::12")
 	h.server.Probe = (&answeringOn{hosts: map[netip.Addr]bool{taken: true}}).probe
+	// IPv6-only management nodes reach Proxmox VE at its IPv6 address.
+	h.server.Appliance.ProxmoxURL = "https://[2001:db8:0:1::5]:8006"
 	// The management VMs take a network of their own on the bridge, beside the node's 2001:db8:0:1::/64.
 	settings := `{"settings":{"nodes":["pve1"],"imageDatastore":"local","vmDatastore":"local-lvm","bridge":"vmbr0",
 "ipFamilies":["IPv6"],"nodeAddresses":[],"nodeAddressesIPv6":["2001:db8:0:2::11/64","2001:db8:0:2::12/64","2001:db8:0:2::13/64"],
@@ -177,6 +179,7 @@ func TestSetupCheckOfAnIPv6Bridge(t *testing.T) {
 		t.Errorf("ranges = %v and %v", f.PodRanges, f.ServiceRanges)
 	}
 	// An IPv4 cluster on the same dual-stack bridge passes.
+	h.server.Appliance.ProxmoxURL = "https://10.0.0.50:8006"
 	if f := checkFindings(t, b); len(f.Errors) != 0 {
 		t.Errorf("an IPv4 cluster on a dual-stack bridge: %q", f.Errors)
 	}
