@@ -44,7 +44,7 @@ func (g *ProxmoxGuests) Run(ctx context.Context, vmid int64, script string, time
 	if err != nil {
 		return "", err
 	}
-	vm, err := (&proxmox.Node{}).New(g.Client, node).VirtualMachine(ctx, int(vmid))
+	vm, err := g.Client.NodeRef(node).VirtualMachine(ctx, int(vmid))
 	if err != nil {
 		return "", fmt.Errorf("reading VM %d: %w", vmid, err)
 	}

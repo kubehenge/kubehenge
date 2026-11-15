@@ -26,8 +26,8 @@ const (
 // same but gives the upload 5 seconds and the change 2, which a busy node overruns. Here both wait
 // as long as the builder's other tasks.
 func attachSeed(ctx context.Context, node *proxmox.Node, storageName string, vm *proxmox.VirtualMachine, device string, files map[string]string) error {
-	storage, err := node.Storage(ctx, storageName)
-	if err != nil {
+	storage := node.StorageRef(storageName)
+	if err := storage.Ping(ctx); err != nil {
 		return fmt.Errorf("reading storage %s: %w", storageName, err)
 	}
 	dir, err := os.MkdirTemp("", "kubehenge-seed-")
