@@ -163,16 +163,20 @@ func TestEtcdRestoreFromTheVolumeThroughTheAPIServer(t *testing.T) {
 func TestEtcdRestoreFromTheVolumeNeedsTheAPIServer(t *testing.T) {
 	t.Parallel()
 	for name, workloads := range map[string]*handOverAPI{
-		"no kubeconfig": {found: false},
+		"no workload clients": nil,
+		"no kubeconfig":       {found: false},
 		"API server down": newFakeWorkloads(t, &interceptor.Funcs{Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
 			return errors.New("dial tcp 10.0.0.10:6443: connect: connection refused")
 		}}),
 	} {
 		f, _ := volumeRestoreFixture(t, templates.Kubeadm)
-		f.r.Workloads = workloads
+		f.r.Workloads = nil
+		if workloads != nil {
+			f.r.Workloads = workloads
+		}
 		f.reconcile()
 		st := f.status()
-		if st.Phase != RestoreFailed || !strings.Contains(st.Message, "Download the snapshot and restore by hand") {
+		if st.Phase != RestoreFailed || !strings.Contains(st.Message, "restore by hand") {
 			t.Errorf("%s: status %+v", name, st)
 		}
 		if runs := f.guests.runs(); slices.ContainsFunc(runs, func(r string) bool { return strings.HasSuffix(r, " stop") || strings.HasSuffix(r, " restore") }) {

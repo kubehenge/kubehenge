@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -130,5 +131,18 @@ func TestValidateDeleteSnapshots(t *testing.T) {
 	}
 	if errs := validateDeleteSnapshots(etcdCluster(`{"enabled":true}`)); len(errs) != 0 {
 		t.Errorf("without the annotation: %v", errs)
+	}
+}
+
+// kubectl meets the same check through the cluster webhook.
+func TestTheWebhookRefusesADeleteSnapshotsTypo(t *testing.T) {
+	t.Parallel()
+	hooks, _ := hooksFor(t)
+	v := &ClusterValidator{Hooks: hooks}
+	c := etcdCluster(`{"enabled":true}`)
+	metav1.SetMetaDataAnnotation(&c.ObjectMeta, DeleteEtcdSnapshotsAnnotation, "yes")
+	_, err := v.ValidateUpdate(context.Background(), etcdCluster(`{"enabled":true}`), c)
+	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), DeleteEtcdSnapshotsAnnotation) {
+		t.Errorf("refusal %v", err)
 	}
 }

@@ -197,7 +197,7 @@ func TestEtcdSnapshotsWaitForASleepingVolume(t *testing.T) {
 		t.Errorf("next look in %s", res.RequeueAfter)
 	}
 	cond := meta.FindStatusCondition(f.cluster().Status.Conditions, EtcdSnapshotCondition)
-	if cond == nil || cond.Reason != EtcdSnapshotWaitingForVolume || etcd.calls.Load() != 0 {
+	if cond == nil || cond.Reason != EtcdSnapshotWaitingForVolume || cond.Message != volumeWakingMessage || etcd.calls.Load() != 0 {
 		t.Errorf("condition %+v, %d snapshots", cond, etcd.calls.Load())
 	}
 	if vol.released != 0 {
