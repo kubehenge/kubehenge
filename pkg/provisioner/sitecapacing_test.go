@@ -16,13 +16,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
-// reconciledCluster marks the cluster's topology as reconciled for its current generation.
-func reconciledCluster(c clusterv1.Cluster) clusterv1.Cluster {
+// markReconciled marks the cluster's topology as reconciled for its current generation.
+func markReconciled(c *clusterv1.Cluster) {
 	c.Generation = 1
 	c.Status.Conditions = append(c.Status.Conditions, metav1.Condition{
 		Type: clusterv1.ClusterTopologyReconciledCondition, Status: metav1.ConditionTrue, ObservedGeneration: 1,
 	})
-	return c
 }
 
 // apiServer makes a fake client count a generation for each update, as the API server does.
@@ -40,7 +39,8 @@ func TestSiteCAPlaceStaysTakenUntilTheRolloutIsDone(t *testing.T) {
 	t.Parallel()
 	objects := make([]client.Object, 0, 2*SiteRollLimit)
 	for i := range 2 * SiteRollLimit {
-		c := reconciledCluster(siteCluster(fmt.Sprintf("web-%d", i)))
+		c := siteCluster(fmt.Sprintf("web-%d", i))
+		markReconciled(&c)
 		objects = append(objects, &c)
 	}
 	kube := apiServer(t, objects...)
@@ -101,7 +101,8 @@ func TestPausedClusterWaitsForItsUnpauseAndTakesNoPlace(t *testing.T) {
 func TestOwnTrustedCAsKeepTheSiteCAVariableCurrentOutsidePacingAndWindows(t *testing.T) {
 	t.Parallel()
 	own := siteCluster("own", jsonVar(trustedCAsVariable, `["x"]`), jsonVar(upgradesVariable, mondayWindow))
-	objects := []client.Object{&own}
+	objects := make([]client.Object, 0, 1+SiteRollLimit)
+	objects = append(objects, &own)
 	for i := range SiteRollLimit {
 		busy := siteCluster(fmt.Sprintf("busy-%d", i))
 		busy.Status.Conditions = append(busy.Status.Conditions, metav1.Condition{Type: clusterv1.ClusterRollingOutCondition, Status: metav1.ConditionTrue})
