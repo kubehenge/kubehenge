@@ -20,7 +20,7 @@ func TestSiteCARollNamesHowManyRollNowAndHowManyWait(t *testing.T) {
 	}
 	// Wednesday noon: the Monday window is closed.
 	now := time.Date(2026, time.November, 18, 12, 0, 0, 0, time.UTC)
-	var clusters []clusterv1.Cluster
+	clusters := make([]clusterv1.Cluster, 0, provisioner.SiteRollLimit+4)
 	for i := range provisioner.SiteRollLimit + 2 {
 		clusters = append(clusters, *cluster("team-a", fmt.Sprintf("web-%d", i)))
 	}

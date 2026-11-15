@@ -90,8 +90,37 @@ func TestSiteCAUnsetLeavesClustersAlone(t *testing.T) {
 	}
 }
 
+func TestNodeSiteSettingsAreCheckedWhenTheyChangeAfterCreation(t *testing.T) {
+	t.Parallel()
+	old := cluster()
+	mirrors := func(raw string) *clusterv1.Cluster {
+		return cluster(jsonVar(registryMirrorsVariable, raw))
+	}
+	now := time.Now()
+	for name, tc := range map[string]struct {
+		changed *clusterv1.Cluster
+		valid   bool
+	}{
+		"a registry mirror":     {mirrors(`[{"registry":"docker.io","endpoints":["https://m.example.org"]}]`), true},
+		"a bad registry mirror": {mirrors(`[{"registry":"docker.io","endpoints":["ftp://m.example.org"]}]`), false},
+		"a release mirror":      {cluster(jsonVar(releaseMirrorVariable, `{"url":"https://r.example.org"}`)), true},
+		"a bad release mirror":  {cluster(jsonVar(releaseMirrorVariable, `{"url":"r.example.org"}`)), false},
+		"no certificate":        {cluster(jsonVar(trustedCAsVariable, `["junk"]`)), false},
+	} {
+		errs := validateNodeSite(old, tc.changed, now)
+		if (len(errs) == 0) != tc.valid {
+			t.Errorf("%s: %v, want valid = %t", name, errs, tc.valid)
+		}
+	}
+	// A setting that stays as it was is not checked again, since a certificate expires on its own.
+	stale := cluster(jsonVar(trustedCAsVariable, `["junk"]`))
+	if errs := validateNodeSite(stale, stale.DeepCopy(), now); len(errs) != 0 {
+		t.Errorf("an unchanged setting was checked again: %v", errs)
+	}
+}
+
 // Not parallel: it sets the process's default time zone.
-func TestSiteTimeZoneIsTheDefaultOfSchedules(t *testing.T) {
+func TestSiteTimeZoneIsTheDefaultOfSchedules(t *testing.T) { //nolint:paralleltest // sets the process's default time zone
 	t.Cleanup(func() { _ = SetDefaultTimeZone(DefaultTimeZone) })
 	zoneOf := func(own string) (string, string) {
 		b, s := Backups{TimeZone: own}, EtcdSnapshots{TimeZone: own}

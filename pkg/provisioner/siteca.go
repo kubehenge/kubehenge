@@ -25,11 +25,15 @@ const (
 )
 
 // siteTimeZone is the time zone of a schedule that names none.
-var siteTimeZone = func() *atomic.Value {
-	v := &atomic.Value{}
-	v.Store(DefaultTimeZone)
-	return v
+var siteTimeZone = func() *atomic.Pointer[string] {
+	p := &atomic.Pointer[string]{}
+	zone := DefaultTimeZone
+	p.Store(&zone)
+	return p
 }()
+
+// siteZone is the time zone a schedule that names none runs in.
+func siteZone() string { return *siteTimeZone.Load() }
 
 // CheckTimeZone refuses a name that is no IANA time zone.
 func CheckTimeZone(zone string) error {
@@ -44,7 +48,7 @@ func SetDefaultTimeZone(zone string) error {
 	if err := CheckTimeZone(zone); err != nil {
 		return err
 	}
-	siteTimeZone.Store(zone)
+	siteTimeZone.Store(&zone)
 	return nil
 }
 
@@ -119,6 +123,27 @@ type SiteRollPlan struct {
 	Inherits int
 }
 
+// windowOpens tells whether the cluster's upgrade window is closed now, and when it opens next.
+// A cluster without a window is never closed.
+func (c *SiteRollCluster) windowOpens(now time.Time) (time.Time, bool, error) {
+	if c.Policy == nil {
+		return time.Time{}, false, nil
+	}
+	open, err := c.Policy.Window.Open(now)
+	if err != nil || open {
+		return time.Time{}, false, wrapCluster(c.Key, err)
+	}
+	opens, err := c.Policy.Window.Next(now)
+	return opens, err == nil, wrapCluster(c.Key, err)
+}
+
+func wrapCluster(key client.ObjectKey, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("cluster %s: %w", key, err)
+}
+
 // PlanSiteRoll plans the rollout of the site CA want. A cluster with its own trustedCAs is left
 // alone. A cluster with an upgrade window rolls only inside it. At most limit clusters roll at the
 // same time, those already rolling counting.
@@ -141,19 +166,13 @@ func PlanSiteRoll(want string, clusters []SiteRollCluster, limit int, now time.T
 		if c.Applied == want {
 			continue
 		}
-		if c.Policy != nil {
-			open, err := c.Policy.Window.Open(now)
-			if err != nil {
-				return plan, fmt.Errorf("cluster %s: %w", c.Key, err)
-			}
-			if !open {
-				opens, err := c.Policy.Window.Next(now)
-				if err != nil {
-					return plan, fmt.Errorf("cluster %s: %w", c.Key, err)
-				}
-				plan.Windows = append(plan.Windows, WindowWait{Key: c.Key, Opens: opens})
-				continue
-			}
+		opens, closed, err := c.windowOpens(now)
+		if err != nil {
+			return plan, err
+		}
+		if closed {
+			plan.Windows = append(plan.Windows, WindowWait{Key: c.Key, Opens: opens})
+			continue
 		}
 		if free <= 0 {
 			plan.Waiting = append(plan.Waiting, c.Key)
@@ -163,6 +182,15 @@ func PlanSiteRoll(want string, clusters []SiteRollCluster, limit int, now time.T
 		plan.Now = append(plan.Now, c.Key)
 	}
 	return plan, nil
+}
+
+// ensureNodeSite keeps the cluster's node customisation revision and site CA current. It returns
+// when to look again, 0 for the usual resync.
+func (r *Reconciler) ensureNodeSite(ctx context.Context, cluster *clusterv1.Cluster) (time.Duration, error) {
+	if err := r.ensureNodeCustomisation(ctx, cluster); err != nil {
+		return 0, err
+	}
+	return r.rollSiteCA(ctx, cluster)
 }
 
 // rollSiteCA gives an inheriting cluster the site CA when the plan lets it, and takes a stale one

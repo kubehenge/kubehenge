@@ -1,6 +1,7 @@
 package appliance
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -45,5 +46,8 @@ func (a *Appliance) siteCA() string {
 
 // trustSiteCA has a transport trust the site CA beside the authorities it trusts already.
 func trustSiteCA(t *http.Transport, siteCA string) error {
-	return provisioner.ReleaseMirror{CABundle: siteCA}.Trust(t)
+	if err := (provisioner.ReleaseMirror{CABundle: siteCA}).Trust(t); err != nil {
+		return fmt.Errorf("trusting the site CA: %w", err)
+	}
+	return nil
 }

@@ -120,7 +120,7 @@ func (b *Backups) withDefaults() {
 		b.Schedule = defaultBackupSchedule
 	}
 	if b.TimeZone == "" {
-		b.TimeZone = siteTimeZone.Load().(string)
+		b.TimeZone = siteZone()
 	}
 	if b.RetentionDays == 0 {
 		b.RetentionDays = defaultBackupRetention

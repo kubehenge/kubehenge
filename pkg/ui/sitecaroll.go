@@ -24,7 +24,7 @@ type siteCARoll struct {
 
 // siteCARollOf plans the rollout of the site CA ca over the clusters.
 func siteCARollOf(ca string, clusters []clusterv1.Cluster, now time.Time) (siteCARoll, error) {
-	plan, err := provisioner.PlanSiteRoll(strings.TrimSpace(ca), provisioner.SiteRollClusters(clusters),provisioner.SiteRollLimit, now)
+	plan, err := provisioner.PlanSiteRoll(strings.TrimSpace(ca), provisioner.SiteRollClusters(clusters), provisioner.SiteRollLimit, now)
 	if err != nil {
 		return siteCARoll{}, err //nolint:wrapcheck // the plan names the cluster
 	}

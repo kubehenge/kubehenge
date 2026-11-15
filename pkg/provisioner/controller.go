@@ -180,10 +180,7 @@ func (r *Reconciler) reconcileCluster(ctx context.Context, cluster *clusterv1.Cl
 	if err = r.ensureEncryption(ctx, cluster); err != nil {
 		return ctrl.Result{}, err
 	}
-	if err = r.ensureNodeCustomisation(ctx, cluster); err != nil {
-		return ctrl.Result{}, err
-	}
-	siteCAAgain, err := r.rollSiteCA(ctx, cluster)
+	siteCAAgain, err := r.ensureNodeSite(ctx, cluster)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -224,6 +221,11 @@ func (r *Reconciler) reconcileCluster(ctx context.Context, cluster *clusterv1.Cl
 	if addonWaiting || othersWaiting {
 		return ctrl.Result{RequeueAfter: waitInterval}, nil
 	}
+	return ctrl.Result{RequeueAfter: r.lookAgainIn(&addons, siteCAAgain)}, nil
+}
+
+// lookAgainIn is the sooner of the resync, the next add-on window and the site CA's wait.
+func (r *Reconciler) lookAgainIn(addons *Addons, siteCAAgain time.Duration) time.Duration {
 	again := resync
 	if until, sooner := addons.untilWindow(r.now()); sooner {
 		again = until
@@ -231,7 +233,7 @@ func (r *Reconciler) reconcileCluster(ctx context.Context, cluster *clusterv1.Cl
 	if siteCAAgain > 0 {
 		again = min(again, siteCAAgain)
 	}
-	return ctrl.Result{RequeueAfter: again}, nil
+	return again
 }
 
 // afterTheRest does what waits on other clusters or on the workload cluster's own API, however long
