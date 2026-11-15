@@ -1032,6 +1032,9 @@ func proxmoxValues(storage string, addons *Addons) (map[string]any, map[string]a
 		// for initialised nodes (RKE2's Calico schedules Typha only there) would otherwise leave a
 		// CCM on the pod network unable to reach Proxmox VE, and the cluster stuck.
 		"useDaemonSet": true,
+		// The node's resolver, not the chart's cluster DNS: CoreDNS waits for the initialised nodes,
+		// so a Proxmox VE address given as a name would otherwise never resolve.
+		"dnsPolicy":    string(corev1.DNSDefault),
 		"affinity":     controlPlane,
 		tolerationsKey: controlPlaneTolerations(toleration("node.cloudprovider.kubernetes.io/uninitialized", corev1.TaintEffectNoSchedule)),
 		extraArgsKey:   leaseArgs("leader-elect"),
