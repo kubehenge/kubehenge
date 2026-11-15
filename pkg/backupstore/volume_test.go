@@ -30,7 +30,8 @@ func TestTheControllerAsksForTheVolume(t *testing.T) {
 	v := &Volume{Kube: kube, Base: srv.URL, Now: func() time.Time { return now }}
 	ctx := t.Context()
 	deps := kube.AppsV1().Deployments(Namespace)
-	if _, err := v.Open(ctx); !errors.Is(err, provisioner.ErrVolumeAsleep) {
+	const holder = "snapshots of a/web"
+	if _, err := v.Open(ctx, holder); !errors.Is(err, provisioner.ErrVolumeAsleep) {
 		t.Fatalf("a sleeping store opened: %v", err)
 	}
 	d, err := deps.Get(ctx, Service, metav1.GetOptions{})
@@ -44,7 +45,7 @@ func TestTheControllerAsksForTheVolume(t *testing.T) {
 	if _, err = deps.UpdateStatus(ctx, d, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	store, err := v.Open(ctx)
+	store, err := v.Open(ctx, holder)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +53,7 @@ func TestTheControllerAsksForTheVolume(t *testing.T) {
 	if err != nil || free != 5<<30 || size != 20<<30 {
 		t.Fatalf("room %d of %d: %v", free, size, err)
 	}
-	if err = v.Done(ctx); err != nil {
+	if err = v.Done(ctx, holder); err != nil {
 		t.Fatal(err)
 	}
 	if d, _ = deps.Get(ctx, Service, metav1.GetOptions{}); WakeRequested(d, now) || d.Annotations["kubehenge.dev/idle-replicas"] != "0" {
@@ -60,13 +61,48 @@ func TestTheControllerAsksForTheVolume(t *testing.T) {
 	}
 	// The interface's own request outlives the controller's.
 	ui := &Volume{Kube: kube, Base: srv.URL, Annotation: InterfaceWakeAnnotation, Now: v.Now}
-	if _, err = ui.Open(ctx); err != nil {
+	if _, err = ui.Open(ctx, holder); err != nil {
 		t.Fatal(err)
 	}
-	if err = v.Done(ctx); err != nil {
+	if err = v.Done(ctx, holder); err != nil {
 		t.Fatal(err)
 	}
 	if d, _ = deps.Get(ctx, Service, metav1.GetOptions{}); !WakeRequested(d, now) {
 		t.Fatal("taking the controller's request away dropped the interface's")
+	}
+}
+
+// Holders that overlap each hold the store: a snapshot ending leaves it awake for a restore still
+// running, and it sleeps once the last holder is done.
+func TestTheVolumeSleepsOnceNoHolderIsLeft(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	kube := fake.NewClientset(&appsv1.Deployment{Name: Service, Namespace: Namespace, Status: appsv1.DeploymentStatus{ReadyReplicas: 1}},
+		&corev1.Secret{Name: TokenSecret, Namespace: Namespace})
+	v := &Volume{Kube: kube, Now: func() time.Time { return now }}
+	ctx := t.Context()
+	asked := func() bool {
+		d, err := kube.AppsV1().Deployments(Namespace).Get(ctx, Service, metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return WakeRequested(d, now)
+	}
+	for _, holder := range []string{"restore of b/db", "snapshots of a/web"} {
+		if _, err := v.Open(ctx, holder); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := v.Done(ctx, "snapshots of a/web"); err != nil {
+		t.Fatal(err)
+	}
+	if !asked() {
+		t.Fatal("the snapshot's Done let the store sleep under the restore")
+	}
+	if err := v.Done(ctx, "restore of b/db"); err != nil {
+		t.Fatal(err)
+	}
+	if asked() {
+		t.Fatal("the store is still asked for with no holder left")
 	}
 }

@@ -199,8 +199,8 @@ spec:
     - expression: >-
         object.spec == oldObject.spec
         && (has(object.metadata.labels) ? object.metadata.labels : {}) == (has(oldObject.metadata.labels) ? oldObject.metadata.labels : {})
-        && variables.after.all(k, k == 'kubehenge.dev/wake-requested' || (k in variables.before && variables.before[k] == variables.after[k]))
-        && variables.before.all(k, k == 'kubehenge.dev/wake-requested' || k in variables.after)
+        && variables.after.all(k, k.startsWith('kubehenge.dev/wake-requested-') || (k in variables.before && variables.before[k] == variables.after[k]))
+        && variables.before.all(k, k.startsWith('kubehenge.dev/wake-requested-') || k in variables.after)
       message: the controller changes nothing of the backup store but its wake request
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -211,7 +211,10 @@ spec:
   policyName: {{ $name }}-snapshots
   validationActions: [Deny]
 ---
-# The controller's pods alone reach the store's port from inside the cluster.
+# The store's port, for the controller's pods and for the API server's service proxy, through which
+# the appliance and the interface reach it. The API server comes from a node's address, or from the
+# pod network's own on another node: no source narrower than any covers both. The store answers
+# only its token.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -223,11 +226,7 @@ spec:
       app.kubernetes.io/name: {{ $name }}
   policyTypes: [Ingress]
   ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: {{ $controller }}
-      ports:
+    - ports:
         - protocol: TCP
           port: 8080
 {{- $zones := printf "%s-zones" $name }}

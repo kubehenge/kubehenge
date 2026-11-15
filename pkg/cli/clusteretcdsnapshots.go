@@ -100,6 +100,92 @@ to what the snapshot holds, and what changed since is lost.`,
 	return cmd
 }
 
+// removedEtcdSnapshotsCommand reaches the snapshots the backup volume keeps of removed clusters, as
+// the interface's Backups view does, through the same routes and the same typed-name rule.
+func (o *clusterOptions) removedEtcdSnapshotsCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "removed-etcd-snapshots",
+		Short: "List and delete the etcd snapshots the backup volume keeps of removed clusters",
+	}
+	cmd.PersistentFlags().StringVarP(&o.namespace, "namespace", "n", "", "the namespace the removed clusters were in")
+	list := &cobra.Command{
+		Use:   "list --namespace NAMESPACE",
+		Short: "List the removed clusters of a namespace whose snapshots the backup volume keeps",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return o.listRemovedEtcdSnapshots(cmd.Context(), cmd.OutOrStdout())
+		},
+	}
+	var yes bool
+	del := &cobra.Command{
+		Use:   "delete NAME --namespace NAMESPACE --yes",
+		Short: "Delete a removed cluster's snapshots and its backup keys",
+		Long: `Delete a removed cluster's etcd snapshots on the backup volume and its backup keys, which the
+snapshots open with. They cannot be brought back.`,
+		Args: argsSay(cobra.ExactArgs(1), "give the removed cluster, as list names it"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !yes {
+				return errors.New("deleting the snapshots and backup keys cannot be undone: add --yes")
+			}
+			if o.namespace == "" {
+				return errNoRemovedNamespace
+			}
+			path := "/api/removed-etcd-snapshots/" + url.PathEscape(o.namespace) + "/" + url.PathEscape(args[0])
+			body, err := o.call(cmd.Context(), http.MethodDelete, path, map[string]string{"confirm": args[0]})
+			if err != nil {
+				return err
+			}
+			var a struct {
+				Deleted int `json:"deleted"`
+			}
+			if err := json.Unmarshal(body, &a); err != nil {
+				return fmt.Errorf("reading the interface's answer: %w", err)
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "removed cluster %s: deleted %d snapshots and its backup keys\n", args[0], a.Deleted)
+			return writeErr(err)
+		},
+	}
+	del.Flags().BoolVar(&yes, "yes", false, "confirm the deletion, which cannot be undone")
+	cmd.AddCommand(list, del)
+	return cmd
+}
+
+// errNoRemovedNamespace asks for the namespace, which a removed cluster no longer shows.
+var errNoRemovedNamespace = errors.New("--namespace is required: the namespace the removed cluster was in")
+
+func (o *clusterOptions) listRemovedEtcdSnapshots(ctx context.Context, out io.Writer) error {
+	if o.namespace == "" {
+		return errNoRemovedNamespace
+	}
+	body, err := o.call(ctx, http.MethodGet, "/api/removed-etcd-snapshots/"+url.PathEscape(o.namespace), nil)
+	if err != nil {
+		return err
+	}
+	var removed []provisioner.RemovedCluster
+	if err := json.Unmarshal(body, &removed); err != nil {
+		return fmt.Errorf("reading the interface's answer: %w", err)
+	}
+	if len(removed) == 0 {
+		_, err := fmt.Fprintf(out, "the backup volume keeps no snapshots of removed clusters in %s\n", o.namespace)
+		return writeErr(err)
+	}
+	w := tabwriter.NewWriter(out, 0, 0, columnGap, ' ', 0)
+	_, _ = fmt.Fprintln(w, "CLUSTER\tSNAPSHOTS\tNEWEST\tKEYS")
+	for i := range removed {
+		r := &removed[i]
+		newest := "-"
+		if len(r.Snapshots) > 0 {
+			newest = r.Snapshots[0].Time.UTC().Format(time.RFC3339)
+		}
+		keys := "kept"
+		if !r.Keys {
+			keys = "gone"
+		}
+		_, _ = fmt.Fprintf(w, "%s\t%d\t%s\t%s\n", r.Name, len(r.Snapshots), newest, keys)
+	}
+	return writeErr(w.Flush())
+}
+
 func (o *clusterOptions) listEtcdSnapshots(ctx context.Context, out io.Writer, name string) error {
 	path, err := o.clusterPath(ctx, name)
 	if err != nil {

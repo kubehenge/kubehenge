@@ -35,7 +35,7 @@ func (m volumeMem) Room(context.Context) (int64, int64, error) {
 	return m.v.free, m.v.size, m.v.roomErr
 }
 
-func (v *fakeVolume) Open(context.Context) (VolumeStore, error) { //nolint:ireturn // BackupVolume's own signature
+func (v *fakeVolume) Open(context.Context, string) (VolumeStore, error) { //nolint:ireturn // BackupVolume's own signature
 	v.opened++
 	if v.asleep {
 		return nil, ErrVolumeAsleep
@@ -44,7 +44,7 @@ func (v *fakeVolume) Open(context.Context) (VolumeStore, error) { //nolint:iretu
 	return volumeMem{memStore: v.store, v: v}, nil
 }
 
-func (v *fakeVolume) Done(context.Context) error {
+func (v *fakeVolume) Done(context.Context, string) error {
 	v.released++
 	return nil
 }

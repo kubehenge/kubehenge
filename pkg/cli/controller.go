@@ -948,11 +948,14 @@ func (o *controllerOptions) addEtcd(mgr manager.Manager, c *proxmox.Client, remo
 	if err := maintainer.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the etcd maintainer: %w", err)
 	}
+	// The restorer holds the volume apart from the snapshotter, which runs beside it.
+	restoreTargets := *targets
+	restoreTargets.Holder = "restore"
 	restorer := &provisioner.EtcdRestorer{
 		Client:         mgr.GetClient(),
 		Reader:         mgr.GetAPIReader(),
 		ClassNamespace: o.r.ClassNamespace,
-		Targets:        targets,
+		Targets:        &restoreTargets,
 		Etcd:           snapshotter.Etcd,
 		Talos:          provisioner.DialTalos,
 		APIs:           remotes,

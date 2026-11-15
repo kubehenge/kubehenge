@@ -124,7 +124,7 @@ decide what it may do, as they do for a user signed in to the interface.`,
 
 	cmd.AddCommand(slices.Concat([]*cobra.Command{
 		list, get, kubeconfig, o.createCommand(), o.exportCommand(), scale, o.upgradeCommand(), o.acceptUpgradeCommand(), o.timeoutsCommand(), deleteCmd,
-		o.poolCommand(), o.updateCommand(), o.machineCommand(), o.etcdCommand(), o.etcdSnapshotsCommand(),
+		o.poolCommand(), o.updateCommand(), o.machineCommand(), o.etcdCommand(), o.etcdSnapshotsCommand(), o.removedEtcdSnapshotsCommand(),
 	}, o.addonCommands())...)
 	return cmd
 }

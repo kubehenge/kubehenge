@@ -5,12 +5,16 @@ package backupstore
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -27,6 +31,7 @@ func TestIntegrationControllerAsksForTheVolume(t *testing.T) { //nolint:parallel
 		t.Fatal(err)
 	}
 	objects := integration.RenderChart(t, "kubehenge-storage", "../../management-cluster/charts/storage", "kube-system", "../appliance/testdata/storage-zones-values.yaml")
+	checkStorePortOpen(t, objects)
 	api := integration.Start(t, &integration.Options{Objects: objects, Namespaces: []string{Namespace, "kube-system"}})
 	admin, err := kubernetes.NewForConfig(api.Config)
 	if err != nil {
@@ -65,21 +70,22 @@ func TestIntegrationControllerAsksForTheVolume(t *testing.T) { //nolint:parallel
 	}
 
 	v := &Volume{Kube: controller}
-	if _, err = v.Open(ctx); !errors.Is(err, provisioner.ErrVolumeAsleep) {
-		t.Fatalf("asking for the sleeping store: %v, want it asleep", err)
+	for _, holder := range []string{"snapshots of a/web", "restore of b/db"} {
+		if _, err = v.Open(ctx, holder); !errors.Is(err, provisioner.ErrVolumeAsleep) {
+			t.Fatalf("%s asking for the sleeping store: %v, want it asleep", holder, err)
+		}
 	}
-	d, err := admin.AppsV1().Deployments(Namespace).Get(ctx, Service, metav1.GetOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !WakeRequested(d, time.Now()) {
-		t.Fatalf("the store carries no wake request: %v", d.Annotations)
-	}
-	if err = v.Done(ctx); err != nil {
-		t.Fatalf("taking the request away: %v", err)
-	}
-	if d, err = admin.AppsV1().Deployments(Namespace).Get(ctx, Service, metav1.GetOptions{}); err != nil || WakeRequested(d, time.Now()) {
-		t.Fatalf("the request stayed: %v, %v", d.Annotations, err)
+	for i, holder := range []string{"snapshots of a/web", "restore of b/db"} {
+		if err = v.Done(ctx, holder); err != nil {
+			t.Fatalf("taking %s's request away: %v", holder, err)
+		}
+		d, gerr := admin.AppsV1().Deployments(Namespace).Get(ctx, Service, metav1.GetOptions{})
+		if gerr != nil {
+			t.Fatal(gerr)
+		}
+		if left := i == 0; WakeRequested(d, time.Now()) != left {
+			t.Fatalf("after %s's Done the store is asked for %v, want %v: %v", holder, !left, left, d.Annotations)
+		}
 	}
 
 	const outside = "the controller changes nothing of the backup store but its wake request"
@@ -97,4 +103,34 @@ func TestIntegrationControllerAsksForTheVolume(t *testing.T) { //nolint:parallel
 	if _, err := controller.AppsV1().Deployments("kube-system").List(ctx, metav1.ListOptions{}); !apierrors.IsForbidden(err) {
 		t.Errorf("listing other Deployments: %v, want forbidden", err)
 	}
+}
+
+// storePort is the store's port in the storage chart.
+const storePort = 8080
+
+// checkStorePortOpen holds the store's NetworkPolicy to letting any source reach its port: the API
+// server's service proxy, through which the appliance and the interface reach the store, comes from
+// a node's address or from the pod network's own on another node, and no pod selector covers it.
+func checkStorePortOpen(t *testing.T, objects []*unstructured.Unstructured) {
+	t.Helper()
+	for _, o := range objects {
+		if o.GetKind() != "NetworkPolicy" {
+			continue
+		}
+		rules, _, _ := unstructured.NestedSlice(o.Object, "spec", "ingress")
+		for _, r := range rules {
+			rule, _ := r.(map[string]any)
+			ports, _, _ := unstructured.NestedSlice(rule, "ports")
+			_, narrowed := rule["from"]
+			if !narrowed && slices.ContainsFunc(ports, func(p any) bool {
+				port, _ := p.(map[string]any)
+				return fmt.Sprint(port["port"]) == strconv.Itoa(storePort)
+			}) {
+				return
+			}
+		}
+		t.Errorf("NetworkPolicy %s lets only some sources reach the store's port %d: %v", o.GetName(), storePort, rules)
+		return
+	}
+	t.Error("the storage chart holds no NetworkPolicy for the store")
 }

@@ -60,10 +60,11 @@ func TestTheApplianceWakesTheStoreTheControllerAskedFor(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		key := backupstore.WakeRequestKey(backupstore.WakeRequestAnnotation, "snapshots")
 		if at == "" {
-			delete(d.Annotations, backupstore.WakeRequestAnnotation)
+			delete(d.Annotations, key)
 		} else {
-			d.Annotations[backupstore.WakeRequestAnnotation] = at
+			d.Annotations[key] = at
 		}
 		if _, err := deps.Update(ctx, d, metav1.UpdateOptions{}); err != nil {
 			t.Fatal(err)

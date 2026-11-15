@@ -711,6 +711,10 @@ type ClusterTargets struct {
 	// Volume is the backup volume, for clusters whose snapshots name no target. It may be nil
 	// where nothing reads the volume.
 	Volume BackupVolume
+	// Holder names what holds the volume awake through these targets, for each cluster apart:
+	// "snapshots" where empty. The restorer names itself, so that a snapshot ending does not let
+	// the volume sleep under a restore.
+	Holder string
 }
 
 // ClusterTarget is a cluster's way into its snapshot folder in its target, with its keys.

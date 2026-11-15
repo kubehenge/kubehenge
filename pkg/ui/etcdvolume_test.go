@@ -25,14 +25,14 @@ type uiVolumeStore struct{ *uiStore }
 
 func (uiVolumeStore) Room(context.Context) (int64, int64, error) { return 10 << 30, 20 << 30, nil }
 
-func (v *uiVolume) Open(context.Context) (provisioner.VolumeStore, error) { //nolint:ireturn // BackupVolume's own signature
+func (v *uiVolume) Open(context.Context, string) (provisioner.VolumeStore, error) { //nolint:ireturn // BackupVolume's own signature
 	if v.asleep {
 		return nil, provisioner.ErrVolumeAsleep
 	}
 	return uiVolumeStore{v.store}, nil
 }
 
-func (*uiVolume) Done(context.Context) error { return nil }
+func (*uiVolume) Done(context.Context, string) error { return nil }
 
 // onTheVolume moves cluster one's snapshots from the bucket onto the backup volume, with no target
 // set.

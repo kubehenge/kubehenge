@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -38,9 +39,50 @@ func (f *etcdSnapshotsAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "GET /api/clusters/clusters/web/etcd-snapshots/cut.db.age":
 		w.Header().Set("Content-Length", "4096")
 		_, _ = io.WriteString(w, "etcd")
+	case "GET /api/removed-etcd-snapshots/clusters":
+		_, _ = io.WriteString(w, `[{"namespace":"clusters","name":"old","keys":true,
+			"snapshots":[{"name":"b.db.age","time":"2026-11-02T06:00:00Z"},{"name":"a.db.age","time":"2026-11-01T06:00:00Z"}]}]`)
+	case "DELETE /api/removed-etcd-snapshots/clusters/old":
+		_, _ = io.WriteString(w, `{"deleted":2}`)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(w, `{"error":"no such snapshot"}`)
+	}
+}
+
+// The CLI lists a namespace's removed clusters whose snapshots the backup volume keeps, and deletes
+// one's through the interface's route, the cluster's name sent as the confirmation it asks for.
+func TestClusterRemovedEtcdSnapshots(t *testing.T) {
+	t.Parallel()
+	api := &etcdSnapshotsAPI{}
+	srv := httptest.NewServer(api)
+	t.Cleanup(srv.Close)
+	const token = "dev@pve!ci=secret" //nolint:gosec // the fake interface's own
+
+	out, err := runCluster(t, srv.URL, token, "removed-etcd-snapshots", "list", "-n", "clusters")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "old") || !strings.Contains(out, "2026-11-02T06:00:00Z") || !strings.Contains(out, "kept") {
+		t.Errorf("list:\n%s", out)
+	}
+	for name, args := range map[string][]string{
+		"without --yes":       {"removed-etcd-snapshots", "delete", "old", "-n", "clusters"},
+		"without a namespace": {"removed-etcd-snapshots", "delete", "old", "--yes"},
+	} {
+		if _, err := runCluster(t, srv.URL, token, args...); err == nil {
+			t.Errorf("deleted %s", name)
+		}
+	}
+	out, err = runCluster(t, srv.URL, token, "removed-etcd-snapshots", "delete", "old", "-n", "clusters", "--yes")
+	if err != nil || !strings.Contains(out, "deleted 2 snapshots") {
+		t.Fatalf("delete: %q, %v", out, err)
+	}
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	want := `DELETE /api/removed-etcd-snapshots/clusters/old {"confirm":"old"}`
+	if !slices.Contains(api.sent, want) {
+		t.Errorf("sent %q, want %q among them", api.sent, want)
 	}
 }
 

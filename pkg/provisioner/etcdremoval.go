@@ -16,7 +16,9 @@ import (
 
 // DeleteEtcdSnapshotsAnnotation on a Cluster, "true", has its etcd snapshots on the backup volume
 // deleted with it. Without it they stay, with the cluster's backup keys, until deleted in the
-// Backups view or with the CLI.
+// Backups view or with `kubehenge cluster removed-etcd-snapshots delete`, both through the
+// interface's route that asks for the cluster's name. Once the Cluster is gone, kubectl has no
+// object to act on.
 const DeleteEtcdSnapshotsAnnotation = "kubehenge.dev/delete-etcd-snapshots"
 
 // EtcdSnapshotsFinalizer holds a cluster's deletion until the snapshotter has done what
@@ -83,11 +85,12 @@ func DeleteVolumeSnapshots(ctx context.Context, volume BackupVolume, namespace, 
 	if volume == nil {
 		return 0, errors.New("the backup volume is not reached here")
 	}
-	store, err := volume.Open(ctx)
+	holder := "removal of " + namespace + "/" + cluster
+	store, err := volume.Open(ctx, holder)
 	if err != nil {
 		return 0, err //nolint:wrapcheck // ErrVolumeAsleep is read as it is
 	}
-	defer func() { _ = volume.Done(context.WithoutCancel(ctx)) }()
+	defer func() { _ = volume.Done(context.WithoutCancel(ctx), holder) }()
 	folder := VolumeFolder(namespace, cluster)
 	objects, err := store.List(ctx, folder+"/")
 	if err != nil {

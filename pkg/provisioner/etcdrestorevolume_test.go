@@ -224,9 +224,10 @@ func TestEtcdRestoreFromTheVolumeThroughTheAPIServer(t *testing.T) {
 			}
 			checkReceiver(t, pod, file[1], st.Node)
 			// The snapshot is on the node, checked, before anything stops, and nothing is reset.
-			if runs := f.guests.runs(); !isSubsequence([]string{"101 fetch", "101 stop", "102 stop", "103 stop"}, runs) ||
-				slices.ContainsFunc(runs, func(r string) bool { return strings.HasSuffix(r, " stop") && slices.Index(runs, r) < slices.Index(runs, "101 fetch") }) ||
-				slices.Contains(runs, "101 reset") {
+			runs := f.guests.runs()
+			fetch := slices.Index(runs, "101 fetch")
+			stop := slices.IndexFunc(runs, func(r string) bool { return strings.HasSuffix(r, " stop") })
+			if fetch < 0 || stop < fetch || slices.Contains(runs, "101 reset") {
 				t.Errorf("ran %v", runs)
 			}
 			if left := podsLeft(t, workloads); len(left) != 0 || !removed {

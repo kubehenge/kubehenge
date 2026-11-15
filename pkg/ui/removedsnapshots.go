@@ -23,8 +23,9 @@ func (s *Server) removedEtcdSnapshots(w http.ResponseWriter, r *http.Request, u 
 	defer cancel()
 	volume, err := s.snapshotVolume()
 	var store provisioner.VolumeStore
+	holder := "the list of removed clusters in " + r.PathValue("namespace")
 	if err == nil {
-		store, err = volume.Open(ctx)
+		store, err = volume.Open(ctx, holder)
 	}
 	switch {
 	case errors.Is(err, provisioner.ErrVolumeAsleep):
@@ -34,7 +35,7 @@ func (s *Server) removedEtcdSnapshots(w http.ResponseWriter, r *http.Request, u 
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	defer func() { _ = volume.Done(context.WithoutCancel(ctx)) }()
+	defer func() { _ = volume.Done(context.WithoutCancel(ctx), holder) }()
 	removed, err := provisioner.RemovedClusters(ctx, u.kube, store, r.PathValue("namespace"))
 	if err != nil {
 		s.kubeError(w, r, err)
@@ -90,7 +91,7 @@ func (s *Server) deleteRemovedEtcdSnapshots(w http.ResponseWriter, r *http.Reque
 	}
 	err = u.kube.Get(r.Context(), client.ObjectKey{Namespace: namespace, Name: name}, &clusterv1.Cluster{})
 	if err == nil {
-		writeError(w, http.StatusConflict, "the cluster exists. Its snapshots go with it when it is removed")
+		writeError(w, http.StatusConflict, fmt.Sprintf("cluster %s still exists, and only a removed cluster's snapshots are deleted here. Delete the cluster with its volume snapshots instead", name))
 		return
 	}
 	if !apierrors.IsNotFound(err) {

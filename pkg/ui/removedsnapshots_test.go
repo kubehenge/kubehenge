@@ -3,6 +3,7 @@ package ui
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -36,7 +37,12 @@ func TestRemovedClustersSnapshots(t *testing.T) {
 	h, vol := onTheVolume(t)
 	b := h.browser()
 	b.signIn("dev@pve")
-	expect(t, b.do("DELETE", "/api/removed-etcd-snapshots/default/one", `{"confirm":"one"}`), http.StatusConflict)
+	exists := b.do("DELETE", "/api/removed-etcd-snapshots/default/one", `{"confirm":"one"}`)
+	expect(t, exists, http.StatusConflict)
+	// The refusal names the cluster, the rule and the way to delete its snapshots.
+	if msg := exists.Body.String(); !strings.Contains(msg, "cluster one still exists, and only a removed cluster's snapshots are deleted here. Delete the cluster with its volume snapshots instead") {
+		t.Errorf("refused with %s", msg)
+	}
 	rec := b.do("GET", "/api/removed-etcd-snapshots/default", "")
 	expect(t, rec, http.StatusOK)
 	if rec.Body.String() != "[]\n" {

@@ -12,10 +12,11 @@ import (
 // cluster whose etcdSnapshots name no target. The controller pulls each snapshot from the cluster's
 // etcd and stores it there itself, so the management cluster opens nothing to workload networks.
 type BackupVolume interface {
-	// Open asks for the volume and returns its store once it is awake, or ErrVolumeAsleep.
-	Open(ctx context.Context) (VolumeStore, error)
-	// Done tells the volume that the controller no longer needs it awake.
-	Done(ctx context.Context) error
+	// Open asks for the volume on behalf of holder and returns its store once it is awake, or
+	// ErrVolumeAsleep. Each holder that may overlap another names itself apart.
+	Open(ctx context.Context, holder string) (VolumeStore, error)
+	// Done tells the volume that holder no longer needs it awake. It sleeps once no holder is left.
+	Done(ctx context.Context, holder string) error
 }
 
 // VolumeStore is the store on the backup volume.
@@ -116,13 +117,18 @@ func (ts *ClusterTargets) openVolume(ctx context.Context, cluster *clusterv1.Clu
 	if keys == nil {
 		return nil, errors.New("the cluster has no backup keys yet")
 	}
-	store, err := ts.Volume.Open(ctx)
+	holder := ts.Holder
+	if holder == "" {
+		holder = "snapshots"
+	}
+	holder += " of " + cluster.Namespace + "/" + cluster.Name
+	store, err := ts.Volume.Open(ctx, holder)
 	if err != nil {
 		return nil, err //nolint:wrapcheck // ErrVolumeAsleep is read as it is
 	}
 	return &ClusterTarget{
 		Store: store, Folder: EtcdSnapshotPrefix(volumeFolderPrefix, cluster.Namespace, cluster.Name), Keys: keys,
-		volume: store, done: ts.Volume.Done,
+		volume: store, done: func(ctx context.Context) error { return ts.Volume.Done(ctx, holder) },
 	}, nil
 }
 
