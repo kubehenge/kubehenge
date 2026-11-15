@@ -531,7 +531,7 @@ A lost passphrase cannot be recovered. The management cluster and every cluster 
 
 1. Delete every cluster in the interface and wait until the management cluster has cleaned up their Proxmox VE objects.
 2. In Proxmox VE, delete what the setup made:
-   - the VMs in the pools `kubehenge-management` (the management cluster) and `kubehenge-templates` (the VM templates), then the pools `kubehenge-management`, `kubehenge-templates` and `kubehenge`.
+   - the VMs in the pools `kubehenge-management` (the management cluster) and `kubehenge-templates` (the VM templates), then the pools `kubehenge-management`, `kubehenge-templates` and `kubehenge`. The management VMs are protected: run `qm set <vmid> --protection 0` on each first.
    - the users `kubehenge-cluster-api@pve`, `kubehenge-provisioner@pve` and those of the settings that were on. Their API tokens go with them.
      - `kubehenge-template-builder@pve` (template refresh)
      - `kubehenge-ha@pve` (Proxmox VE HA)
@@ -559,6 +559,7 @@ It creates objects on Proxmox VE and installs charts in the management cluster.
 ##### On Proxmox VE
 
 - the three pools.
+- the management cluster's VMs, with Proxmox VE's protection on, so that Proxmox VE refuses to destroy them. A run that replaces or removes one lifts it on that VM alone, and sets it again should the run fail.
 - a user and API token for Cluster API, with no rights on the management cluster's own VMs. It manages VMs in the clusters' pool, clones templates, uses the chosen storages and bridges and writes cloud-init images.
 - a user and API token for Kubehenge's controller, which creates each cluster's own pool, user and token ([architecture.md](architecture.md#each-clusters-own-corner-of-proxmox-ve)).
 - while the template refresh is on, a user and API token for the weekly template build ([details](install-settings.md#what-the-template-builds-may-do)).

@@ -453,6 +453,10 @@ resource "proxmox_virtual_environment_vm" "node" {
   scsi_hardware   = "virtio-scsi-single"
   on_boot         = true
   stop_on_destroy = true
+  # Proxmox VE refuses to destroy a protected VM, from its interface and API alike. Before an apply
+  # that replaces or removes a node VM, the appliance lifts the flag on exactly that VM. Migration,
+  # HA included, is not affected.
+  protection = true
   # Rebooting on a hardware change would take every node down at once; a change of cores or
   # memory takes effect when each node next reboots, as a Talos upgrade reboots them one by one.
   reboot_after_update = false

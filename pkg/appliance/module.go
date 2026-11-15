@@ -131,7 +131,7 @@ func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase str
 		return nil, err
 	}
 	j.Add("Applying the management cluster")
-	err = a.tofu(ctx, j, env, jsonMessage, "apply", "-auto-approve", "-input=false", "-json")
+	err = a.applyPlanned(ctx, j, env, ticket)
 	if err != nil {
 		a.explainWaits(ctx, j, env)
 		return nil, err
@@ -460,7 +460,15 @@ func errorDiagnostic(line string) string {
 
 // output reads one output of the last apply.
 func (a *Appliance) output(ctx context.Context, env []string, name string) (string, error) {
-	cmd := exec.CommandContext(ctx, a.Tofu, "-chdir="+a.workdir(), "output", "-raw", name) //nolint:gosec // the binary and arguments are the appliance's own
+	out, err := a.read(ctx, env, "output", "-raw", name)
+	return string(out), err
+}
+
+// read runs one OpenTofu command that prints what it reads, and returns that. Its errors name the
+// command and what it read, its last argument.
+func (a *Appliance) read(ctx context.Context, env []string, args ...string) ([]byte, error) {
+	what := args[0] + " " + args[len(args)-1]
+	cmd := exec.CommandContext(ctx, a.Tofu, append([]string{"-chdir=" + a.workdir()}, args...)...) //nolint:gosec // the binary and arguments are the appliance's own
 	cmd.Env = env
 	out, err := cmd.Output()
 	if exit, ok := errors.AsType[*exec.ExitError](err); ok {
@@ -472,12 +480,12 @@ func (a *Appliance) output(ctx context.Context, env []string, name string) (stri
 				stderr = j.hidden.Replace(stderr)
 			}
 		}
-		return "", fmt.Errorf("tofu output %s: %s", name, stderr)
+		return nil, fmt.Errorf("tofu %s: %s", what, stderr)
 	}
 	if err != nil {
-		return "", fmt.Errorf("tofu output %s: %w", name, err)
+		return nil, fmt.Errorf("tofu %s: %w", what, err)
 	}
-	return string(out), nil
+	return out, nil
 }
 
 // moduleOIDC names the providers as the module's cluster_oidc does. Null takes its default.
