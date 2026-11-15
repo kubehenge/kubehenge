@@ -159,7 +159,7 @@ Security groups act only with the datacenter firewall on, which also turns on ea
 
 Both of Proxmox VE's firewalls read what Kubehenge writes: the default one on iptables and the one on nftables (Host, Firewall, Options, nftables). The end-to-end tests run the nftables one.
 
-With the iptables firewall, a bridge behind NAT needs the conntrack zone rule from Proxmox VE's [Network Configuration guide](https://pve.proxmox.com/wiki/Network_Configuration#_masquerading_nat_with_iptables). Without it the firewall drops the nodes' outbound connections. The nftables firewall needs none.
+With the iptables firewall, a bridge behind NAT needs the conntrack zone rule from Proxmox VE's [Network Configuration guide](https://pve.proxmox.com/wiki/Network_Configuration#sysadmin_network_masquerading). Without it the firewall drops the nodes' outbound connections. The nftables firewall needs none.
 
 #### IPv6 and dual-stack
 
