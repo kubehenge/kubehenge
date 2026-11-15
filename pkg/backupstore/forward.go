@@ -82,8 +82,8 @@ func (f *Forward) readyPod(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("finding the backup store's pod: %w", err)
 	}
-	for _, s := range slices.Items {
-		for _, e := range s.Endpoints {
+	for i := range slices.Items {
+		for _, e := range slices.Items[i].Endpoints {
 			if e.TargetRef != nil && e.TargetRef.Kind == "Pod" && e.Conditions.Ready != nil && *e.Conditions.Ready {
 				return e.TargetRef.Name, nil
 			}
@@ -145,6 +145,45 @@ type forwardConn struct {
 	failed chan struct{}
 }
 
+// errorStreamLag is how long a forward's end waits for the error stream to say why.
+const errorStreamLag = time.Second
+
+func (c *forwardConn) Read(b []byte) (int, error) {
+	n, err := c.data.Read(b)
+	if n > 0 {
+		c.watchdog.Reset(c.idle)
+	}
+	if err != nil {
+		err = c.errorAfter(err)
+	}
+	return n, err
+}
+
+func (c *forwardConn) Write(b []byte) (int, error) {
+	n, err := c.data.Write(b)
+	if n > 0 {
+		c.watchdog.Reset(c.idle)
+	}
+	if err != nil {
+		err = c.errorAfter(err)
+	}
+	return n, err
+}
+
+func (c *forwardConn) Close() error {
+	c.watchdog.Stop()
+	c.conn.RemoveStreams(c.data)
+	return errors.Join(c.data.Close(), c.conn.Close())
+}
+
+func (*forwardConn) LocalAddr() net.Addr  { return forwardAddr{} }
+func (*forwardConn) RemoteAddr() net.Addr { return forwardAddr{} }
+
+// The deadlines are the watchdog's: a stream has none of its own.
+func (*forwardConn) SetDeadline(time.Time) error      { return nil }
+func (*forwardConn) SetReadDeadline(time.Time) error  { return nil }
+func (*forwardConn) SetWriteDeadline(time.Time) error { return nil }
+
 // readErrors waits for the error stream, which the kubelet writes when the forward fails, such as
 // when the pod goes.
 func (c *forwardConn) readErrors(s httpstream.Stream) {
@@ -192,45 +231,6 @@ func (c *forwardConn) errorAfter(err error) error {
 	}
 	return err
 }
-
-// errorStreamLag is how long a forward's end waits for the error stream to say why.
-const errorStreamLag = time.Second
-
-func (c *forwardConn) Read(b []byte) (int, error) {
-	n, err := c.data.Read(b)
-	if n > 0 {
-		c.watchdog.Reset(c.idle)
-	}
-	if err != nil {
-		err = c.errorAfter(err)
-	}
-	return n, err
-}
-
-func (c *forwardConn) Write(b []byte) (int, error) {
-	n, err := c.data.Write(b)
-	if n > 0 {
-		c.watchdog.Reset(c.idle)
-	}
-	if err != nil {
-		err = c.errorAfter(err)
-	}
-	return n, err
-}
-
-func (c *forwardConn) Close() error {
-	c.watchdog.Stop()
-	c.conn.RemoveStreams(c.data)
-	return errors.Join(c.data.Close(), c.conn.Close())
-}
-
-func (*forwardConn) LocalAddr() net.Addr  { return forwardAddr{} }
-func (*forwardConn) RemoteAddr() net.Addr { return forwardAddr{} }
-
-// The deadlines are the watchdog's: a stream has none of its own.
-func (*forwardConn) SetDeadline(time.Time) error      { return nil }
-func (*forwardConn) SetReadDeadline(time.Time) error  { return nil }
-func (*forwardConn) SetWriteDeadline(time.Time) error { return nil }
 
 // forwardAddr names a forward's two ends, which have no network address.
 type forwardAddr struct{}

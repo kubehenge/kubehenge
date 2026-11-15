@@ -15,7 +15,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/portforward"
@@ -100,7 +99,7 @@ func forwardTo(t *testing.T, k *kubelet) (*Forward, *Client) {
 	t.Cleanup(srv.Close)
 	ready := true
 	kube := fake.NewClientset(&discoveryv1.EndpointSlice{
-		ObjectMeta: metav1.ObjectMeta{Name: Service + "-x", Namespace: Namespace, Labels: map[string]string{discoveryv1.LabelServiceName: Service}},
+		Name: Service + "-x", Namespace: Namespace, Labels: map[string]string{discoveryv1.LabelServiceName: Service},
 		Endpoints: []discoveryv1.Endpoint{
 			{TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: "kubehenge-backup-store-old-zzzzz"}, Conditions: discoveryv1.EndpointConditions{Ready: new(false)}},
 			{TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: storePod}, Conditions: discoveryv1.EndpointConditions{Ready: &ready}},
@@ -217,8 +216,7 @@ func TestForwardKeepsATransferThatMoves(t *testing.T) {
 func TestForwardNeedsAReadyPod(t *testing.T) {
 	t.Parallel()
 	f := &Forward{Kube: fake.NewClientset(), Dial: func(context.Context, string) (httpstream.Connection, error) {
-		t.Fatal("dialled with no ready pod")
-		return nil, nil
+		return nil, errors.New("dialled with no ready pod")
 	}}
 	c := &Client{Base: ForwardBase, Token: "secret", HTTP: f.HTTPClient()}
 	if _, err := c.Get(t.Context(), "big"); err == nil || !strings.Contains(err.Error(), "no ready pod") {

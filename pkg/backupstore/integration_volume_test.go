@@ -127,7 +127,7 @@ func TestIntegrationInterfaceForwardsToTheStoreAlone(t *testing.T) { //nolint:pa
 	ctx := context.Background()
 	const store, other = "kubehenge-backup-store-5d8f7c9b4-abcde", "kubehenge-backup-store-zones-29384756-abcde"
 	for _, name := range []string{store, other} {
-		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: Namespace}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: "x"}}}}
+		pod := &corev1.Pod{Name: name, Namespace: Namespace, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: "x"}}}}
 		if _, err = admin.CoreV1().Pods(Namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 			t.Fatal(err)
 		}
