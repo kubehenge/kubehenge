@@ -39,6 +39,8 @@ import {
   withNamespace,
   withRoom,
   withTalosRelease,
+  siteZoneOf,
+  withSiteZone,
   type FieldKey,
   type Form,
   type Step,
@@ -51,7 +53,7 @@ import { offersHA, offersHAGroups, useHARules } from "./Placement";
 import { navigate } from "./router";
 import { clusterKey, fromCluster, startable, startKeys } from "./start-from";
 import type { Bridge, Cluster, ClusterClass, NodeDNS, PveNode, Storage, Versions } from "./types";
-import { CopiedFrom, Detail, Dialog, ErrorBox, errorMessage, filled, sole } from "./ui";
+import { CopiedFrom, Detail, Dialog, ErrorBox, defaultZone, errorMessage, filled, setSiteZone, sole } from "./ui";
 import { record } from "./values";
 
 // customisationRefusal is the server's error where it names the node customisation, which then shows with it.
@@ -275,7 +277,14 @@ export function CreateCluster({
   useEffect(() => {
     async function loadClasses(): Promise<void> {
       try {
-        setClasses(await api.classes());
+        const listed = await api.classes();
+        const zone = siteZoneOf(listed);
+        if (zone !== "") {
+          const was = defaultZone();
+          setSiteZone(zone);
+          setEntered((f) => withSiteZone(f, was, zone));
+        }
+        setClasses(listed);
       } catch (err) {
         setError(errorMessage(err));
       }

@@ -563,6 +563,16 @@ export function saveFile(blob: Blob, name: string): void {
 /** browserZone is the browser's IANA time zone, UTC when it names none. */
 export const browserZone = (): string => new Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
+let siteZone = "";
+
+/** setSiteZone sets the site's default time zone, which the classes carry. Empty, the browser's. */
+export function setSiteZone(zone: string): void {
+  siteZone = zone;
+}
+
+/** defaultZone is the time zone a new schedule starts in: the site's, else the browser's. */
+export const defaultZone = (): string => (siteZone === "" ? browserZone() : siteZone);
+
 /** timeZones lists the IANA time zones, with UTC and the current one, which the browser may not list. */
 export function timeZones(current: string): string[] {
   return [...new Set(["UTC", current, ...Intl.supportedValuesOf("timeZone")])];

@@ -22,6 +22,13 @@ func (s *Settings) checkSiteDefaults(p *problems, now time.Time) {
 	}
 }
 
+// ValidateSiteDefaults refuses a site CA or time zone that Validate refuses, with its message.
+func (s *Settings) ValidateSiteDefaults() error {
+	var p problems
+	s.checkSiteDefaults(&p, time.Now())
+	return p.err()
+}
+
 // EffectiveReleaseMirror is the release mirror as the nodes and the interface use it: an https
 // mirror without an authority of its own is verified with the site CA.
 func (s *Settings) EffectiveReleaseMirror() provisioner.ReleaseMirror {

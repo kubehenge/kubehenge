@@ -46,7 +46,7 @@ import type { ClusterClass } from "./types";
 import {
   Field,
   Info,
-  browserZone,
+  defaultZone,
   filled,
   headlampHint,
   headlampViewHint,
@@ -796,7 +796,7 @@ export function PoliciesStep(props: AddOnsProps): JSX.Element {
               : "Replaces the nodes with each new template build."}
           </Info>
           {(form.upgradeMode !== "off" || form.nodeImages) && (
-            <p className="hint">Upgrades run daily 02:00 to 06:00, {browserZone()} time</p>
+            <p className="hint">Upgrades run daily 02:00 to 06:00, {defaultZone()} time</p>
           )}
         </>
       )}

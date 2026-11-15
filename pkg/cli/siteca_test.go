@@ -48,7 +48,7 @@ func TestControllerSiteCAReachesTheReleaseMirrorAndTheNodes(t *testing.T) {
 	if err := o.parseReleaseMirror(); err != nil {
 		t.Fatal(err)
 	}
-	if o.releaseMirror.CABundle != site || o.r.SiteCA != site {
+	if o.releaseMirror.CABundle != strings.TrimSpace(site) || o.r.SiteCA != strings.TrimSpace(site) {
 		t.Errorf("a mirror without an authority: %q, nodes %q, want the site CA", o.releaseMirror.CABundle, o.r.SiteCA)
 	}
 

@@ -173,7 +173,7 @@ import type {
   Versions,
 } from "./types";
 import {
-  browserZone,
+  defaultZone,
   bytes,
   cniName,
   csiText,
@@ -1474,7 +1474,7 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   // A cluster whose nodes move to new template builds needs its window in the browser's time zone
   // even with Kubernetes upgrades off.
   if (form.upgradeMode !== "off" || defined.has("upgrades")) {
-    variables["upgrades"] = newUpgrades(form.upgradeMode, browserZone(), form.nodeImages);
+    variables["upgrades"] = newUpgrades(form.upgradeMode, defaultZone(), form.nodeImages);
   }
   const req: CreateRequest = {
     ...(form.namespace ? { namespace: form.namespace } : {}),
@@ -1683,7 +1683,7 @@ export function summary(form: Form, c: ClusterClass, offered: SummaryOffered = {
   }
   rows.push(...customisationRows(form, defined), ...addOnRows(form, c, defined));
   if (defined.has("upgrades")) {
-    const upgrades = newUpgrades(form.upgradeMode, browserZone(), form.nodeImages);
+    const upgrades = newUpgrades(form.upgradeMode, defaultZone(), form.nodeImages);
     rows.push(["Automatic upgrades", describe(upgrades, refreshesNodes(upgrades), c.distribution)]);
   }
   if (defined.has("oidc")) {
@@ -2107,6 +2107,17 @@ function balancerProblems(form: Form, c: ClusterClass | undefined): Problems {
   }
   return p;
 }
+
+/** siteZoneOf is the time zone the site set for schedules, which every class carries. */
+export const siteZoneOf = (classes: ClusterClass[]): string =>
+  classes.map((c) => c.annotations?.["kubehenge.dev/time-zone"] ?? "").find((zone) => zone !== "") ?? "";
+
+/** withSiteZone moves the schedules that still start in zone `was` to the site's zone. */
+export const withSiteZone = (f: Form, was: string, zone: string): Form => ({
+  ...f,
+  etcdFields: f.etcdFields.timeZone === was ? { ...f.etcdFields, timeZone: zone } : f.etcdFields,
+  backupFields: f.backupFields.timeZone === was ? { ...f.backupFields, timeZone: zone } : f.backupFields,
+});
 
 /**
  * setLoadBalancer sets the form fields behind the load-balancer fields that a patch holds. A load

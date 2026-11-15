@@ -634,7 +634,7 @@ func (o *controllerOptions) parseReleaseMirror() error {
 		if err = provisioner.CheckCertificateBundle(string(ca), time.Now()); err != nil {
 			return fmt.Errorf("--site-ca: the authority %w", err)
 		}
-		o.r.SiteCA = string(ca)
+		o.r.SiteCA = strings.TrimSpace(string(ca))
 		o.releaseMirror = o.releaseMirror.WithSiteCA(o.r.SiteCA)
 	}
 	if err := o.releaseMirror.Check(time.Now()); err != nil {

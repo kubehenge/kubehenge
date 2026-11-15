@@ -24,7 +24,7 @@ import {
   Info,
   Status,
   age,
-  browserZone,
+  defaultZone,
   bytes,
   distributionName,
   errorMessage,
@@ -104,7 +104,7 @@ export function etcdFieldsOf(v: EtcdSnapshotsValue): EtcdSnapshotFields {
     target: v.target ?? "",
     schedule: v.schedule ?? defaultEtcdSchedule,
     // What is in effect: UTC when snapshots name none. Snapshots switched on start in the browser's zone.
-    timeZone: v.timeZone ?? (v.enabled ? "UTC" : browserZone()),
+    timeZone: v.timeZone ?? (v.enabled ? "UTC" : defaultZone()),
     keep: String(v.keep ?? defaultEtcdKeep),
     upload: v.distributionUpload === true,
   };

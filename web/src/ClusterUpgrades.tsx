@@ -1,7 +1,7 @@
 import { useState, type JSX } from "react";
 
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, Field, Info, browserZone, stageLabel, timeZones, useChange, weekdays } from "./ui";
+import { Dialog, ErrorBox, Field, Info, defaultZone, stageLabel, timeZones, useChange, weekdays } from "./ui";
 import { oneOf, quantities, quantity, record, text, texts } from "./values";
 
 export const upgradeModes = ["off", "patch", "minor"] as const;
@@ -150,7 +150,7 @@ function fieldsOf(current: UpgradePolicy): PolicyFields {
     start: w.start ?? defaultStart,
     hours: String((w.durationMinutes ?? defaultMinutes) / minutesPerHour),
     // What is in effect: UTC when a policy names none. A new policy starts in the browser's zone.
-    timeZone: w.timeZone ?? (active ? "UTC" : browserZone()),
+    timeZone: w.timeZone ?? (active ? "UTC" : defaultZone()),
   };
 }
 

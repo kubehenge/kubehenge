@@ -15,7 +15,7 @@ import {
   Info,
   Status,
   age,
-  browserZone,
+  defaultZone,
   errorMessage,
   filled,
   pollCache,
@@ -255,7 +255,7 @@ export interface BackupFields {
 export const newBackupFields = (): BackupFields => ({
   target: "",
   schedule: defaultSchedule,
-  timeZone: browserZone(),
+  timeZone: defaultZone(),
   retention: String(defaultRetentionDays),
   volumes: "all",
   readFrom: [],
@@ -267,7 +267,7 @@ export function backupFieldsOf(b: BackupsValue): BackupFields {
     target: b.target ?? "",
     schedule: b.schedule ?? defaultSchedule,
     // What is in effect: UTC when backups name none. Backups switched on start in the browser's zone.
-    timeZone: b.timeZone ?? (b.enabled ? "UTC" : browserZone()),
+    timeZone: b.timeZone ?? (b.enabled ? "UTC" : defaultZone()),
     retention: String(b.retentionDays ?? defaultRetentionDays),
     volumes: b.volumes ?? "all",
     readFrom: b.readFrom ?? [],
