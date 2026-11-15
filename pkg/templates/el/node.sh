@@ -116,9 +116,9 @@ fi
 mkdir -p /usr/lib/systemd/system-preset
 printf 'enable qemu-guest-agent.service\nenable kubehenge-boot-log.timer\nenable chronyd.service\n' > /usr/lib/systemd/system-preset/80-kubehenge.preset
 systemctl preset qemu-guest-agent kubehenge-boot-log.timer chronyd
-# A node takes its updates as a new build of its template, which its cluster rolls out; fwupd
-# cannot go, since shim needs it.
-systemctl mask bootc-fetch-apply-updates.timer fwupd-refresh.timer
+# A node takes its updates as a new build of its template, which its cluster rolls out, its
+# bootloader included; fwupd cannot go, since shim needs it.
+systemctl mask bootc-fetch-apply-updates.timer fwupd-refresh.timer bootloader-update.service
 
 # The image has no /var/log/journal, so the journal would stay in memory and go with each reboot;
 # the CIS benchmarks ask for it on disk, and kube-bench reads it there.
