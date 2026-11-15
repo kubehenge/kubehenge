@@ -295,6 +295,21 @@ function Step({
 }
 
 describe("the add-ons step", () => {
+  it("moves the snapshots to the backup volume and back where the class offers a bucket", async () => {
+    const user = userEvent.setup({ delay: null });
+    render(<Step cls={kubeadm} first={{ noSharedKey: true }} />);
+    const target = screen.getByLabelText("Target");
+    expect(target).toHaveValue("store");
+    expect(screen.getByText("No snapshots until a key for store is stored")).toBeInTheDocument();
+    await user.selectOptions(target, "Backup volume");
+    expect(target).toHaveDisplayValue("Backup volume");
+    expect(screen.queryByLabelText("Access key ID")).not.toBeInTheDocument();
+    expect(screen.queryByText(/No snapshots until a key/u)).not.toBeInTheDocument();
+    await user.selectOptions(target, "store");
+    expect(target).toHaveValue("store");
+    expect(screen.getByText("No snapshots until a key for store is stored")).toBeInTheDocument();
+  });
+
   it("offers etcd snapshots on, with the fields of the options and one access key", async () => {
     const user = userEvent.setup({ delay: null });
     const { container } = render(<Step cls={kubeadm} />);

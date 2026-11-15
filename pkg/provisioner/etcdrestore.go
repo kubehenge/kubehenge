@@ -190,6 +190,9 @@ type EtcdRestorer struct {
 	ScratchDir string
 	// APIs asks the restored cluster's API server whether it answers on the cluster's address.
 	APIs ClusterAPIs
+	// Workloads reaches the clusters' API servers, through which a snapshot on the backup volume
+	// reaches the node a kubeadm, RKE2 or k3s restore runs on. Nil restores those from buckets only.
+	Workloads WorkloadClients
 	// poll is how often a restore looks at what it waits for. It is talosRestorePoll when 0.
 	poll time.Duration
 	// Events reports on a Cluster how its restore went. It may be nil.
@@ -471,10 +474,19 @@ var volumeWakePoll = 5 * time.Second
 // openTarget opens the restore's target. The backup volume is waited for while it sleeps, within
 // the restore's time.
 func (run *restoreRun) openTarget(ctx context.Context) (*ClusterTarget, error) {
-	for {
+	for waited := false; ; waited = true {
 		t, err := run.r.Targets.Open(ctx, run.cluster, run.request.Target, false)
 		if !errors.Is(err, ErrVolumeAsleep) {
 			return t, err
+		}
+		if !waited {
+			run.status.Message = volumeWakingMessage
+			if serr := run.save(ctx); serr != nil {
+				return nil, serr
+			}
+			if run.r.Events != nil {
+				run.r.Events.Eventf(run.cluster, nil, corev1.EventTypeNormal, "EtcdRestoreWaitingForVolume", "RestoreEtcd", "restore from %s: %s", run.source(), volumeWakingMessage)
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -490,9 +502,9 @@ func (run *restoreRun) readSnapshot(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if t.OnVolume() && !run.talos {
+	if t.OnVolume() && !run.talos && run.r.Workloads == nil {
 		_ = t.Release(ctx)
-		return errors.New("the nodes of kubeadm, RKE2 and k3s clusters fetch the snapshot by a link, which the backup volume hands out to no workload network. Restore by hand as the steps say, or from a bucket target")
+		return errVolumeUnreached
 	}
 	s, err := ReadEtcdSnapshot(ctx, t.Store, t.Folder, run.request.Snapshot)
 	if err != nil {
@@ -587,6 +599,9 @@ func (run *restoreRun) fetch(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if run.target.OnVolume() {
+		return run.handOver(ctx, password)
+	}
 	id := make([]byte, restoreObjectID)
 	if _, err = rand.Read(id); err != nil {
 		return fmt.Errorf("naming the transcoded snapshot: %w", err)
@@ -604,35 +619,49 @@ func (run *restoreRun) fetch(ctx context.Context) error {
 	return run.on(ctx, run.nodes[0], "fetching the snapshot", fetchScriptFor(link, password, sum, run.target.CACertificate))
 }
 
-// transcode stores the snapshot under key encrypted with password, and returns the SHA-256 the
-// node checks it by. Where the node's restore keeps the snapshot's revision, what is stored has its
-// revision moved on (bumpedForNode). Otherwise the snapshot is encrypted as it is read.
-func (run *restoreRun) transcode(ctx context.Context, key, password string) (string, error) {
+// sealedForNode is the snapshot as the node gets it, encrypted with password, and the SHA-256 the
+// node checks it by. done lets go of what it reads from.
+func (run *restoreRun) sealedForNode(ctx context.Context, password string) (io.Reader, string, func(), error) {
 	var plain io.ReadCloser
 	sum := run.snapshot.SHA256
+	remove := func() {}
 	if run.scripts.Bumps {
 		r, err := run.target.OpenEtcdSnapshot(ctx, run.snapshot.Name)
 		if err != nil {
-			return "", err
+			return nil, "", nil, err
 		}
 		plain = r
 	} else {
 		path, bumped, err := run.bumpedForNode(ctx)
 		if err != nil {
-			return "", err
+			return nil, "", nil, err
 		}
-		defer func() { _ = os.Remove(path) }()
+		remove = func() { _ = os.Remove(path) }
 		f, err := os.Open(path) //nolint:gosec // the controller's own file of the snapshot
 		if err != nil {
-			return "", fmt.Errorf("reading the snapshot: %w", err)
+			remove()
+			return nil, "", nil, fmt.Errorf("reading the snapshot: %w", err)
 		}
 		plain, sum = f, bumped
 	}
-	defer func() { _ = plain.Close() }()
+	done := func() { _ = plain.Close(); remove() }
 	body, err := opensslSeal(plain, password)
+	if err != nil {
+		done()
+		return nil, "", nil, err
+	}
+	return body, sum, done, nil
+}
+
+// transcode stores the snapshot under key encrypted with password, and returns the SHA-256 the
+// node checks it by. Where the node's restore keeps the snapshot's revision, what is stored has its
+// revision moved on (bumpedForNode). Otherwise the snapshot is encrypted as it is read.
+func (run *restoreRun) transcode(ctx context.Context, key, password string) (string, error) {
+	body, sum, done, err := run.sealedForNode(ctx, password)
 	if err != nil {
 		return "", err
 	}
+	defer done()
 	if _, err := run.target.Store.Put(ctx, key, body, nil); err != nil {
 		return "", fmt.Errorf("storing the transcoded snapshot: %w", err)
 	}

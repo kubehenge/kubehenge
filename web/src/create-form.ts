@@ -48,6 +48,7 @@ import {
   etcdProblems,
   etcdSnapshotsText,
   etcdSnapshotsVariable,
+  toTarget,
   uploadsItself,
   withEtcdTarget,
   type EtcdSnapshotFields,
@@ -787,7 +788,7 @@ export const etcdOffered = (c: ClusterClass | undefined): boolean => variable(c,
 export const etcdChosen = (f: Form, c: ClusterClass | undefined): boolean => f.etcdSnapshots && etcdOffered(c);
 
 /** etcdToTarget says whether the form's etcd snapshots go to a bucket target, which needs an access key. */
-const etcdToTarget = (f: Form, c: ClusterClass | undefined): boolean => etcdChosen(f, c) && filled(f.etcdFields.target);
+const etcdToTarget = (f: Form, c: ClusterClass | undefined): boolean => etcdChosen(f, c) && toTarget(f.etcdFields.target);
 
 /** keyNeeded says whether the cluster gets the access key that its backups or etcd snapshots are written with. */
 export const keyNeeded = (f: Form, c: ClusterClass | undefined): boolean => backupsChosen(f, c) || etcdToTarget(f, c);

@@ -54,6 +54,9 @@ const (
 	volumeFirstSnapshot = 64 << 20
 )
 
+// volumeWakingMessage says a snapshot or a restore waits for the volume.
+const volumeWakingMessage = "Waiting for the appliance to wake the backup volume."
+
 // ErrVolumeFull refuses a snapshot the volume has no room for.
 var ErrVolumeFull = errors.New("the backup volume is nearly full")
 

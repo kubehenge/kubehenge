@@ -3,8 +3,15 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
-import { scheduleText } from "./Backups";
-import { etcdFieldsOf, etcdProblems, etcdSnapshotsText, restoreProblem } from "./EtcdSnapshots";
+import { scheduleText, volumeName, volumeTarget } from "./Backups";
+import {
+  etcdFieldsOf,
+  etcdProblems,
+  etcdSnapshotsText,
+  etcdSnapshotsVariable,
+  restoreProblem,
+  withEtcdTarget,
+} from "./EtcdSnapshots";
 import { applyStaged, fakeServer } from "./fake-server";
 import type { Cluster, ClusterClass, ClusterEtcdSnapshots, EtcdRestorePlan } from "./types";
 import { browserZone } from "./ui";
@@ -134,11 +141,57 @@ describe("etcd snapshot settings", () => {
     expect(etcdSnapshotsText({ enabled: false })).toBe("Off");
     const offered = [{ name: "store", bucket: "backups" }];
     expect(etcdProblems({ ...etcdFieldsOf({ enabled: true }), target: "store" }, offered)).toStrictEqual({});
-    expect(etcdProblems({ ...etcdFieldsOf({ enabled: true }), keep: "0" }, offered)).toStrictEqual({
+    expect(etcdProblems({ ...etcdFieldsOf({ enabled: true }), target: "", keep: "0" }, offered)).toStrictEqual({
       target: "Choose a target",
       keep: "A whole number from 1 to 1000",
     });
+    // Without a target the snapshots go to the backup volume, which needs no key.
+    expect(etcdFieldsOf({ enabled: true }).target).toBe(volumeTarget);
+    expect(etcdProblems(etcdFieldsOf({ enabled: true }), offered, { backups: "store" })).toStrictEqual({});
+    expect(etcdSnapshotsText({ enabled: true })).toBe("Every 12 hours from 00:00 (UTC), keeps 14, to the backup volume");
   });
+
+  it("keep the backup volume once chosen, and a bucket once chosen", () => {
+    const offered = [{ name: "store", bucket: "backups" }];
+    const volume = etcdFieldsOf({ enabled: true });
+    expect(withEtcdTarget(volume, offered, "store").target).toBe(volumeTarget);
+    expect(etcdSnapshotsVariable(withEtcdTarget(volume, offered, "store"))).not.toHaveProperty("target");
+    const unchosen = { ...volume, target: "" };
+    expect(withEtcdTarget(unchosen, offered, undefined).target).toBe("store");
+    expect(withEtcdTarget(unchosen, [], undefined).target).toBe(volumeTarget);
+    expect(etcdSnapshotsVariable({ ...volume, target: "store" }).target).toBe("store");
+  });
+
+  for (const [from, to, sent] of [
+    ["store", volumeName, undefined],
+    [volumeName, "store", "store"],
+  ] as const) {
+    it(`move from ${from} to ${to} in a cluster's options`, async () => {
+      window.history.replaceState(null, "", "/clusters/clusters/web/options");
+      const etcdSnapshots = from === "store" ? { enabled: true, target: "store" } : { enabled: true };
+      const calls = fakeServer({
+        ...signedIn,
+        "GET /api/clusters/clusters/web": { body: { ...cluster, variables: { ...cluster.variables, etcdSnapshots } } },
+        "GET /api/classes": { body: [rke2] },
+        "GET /api/clusters/clusters/web/credentials/backup": { body: { purpose: "backup", set: true, canChange: true } },
+        "PATCH /api/clusters/clusters/web": { body: snapshotting },
+      });
+      const user = userEvent.setup({ delay: null });
+      render(<App />);
+      await user.click(await screen.findByRole("button", { name: "Edit etcd snapshots" }));
+      const dialog = screen.getByRole("dialog", { name: "Edit etcd snapshots" });
+      const target = within(dialog).getByLabelText("Target");
+      expect(target).toHaveDisplayValue(from === "store" ? /^store:/u : volumeName);
+      await user.selectOptions(target, to === "store" ? "store" : volumeTarget);
+      await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      await applyStaged(user);
+      const body = calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body as {
+        variables: { etcdSnapshots: Record<string, unknown> };
+      };
+      expect(body.variables.etcdSnapshots["target"]).toBe(sent);
+    });
+  }
 
   it("allow a restore only from a snapshot of the cluster's distribution and Kubernetes minor", () => {
     const c: Cluster = snapshotting;

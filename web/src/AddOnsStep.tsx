@@ -37,7 +37,7 @@ import {
 import type { StepProps } from "./CreateSteps";
 import type { CredentialKey } from "./CredentialField";
 import { EgressFields, egressFields } from "./EgressProxy";
-import { EtcdSnapshotFieldset, etcdSnapshotsInfo } from "./EtcdSnapshots";
+import { EtcdSnapshotFieldset, etcdSnapshotsInfo, toTarget } from "./EtcdSnapshots";
 import { GitOpsFields, gitOpsFields, gitOpsTrustHint } from "./GitOps";
 import { LogsFields, logsHint, logsNeedMonitoring } from "./Logs";
 import { NamespaceLabelsField } from "./NamespaceLabels";
@@ -290,7 +290,7 @@ function EtcdSnapshotsChoice({
             problems={{ target: shown("etcdTarget"), schedule: shown("etcdSchedule"), keep: shown("etcdKeep") }}
             distribution={cls?.distribution ?? ""}
           />
-          {!backupsChosen(form, cls) && filled(form.etcdFields.target) && (
+          {!backupsChosen(form, cls) && toTarget(form.etcdFields.target) && (
             <AccessKey
               form={form}
               set={set}

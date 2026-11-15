@@ -510,7 +510,7 @@ func (s *EtcdSnapshotter) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	if errors.Is(err, ErrVolumeAsleep) {
 		return ctrl.Result{RequeueAfter: etcdSnapshotWait}, s.condition(ctx, cluster, &metav1.Condition{
 			Type: EtcdSnapshotCondition, Status: metav1.ConditionFalse, Reason: EtcdSnapshotWaitingForVolume,
-			Message: "Waiting for the appliance to wake the backup volume.",
+			Message: volumeWakingMessage,
 		})
 	}
 	var taken EtcdSnapshot

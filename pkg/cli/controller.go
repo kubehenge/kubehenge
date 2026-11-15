@@ -956,6 +956,7 @@ func (o *controllerOptions) addEtcd(mgr manager.Manager, c *proxmox.Client, remo
 		Etcd:           snapshotter.Etcd,
 		Talos:          provisioner.DialTalos,
 		APIs:           remotes,
+		Workloads:      remotes,
 		Events:         mgr.GetEventRecorder("kubehenge"),
 	}
 	if o.etcdRestore {
