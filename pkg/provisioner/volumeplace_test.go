@@ -374,6 +374,27 @@ func TestNoWorkerAdviceNamesAWorkerWhoseReplacementGoesThere(t *testing.T) {
 	}
 }
 
+// With no worker on a node without volumes, the advice names the second worker on a node with
+// volumes, and the webhook sends its replacement to the node named.
+func TestNoWorkerAdviceNamesASecondWorkerOnAVolumeNode(t *testing.T) {
+	t.Parallel()
+	volumes := []client.Object{
+		localVolume("data-0", "pve1", "local-lvm"), localVolume("data-1", "pve1", "local-lvm"), localVolume("data-2", "pve2", "local-lvm"),
+	}
+	p, c, _ := volumePlacer(t, []client.Object{volumeCluster(t)}, StorageSite{}, allUp(), volumes,
+		worker("web-a", "ms-1", "pve1"), worker("web-b", "ms-1", "pve1"))
+	placeRound(t, p)
+	got := readCluster(t, c, "web")
+	cond := meta.FindStatusCondition(got.Status.Conditions, VolumesWithoutWorkerCondition)
+	want := "Volume db/data-2 is on node pve2, which has no worker. Delete machine web-b on node pve1, and its replacement goes to pve2."
+	if cond == nil || cond.Reason != reasonNoWorker || cond.Message != want {
+		t.Fatalf("the condition is %+v", cond)
+	}
+	if pinned := placeWorker(t, got, worker("web-c", "ms-1", ""), worker("web-a", "ms-1", "pve1")); !slices.Equal(pinned, []string{"pve2"}) {
+		t.Errorf("the replacement of web-b is kept to %v, not to pve2 as the advice says", pinned)
+	}
+}
+
 // A node with volumes that no new VM of the cluster may go to now gets no advice to send one there.
 func TestNoWorkerAdviceLeavesOutNodesThatTakeNoVM(t *testing.T) {
 	t.Parallel()
