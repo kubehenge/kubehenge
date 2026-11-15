@@ -79,6 +79,11 @@ run "setup" {
 
 run "ipv4" {
   command = plan
+
+  assert {
+    condition     = can(regex("heartbeat-interval: \"?500\"?\\n", data.talos_machine_configuration.node[0].machine_configuration)) && can(regex("election-timeout: \"?5000\"?\\n", data.talos_machine_configuration.node[0].machine_configuration))
+    error_message = "etcd waits out storage that holds a sync for seconds"
+  }
 }
 
 run "dual" {
@@ -89,6 +94,11 @@ run "dual" {
     node_addresses_ipv6 = ["2001:db8:1::11/64"]
     gateway_ipv6        = "2001:db8:1::1"
     dns_servers         = ["192.0.2.1", "2001:db8:1::53"]
+  }
+
+  assert {
+    condition     = strcontains(data.talos_machine_configuration.node[0].machine_configuration, "advertisedSubnets") && can(regex("election-timeout: \"?5000\"?\\n", data.talos_machine_configuration.node[0].machine_configuration))
+    error_message = "with IPv6 etcd keeps its timings and advertises an address of the primary family"
   }
 }
 

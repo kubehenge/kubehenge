@@ -657,7 +657,7 @@ func TestHelmChartProxiesHoldNoSecret(t *testing.T) {
 	}
 
 	// Both hold the cluster's Proxmox VE token, so both stay on the control plane. The CCM also
-	// reaches Proxmox VE before any CNI runs.
+	// reaches Proxmox VE before any CNI or CoreDNS runs.
 	for i, name := range []string{"CCM", "CSI"} {
 		values := map[string]any{}
 		if err := yaml.Unmarshal([]byte(lookup[string](t, proxies[i].Object, "spec", "valuesTemplate")), &values); err != nil {
@@ -676,6 +676,10 @@ func TestHelmChartProxiesHoldNoSecret(t *testing.T) {
 		}
 		if daemonSet, set := values["useDaemonSet"].(bool); (set && daemonSet) != (name == "CCM") {
 			t.Errorf("%s useDaemonSet: %v", name, values["useDaemonSet"])
+		}
+		// The CCM resolves Proxmox VE's name before CoreDNS can run.
+		if policy, set := values["dnsPolicy"]; set != (name == "CCM") || (set && policy != "Default") {
+			t.Errorf("%s dnsPolicy: %v", name, policy)
 		}
 	}
 }

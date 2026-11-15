@@ -92,6 +92,16 @@ func run(dir string, args []string) int {
 		if strings.Contains(string(vars), `"interrupt"`) {
 			return waitForInterrupt(dir)
 		}
+		// A "stall" apply fails on etcd timing out a request while <dir>/../stalls holds stalls left,
+		// one fewer each time.
+		if strings.Contains(string(vars), `"stall"`) {
+			left, _ := os.ReadFile(filepath.Join(dir, "..", "stalls"))
+			if n := len(left); n > 0 {
+				_ = os.WriteFile(filepath.Join(dir, "..", "stalls"), left[1:], 0o600)
+				fmt.Println(`{"@level":"error","@message":"Error: Helm release error","type":"diagnostic","diagnostic":{"summary":"Helm release error","detail":"1 error occurred:\n\t* etcdserver: request timed out","address":"module.management.helm_release.kubehenge"}}`)
+				return 1
+			}
+		}
 		if strings.Contains(string(vars), `"fail"`) {
 			fmt.Println(`{"@level":"error","@message":"Error: no such node","type":"diagnostic","diagnostic":{"summary":"Error","detail":"node fail does not exist"}}`)
 			return 1

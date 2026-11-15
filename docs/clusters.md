@@ -382,6 +382,7 @@ Every change to the cluster waits for etcd to sync its write-ahead log to the co
 - Put the control planes on local SSD or NVMe storage. It syncs in well under 5 ms.
 - Ceph and NFS are often slower, since each write crosses the network first.
 - Their latency swings with the load of every other VM. Ceph on SSD or NVMe can keep up, unlike spinning disks.
+- The same holds for the management cluster's storage. Its etcd waits 15 s for a request rather than 7 s, so a stall of a few seconds slows an install without failing it.
 
 ##### The etcd disk slow warning
 

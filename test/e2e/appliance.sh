@@ -328,6 +328,7 @@ expect 202 "starting the setup" post "${work}/admin.jar" "${admin_csrf}" "${ui}/
 expect 409 "a second setup beside it" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup" "${setup}"
 upgrade_refused "${newer}" 'is being applied or removed'
 until_true 3600 "the setup to end" job_ended
+keep_management_credentials
 job_was apply succeeded true
 expect 200 "the ClusterClasses" request "${work}/admin.jar" "${ui}/api/classes"
 body_is '[.[].name] | contains(["kubehenge-kubeadm", "kubehenge-rke2", "kubehenge-k3s"])' "the interface does not offer the ClusterClasses"

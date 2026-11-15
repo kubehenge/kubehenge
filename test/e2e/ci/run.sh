@@ -353,6 +353,7 @@ case "${test}" in
             -e KUBEHENGE_E2E_STORAGE=local -e KUBEHENGE_E2E_S3_ADDRESS=172.20.99.1 \
             -e KUBEHENGE_E2E_RECREATE="${KUBEHENGE_E2E_RECREATE:-}" \
             -e KUBEHENGE_E2E_RELEASE_KEY=/root/kubehenge/release.key \
+            -e KUBEHENGE_E2E_KEEP=/root/kubehenge/management \
             "${pve}" sh /root/kubehenge/test/e2e/appliance.sh \
             /root/kubehenge/kubehenge_0.0.1_linux_amd64.tar.gz /root/kubehenge/kubehenge_0.0.2_linux_amd64.tar.gz \
             /root/kubehenge/kubehenge_0.0.3_linux_amd64.tar.gz /root/kubehenge/settings.json

@@ -283,7 +283,11 @@ resource "helm_release" "cert_manager" {
   repository = "oci://quay.io/jetstack/charts"
   chart      = "cert-manager@sha256:${split("@sha256:", local.cert_manager.chart)[1]}"
   version    = split("@sha256:", local.cert_manager.chart)[0]
-  wait       = true
+  # An install that fails, as one etcd timeout makes it do, leaves a failed release the state does
+  # not hold. The next apply then installs over it rather than stopping on the name in use. Every
+  # release of the module does the same.
+  replace = true
+  wait    = true
   # Helm's 300 seconds are short for images pulled through a mirror or a slow uplink and verified.
   timeout = 900
 
@@ -309,6 +313,7 @@ resource "helm_release" "cluster_api_operator" {
   namespace        = "capi-operator-system"
   create_namespace = true
   chart            = local.capi_operator_chart
+  replace          = true
   wait             = true
   timeout          = 900
 
@@ -342,6 +347,7 @@ resource "helm_release" "cluster_api_providers" {
   # Helm records the release before creating the chart's namespaces, so it lives in the operator's.
   namespace = helm_release.cluster_api_operator.namespace
   chart     = "${path.module}/charts/cluster-api-providers"
+  replace   = true
   wait      = true
   timeout   = 900
 
@@ -443,6 +449,7 @@ resource "helm_release" "kubehenge" {
   name      = "kubehenge"
   namespace = local.kubehenge_namespace
   chart     = "${path.module}/../charts/kubehenge"
+  replace   = true
   wait      = true
   timeout   = 900
 

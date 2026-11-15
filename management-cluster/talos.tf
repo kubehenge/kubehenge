@@ -31,6 +31,12 @@ locals {
     leader-elect-renew-deadline = local.patient_leases.leaderElection.renewDeadline
     leader-elect-retry-period   = local.patient_leases.leaderElection.retryPeriod
   }
+
+  # In milliseconds. The election timeout stays ten heartbeats, as etcd's tuning guide asks.
+  etcd_timing_args = {
+    heartbeat-interval = "500"
+    election-timeout   = "5000"
+  }
 }
 
 resource "talos_image_factory_schematic" "this" {
@@ -182,10 +188,16 @@ data "talos_machine_configuration" "node" {
         kind          = "ResolverConfig"
         searchDomains = { domains = var.search_domains }
       })],
-      # With IPv6, etcd advertises a node address of the primary family, never the VIP or an
-      # address of the other family.
-      !local.has_ipv6 ? [] : [yamlencode({
-        cluster = { etcd = { advertisedSubnets = local.node_networks[0] } }
+      # etcd's own timings fit a LAN with SSDs. It fails a request after 5 s plus two election
+      # timeouts, 7 s by default, and storage under load (HDD-backed LVM, NFS, a busy Ceph pool)
+      # holds a sync longer than that. With these it waits 15 s. A dead leader is replaced after 5 s
+      # instead of 1 s. With IPv6, etcd advertises a node address of the primary family, never the
+      # VIP or an address of the other family.
+      [yamlencode({
+        cluster = { etcd = merge(
+          { extraArgs = local.etcd_timing_args },
+          local.has_ipv6 ? { advertisedSubnets = local.node_networks[0] } : {},
+        ) }
       })],
     )),
   ]

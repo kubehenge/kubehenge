@@ -81,6 +81,9 @@ type Appliance struct {
 	CopyCap int64
 	// waitVolume bounds a recovery's wait for the backup volume's store, volumeWait when 0.
 	waitVolume time.Duration
+	// stallPause is the wait before an apply runs again after etcd timed out a request,
+	// etcdStallPause when 0.
+	stallPause time.Duration
 	// vmHosts reads with token which Proxmox VE node each VM it may see runs on, by VM name. Nil
 	// asks the Proxmox VE API.
 	vmHosts func(ctx context.Context, token string) (map[string]string, error)

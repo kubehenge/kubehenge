@@ -50,11 +50,57 @@ type changeAction struct {
 	Before  *managementVM `json:"before"`
 }
 
-// applyPlanned plans with args, lifts the protection of exactly the node VMs that plan replaces or
+// applyAttempts bounds the runs applyPlanned makes while each fails on etcd timing out a request.
+// Storage that holds etcd's syncs for seconds fails a request now and then. The next run carries on
+// from the state the last one wrote.
+const applyAttempts = 3
+
+// etcdStallPause is the wait before planning again after etcd timed out a request.
+const etcdStallPause = 30 * time.Second
+
+// etcdStalls are etcd's errors for a request it could not commit in time, as the API server passes
+// them on. Anything else fails the run at once.
+var etcdStalls = []string{
+	"etcdserver: request timed out",
+	"etcdserver: leader changed",
+	"etcdserver: no leader",
+	"etcdserver: too many requests",
+}
+
+// etcdStalled reports whether err names one of etcd's timing errors.
+func etcdStalled(err error) bool {
+	return slices.ContainsFunc(etcdStalls, func(s string) bool { return strings.Contains(err.Error(), s) })
+}
+
+// applyPlanned runs applyOnce, and again up to applyAttempts in all while a run fails on etcd timing
+// out a request.
+func (a *Appliance) applyPlanned(ctx context.Context, j *Job, env []string, t *pve.Ticket, args ...string) error {
+	pause := etcdStallPause
+	if a.stallPause != 0 {
+		pause = a.stallPause
+	}
+	for attempt := 1; ; attempt++ {
+		err := a.applyOnce(ctx, j, env, t, args...)
+		if err == nil || attempt == applyAttempts || !etcdStalled(err) {
+			return err
+		}
+		j.Add(fmt.Sprintf("etcd timed out a request, as slow storage makes it do. Running again in %s, attempt %d of %d", pause, attempt+1, applyAttempts))
+		select {
+		case <-ctx.Done():
+			if errors.Is(context.Cause(ctx), ErrServiceStopped) {
+				return fmt.Errorf("tofu apply: interrupted as %w, so run it again: %w", ErrServiceStopped, err)
+			}
+			return err
+		case <-time.After(pause):
+		}
+	}
+}
+
+// applyOnce plans with args, lifts the protection of exactly the node VMs that plan replaces or
 // destroys, and applies that same plan. An in-place change lifts nothing. A failed apply sets
 // protection again on each lifted VM that is still there, so that no run leaves one unprotected.
 // A run cut off before that leaves the flag off on a VM the state holds, and the next plan sets it.
-func (a *Appliance) applyPlanned(ctx context.Context, j *Job, env []string, t *pve.Ticket, args ...string) error {
+func (a *Appliance) applyOnce(ctx context.Context, j *Job, env []string, t *pve.Ticket, args ...string) error {
 	defer func() { _ = os.Remove(filepath.Join(a.workdir(), planFile)) }()
 	plan := append([]string{"plan", "-input=false", "-json", "-out=" + planFile}, args...)
 	if err := a.tofu(ctx, j, env, jsonMessage, plan...); err != nil {

@@ -368,6 +368,8 @@ Each try records what the machine and its VMs take every 15 seconds (`test/e2e/c
 
 The log's "The guests' load" step sums it up per minute. It gives each VM's busiest minute, most memory, fastest reads and longest waits. A VM stalled on the machine's CPUs shows as CPU waits. One stalled on its disk shows as disk waits and reads.
 
+"The management cluster's etcd" step reads each management node's etcd log, pass or fail (`guests.sh etcd`). It counts the slow disk syncs (over 1 s), the slow requests (over 100 ms) and the requests that timed out, each with the longest. The figures go into the job summary and the `e2e-etcd-<lane>` artifact. A lane that removed the management cluster has no figures.
+
 #### CPU and page cache
 
 The guests' vCPUs outnumber the runner's CPUs and compete for them. The management node runs at a higher CPU weight (`node_cpu_units`), which keeps its API server answering while the workload guests are busy.
@@ -521,6 +523,8 @@ A Talos VM's guest agent runs no commands, so a Talos VM is read through Talos's
 - on a control plane, etcd's members, status and alarms
 
 A node whose API does not answer is asked once, and every call is cut off after a minute. These still read when a cluster's Kubernetes API no longer answers. Tokens and passwords are redacted from them, and the talosconfigs stay out of them.
+
+The management cluster's talosconfig comes from the module's state. In the appliance lanes the appliance made the cluster, so its test keeps the credentials in the Proxmox VE container once the setup ends.
 
 ### The Proxmox VE container
 
