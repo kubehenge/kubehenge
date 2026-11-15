@@ -625,7 +625,7 @@ run "controller_and_clusters_are_least_privilege" {
   assert {
     condition = [
       for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d).kubeNetworkPoliciesEnabled
-      if yamldecode(d).kind == "KubeFlannelCNIConfig"
+      if try(yamldecode(d).kind, "") == "KubeFlannelCNIConfig"
     ] == [true]
     error_message = "the management cluster must enforce NetworkPolicies"
   }
@@ -634,7 +634,7 @@ run "controller_and_clusters_are_least_privilege" {
     condition = [
       for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : [
         for r in yamldecode(d).rules : [r.image, r.keyless.issuer, try(r.keyless.subject, r.keyless.subjectRegex)]
-      ] if yamldecode(d).kind == "ImageVerificationConfig"
+      ] if try(yamldecode(d).kind, "") == "ImageVerificationConfig"
       ] == [[
         ["factory.talos.dev/*", "https://accounts.google.com", "image-factory-signing@talos-production.iam.gserviceaccount.com"],
         ["ghcr.io/siderolabs/*", "https://accounts.google.com", "^(releasemgr-svc@talos-production\\.iam\\.gserviceaccount\\.com|[^@]+@siderolabs\\.com)$"],
@@ -1317,7 +1317,7 @@ run "registry_mirrors_and_controller_image" {
   assert {
     condition = [
       for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
-      if yamldecode(d).kind == "RegistryMirrorConfig"
+      if try(yamldecode(d).kind, "") == "RegistryMirrorConfig"
       ] == [{
         apiVersion = "v1alpha1"
         kind       = "RegistryMirrorConfig"
@@ -1933,7 +1933,7 @@ run "time_servers_become_time_sync_config" {
   assert {
     condition = [
       for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
-      if yamldecode(d).kind == "TimeSyncConfig"
+      if try(yamldecode(d).kind, "") == "TimeSyncConfig"
       ] == [{
         apiVersion = "v1alpha1"
         kind       = "TimeSyncConfig"
@@ -1972,7 +1972,7 @@ run "search_domains_become_resolver_config" {
   assert {
     condition = [
       for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
-      if yamldecode(d).kind == "ResolverConfig"
+      if try(yamldecode(d).kind, "") == "ResolverConfig"
       ] == [{
         apiVersion    = "v1alpha1"
         kind          = "ResolverConfig"
@@ -2020,6 +2020,26 @@ run "every_helm_release_that_waits_has_a_long_timeout" {
       r.wait && r.timeout == 900
     ])
     error_message = "a release that waits needs Helm's timeout raised from 300 to 900 seconds for slow image pulls"
+  }
+}
+
+run "every_helm_release_installs_over_a_failed_one" {
+  command = plan
+
+  variables {
+    proxy = {
+      url       = "http://proxy.example.com:3128"
+      no_proxy  = ""
+      ca_bundle = ""
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      for r in [helm_release.cert_manager, helm_release.cluster_api_operator, helm_release.cluster_api_providers, helm_release.kubehenge, helm_release.proxy_operator[0], helm_release.storage, helm_release.proxmox_csi] :
+      r.replace
+    ])
+    error_message = "a release whose install failed on one etcd timeout is installed again by the next apply, not refused as a name in use"
   }
 }
 
@@ -2087,7 +2107,7 @@ run "dual_stack_ipv4_first" {
       ] == [{ validSubnets = ["192.0.2.0/24", "2001:db8:1::/64"] }] && [
       for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
       if can(yamldecode(d).cluster.etcd)
-    ] == [{ cluster = { etcd = { advertisedSubnets = ["192.0.2.0/24"] } } }]
+    ] == [{ cluster = { etcd = { advertisedSubnets = ["192.0.2.0/24"], extraArgs = { election-timeout = "5000", heartbeat-interval = "500" } } } }]
     error_message = "the kubelet picks its addresses from both node networks, primary first, and etcd advertises the primary one"
   }
 
@@ -2138,7 +2158,7 @@ run "dual_stack_ipv6_first" {
       ] == [{ validSubnets = ["2001:db8:1::/64", "192.0.2.0/24"] }] && [
       for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
       if can(yamldecode(d).cluster.etcd)
-    ] == [{ cluster = { etcd = { advertisedSubnets = ["2001:db8:1::/64"] } } }]
+    ] == [{ cluster = { etcd = { advertisedSubnets = ["2001:db8:1::/64"], extraArgs = { election-timeout = "5000", heartbeat-interval = "500" } } } }]
     error_message = "the kubelet picks the IPv6 address first, and etcd advertises the IPv6 network"
   }
 
@@ -2191,7 +2211,7 @@ run "ipv6_only" {
       ] == [{ validSubnets = ["2001:db8:1::/64"] }] && [
       for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d)
       if can(yamldecode(d).cluster.etcd)
-    ] == [{ cluster = { etcd = { advertisedSubnets = ["2001:db8:1::/64"] } } }]
+    ] == [{ cluster = { etcd = { advertisedSubnets = ["2001:db8:1::/64"], extraArgs = { election-timeout = "5000", heartbeat-interval = "500" } } } }]
     error_message = "the kubelet and etcd use the IPv6 node network"
   }
 
@@ -2205,7 +2225,7 @@ run "ipv4_config_has_no_ipv6_patch" {
   command = apply
 
   assert {
-    condition     = !anytrue([for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : can(yamldecode(d).nodeIP) || can(yamldecode(d).cluster.etcd)])
+    condition     = !anytrue([for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : can(yamldecode(d).nodeIP) || can(yamldecode(d).cluster.etcd.advertisedSubnets)])
     error_message = "an IPv4-only cluster's Talos config carries no kubelet or etcd address settings"
   }
 

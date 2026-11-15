@@ -165,6 +165,7 @@ resource "helm_release" "storage" {
   name      = "kubehenge-storage"
   namespace = local.storage_secret.namespace
   chart     = "${path.module}/charts/storage"
+  replace   = true
   # The backup store becomes ready only once the plugin, installed after this release, attaches
   # the volume. The plugin's release waits for its own pods instead.
   wait = false
@@ -200,6 +201,7 @@ resource "helm_release" "proxmox_csi" {
   repository = local.csi_plugin.repository
   chart      = "${local.csi_plugin.chart}@sha256:${split("@sha256:", local.csi_plugin.version)[1]}"
   version    = split("@sha256:", local.csi_plugin.version)[0]
+  replace    = true
   wait       = true
   timeout    = 900
 
