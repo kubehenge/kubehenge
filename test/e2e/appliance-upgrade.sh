@@ -48,6 +48,7 @@ finish() {
         echo "-- the appliance's log" >&2
         pct exec "${ctid}" -- journalctl -u kubehenge.service -n 100 --no-pager >&2 || true
     fi
+    [ "${status}" -eq 0 ] || stuck_state
     pvesh delete "/access/users/${admin}" > /dev/null 2>&1 || true
     rm -rf "${work}"
 }

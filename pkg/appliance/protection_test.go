@@ -180,6 +180,38 @@ func TestApplyProtectsNodeVMsFoundWithoutIt(t *testing.T) {
 	}
 }
 
+// The module leaves the node VMs' protection and description alone after creating them, so that an
+// apply in the middle of a detach neither sets the protection the plugin lifted nor takes its marker
+// off. Mocked OpenTofu tests cannot drift a configured attribute, so the module's own text is read.
+func TestModuleLeavesNodeVMProtectionToTheAppliance(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "management-cluster", "proxmox.tf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	module := string(raw)
+	start := strings.Index(module, `resource "proxmox_virtual_environment_vm" "node" {`)
+	if start < 0 {
+		t.Fatal("the node VMs' resource is not in proxmox.tf")
+	}
+	node := module[start:]
+	if end := strings.Index(node[1:], "\nresource "); end >= 0 {
+		node = node[:end+1]
+	}
+	ignored := ""
+	for line := range strings.SplitSeq(node, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "ignore_changes") {
+			ignored = line
+		}
+	}
+	fields := strings.FieldsFunc(ignored, func(r rune) bool { return strings.ContainsRune("[], =", r) })
+	for _, field := range []string{"description", "protection"} {
+		if !slices.Contains(fields, field) {
+			t.Errorf("the node VMs' ignore_changes (%q) lacks %s", strings.TrimSpace(ignored), field)
+		}
+	}
+}
+
 // The appliance and the patched CSI plugin name the plugin's marker alike.
 func TestCSIMarkerIsThePluginPatchs(t *testing.T) {
 	t.Parallel()

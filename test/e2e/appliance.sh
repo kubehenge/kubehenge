@@ -62,6 +62,7 @@ finish() {
         audit_report
     fi
     [ "${status}" -eq 0 ] || seaweedfs_errors "${work}"
+    [ "${status}" -eq 0 ] || stuck_state
     if [ -n "${ha_vmid}" ]; then
         pvesh delete "/cluster/ha/rules/${ha_rule}" > /dev/null 2>&1 || true
         pvesh delete "/cluster/ha/resources/vm:${ha_vmid}" > /dev/null 2>&1 || true

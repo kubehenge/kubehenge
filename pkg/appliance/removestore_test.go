@@ -1,6 +1,10 @@
 package appliance
 
 import (
+	"context"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -10,7 +14,9 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	clienttesting "k8s.io/client-go/testing"
 
 	"github.com/kubehenge/kubehenge/pkg/backupstore"
 )
@@ -73,6 +79,47 @@ func TestStopStoreWaitsForTheDetach(t *testing.T) {
 	err := stopStore(t.Context(), &Job{}, kube, shortStop)
 	if err == nil || !strings.Contains(err.Error(), "still attached to node cp-0") {
 		t.Fatalf("error %v, want the attachment named", err)
+	}
+}
+
+// A removal stops the store before its destroy, which would otherwise uninstall the CSI plugin
+// under a pod still mounting the volume.
+func TestRemoveStopsTheStoreBeforeTheDestroy(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	if j := applyWith(t, a, "pve1"); j.State != StateSucceeded {
+		t.Fatalf("apply: %+v", j)
+	}
+	if err := os.WriteFile(filepath.Join(a.workdir(), "terraform.tfstate"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	management := fake.NewClientset(storeObjects(1)...)
+	stoppedAfter := -1
+	management.PrependReactor("patch", "deployments", func(clienttesting.Action) (bool, runtime.Object, error) {
+		stoppedAfter = len(tofuCalls(t, a))
+		return false, nil, nil
+	})
+	a.ManagementClient = func([]byte) (kubernetes.Interface, error) { return management, nil }
+	if err := a.Remove("correct horse battery staple", KeepBackups, ticket(), func(context.Context, *Job) error { return nil }, func() {}); err != nil {
+		t.Fatal(err)
+	}
+	if j := waitFor(t, a); j.State != StateSucceeded {
+		t.Fatalf("remove: %+v", j)
+	}
+	d, err := management.AppsV1().Deployments(backupstore.Namespace).Get(t.Context(), backupstore.Service, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *d.Spec.Replicas != 0 {
+		t.Fatalf("the store has %d replicas after the removal, want 0", *d.Spec.Replicas)
+	}
+	if stoppedAfter < 0 {
+		t.Fatal("the store was never stopped")
+	}
+	for i, args := range tofuCalls(t, a) {
+		if slices.Contains(args, "-destroy") && i < stoppedAfter {
+			t.Fatalf("the destroy (tofu call %d) ran before the store was stopped (after call %d)", i, stoppedAfter)
+		}
 	}
 }
 
