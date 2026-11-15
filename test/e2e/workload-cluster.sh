@@ -3009,7 +3009,7 @@ EOF
         # renovate: datasource=docker depName=docker.io/internetsystemsconsortium/bind9
         bind_image=docker.io/internetsystemsconsortium/bind9:9.20@sha256:66092edb53c081fa11b1fa8219e99065b0f497cb38f568ba789702a4c10e2590
         # renovate: datasource=docker depName=ghcr.io/letsencrypt/pebble
-        pebble_image=ghcr.io/letsencrypt/pebble:2.10.1@sha256:ddf230642b1a584f519f32e347de1b05a6e4c1f6c35c1863b33effeab5f78199
+        pebble_image=ghcr.io/letsencrypt/pebble:2.10.3@sha256:0c81f05db371f436c97fb894bd6d2ab8fc9c8e2ce40f8bef8a8e15941bcd75ef
         # Pebble refuses an account without an external account binding, as ZeroSSL or Sectigo do. Its key
         # and cert-manager's are base64url without padding.
         eab_key_id=e2e-eab

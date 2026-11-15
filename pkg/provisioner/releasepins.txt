@@ -5,11 +5,11 @@
 # content and Sidero's signature. `make release-pins` adds the releases published since. A pin
 # never changes. The newest release of each, which Renovate raises, has to be pinned.
 # renovate: datasource=github-releases depName=rancher/rke2
-# rke2 = v1.37.1+rke2r1
+# rke2 = v1.37.2+rke2r1
 # renovate: datasource=github-releases depName=k3s-io/k3s
-# k3s = v1.37.1+k3s1
+# k3s = v1.37.2+k3s1
 # renovate: datasource=github-releases depName=siderolabs/talos
-# talos = v1.14.5
+# talos = v1.14.6
 v1.10.0 sha256:4b3c4df4ad0763965349bfb48c4242b880bf8d82ae2bd1f053694ad7f4bf37e1 sha256:2493d173f9c5540464466ec95bb4c273e44dc9c0a5adb82c249b0dab88379102 sha256:8ef9c1df17d1179282a2e8b7fb10494a29fa5b1247463d8efe634b4329ef49eb 9.2.3@sha256:e49001e2b218df347d88bae32c8f8878c2c11cb2b070c5dad548f27ef5f3ad01
 v1.10.1 sha256:6f8e58fd5ba97d6bf6c20fba52f8b0c6236d2723ee4eb40873228bcf5a39fb43 sha256:fffa482c5c3eff9d33c88ed4b8887a7b6234155a8f7fe2c4ceefeb5e50b67dae sha256:cbaabe8ff0b90a025be05ecaf990db209caf4f23c01d40bb0d37a6cddf5bbee6 9.2.3@sha256:e2415c65f30c85857890d3c29413ba72c344e4465bfacab01d96799a79d00be9
 v1.10.2 sha256:d191bd3f06e2aea3e2dee520a1544622ae307dbe874951a79c9c4d280812b6d2 sha256:6d3437ab21070252db59fc5e546eefd29bf1ce493a719dc13f141be453b76027 sha256:c8986e506d5831535e5a2c864dac89d50934027d1426f783ff66c976815ccd49 9.2.3@sha256:e49001e2b218df347d88bae32c8f8878c2c11cb2b070c5dad548f27ef5f3ad01
