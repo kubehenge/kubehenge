@@ -3,6 +3,11 @@ variable "node" {
   type        = string
 }
 
+variable "vm_id" {
+  description = "ID of the node's VM; a new one configures the node again."
+  type        = string
+}
+
 variable "client_configuration" {
   description = "Talos client credentials of the cluster."
   type = object({
