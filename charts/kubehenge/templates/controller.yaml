@@ -349,10 +349,15 @@ spec:
     metadata:
       labels:
         {{- toYaml $labels | nindent 8 }}
-      {{- if .Values.releaseMirror.caBundle }}
+      {{- if or .Values.releaseMirror.caBundle .Values.siteCA }}
       annotations:
-        # The controller reads the authority once, as it starts.
+        # The controller reads the authorities once, as it starts.
+        {{- if .Values.releaseMirror.caBundle }}
         kubehenge.dev/release-mirror-ca: {{ .Values.releaseMirror.caBundle | sha256sum }}
+        {{- end }}
+        {{- if .Values.siteCA }}
+        kubehenge.dev/site-ca: {{ .Values.siteCA | sha256sum }}
+        {{- end }}
       {{- end }}
     spec:
       serviceAccountName: {{ $name }}
@@ -407,6 +412,10 @@ spec:
             {{- if .Values.releaseMirror.caBundle }}
             - --release-mirror-ca=/etc/kubehenge/release-mirror/ca.crt
             {{- end }}
+            {{- if .Values.siteCA }}
+            - --site-ca=/etc/kubehenge/site-ca/ca.crt
+            {{- end }}
+            - --time-zone={{ .Values.timeZone }}
             - --calico-images={{ join "," .Values.addons.calico.images }}
             - --rancher-kubernetes={{ .Values.addons.rancher.kubernetes }}
             - --rancher-turtles-image={{ .Values.addons.rancher.turtles.image }}
@@ -519,6 +528,11 @@ spec:
               mountPath: /etc/kubehenge/release-mirror
               readOnly: true
             {{- end }}
+            {{- if .Values.siteCA }}
+            - name: site-ca
+              mountPath: /etc/kubehenge/site-ca
+              readOnly: true
+            {{- end }}
             {{- include "kubehenge.proxyMount" . | nindent 12 }}
       volumes:
         # A Talos etcd restore keeps the snapshot it uploads there, as large as etcd's quota
@@ -540,6 +554,11 @@ spec:
           configMap:
             name: kubehenge-release-mirror
         {{- end }}
+        {{- if .Values.siteCA }}
+        - name: site-ca
+          configMap:
+            name: kubehenge-site-ca
+        {{- end }}
         {{- include "kubehenge.proxyVolume" . | nindent 8 }}
 {{- if .Values.releaseMirror.caBundle }}
 ---
@@ -552,6 +571,18 @@ metadata:
     {{- toYaml $labels | nindent 4 }}
 data:
   ca.crt: {{ .Values.releaseMirror.caBundle | quote }}
+{{- end }}
+{{- if .Values.siteCA }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubehenge-site-ca
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml $labels | nindent 4 }}
+data:
+  ca.crt: {{ .Values.siteCA | quote }}
 {{- end }}
 ---
 apiVersion: v1

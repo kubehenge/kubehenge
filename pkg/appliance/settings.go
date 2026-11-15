@@ -60,6 +60,12 @@ type Settings struct {
 	ChartRepositories *ChartRepositories `json:"chartRepositories,omitempty"`
 	// ReleaseMirror serves the RKE2 and k3s releases in place of GitHub.
 	ReleaseMirror *ReleaseMirror `json:"releaseMirror,omitempty"`
+	// SiteCA is the PEM authority of the site's private CA. Every connection that names no authority
+	// of its own trusts it: the clusters' nodes, the release mirror, the backup targets, the
+	// identity providers and the appliance's own outgoing connections. Empty, none.
+	SiteCA string `json:"siteCA,omitempty"`
+	// TimeZone is the IANA time zone of schedules that name none. Empty, UTC.
+	TimeZone string `json:"timeZone,omitempty"`
 	// ControllerImage replaces the controller image the chart was released with.
 	ControllerImage string `json:"controllerImage,omitempty"`
 	// PodSubnets and ServiceSubnets are the management cluster's own ranges. When unset, the first
@@ -467,6 +473,7 @@ func (s *Settings) Validate() error {
 	s.checkMirrors(&p)
 	s.ChartRepositories.check(&p)
 	s.ReleaseMirror.check(&p, time.Now())
+	s.checkSiteDefaults(&p, time.Now())
 	if err := ValidOIDC(s.ClusterOIDC); err != nil {
 		p.addf("Identity providers: %s", err)
 	}

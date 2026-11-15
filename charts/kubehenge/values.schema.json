@@ -145,6 +145,19 @@
         "caBundle": { "type": "string", "maxLength": 262144 }
       }
     },
+    "siteCA": {
+      "description": "The PEM authority of the site's private CA, the default of every connection that names none of its own.",
+      "type": "string",
+      "maxLength": 65536,
+      "pattern": "^$|^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$"
+    },
+    "timeZone": {
+      "description": "The IANA time zone that schedules without one of their own run in.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9_+/-]+$"
+    },
     "controllerLogs": {
       "description": "How the controller logs, in JSON either way.",
       "type": "object",

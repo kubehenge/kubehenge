@@ -73,6 +73,9 @@ type Reconciler struct {
 	// Egress is the management side's proxy, which the add-ons of clusters that set none of their
 	// own go through.
 	Egress Egress
+	// SiteCA is the PEM authority every cluster without trustedCAs of its own trusts. Empty when
+	// the site sets none.
+	SiteCA string
 	// Registrar removes clusters from Rancher before Rancher itself is switched off.
 	Registrar *Registrar
 	// Remotes reaches the workload clusters, to take their workloads out of the mesh before Istio
@@ -180,6 +183,10 @@ func (r *Reconciler) reconcileCluster(ctx context.Context, cluster *clusterv1.Cl
 	if err = r.ensureNodeCustomisation(ctx, cluster); err != nil {
 		return ctrl.Result{}, err
 	}
+	siteCAAgain, err := r.rollSiteCA(ctx, cluster)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	addons, rancherRefused, err := r.addons(ctx, cluster)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -217,10 +224,14 @@ func (r *Reconciler) reconcileCluster(ctx context.Context, cluster *clusterv1.Cl
 	if addonWaiting || othersWaiting {
 		return ctrl.Result{RequeueAfter: waitInterval}, nil
 	}
+	again := resync
 	if until, sooner := addons.untilWindow(r.now()); sooner {
-		return ctrl.Result{RequeueAfter: until}, nil
+		again = until
 	}
-	return ctrl.Result{RequeueAfter: resync}, nil
+	if siteCAAgain > 0 {
+		again = min(again, siteCAAgain)
+	}
+	return ctrl.Result{RequeueAfter: again}, nil
 }
 
 // afterTheRest does what waits on other clusters or on the workload cluster's own API, however long

@@ -153,6 +153,8 @@ type controllerOptions struct {
 	chartMirrors      []string
 	releaseMirror     provisioner.ReleaseMirror
 	releaseMirrorCA   string
+	siteCAFile        string
+	timeZone          string
 	egressProxy       string
 	egressNoProxy     string
 	podSecurityExempt string
@@ -253,6 +255,8 @@ func (o *controllerOptions) addonFlags(f *pflag.FlagSet) {
 	f.StringArrayVar(&o.chartMirrors, "chart-mirror", nil, "a mirror of a chart repository, as <host>=<address>, such as ghcr.io=oci://registry.example.org/ghcr or charts.jetstack.io=https://charts.example.org/jetstack. It serves the same charts under the same digests (repeatable)")
 	f.StringVar(&o.releaseMirror.URL, "release-mirror", "", "a mirror of the RKE2 and k3s releases, such as https://mirror.example.org/github, which serves them on GitHub's paths beneath it: <mirror>/<repository>/releases/download/<version>/<file> and <mirror>/<repository>/raw/<version>/install.sh. Nodes download from it in place of GitHub, and still install only the pinned files")
 	f.StringVar(&o.releaseMirrorCA, "release-mirror-ca", "", "a PEM file with the authority of a --release-mirror the usual authorities do not sign, which the nodes trust for their download")
+	f.StringVar(&o.siteCAFile, "site-ca", "", "a PEM file with the site's authority, which the nodes of clusters without trustedCAs of their own trust and an https release mirror without an authority of its own is verified with")
+	f.StringVar(&o.timeZone, "time-zone", provisioner.DefaultTimeZone, "the IANA time zone that schedules without one of their own run in, such as a cluster's etcd snapshots")
 	f.StringVar(&o.egressProxy, "egress-proxy", os.Getenv("HTTPS_PROXY"), "the proxy the add-ons of clusters that set none of their own go through (env HTTPS_PROXY). An address with credentials is not passed on")
 	f.StringVar(&o.egressNoProxy, "egress-no-proxy", os.Getenv("NO_PROXY"), "the exceptions to --egress-proxy, comma-separated (env NO_PROXY)")
 	f.StringVar(&o.certManagerChart, "cert-manager-chart", "", "cert-manager chart, installed with Rancher and with monitoring, as <repository>/<name>:<version>@sha256:<digest>")
@@ -616,6 +620,22 @@ func (o *controllerOptions) parseReleaseMirror() error {
 			return fmt.Errorf("--release-mirror-ca: %w", err)
 		}
 		o.releaseMirror.CABundle = string(ca)
+	}
+	if o.timeZone != "" {
+		if err := provisioner.SetDefaultTimeZone(o.timeZone); err != nil {
+			return fmt.Errorf("--time-zone: %w", err)
+		}
+	}
+	if o.siteCAFile != "" {
+		ca, err := os.ReadFile(o.siteCAFile)
+		if err != nil {
+			return fmt.Errorf("--site-ca: %w", err)
+		}
+		if err = provisioner.CheckCertificateBundle(string(ca), time.Now()); err != nil {
+			return fmt.Errorf("--site-ca: the authority %w", err)
+		}
+		o.r.SiteCA = string(ca)
+		o.releaseMirror = o.releaseMirror.WithSiteCA(o.r.SiteCA)
 	}
 	if err := o.releaseMirror.Check(time.Now()); err != nil {
 		return fmt.Errorf("--release-mirror: %w", err)

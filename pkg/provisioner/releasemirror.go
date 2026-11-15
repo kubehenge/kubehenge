@@ -41,6 +41,14 @@ func ClusterReleaseMirror(c *clusterv1.Cluster) (ReleaseMirror, bool, error) {
 	return ReleaseMirror{URL: v.URL, CABundle: v.CABundle}, set, err
 }
 
+// WithSiteCA gives an https mirror that names no authority of its own the site's.
+func (m ReleaseMirror) WithSiteCA(siteCA string) ReleaseMirror {
+	if m.CABundle == "" && strings.HasPrefix(m.URL, schemeHTTPS+"://") {
+		m.CABundle = siteCA
+	}
+	return m
+}
+
 // releaseMirrorAddress holds a mirror to what a node's command line carries unquoted.
 var releaseMirrorAddress = regexp.MustCompile(`^[A-Za-z0-9._~:/\[\]-]+$`)
 

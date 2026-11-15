@@ -56,7 +56,17 @@ pattern: '^(-----BEGIN CERTIFICATE-----\n([A-Za-z0-9+/=]+\n)+-----END CERTIFICAT
       maxItems: 8
       description: >-
         Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node
-        OS's trust store, which the container runtime and the distribution read.
+        OS's trust store, which the container runtime and the distribution read. A cluster that sets
+        none trusts the site CA.
+      items:
+        {{- include "kubehenge.pemSchema" . | nindent 8 }}
+- name: siteCAs
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: array
+      maxItems: 1
+      description: The site CA the controller gives a cluster that sets no trustedCAs.
       items:
         {{- include "kubehenge.pemSchema" . | nindent 8 }}
 {{- end -}}
@@ -109,7 +119,7 @@ exceptions the cluster lists.
 
 {{/* The boot script of a kubeadm, RKE2 or k3s node, as the file Cluster API writes (call with the distribution and its ranges). */}}
 {{- define "kubehenge.nodeSiteFile" -}}
-{{ `{{ $mirrors := dig "registryMirrors" (list) . }}{{ $cas := dig "trustedCAs" (list) . }}{{ $url := dig "egressProxy" "url" "" . }}{{ $https := dig "egressProxy" "httpsUrl" $url . }}` }}
+{{ `{{ $mirrors := dig "registryMirrors" (list) . }}{{ $cas := concat (dig "siteCAs" (list) .) (dig "trustedCAs" (list) .) }}{{ $url := dig "egressProxy" "url" "" . }}{{ $https := dig "egressProxy" "httpsUrl" $url . }}` }}
 {{ include "kubehenge.nodeNoProxy" . }}
 path: /etc/kubehenge/node-site.sh
 owner: root:root
@@ -120,7 +130,7 @@ content: |
 
 {{/* The enabledIf of the patches: any of the three settings is set. */}}
 {{- define "kubehenge.nodeSiteEnabled" -}}
-{{ `{{ if or (dig "trustedCAs" (list) .) (dig "registryMirrors" (list) .) (dig "egressProxy" "url" "" .) }}true{{ end }}` | quote }}
+{{ `{{ if or (dig "siteCAs" (list) .) (dig "trustedCAs" (list) .) (dig "registryMirrors" (list) .) (dig "egressProxy" "url" "" .) }}true{{ end }}` | quote }}
 {{- end -}}
 
 {{- define "kubehenge.nodeProxyEnabled" -}}
@@ -204,7 +214,7 @@ container runtime read.
               {{- include "kubehenge.talosProxyEnv" $ | nindent 14 }}
     {{- end }}
 - name: talos-node-registries
-  enabledIf: {{ `{{ if or (dig "trustedCAs" (list) .) (dig "registryMirrors" (list) .) }}true{{ end }}` | quote }}
+  enabledIf: {{ `{{ if or (dig "siteCAs" (list) .) (dig "trustedCAs" (list) .) (dig "registryMirrors" (list) .) }}true{{ end }}` | quote }}
   definitions:
     {{- range $sel := .selectors }}
     - selector:
@@ -231,6 +241,6 @@ container runtime read.
 {{ range $m := (dig "registryMirrors" (list) .) }}{{ $eps := list }}{{ range $e := $m.endpoints }}{{ $ep := dict "url" $e }}{{ if (urlParse $e).path }}{{ $_ := set $ep "overridePath" true }}{{ end }}{{ $eps = append $eps $ep }}{{ end }}
 {{ $docs = append $docs (dict "apiVersion" "v1alpha1" "kind" "RegistryMirrorConfig" "name" $m.registry "endpoints" $eps | toJson) }}
 {{ $ca := dig "caBundle" "" $m }}{{ if $ca }}{{ range $e := $m.endpoints }}{{ $h := (urlParse $e).host }}{{ if not (hasKey $seen $h) }}{{ $_ := set $seen $h true }}{{ $docs = append $docs (dict "apiVersion" "v1alpha1" "kind" "RegistryTLSConfig" "name" $h "ca" $ca | toJson) }}{{ end }}{{ end }}{{ end }}{{ end }}
-{{ with (dig "trustedCAs" (list) .) }}{{ $docs = append $docs (dict "apiVersion" "v1alpha1" "kind" "TrustedRootsConfig" "name" "kubehenge" "certificates" (join "\n" .) | toJson) }}{{ end }}
+{{ with (concat (dig "siteCAs" (list) .) (dig "trustedCAs" (list) .)) }}{{ $docs = append $docs (dict "apiVersion" "v1alpha1" "kind" "TrustedRootsConfig" "name" "kubehenge" "certificates" (join "\n" .) | toJson) }}{{ end }}
 {{ join "\n---\n" $docs | toJson }}` }}
 {{- end -}}

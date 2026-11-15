@@ -86,8 +86,9 @@ const (
 
 // Defaults of the backups variable, as the chart's schema has them.
 const (
-	defaultBackupSchedule  = "0 2 * * *"
-	defaultBackupTimeZone  = "UTC"
+	defaultBackupSchedule = "0 2 * * *"
+	// DefaultTimeZone is the time zone of a schedule that names none, until the site sets one.
+	DefaultTimeZone        = "UTC"
 	defaultBackupRetention = 7
 	backupVolumesAll       = "all"
 	backupVolumesAnnotated = "annotated"
@@ -119,7 +120,7 @@ func (b *Backups) withDefaults() {
 		b.Schedule = defaultBackupSchedule
 	}
 	if b.TimeZone == "" {
-		b.TimeZone = defaultBackupTimeZone
+		b.TimeZone = siteTimeZone.Load().(string)
 	}
 	if b.RetentionDays == 0 {
 		b.RetentionDays = defaultBackupRetention

@@ -64,6 +64,8 @@ module "management" {
   registry_mirrors       = var.settings.registryMirrors
   chart_repositories     = var.settings.chartRepositories
   release_mirror         = var.settings.releaseMirror
+  site_ca                = try(var.settings.siteCA, "")
+  time_zone              = try(var.settings.timeZone, "UTC")
   controller_image       = var.settings.controllerImage
   vm_id_range            = var.settings.vmIdRange
   pod_subnets            = var.settings.podSubnets
@@ -254,6 +256,13 @@ func (a *Appliance) writeConfig(s *Settings, ids VMIDRange) error {
 		"proxy":                    moduleProxy(s, a.ProxmoxURL),
 		// The module takes no null for a list.
 		"extraClusterNamespaces": append([]string{}, s.ExtraClusterNamespaces...),
+	}
+	// Left out while unset, so that the module's defaults apply.
+	if s.SiteCA != "" {
+		values["siteCA"] = s.SiteCA
+	}
+	if s.TimeZone != "" {
+		values["timeZone"] = s.TimeZone
 	}
 	if s.HasIPv6() {
 		// An IPv4 cluster leaves these out, so its variables stay as they were and the module's

@@ -319,8 +319,11 @@ func (t *SavedTransport) current() (http.RoundTripper, error) {
 		transport.Proxy = http.ProxyFromEnvironment
 	}
 	if saved != nil {
-		if err = saved.ReleaseMirror.Mirror().Trust(transport); err != nil {
+		if err = saved.EffectiveReleaseMirror().Trust(transport); err != nil {
 			return nil, fmt.Errorf("the saved release mirror: %w", err)
+		}
+		if err = trustSiteCA(transport, saved.SiteCA); err != nil {
+			return nil, fmt.Errorf("the saved site CA: %w", err)
 		}
 	}
 	t.rt = transport
