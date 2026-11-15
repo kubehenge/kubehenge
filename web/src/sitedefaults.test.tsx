@@ -199,7 +199,9 @@ describe("a cluster copied into the wizard", () => {
       pool: "/pool/kubehenge/default.web",
       allowed: { change: true, kubeconfig: true },
     } satisfies Cluster;
-    expect(fromCluster(source, newForm()).loadBalancerPicked).toBeTruthy();
-    expect(newForm().loadBalancerPicked).toBeFalsy();
+    expect([fromCluster(source, newForm()).loadBalancerPicked, newForm().loadBalancerPicked]).toStrictEqual([
+      true,
+      false,
+    ]);
   });
 });
