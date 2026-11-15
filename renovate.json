@@ -44,6 +44,13 @@
       "enabled": true
     },
     {
+      "description": "gopls builds only against the golang.org/x/tools it was released with, so the modules its own module requires move with gopls and not on their own.",
+      "matchManagers": ["gomod"],
+      "matchFileNames": ["scripts/gopls/go.mod"],
+      "matchDepTypes": ["indirect"],
+      "enabled": false
+    },
+    {
       "description": "A major release of a Go module is a module of its own, which nothing here requires until the module that requires the old one moves; go mod tidy would take it out again.",
       "matchManagers": ["gomod"],
       "matchDepTypes": ["indirect"],
