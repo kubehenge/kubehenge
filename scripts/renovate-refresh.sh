@@ -24,7 +24,7 @@ curl_get() {
 digest() {
     curl_get -o /dev/null -D - \
         -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
-        "https://$1/v2/$2/manifests/$3" | tr -d '\r' | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: *//p'
+        "https://$1/v2/$2/manifests/$3" | tr -d '\r' | tr '[:upper:]' '[:lower:]' | sed -n 's/^docker-content-digest: *//p'
 }
 
 # The chart's release, from the version line below `chart: tigera-operator`.
