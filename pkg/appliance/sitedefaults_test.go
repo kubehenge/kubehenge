@@ -54,7 +54,7 @@ func TestSiteDefaultsReachTheModuleOnlyWhenSet(t *testing.T) {
 		t.Fatalf("job = %+v", j)
 	}
 	main, err := os.ReadFile(filepath.Join(a.Dir, "management", "main.tf"))
-	if err != nil || !strings.Contains(string(main), "site_ca                = try(var.settings.siteCA, \"\")") || !strings.Contains(string(main), "time_zone              = try(var.settings.timeZone, \"UTC\")") {
+	if err != nil || !strings.Contains(string(main), "site_ca                = try(var.settings.siteCA, \"\")") || !strings.Contains(string(main), "time_zone              = try(var.settings.timeZone, \"\")") {
 		t.Fatalf("main.tf: %v\n%s", err, main)
 	}
 	vars, err := os.ReadFile(filepath.Join(a.Dir, "management", "terraform.tfvars.json"))

@@ -84,8 +84,8 @@ run "no_site_ca_leaves_the_chart_without_one" {
   command = plan
 
   assert {
-    condition     = !contains(keys(yamldecode(helm_release.kubehenge.values[0])), "siteCA") && yamldecode(helm_release.kubehenge.values[0]).timeZone == "UTC"
-    error_message = "without a site CA the chart gets none, and the time zone is UTC"
+    condition     = !contains(keys(yamldecode(helm_release.kubehenge.values[0])), "siteCA") && !contains(keys(yamldecode(helm_release.kubehenge.values[0])), "timeZone")
+    error_message = "without a site CA or time zone the chart gets neither"
   }
 }
 
@@ -104,6 +104,16 @@ run "time_zone_refuses_a_name_with_spaces" {
 
   variables {
     time_zone = "Mars Olympus"
+  }
+
+  expect_failures = [var.time_zone]
+}
+
+run "time_zone_refuses_local" {
+  command = plan
+
+  variables {
+    time_zone = "Local"
   }
 
   expect_failures = [var.time_zone]

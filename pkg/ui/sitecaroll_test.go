@@ -35,7 +35,7 @@ func TestSiteCARollNamesHowManyRollNowAndHowManyWait(t *testing.T) {
 		with("windowed", "upgrades", `{"mode":"patch","window":{"weekdays":["Mon"],"start":"02:00","timeZone":"UTC"}}`),
 		with("own", "trustedCAs", `["x"]`),
 	)
-	roll, err := siteCARollOf("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n", clusters, now)
+	roll, err := siteCARollOf("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n", "kubehenge-system", clusters, now)
 	if err != nil {
 		t.Fatal(err)
 	}

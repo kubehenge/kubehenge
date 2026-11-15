@@ -703,13 +703,13 @@ variable "site_ca" {
 }
 
 variable "time_zone" {
-  description = "The IANA time zone that schedules without one of their own run in, such as a cluster's etcd snapshots."
+  description = "The IANA time zone that schedules without one of their own run in, such as a cluster's etcd snapshots. Empty, UTC, and the wizard starts from the user's browser time zone."
   type        = string
-  default     = "UTC"
+  default     = ""
   nullable    = false
 
   validation {
-    condition     = can(regex("^[A-Za-z0-9_+/-]+$", var.time_zone))
+    condition     = var.time_zone == "" || (can(regex("^[A-Za-z0-9_+/-]+$", var.time_zone)) && var.time_zone != "Local")
     error_message = "time_zone is an IANA time zone name such as Europe/Zurich."
   }
 }

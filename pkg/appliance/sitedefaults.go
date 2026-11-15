@@ -9,11 +9,13 @@ import (
 )
 
 // checkSiteDefaults holds the site CA to PEM certificates valid now and the site time zone to an
-// IANA name.
+// IANA name. A site CA that passes is rewritten as the chart and the module take it.
 func (s *Settings) checkSiteDefaults(p *problems, now time.Time) {
 	if s.SiteCA != "" {
 		if err := provisioner.CheckCertificateBundle(s.SiteCA, now); err != nil {
 			p.addf("Site CA: the authority %s", err)
+		} else {
+			s.SiteCA = provisioner.NormalizeCertificateBundle(s.SiteCA)
 		}
 	}
 	if s.TimeZone != "" {

@@ -154,9 +154,9 @@
     "timeZone": {
       "description": "The IANA time zone that schedules without one of their own run in.",
       "type": "string",
-      "minLength": 1,
       "maxLength": 64,
-      "pattern": "^[A-Za-z0-9_+/-]+$"
+      "pattern": "^$|^[A-Za-z0-9_+/-]+$",
+      "not": { "const": "Local" }
     },
     "controllerLogs": {
       "description": "How the controller logs, in JSON either way.",

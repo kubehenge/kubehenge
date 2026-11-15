@@ -3,12 +3,14 @@ package provisioner
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/util/retry"
@@ -53,13 +55,31 @@ func SetDefaultTimeZone(zone string) error {
 }
 
 // CheckCertificateBundle holds a PEM bundle to certificates alone, none of them expired or not yet
-// valid.
+// valid. A zero now leaves the validity unchecked.
 func CheckCertificateBundle(bundle string, now time.Time) error {
 	return checkCertificates(bundle, now)
 }
 
-// SiteCA is the site CA the nodes of a cluster that sets no trustedCAs of its own are given.
-// Empty when none is.
+// NormalizeCertificateBundle writes a PEM bundle's certificates as the chart and the module take
+// them: LF line ends and nothing between the blocks, so that CRLF files and openssl's text output
+// are accepted the same everywhere.
+func NormalizeCertificateBundle(bundle string) string {
+	var out strings.Builder
+	rest := []byte(bundle)
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			return out.String()
+		}
+		if block.Type == certificateBlock {
+			out.Write(pem.EncodeToMemory(&pem.Block{Type: certificateBlock, Bytes: block.Bytes}))
+		}
+	}
+}
+
+// appliedSiteCA is the site CA the nodes of a cluster that sets no trustedCAs of its own were
+// given. Empty when none was.
 func appliedSiteCA(c *clusterv1.Cluster) string {
 	applied, _, err := optionalVariable[[]string](c, SiteCAsVariable)
 	if err != nil {
@@ -88,6 +108,12 @@ type SiteRollCluster struct {
 	Applied string
 	// Rolling is true while the cluster replaces nodes.
 	Rolling bool
+	// Settling is true while the cluster has not yet taken up what its topology says: the topology
+	// controller has not seen the latest change, or machines are not up to date. A cluster just
+	// given the site CA is settling before Cluster API marks it rolling.
+	Settling bool
+	// Paused is true for a cluster Cluster API does not act on, which therefore replaces no node.
+	Paused bool
 	// Built is true once the cluster's control plane is up. Before that it has no node to replace,
 	// so the site CA is part of its first nodes and no pacing applies.
 	Built bool
@@ -95,11 +121,31 @@ type SiteRollCluster struct {
 	Policy *UpgradePolicy
 }
 
-// SiteRollClusters reads the clusters' state for PlanSiteRoll.
-func SiteRollClusters(clusters []clusterv1.Cluster) []SiteRollCluster {
+// clusterSettling tells whether a cluster has yet to take up its latest topology: the topology
+// controller has not reconciled the latest generation, or machines of the control plane or the
+// workers are not up to date.
+func clusterSettling(c *clusterv1.Cluster) bool {
+	if cond := meta.FindStatusCondition(c.Status.Conditions, clusterv1.ClusterTopologyReconciledCondition); cond != nil && cond.ObservedGeneration != c.Generation {
+		return true
+	}
+	behind := func(upToDate, desired *int32) bool { return upToDate != nil && desired != nil && *upToDate < *desired }
+	if cp := c.Status.ControlPlane; cp != nil && behind(cp.UpToDateReplicas, cp.DesiredReplicas) {
+		return true
+	}
+	w := c.Status.Workers
+	return w != nil && behind(w.UpToDateReplicas, w.DesiredReplicas)
+}
+
+// SiteRollClusters reads the state of the live clusters of Kubehenge's classes for PlanSiteRoll.
+// A cluster of another class or one being deleted is left out: the controller never gives it a
+// site CA, so it would hold a place for good.
+func SiteRollClusters(clusters []clusterv1.Cluster, classNamespace string) []SiteRollCluster {
 	out := make([]SiteRollCluster, 0, len(clusters))
 	for i := range clusters {
 		c := &clusters[i]
+		if !Owns(c, classNamespace) || !c.DeletionTimestamp.IsZero() {
+			continue
+		}
 		policy, set, err := optionalVariable[UpgradePolicy](c, upgradesVariable)
 		sc := SiteRollCluster{
 			Key:      client.ObjectKeyFromObject(c),
@@ -107,6 +153,8 @@ func SiteRollClusters(clusters []clusterv1.Cluster) []SiteRollCluster {
 			Applied:  appliedSiteCA(c),
 			Rolling:  meta.IsStatusConditionTrue(c.Status.Conditions, clusterv1.ClusterRollingOutCondition),
 			Built:    clusterBuilt(c),
+			Settling: clusterSettling(c),
+			Paused:   c.Spec.Paused != nil && *c.Spec.Paused,
 		}
 		if err == nil && set && (policy.Mode == upgradePatch || policy.Mode == upgradeMinor || policy.RefreshesNodeImages()) {
 			sc.Policy = &policy
@@ -154,13 +202,14 @@ func wrapCluster(key client.ObjectKey, err error) error {
 }
 
 // PlanSiteRoll plans the rollout of the site CA want. A cluster with its own trustedCAs is left
-// alone. A cluster with an upgrade window rolls only inside it. At most limit clusters roll at the
-// same time, those already rolling counting.
+// alone. A cluster with an upgrade window rolls only inside it, and a paused one waits for its
+// unpause. At most limit clusters roll at the same time, those already rolling or settling after
+// being given a site CA counting.
 func PlanSiteRoll(want string, clusters []SiteRollCluster, limit int, now time.Time) (SiteRollPlan, error) {
 	var plan SiteRollPlan
 	free := limit
 	for _, c := range clusters {
-		if c.Rolling {
+		if c.Rolling || (c.Settling && c.Built) {
 			free--
 			plan.Rolling++
 		}
@@ -173,6 +222,10 @@ func PlanSiteRoll(want string, clusters []SiteRollCluster, limit int, now time.T
 		}
 		plan.Inherits++
 		if c.Applied == want {
+			continue
+		}
+		if c.Paused {
+			plan.Waiting = append(plan.Waiting, c.Key)
 			continue
 		}
 		opens, closed, err := c.windowOpens(now)
@@ -202,18 +255,23 @@ func (r *Reconciler) ensureNodeSite(ctx context.Context, cluster *clusterv1.Clus
 	return r.rollSiteCA(ctx, cluster)
 }
 
-// rollSiteCA gives an inheriting cluster the site CA when the plan lets it, and takes a stale one
-// off a cluster that sets trustedCAs of its own. It returns when to look again, 0 for the usual resync.
+// rollSiteCA gives an inheriting cluster the site CA when the plan lets it. A cluster that sets
+// trustedCAs of its own is kept current at once, as its nodes ignore the variable. It returns when to look again, 0 for the usual resync.
 func (r *Reconciler) rollSiteCA(ctx context.Context, cluster *clusterv1.Cluster) (time.Duration, error) {
 	key := client.ObjectKeyFromObject(cluster)
-	if !InheritsSiteCA(cluster) {
-		if appliedSiteCA(cluster) == "" {
-			return 0, nil
-		}
-		return 0, r.setSiteCA(ctx, key, "")
-	}
 	if appliedSiteCA(cluster) == r.SiteCA {
 		return 0, nil
+	}
+	if r.SiteCA != "" && r.SiteCAProblem != "" {
+		if r.Events != nil {
+			r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, "SiteCAInvalid", "RollSiteCA", "the site CA is not given to the nodes: %s", r.SiteCAProblem)
+		}
+		return 0, nil
+	}
+	if !InheritsSiteCA(cluster) {
+		// The nodes of a cluster with trustedCAs of its own trust those alone, so keeping the variable
+		// current replaces nothing and takes nothing from the pacing.
+		return 0, r.setSiteCA(ctx, key, r.SiteCA)
 	}
 	if !clusterBuilt(cluster) {
 		return 0, r.setSiteCA(ctx, key, r.SiteCA)
@@ -223,7 +281,7 @@ func (r *Reconciler) rollSiteCA(ctx context.Context, cluster *clusterv1.Cluster)
 		return 0, fmt.Errorf("listing clusters for the site CA: %w", err)
 	}
 	now := r.now()
-	plan, err := PlanSiteRoll(r.SiteCA, SiteRollClusters(all.Items), SiteRollLimit, now)
+	plan, err := PlanSiteRoll(r.SiteCA, SiteRollClusters(all.Items, r.ClassNamespace), SiteRollLimit, now)
 	if err != nil {
 		return 0, err
 	}

@@ -47,6 +47,10 @@ type ReleaseChecksums struct {
 	// GitHub, read again for each patch and read. A cluster's own releaseMirror takes its place for
 	// that cluster's nodes.
 	Mirror func() ReleaseMirror
+	// SiteCA, when set, is the site CA that verifies an https mirror without an authority of its
+	// own, for the controller's own reads. A cluster's nodes get the site CA the cluster was given
+	// instead, so that a new site CA reaches them through the paced rollout alone.
+	SiteCA func() string
 }
 
 // DefaultMirror is the management cluster's release mirror, the zero mirror for none.
@@ -57,7 +61,17 @@ func (r *ReleaseChecksums) DefaultMirror() ReleaseMirror {
 	return r.mirror()
 }
 
+// mirror is the management cluster's mirror as the controller reads it, an https mirror without an
+// authority of its own verified with the site CA.
 func (r *ReleaseChecksums) mirror() ReleaseMirror {
+	m := r.configuredMirror()
+	if r.SiteCA != nil {
+		m = m.WithSiteCA(r.SiteCA())
+	}
+	return m
+}
+
+func (r *ReleaseChecksums) configuredMirror() ReleaseMirror {
 	if r.Mirror == nil {
 		return ReleaseMirror{}
 	}
@@ -65,12 +79,18 @@ func (r *ReleaseChecksums) mirror() ReleaseMirror {
 }
 
 // mirrorFor is the mirror a cluster's nodes download from: its own, else the management cluster's.
+// An https mirror without an authority of its own is verified with the site CA the cluster was
+// given, none for a cluster whose nodes trust their own trustedCAs.
 func (r *ReleaseChecksums) mirrorFor(cluster *clusterv1.Cluster) (ReleaseMirror, error) {
 	own, set, err := ClusterReleaseMirror(cluster)
 	if err != nil || set {
 		return own, err
 	}
-	return r.mirror(), nil
+	m := r.configuredMirror()
+	if InheritsSiteCA(cluster) {
+		m = m.WithSiteCA(appliedSiteCA(cluster))
+	}
+	return m, nil
 }
 
 // releaseTemplate is where a bootstrap template of RKE2 or k3s keeps its node's configuration.

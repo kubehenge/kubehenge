@@ -14,6 +14,8 @@ import (
 
 const siteCAPEM = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
 
+const siteClassNamespace = "kubehenge-system"
+
 // siteNow is a Wednesday noon.
 var siteNow = time.Date(2026, time.November, 18, 12, 0, 0, 0, time.UTC)
 
@@ -55,7 +57,7 @@ func TestSiteCARollsInheritingClustersWithinTheLimitAndTheirWindows(t *testing.T
 		siteCluster("own", jsonVar(trustedCAsVariable, `["x"]`)),
 		siteCluster("done", jsonVar(SiteCAsVariable, `["new"]`)),
 	}
-	plan, err := PlanSiteRoll("new", SiteRollClusters(clusters), 1, siteNow)
+	plan, err := PlanSiteRoll("new", SiteRollClusters(clusters, siteClassNamespace), 1, siteNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +78,7 @@ func TestSiteCARollsInheritingClustersWithinTheLimitAndTheirWindows(t *testing.T
 func TestSiteCARollLeavesUnbuiltClustersOutOfThePacing(t *testing.T) {
 	t.Parallel()
 	clusters := []clusterv1.Cluster{unbuilt("new-1"), unbuilt("new-2", jsonVar(upgradesVariable, mondayWindow)), siteCluster("a")}
-	plan, err := PlanSiteRoll("new", SiteRollClusters(clusters), 1, siteNow)
+	plan, err := PlanSiteRoll("new", SiteRollClusters(clusters, siteClassNamespace), 1, siteNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +92,7 @@ func TestSiteCARollCountsClustersAlreadyRolling(t *testing.T) {
 	busy := siteCluster("busy")
 	busy.Status.Conditions = append(busy.Status.Conditions, metav1.Condition{Type: clusterv1.ClusterRollingOutCondition, Status: metav1.ConditionTrue})
 	clusters := []clusterv1.Cluster{busy, siteCluster("a"), siteCluster("b")}
-	plan, err := PlanSiteRoll("new", SiteRollClusters(clusters), SiteRollLimit, siteNow)
+	plan, err := PlanSiteRoll("new", SiteRollClusters(clusters, siteClassNamespace), SiteRollLimit, siteNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +103,7 @@ func TestSiteCARollCountsClustersAlreadyRolling(t *testing.T) {
 
 func TestSiteCAUnsetLeavesClustersAlone(t *testing.T) {
 	t.Parallel()
-	plan, err := PlanSiteRoll("", SiteRollClusters([]clusterv1.Cluster{siteCluster("a"), siteCluster("b", jsonVar(upgradesVariable, mondayWindow))}), 4, siteNow)
+	plan, err := PlanSiteRoll("", SiteRollClusters([]clusterv1.Cluster{siteCluster("a"), siteCluster("b", jsonVar(upgradesVariable, mondayWindow))}, siteClassNamespace), 4, siteNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,13 +175,13 @@ func TestSiteCAIsWrittenOnlyWhereThePlanLetsIt(t *testing.T) {
 	// A cluster not built yet has no node to replace, so neither its closed window nor the limit holds it.
 	fresh := unbuilt("fresh", jsonVar(upgradesVariable, mondayWindow))
 	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(&a, &own, &windowed, &fresh).Build()
-	r := &Reconciler{Client: kube, Reader: kube, SiteCA: siteCAPEM, Now: func() time.Time { return siteNow }}
+	r := &Reconciler{Client: kube, Reader: kube, ClassNamespace: siteClassNamespace, SiteCA: siteCAPEM, Now: func() time.Time { return siteNow }}
 	ctx := t.Context()
 	for _, tc := range []struct {
 		name      string
 		wantCA    bool
 		wantAfter bool
-	}{{"a", true, false}, {"own", false, false}, {"windowed", false, true}, {"fresh", true, false}} {
+	}{{"a", true, false}, {"own", true, false}, {"windowed", false, true}, {"fresh", true, false}} {
 		var live clusterv1.Cluster
 		if err := kube.Get(ctx, client.ObjectKey{Namespace: "team-a", Name: tc.name}, &live); err != nil {
 			t.Fatal(err)

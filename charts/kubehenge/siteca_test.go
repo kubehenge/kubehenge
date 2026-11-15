@@ -126,8 +126,38 @@ func TestControllerGetsTheSiteCAAndTimeZone(t *testing.T) {
 		}
 	}
 	plain := controllerArgs(t)
-	if slices.ContainsFunc(plain, func(a string) bool { return strings.HasPrefix(a, "--site-ca") }) || !slices.Contains(plain, "--time-zone=UTC") {
+	if slices.ContainsFunc(plain, func(a string) bool { return strings.HasPrefix(a, "--site-ca") || strings.HasPrefix(a, "--time-zone") }) {
 		t.Errorf("with nothing set the controller got %v", plain)
+	}
+}
+
+func TestNoSiteTimeZoneLeavesTheWizardTheBrowsersAndSchedulesInUTC(t *testing.T) {
+	t.Parallel()
+	out := helmTemplateWith(t, "templates/rke2.yaml", map[string]any{})
+	if strings.Contains(out, "kubehenge.dev/time-zone") {
+		t.Error("the class names a site time zone nobody set")
+	}
+	if got := strings.Count(out, `default: "UTC"`); got != 3 {
+		t.Errorf("%d schedule defaults are UTC, want 3", got)
+	}
+}
+
+func TestOwnCAsStandAloneSoDroppingTheSiteCAChangesNothing(t *testing.T) {
+	t.Parallel()
+	site, own := siteCA(t, "site"), siteCA(t, "own")
+	for _, c := range siteCases {
+		render := func(vars string) string {
+			raw, err := json.Marshal(field(t, renderClass(t, c.file).patched(t, c.kind, variablesOf(t, vars)), c.files...))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(raw)
+		}
+		both := render(`{"siteCAs": [` + jsonString(site) + `], "trustedCAs": [` + jsonString(own) + `]}`)
+		alone := render(`{"trustedCAs": [` + jsonString(own) + `]}`)
+		if both != alone {
+			t.Errorf("%s %s: a siteCAs variable beside trustedCAs changes the nodes", c.file, c.kind)
+		}
 	}
 }
 
@@ -145,7 +175,7 @@ func TestSchedulesInTheClassDefaultToTheSiteTimeZone(t *testing.T) {
 
 func TestChartRefusesAMalformedSiteCAAndTimeZone(t *testing.T) {
 	t.Parallel()
-	for _, set := range []string{"siteCA=hello", "siteCA=-----BEGIN PRIVATE KEY-----", "timeZone=", "timeZone=Mars Olympus"} {
+	for _, set := range []string{"siteCA=hello", "siteCA=-----BEGIN PRIVATE KEY-----", "timeZone=Local", "timeZone=Mars Olympus"} {
 		cmd := exec.CommandContext(t.Context(), "helm", "template", //nolint:gosec // helm with the test's own arguments
 			"kubehenge", ".", "--namespace", "kubehenge-system", "--values", "../../pkg/provisioner/testdata/integration-values.yaml", "--set-string", set)
 		if out, err := cmd.CombinedOutput(); err == nil {

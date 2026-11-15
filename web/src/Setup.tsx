@@ -65,6 +65,7 @@ import {
   pollIdle,
   pollRunning,
   Said,
+  isTimeZone,
   timeZones,
   usePoll,
   weekdayName,
@@ -1077,7 +1078,7 @@ function siteDefaultProblems(f: SetupForm): SetupProblems {
     }
   }
   const zone = f.timeZone.trim();
-  if (zone !== "" && !timeZones("").includes(zone)) {
+  if (zone !== "" && !isTimeZone(zone)) {
     p.timeZone = "Use an IANA name like Europe/Zurich.";
   }
   return p;
@@ -1089,27 +1090,31 @@ export function siteCARollText(roll: SiteCARoll): string {
   if (total === 0) {
     return "";
   }
-  const parts = [`${roll.now} start now`];
-  if (roll.windows > 0) {
-    parts.push(
-      `${roll.windows} ${roll.windows === 1 ? "waits" : "wait"} for ${roll.windows === 1 ? "its window" : "their windows"}`,
-    );
-  }
-  if (roll.waiting > 0) {
-    parts.push(`${roll.waiting} for a free place`);
-  }
-  return `Replaces the nodes of ${total} ${total === 1 ? "cluster" : "clusters"}. ${parts.join(", ")}.`;
+  const parts = [
+    ...(roll.now > 0 ? [`${roll.now} now`] : []),
+    ...(roll.windows > 0 ? [`${roll.windows} at window`] : []),
+    ...(roll.waiting > 0 ? [`${roll.waiting} queued`] : []),
+  ];
+  return `Replaces nodes: ${parts.join(", ")}.`;
 }
 
 // SiteCARollNote tells, before the site CA is saved, how many clusters take it and when.
 function SiteCARollNote({ siteCA }: { siteCA: string }): JSX.Element | null {
   const [text, setText] = useState("");
-  const candidate = siteCA.includes("-----END CERTIFICATE-----") ? `${siteCA.trim()}\n` : "";
+  // Clearing a site CA that was there replaces the nodes of the clusters that hold it too.
+  const complete = siteCA.includes("-----END CERTIFICATE-----");
+  const blank = siteCA.trim() === "";
+  const [wasFilled, setWasFilled] = useState(!blank);
+  if (!blank && !wasFilled) {
+    setWasFilled(true);
+  }
+  const candidate = complete ? `${siteCA.trim()}\n` : "";
+  const asks = complete || (blank && wasFilled);
   useEffect(() => {
     let current = true;
     async function load(): Promise<void> {
       try {
-        const roll = candidate === "" ? undefined : await api.siteCARoll(candidate);
+        const roll = asks ? await api.siteCARoll(candidate) : undefined;
         if (current) {
           setText(roll === undefined ? "" : siteCARollText(roll));
         }
@@ -1124,7 +1129,7 @@ function SiteCARollNote({ siteCA }: { siteCA: string }): JSX.Element | null {
     return () => {
       current = false;
     };
-  }, [candidate]);
+  }, [asks, candidate]);
   return text === "" ? null : <p className="hint">{text}</p>;
 }
 

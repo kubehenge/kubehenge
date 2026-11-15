@@ -65,7 +65,7 @@ module "management" {
   chart_repositories     = var.settings.chartRepositories
   release_mirror         = var.settings.releaseMirror
   site_ca                = try(var.settings.siteCA, "")
-  time_zone              = try(var.settings.timeZone, "UTC")
+  time_zone              = try(var.settings.timeZone, "")
   controller_image       = var.settings.controllerImage
   vm_id_range            = var.settings.vmIdRange
   pod_subnets            = var.settings.podSubnets

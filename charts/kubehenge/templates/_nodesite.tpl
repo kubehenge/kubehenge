@@ -119,7 +119,7 @@ exceptions the cluster lists.
 
 {{/* The boot script of a kubeadm, RKE2 or k3s node, as the file Cluster API writes (call with the distribution and its ranges). */}}
 {{- define "kubehenge.nodeSiteFile" -}}
-{{ `{{ $mirrors := dig "registryMirrors" (list) . }}{{ $cas := concat (dig "siteCAs" (list) .) (dig "trustedCAs" (list) .) }}{{ $url := dig "egressProxy" "url" "" . }}{{ $https := dig "egressProxy" "httpsUrl" $url . }}` }}
+{{ `{{ $mirrors := dig "registryMirrors" (list) . }}{{ $cas := or (dig "trustedCAs" (list) .) (dig "siteCAs" (list) .) }}{{ $url := dig "egressProxy" "url" "" . }}{{ $https := dig "egressProxy" "httpsUrl" $url . }}` }}
 {{ include "kubehenge.nodeNoProxy" . }}
 path: /etc/kubehenge/node-site.sh
 owner: root:root
@@ -241,6 +241,6 @@ container runtime read.
 {{ range $m := (dig "registryMirrors" (list) .) }}{{ $eps := list }}{{ range $e := $m.endpoints }}{{ $ep := dict "url" $e }}{{ if (urlParse $e).path }}{{ $_ := set $ep "overridePath" true }}{{ end }}{{ $eps = append $eps $ep }}{{ end }}
 {{ $docs = append $docs (dict "apiVersion" "v1alpha1" "kind" "RegistryMirrorConfig" "name" $m.registry "endpoints" $eps | toJson) }}
 {{ $ca := dig "caBundle" "" $m }}{{ if $ca }}{{ range $e := $m.endpoints }}{{ $h := (urlParse $e).host }}{{ if not (hasKey $seen $h) }}{{ $_ := set $seen $h true }}{{ $docs = append $docs (dict "apiVersion" "v1alpha1" "kind" "RegistryTLSConfig" "name" $h "ca" $ca | toJson) }}{{ end }}{{ end }}{{ end }}{{ end }}
-{{ with (concat (dig "siteCAs" (list) .) (dig "trustedCAs" (list) .)) }}{{ $docs = append $docs (dict "apiVersion" "v1alpha1" "kind" "TrustedRootsConfig" "name" "kubehenge" "certificates" (join "\n" .) | toJson) }}{{ end }}
+{{ with (or (dig "trustedCAs" (list) .) (dig "siteCAs" (list) .)) }}{{ $docs = append $docs (dict "apiVersion" "v1alpha1" "kind" "TrustedRootsConfig" "name" "kubehenge" "certificates" (join "\n" .) | toJson) }}{{ end }}
 {{ join "\n---\n" $docs | toJson }}` }}
 {{- end -}}

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type JSX } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -36,10 +36,23 @@ describe("the site settings in Setup", () => {
     render(<Fields />);
     await user.click(screen.getByLabelText("Site CA"));
     await user.paste(pem);
-    await expect(
-      screen.findByText("Replaces the nodes of 3 clusters. 2 start now, 1 waits for its window."),
-    ).resolves.toBeInTheDocument();
+    await expect(screen.findByText("Replaces nodes: 2 now, 1 at window.")).resolves.toBeInTheDocument();
     expect(calls.find((c) => c.key === "POST /api/setup/site-ca-roll")?.body).toStrictEqual({ siteCA: `${pem}\n` });
+  });
+
+  it("says what clearing the site CA replaces", async () => {
+    const user = userEvent.setup({ delay: null });
+    const calls = fakeServer({
+      "POST /api/setup/site-ca-roll": { body: { inherits: 3, now: 3, windows: 0, waiting: 0 } },
+    });
+    render(<Fields />);
+    await user.click(screen.getByLabelText("Site CA"));
+    await user.paste(pem);
+    await expect(screen.findByText("Replaces nodes: 3 now.")).resolves.toBeInTheDocument();
+    await user.clear(screen.getByLabelText("Site CA"));
+    await waitFor(() => {
+      expect(calls.findLast((c) => c.key === "POST /api/setup/site-ca-roll")?.body).toStrictEqual({ siteCA: "" });
+    });
   });
 
   it("asks nothing and says nothing for text that is no certificate", async () => {
@@ -49,7 +62,7 @@ describe("the site settings in Setup", () => {
     await user.click(screen.getByLabelText("Site CA"));
     await user.paste("junk");
     expect(calls).toHaveLength(0);
-    expect(screen.queryByText(/Replaces the nodes/u)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Replaces nodes/u)).not.toBeInTheDocument();
   });
 
   it("take a time zone", async () => {

@@ -23,8 +23,8 @@ type siteCARoll struct {
 }
 
 // siteCARollOf plans the rollout of the site CA ca over the clusters.
-func siteCARollOf(ca string, clusters []clusterv1.Cluster, now time.Time) (siteCARoll, error) {
-	plan, err := provisioner.PlanSiteRoll(strings.TrimSpace(ca), provisioner.SiteRollClusters(clusters), provisioner.SiteRollLimit, now)
+func siteCARollOf(ca, classNamespace string, clusters []clusterv1.Cluster, now time.Time) (siteCARoll, error) {
+	plan, err := provisioner.PlanSiteRoll(strings.TrimSpace(ca), provisioner.SiteRollClusters(clusters, classNamespace), provisioner.SiteRollLimit, now)
 	if err != nil {
 		return siteCARoll{}, err //nolint:wrapcheck // the plan names the cluster
 	}
@@ -67,7 +67,7 @@ func (s *Server) siteCARollPreview(w http.ResponseWriter, r *http.Request, u use
 			return
 		}
 	}
-	roll, err := siteCARollOf(req.SiteCA, list.Items, time.Now())
+	roll, err := siteCARollOf(check.SiteCA, s.ClassNamespace, list.Items, time.Now())
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return

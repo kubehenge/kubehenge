@@ -146,8 +146,9 @@ releaseMirror:
 siteCA: ""
 
 # The IANA time zone that schedules without one of their own run in, such as a cluster's etcd
-# snapshots. The wizard starts from it.
-timeZone: UTC
+# snapshots. The wizard starts from it. Empty, schedules run in UTC and the wizard starts from the
+# user's browser time zone.
+timeZone: ""
 
 proxmox:
   # The Proxmox VE API, such as https://pve.example.org:8006. Required.

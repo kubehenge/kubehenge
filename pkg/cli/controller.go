@@ -420,6 +420,7 @@ func (o *controllerOptions) newHooks(mgr ctrl.Manager, registrar *provisioner.Re
 			Pins:   provisioner.DefaultReleasePins(),
 			Store:  &provisioner.PinStore{Reader: mgr.GetAPIReader(), Namespace: o.r.ClassNamespace},
 			Mirror: func() provisioner.ReleaseMirror { return o.releaseMirror },
+			SiteCA: func() string { return o.r.SiteCA },
 		},
 		Client: mgr.GetClient(),
 		Soak:   o.nodeImageSoak,
@@ -631,11 +632,15 @@ func (o *controllerOptions) parseReleaseMirror() error {
 		if err != nil {
 			return fmt.Errorf("--site-ca: %w", err)
 		}
-		if err = provisioner.CheckCertificateBundle(string(ca), time.Now()); err != nil {
+		if err = provisioner.CheckCertificateBundle(string(ca), time.Time{}); err != nil {
 			return fmt.Errorf("--site-ca: the authority %w", err)
 		}
 		o.r.SiteCA = strings.TrimSpace(string(ca))
-		o.releaseMirror = o.releaseMirror.WithSiteCA(o.r.SiteCA)
+		// An authority that has run out is no reason to stop the controller, which the clusters'
+		// upgrades, snapshots and deletions depend on. Each cluster reports it instead.
+		if err = provisioner.CheckCertificateBundle(o.r.SiteCA, time.Now()); err != nil {
+			o.r.SiteCAProblem = "the authority " + err.Error()
+		}
 	}
 	if err := o.releaseMirror.Check(time.Now()); err != nil {
 		return fmt.Errorf("--release-mirror: %w", err)

@@ -578,6 +578,22 @@ export function timeZones(current: string): string[] {
   return [...new Set(["UTC", current, ...Intl.supportedValuesOf("timeZone")])];
 }
 
+/**
+ * isTimeZone tells whether the browser knows the IANA time zone by that name, aliases such as
+ * Europe/Kyiv and Etc/UTC included, which the list of timeZones leaves out. A name starts with a
+ * capital, as the server's tz database reads it.
+ */
+export function isTimeZone(zone: string): boolean {
+  if (!/^[A-Z][\w+/-]*$/u.test(zone)) {
+    return false;
+  }
+  try {
+    return new Intl.DateTimeFormat("en", { timeZone: zone }).resolvedOptions().timeZone !== "";
+  } catch {
+    return false;
+  }
+}
+
 const weekdayNames: Record<string, string> = {
   Mon: "Monday",
   Tue: "Tuesday",

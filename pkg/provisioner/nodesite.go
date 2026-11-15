@@ -167,7 +167,8 @@ func mirrorAddress(endpoint string) (*url.URL, error) {
 }
 
 // checkCertificates holds a PEM bundle to certificates alone, none of them expired or not yet valid,
-// as Talos and the nodes' trust stores would otherwise refuse it only after a node was built.
+// as Talos and the nodes' trust stores would otherwise refuse it only after a node was built. A zero
+// now leaves the validity unchecked.
 func checkCertificates(bundle string, now time.Time) error {
 	if len(bundle) > maxNodePEMBytes {
 		return fmt.Errorf("at most %d KiB", maxNodePEMBytes/kibibyte)
@@ -188,6 +189,7 @@ func checkCertificates(bundle string, now time.Time) error {
 			return fmt.Errorf("certificate %d is no valid X.509 certificate", found+1)
 		}
 		switch {
+		case now.IsZero():
 		case now.After(cert.NotAfter):
 			return fmt.Errorf("certificate %d (%s) expired on %s", found+1, cert.Subject.CommonName, cert.NotAfter.UTC().Format(time.DateOnly))
 		case now.Before(cert.NotBefore):

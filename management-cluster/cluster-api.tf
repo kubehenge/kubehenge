@@ -531,7 +531,8 @@ resource "helm_release" "kubehenge" {
         t.ca_certificate == null ? {} : { caCertificate = t.ca_certificate },
       )]
     },
-    { image = local.controller_image, timeZone = var.time_zone },
+    { image = local.controller_image },
+    var.time_zone != "" ? { timeZone = var.time_zone } : {},
     var.site_ca != "" ? { siteCA = var.site_ca } : {},
     local.proxy_enabled ? { proxy = { secret = local.proxy_secret_name, ca = local.proxy_has_ca } } : {},
     length(var.chart_repositories.mirrors) > 0 ? { chartMirrors = var.chart_repositories.mirrors } : {},

@@ -51,8 +51,10 @@ func TestControllerSiteCAReachesTheReleaseMirrorAndTheNodes(t *testing.T) {
 	if err := o.parseReleaseMirror(); err != nil {
 		t.Fatal(err)
 	}
-	if o.releaseMirror.CABundle != strings.TrimSpace(site) || o.r.SiteCA != strings.TrimSpace(site) {
-		t.Errorf("a mirror without an authority: %q, nodes %q, want the site CA", o.releaseMirror.CABundle, o.r.SiteCA)
+	// The mirror's authority is read per cluster, from the site CA each was given, so the configured
+	// mirror stays without one and a new site CA reaches the nodes through the paced rollout alone.
+	if o.releaseMirror.CABundle != "" || o.r.SiteCA != strings.TrimSpace(site) {
+		t.Errorf("a mirror without an authority: %q, site CA %q, want none and the site CA", o.releaseMirror.CABundle, o.r.SiteCA)
 	}
 
 	o = &controllerOptions{siteCAFile: sitePath, releaseMirrorCA: ownPath}

@@ -436,19 +436,22 @@ describe("setup", () => {
     expect(problems({ siteCA: "junk" }).siteCA).toBe("Paste PEM certificates.");
     expect(problems({ siteCA: "-----BEGIN PRIVATE KEY-----" }).siteCA).toBe("Paste certificates only, no private key.");
     expect(problems({ timeZone: "Mars/Olympus" }).timeZone).toBe("Use an IANA name like Europe/Zurich.");
+    expect(problems({ timeZone: "Local" }).timeZone).toBe("Use an IANA name like Europe/Zurich.");
+    // The server's tz database takes aliases that the browser's list of zones leaves out.
+    for (const zone of ["Europe/Kyiv", "Asia/Kolkata", "Etc/UTC", "Etc/GMT+1"]) {
+      expect(problems({ timeZone: zone })).toStrictEqual({});
+    }
   });
 
-  it("says how many clusters a site CA replaces, and when", () => {
+  it("says how many clusters a site CA replaces, and when, in one short sentence", () => {
     expect(siteCARollText({ inherits: 3, now: 0, windows: 0, waiting: 0 })).toBe("");
-    expect(siteCARollText({ inherits: 3, now: 2, windows: 1, waiting: 0 })).toBe(
-      "Replaces the nodes of 3 clusters. 2 start now, 1 waits for its window.",
-    );
+    expect(siteCARollText({ inherits: 3, now: 2, windows: 1, waiting: 0 })).toBe("Replaces nodes: 2 now, 1 at window.");
     expect(siteCARollText({ inherits: 6, now: 4, windows: 1, waiting: 1 })).toBe(
-      "Replaces the nodes of 6 clusters. 4 start now, 1 waits for its window, 1 for a free place.",
+      "Replaces nodes: 4 now, 1 at window, 1 queued.",
     );
-    expect(siteCARollText({ inherits: 1, now: 1, windows: 0, waiting: 0 })).toBe(
-      "Replaces the nodes of 1 cluster. 1 start now.",
-    );
+    expect(siteCARollText({ inherits: 1, now: 0, windows: 1, waiting: 0 })).toBe("Replaces nodes: 1 at window.");
+    const longest = siteCARollText({ inherits: 99, now: 99, windows: 99, waiting: 99 });
+    expect(longest.split(/\s+/u).length).toBeLessThanOrEqual(10);
   });
 
   it("sends a proxy only when it has an address", () => {

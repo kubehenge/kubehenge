@@ -464,7 +464,9 @@ whether it has a site CA ride along, for the interface to show.
 {{- $targets = append $targets $target -}}
 {{- end -}}
 kubehenge.dev/backup-targets: {{ $targets | toJson | quote }}
+{{- if .Values.timeZone }}
 kubehenge.dev/time-zone: {{ .Values.timeZone | quote }}
+{{- end }}
 {{- if .Values.siteCA }}
 kubehenge.dev/site-ca: "set"
 {{- end }}
@@ -777,7 +779,7 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           description: When to back up, as a cron expression of five fields or a descriptor such as @weekly.
         timeZone:
           type: string
-          default: {{ .Values.timeZone | quote }}
+          default: {{ .Values.timeZone | default "UTC" | quote }}
           description: IANA time zone the schedule is read in, such as Europe/Berlin.
         retentionDays:
           type: integer
@@ -849,7 +851,7 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           description: When to take a snapshot, as a cron expression of five fields or a descriptor such as @daily.
         timeZone:
           type: string
-          default: {{ .Values.timeZone | quote }}
+          default: {{ .Values.timeZone | default "UTC" | quote }}
           description: IANA time zone the schedule is read in, such as Europe/Berlin.
         keep:
           type: integer
@@ -2433,7 +2435,7 @@ reads it.
               default: 240
             timeZone:
               type: string
-              default: {{ .Values.timeZone | quote }}
+              default: {{ .Values.timeZone | default "UTC" | quote }}
               description: IANA time zone of start, such as Europe/Berlin.
 {{- end -}}
 

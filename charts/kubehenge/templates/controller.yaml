@@ -415,7 +415,9 @@ spec:
             {{- if .Values.siteCA }}
             - --site-ca=/etc/kubehenge/site-ca/ca.crt
             {{- end }}
+            {{- if .Values.timeZone }}
             - --time-zone={{ .Values.timeZone }}
+            {{- end }}
             - --calico-images={{ join "," .Values.addons.calico.images }}
             - --rancher-kubernetes={{ .Values.addons.rancher.kubernetes }}
             - --rancher-turtles-image={{ .Values.addons.rancher.turtles.image }}
