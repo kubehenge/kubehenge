@@ -47,6 +47,7 @@ import type {
   PveNode,
   SetupFindings,
   SetupStatus,
+  SiteCARoll,
   Storage,
 } from "./types";
 import {
@@ -115,6 +116,10 @@ export interface SetupForm {
   releaseMirror: string;
   // PEM certificates of the release mirror's authority.
   releaseMirrorCA: string;
+  // PEM certificates of the site's private CA, the default of every connection with none of its own.
+  siteCA: string;
+  // The IANA time zone of schedules that name none.
+  timeZone: string;
   // The address alone, with no user name or password.
   proxyURL: string;
   proxyUser: string;
@@ -337,6 +342,12 @@ function outboundSettings(f: SetupForm): Partial<ManagementSettings> {
   const release = releaseMirror(f);
   if (release) {
     s.releaseMirror = release;
+  }
+  if (filled(f.siteCA)) {
+    s.siteCA = `${f.siteCA.trim()}\n`;
+  }
+  if (filled(f.timeZone)) {
+    s.timeZone = f.timeZone.trim();
   }
   const proxy = proxySettings(f);
   if (proxy) {
@@ -564,6 +575,8 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     mirrors: formatMirrors(saved.registryMirrors),
     ...chartFields(saved),
     ...releaseFields(saved),
+    siteCA: saved.siteCA ?? "",
+    timeZone: saved.timeZone ?? "",
     ...proxyFields(saved),
     podSubnets: (saved.podSubnets ?? []).join(", "),
     serviceSubnets: (saved.serviceSubnets ?? []).join(", "),
@@ -611,6 +624,8 @@ export type SetupField =
   | "chartMirrorCA"
   | "releaseMirror"
   | "releaseMirrorCA"
+  | "siteCA"
+  | "timeZone"
   | "proxyURL"
   | "proxyUser"
   | "proxyPassword"
@@ -649,6 +664,8 @@ const stepFields: Record<SetupStep, SetupField[]> = {
     "chartMirrorCA",
     "releaseMirror",
     "releaseMirrorCA",
+    "siteCA",
+    "timeZone",
     "proxyURL",
     "proxyUser",
     "proxyPassword",
@@ -670,6 +687,8 @@ const advancedFields: SetupField[] = [
   "chartMirrorCA",
   "releaseMirror",
   "releaseMirrorCA",
+  "siteCA",
+  "timeZone",
   "proxyURL",
   "proxyUser",
   "proxyPassword",
@@ -1047,6 +1066,68 @@ function releaseMirrorProblems(f: SetupForm): SetupProblems {
   return p;
 }
 
+// siteDefaultProblems are those of the site CA and the site time zone.
+function siteDefaultProblems(f: SetupForm): SetupProblems {
+  const p: SetupProblems = {};
+  if (filled(f.siteCA)) {
+    if (f.siteCA.includes("PRIVATE KEY")) {
+      p.siteCA = "Paste certificates only, no private key.";
+    } else if (!f.siteCA.includes("-----BEGIN CERTIFICATE-----")) {
+      p.siteCA = "Paste PEM certificates.";
+    }
+  }
+  const zone = f.timeZone.trim();
+  if (zone !== "" && !timeZones("").includes(zone)) {
+    p.timeZone = "Use an IANA name like Europe/Zurich.";
+  }
+  return p;
+}
+
+/** siteCARollText says what saving a site CA does to the clusters, empty where nothing changes. */
+export function siteCARollText(roll: SiteCARoll): string {
+  const total = roll.now + roll.windows + roll.waiting;
+  if (total === 0) {
+    return "";
+  }
+  const parts = [`${roll.now} start now`];
+  if (roll.windows > 0) {
+    parts.push(
+      `${roll.windows} ${roll.windows === 1 ? "waits" : "wait"} for ${roll.windows === 1 ? "its window" : "their windows"}`,
+    );
+  }
+  if (roll.waiting > 0) {
+    parts.push(`${roll.waiting} for a free place`);
+  }
+  return `Replaces the nodes of ${total} ${total === 1 ? "cluster" : "clusters"}. ${parts.join(", ")}.`;
+}
+
+// SiteCARollNote tells, before the site CA is saved, how many clusters take it and when.
+function SiteCARollNote({ siteCA }: { siteCA: string }): JSX.Element | null {
+  const [text, setText] = useState("");
+  const candidate = siteCA.includes("-----END CERTIFICATE-----") ? `${siteCA.trim()}\n` : "";
+  useEffect(() => {
+    let current = true;
+    async function load(): Promise<void> {
+      try {
+        const roll = candidate === "" ? undefined : await api.siteCARoll(candidate);
+        if (current) {
+          setText(roll === undefined ? "" : siteCARollText(roll));
+        }
+      } catch {
+        // Saving says what is wrong with the authority.
+        if (current) {
+          setText("");
+        }
+      }
+    }
+    void load();
+    return () => {
+      current = false;
+    };
+  }, [candidate]);
+  return text === "" ? null : <p className="hint">{text}</p>;
+}
+
 // offerProblems are those of what the management cluster offers the clusters it makes.
 function offerProblems(f: SetupForm): SetupProblems {
   const p: SetupProblems = {};
@@ -1067,7 +1148,7 @@ function offerProblems(f: SetupForm): SetupProblems {
   if (bad !== undefined) {
     p.mirrors = `${bad} is not in the form ghcr.io=https://mirror.example:5000.`;
   }
-  Object.assign(p, chartMirrorProblems(f), releaseMirrorProblems(f), proxyProblems(f));
+  Object.assign(p, chartMirrorProblems(f), releaseMirrorProblems(f), siteDefaultProblems(f), proxyProblems(f));
   for (const key of ["podSubnets", "serviceSubnets"] as const) {
     const wrong = list(f[key]).find((r) => rangeProblem(r) !== undefined);
     if (wrong !== undefined) {
@@ -2223,6 +2304,25 @@ export function AdvancedFields({
             value={form.chartMirrorCA}
             onChange={(e) => set("chartMirrorCA", e.target.value)}
           />
+        )}
+      </Field>
+      <Field
+        label="Site CA"
+        hint="PEM, the default for every connection"
+        info="Every cluster's nodes, the release mirror, backup targets and identity providers trust it unless they name an authority of their own."
+        error={shown("siteCA")}
+      >
+        {(id) => <textarea id={id} rows={3} value={form.siteCA} onChange={(e) => set("siteCA", e.target.value)} />}
+      </Field>
+      <SiteCARollNote siteCA={form.siteCA} />
+      <Field
+        label="Time zone"
+        hint="For schedules that name none"
+        info="New etcd snapshots, backups and upgrade windows start in it. A cluster's own zone wins."
+        error={shown("timeZone")}
+      >
+        {(id) => (
+          <input id={id} placeholder="UTC" value={form.timeZone} onChange={(e) => set("timeZone", e.target.value)} />
         )}
       </Field>
       <Field

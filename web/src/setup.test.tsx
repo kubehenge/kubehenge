@@ -21,6 +21,7 @@ import {
   settings,
   setupFieldProblems,
   setupProblems,
+  siteCARollText,
   type SetupForm,
 } from "./Setup";
 
@@ -48,6 +49,8 @@ const form: SetupForm = {
   chartMirrorCA: "",
   releaseMirror: "",
   releaseMirrorCA: "",
+  siteCA: "",
+  timeZone: "",
   proxyURL: "",
   proxyUser: "",
   proxyPassword: "",
@@ -411,6 +414,41 @@ describe("setup", () => {
       "A certificate needs an https:// mirror.",
     );
     expect(problems({ releaseMirrorCA: pem }).releaseMirrorCA).toBe("Add a release mirror first.");
+  });
+
+  it("sends the site CA and time zone only when set, and reads them back", () => {
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    expect(settings(form)).not.toHaveProperty("siteCA");
+    expect(settings(form)).not.toHaveProperty("timeZone");
+    const sent = settings({ ...form, siteCA: ` ${pem}\n\n`, timeZone: " Europe/Zurich " });
+    expect(sent.siteCA).toBe(`${pem}\n`);
+    expect(sent.timeZone).toBe("Europe/Zurich");
+    const again = formOf(sent);
+    expect(again.siteCA).toBe(`${pem}\n`);
+    expect(again.timeZone).toBe("Europe/Zurich");
+    expect(formOf(settings(form)).siteCA).toBe("");
+  });
+
+  it("checks the site CA and time zone", () => {
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    expect(problems({ siteCA: pem, timeZone: "Europe/Zurich" })).toStrictEqual({});
+    expect(problems({ timeZone: "UTC" })).toStrictEqual({});
+    expect(problems({ siteCA: "junk" }).siteCA).toBe("Paste PEM certificates.");
+    expect(problems({ siteCA: "-----BEGIN PRIVATE KEY-----" }).siteCA).toBe("Paste certificates only, no private key.");
+    expect(problems({ timeZone: "Mars/Olympus" }).timeZone).toBe("Use an IANA name like Europe/Zurich.");
+  });
+
+  it("says how many clusters a site CA replaces, and when", () => {
+    expect(siteCARollText({ inherits: 3, now: 0, windows: 0, waiting: 0 })).toBe("");
+    expect(siteCARollText({ inherits: 3, now: 2, windows: 1, waiting: 0 })).toBe(
+      "Replaces the nodes of 3 clusters. 2 start now, 1 waits for its window.",
+    );
+    expect(siteCARollText({ inherits: 6, now: 4, windows: 1, waiting: 1 })).toBe(
+      "Replaces the nodes of 6 clusters. 4 start now, 1 waits for its window, 1 for a free place.",
+    );
+    expect(siteCARollText({ inherits: 1, now: 1, windows: 0, waiting: 0 })).toBe(
+      "Replaces the nodes of 1 cluster. 1 start now.",
+    );
   });
 
   it("sends a proxy only when it has an address", () => {

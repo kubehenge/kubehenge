@@ -44,6 +44,7 @@ import type {
   Session,
   SetupFindings,
   SetupStatus,
+  SiteCARoll,
   Storage,
   StoredCredential,
   ReleasePin,
@@ -386,6 +387,7 @@ export interface Api {
   setupStatus: () => Promise<SetupStatus>;
   setup: (settings: ManagementSettings, passphrase: string) => Promise<Job>;
   setupCheck: (settings: ManagementSettings) => Promise<SetupFindings>;
+  siteCARoll: (siteCA: string) => Promise<SiteCARoll>;
 
   health: (ns: string, name: string) => Promise<ClusterHealth>;
   /** upgradeChecks reads the removed APIs in use and the fail-closed webhooks an upgrade to version would meet. */
@@ -563,6 +565,7 @@ export const api: Api = {
   setupStatus: () => request("GET", "/api/setup"),
   setup: (settings, passphrase) => request("POST", "/api/setup", { settings, passphrase }),
   setupCheck: (settings) => request("POST", "/api/setup/check", { settings }),
+  siteCARoll: (siteCA) => request("POST", "/api/setup/site-ca-roll", { siteCA }),
 
   health: (ns, name) => request("GET", `${clusterPath(ns, name)}/health`),
   upgradeChecks: (ns, name, version) =>

@@ -841,6 +841,12 @@ export interface ManagementSettings {
    */
   releaseMirror?: { url?: string; caBundle?: string };
   /**
+   * The PEM authority of the site's private CA. Every connection that names none of its own trusts it.
+   */
+  siteCA?: string;
+  /** The IANA time zone of schedules that name none. Empty, UTC. */
+  timeZone?: string;
+  /**
    * The proxy downloads go through. The address has no credentials. The server never sends the
    * password, only passwordSet. Sent back, an empty password keeps the saved one and clearPassword
    * removes it.
@@ -1295,6 +1301,18 @@ export interface RebootReadiness {
 }
 
 /** What the setup would run into: errors stop it, warnings do not. */
+/** What saving a site CA does to the clusters that inherit it. */
+export interface SiteCARoll {
+  inherits: number;
+  /** Clusters that replace their nodes at once. */
+  now: number;
+  /** Clusters that wait for their upgrade window, and the first time one opens. */
+  windows: number;
+  opens?: string;
+  /** Clusters that wait for a free place among those rolling. */
+  waiting: number;
+}
+
 export interface SetupFindings {
   errors: string[];
   warnings: string[];
