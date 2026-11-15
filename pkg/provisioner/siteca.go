@@ -74,6 +74,11 @@ func InheritsSiteCA(c *clusterv1.Cluster) bool {
 	return err == nil && len(own) == 0
 }
 
+// clusterBuilt tells whether the cluster's control plane has been up, so that it has nodes.
+func clusterBuilt(c *clusterv1.Cluster) bool {
+	return meta.IsStatusConditionTrue(c.Status.Conditions, clusterv1.ClusterControlPlaneInitializedCondition)
+}
+
 // SiteRollCluster is a cluster as the site CA's rollout sees it.
 type SiteRollCluster struct {
 	Key client.ObjectKey
@@ -83,6 +88,9 @@ type SiteRollCluster struct {
 	Applied string
 	// Rolling is true while the cluster replaces nodes.
 	Rolling bool
+	// Built is true once the cluster's control plane is up. Before that it has no node to replace,
+	// so the site CA is part of its first nodes and no pacing applies.
+	Built bool
 	// Policy is the cluster's upgrade policy, nil when it sets none.
 	Policy *UpgradePolicy
 }
@@ -98,6 +106,7 @@ func SiteRollClusters(clusters []clusterv1.Cluster) []SiteRollCluster {
 			Inherits: InheritsSiteCA(c),
 			Applied:  appliedSiteCA(c),
 			Rolling:  meta.IsStatusConditionTrue(c.Status.Conditions, clusterv1.ClusterRollingOutCondition),
+			Built:    clusterBuilt(c),
 		}
 		if err == nil && set && (policy.Mode == upgradePatch || policy.Mode == upgradeMinor || policy.RefreshesNodeImages()) {
 			sc.Policy = &policy
@@ -159,7 +168,7 @@ func PlanSiteRoll(want string, clusters []SiteRollCluster, limit int, now time.T
 	ordered := slices.Clone(clusters)
 	slices.SortFunc(ordered, func(a, b SiteRollCluster) int { return strings.Compare(a.Key.String(), b.Key.String()) })
 	for _, c := range ordered {
-		if !c.Inherits {
+		if !c.Inherits || !c.Built {
 			continue
 		}
 		plan.Inherits++
@@ -205,6 +214,9 @@ func (r *Reconciler) rollSiteCA(ctx context.Context, cluster *clusterv1.Cluster)
 	}
 	if appliedSiteCA(cluster) == r.SiteCA {
 		return 0, nil
+	}
+	if !clusterBuilt(cluster) {
+		return 0, r.setSiteCA(ctx, key, r.SiteCA)
 	}
 	var all clusterv1.ClusterList
 	if err := r.Client.List(ctx, &all); err != nil {

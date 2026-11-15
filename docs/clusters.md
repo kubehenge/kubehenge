@@ -878,7 +878,7 @@ A network that reaches few hosts needs four settings. Each works on every distri
 | Time servers | `network.ntp` | NTP servers, with the hypervisor's clock as the fallback. |
 | Proxy | `egressProxy` | The proxy for the container runtime, the installers of RKE2 and k3s, and the distribution's service. The add-ons use it too. |
 | Registry mirrors | `registryMirrors` | Mirrors that images are pulled from before the registry itself. |
-| Trusted CAs | `trustedCAs` | Authorities in the node OS's trust store, which the container runtime and the distribution read. |
+| Trusted CAs | `trustedCAs` | Authorities in the node OS's trust store, which the container runtime and the distribution read. A cluster that sets none gets the management cluster's site CA (`siteCA` in the chart values, **Site CA** in Setup), `kubehenge appliance settings set --site-ca-file` from the command line. |
 
 Where each lands on a node:
 
@@ -1058,6 +1058,8 @@ A setting that is only on or off has a switch in its row. These are Proxmox VE H
 | Nodes | Proxmox VE HA | where the management cluster has Proxmox VE HA and the storage is shared | Takes the control-plane VMs into HA or out of it ([Machines](#machines)). |
 | Nodes | HA rule labels | unless the management cluster switched them off for every cluster, or while they are on | [Machines](#machines). |
 | Nodes | Autoscaler | always | Its expander, its timing and where it runs ([Autoscaling](#autoscaling)). |
+| Nodes | Registry mirrors, Trusted CAs, Release mirror | always, the release mirror on RKE2 and k3s | Replaces every node, one at a time. A cluster without its own Trusted CAs takes the management cluster's site CA, a few clusters at a time and inside their upgrade windows ([below](#sites-with-limited-access)). |
+| Network | Bridge, VLAN, address families | always | Fixed for the cluster's life. |
 | Network | Pod network | always | Fixed for the cluster's life ([Pod network](#pod-network)). |
 | Network | Load balancer | always | See the list below. |
 | Network | Cluster Mesh | on a cluster that runs Cilium | See the list below. |

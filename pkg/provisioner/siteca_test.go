@@ -20,7 +20,15 @@ var siteNow = time.Date(2026, time.November, 18, 12, 0, 0, 0, time.UTC)
 func siteCluster(name string, variables ...clusterv1.ClusterVariable) clusterv1.Cluster {
 	c := cluster(variables...)
 	c.Name = name
+	c.Status.Conditions = []metav1.Condition{{Type: clusterv1.ClusterControlPlaneInitializedCondition, Status: metav1.ConditionTrue}}
 	return *c
+}
+
+// unbuilt is a cluster whose control plane never came up.
+func unbuilt(name string, variables ...clusterv1.ClusterVariable) clusterv1.Cluster {
+	c := siteCluster(name, variables...)
+	c.Status.Conditions = nil
+	return c
 }
 
 func jsonVar(name, raw string) clusterv1.ClusterVariable {
@@ -65,10 +73,22 @@ func TestSiteCARollsInheritingClustersWithinTheLimitAndTheirWindows(t *testing.T
 	}
 }
 
+func TestSiteCARollLeavesUnbuiltClustersOutOfThePacing(t *testing.T) {
+	t.Parallel()
+	clusters := []clusterv1.Cluster{unbuilt("new-1"), unbuilt("new-2", jsonVar(upgradesVariable, mondayWindow)), siteCluster("a")}
+	plan, err := PlanSiteRoll("new", SiteRollClusters(clusters), 1, siteNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(plan.Now, keys("a")) || len(plan.Waiting) != 0 || len(plan.Windows) != 0 {
+		t.Errorf("plan = %+v, want a to roll alone and the unbuilt clusters outside the plan", plan)
+	}
+}
+
 func TestSiteCARollCountsClustersAlreadyRolling(t *testing.T) {
 	t.Parallel()
 	busy := siteCluster("busy")
-	busy.Status.Conditions = []metav1.Condition{{Type: clusterv1.ClusterRollingOutCondition, Status: metav1.ConditionTrue}}
+	busy.Status.Conditions = append(busy.Status.Conditions, metav1.Condition{Type: clusterv1.ClusterRollingOutCondition, Status: metav1.ConditionTrue})
 	clusters := []clusterv1.Cluster{busy, siteCluster("a"), siteCluster("b")}
 	plan, err := PlanSiteRoll("new", SiteRollClusters(clusters), SiteRollLimit, siteNow)
 	if err != nil {
@@ -150,14 +170,16 @@ func TestSiteTimeZoneIsTheDefaultOfSchedules(t *testing.T) { //nolint:parallelte
 func TestSiteCAIsWrittenOnlyWhereThePlanLetsIt(t *testing.T) {
 	t.Parallel()
 	a, own, windowed := siteCluster("a"), siteCluster("own", jsonVar(trustedCAsVariable, `["x"]`), jsonVar(SiteCAsVariable, `["old"]`)), siteCluster("windowed", jsonVar(upgradesVariable, mondayWindow))
-	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(&a, &own, &windowed).Build()
+	// A cluster not built yet has no node to replace, so neither its closed window nor the limit holds it.
+	fresh := unbuilt("fresh", jsonVar(upgradesVariable, mondayWindow))
+	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(&a, &own, &windowed, &fresh).Build()
 	r := &Reconciler{Client: kube, Reader: kube, SiteCA: siteCAPEM, Now: func() time.Time { return siteNow }}
 	ctx := t.Context()
 	for _, tc := range []struct {
 		name      string
 		wantCA    bool
 		wantAfter bool
-	}{{"a", true, false}, {"own", false, false}, {"windowed", false, true}} {
+	}{{"a", true, false}, {"own", false, false}, {"windowed", false, true}, {"fresh", true, false}} {
 		var live clusterv1.Cluster
 		if err := kube.Get(ctx, client.ObjectKey{Namespace: "team-a", Name: tc.name}, &live); err != nil {
 			t.Fatal(err)

@@ -130,13 +130,21 @@ func newFakeInterface(t *testing.T) *fakeInterface {
 		}
 		answer(w, http.StatusOK, `{"entries":[]}`)
 	}))
+	const saved = `"appliance":true,"allowed":true,"settings":{"bridge":"vmbr0","timeZone":"Europe/Zurich"}`
 	mux.HandleFunc("GET /api/setup", f.admin(func(w http.ResponseWriter, _ *http.Request) {
 		f.setups++
 		if f.setups == 1 {
-			answer(w, http.StatusOK, `{"job":{"kind":"etcd-restore","state":"running","log":["Restoring"],"lines":1}}`)
+			answer(w, http.StatusOK, `{`+saved+`,"job":{"kind":"etcd-restore","state":"running","log":["Restoring"],"lines":1}}`)
 			return
 		}
-		answer(w, http.StatusOK, `{"job":{"kind":"etcd-restore","state":"succeeded","log":["The snapshot matches its checksum","etcd runs"],"lines":3}}`)
+		answer(w, http.StatusOK, `{`+saved+`,"job":{"kind":"etcd-restore","state":"succeeded","log":["The snapshot matches its checksum","etcd runs"],"lines":3}}`)
+	}))
+	mux.HandleFunc("POST /api/setup", f.admin(func(w http.ResponseWriter, _ *http.Request) {
+		if field(savedBody(f), "timeZone") == "Mars/Base" {
+			answer(w, http.StatusUnprocessableEntity, `{"error":"Time zone: Mars/Base is not an IANA time zone"}`)
+			return
+		}
+		answer(w, http.StatusAccepted, `{}`)
 	}))
 	f.srv = httptest.NewTLSServer(mux)
 	t.Cleanup(f.srv.Close)

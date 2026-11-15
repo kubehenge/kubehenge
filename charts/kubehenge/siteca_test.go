@@ -2,6 +2,7 @@ package kubehenge_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -114,6 +115,25 @@ func TestChartRefusesAMalformedSiteCAAndTimeZone(t *testing.T) {
 	}
 }
 
+func TestIdentityProvidersWithoutACAGetTheSiteCA(t *testing.T) {
+	t.Parallel()
+	site, own := siteCA(t, "site"), siteCA(t, "own")
+	providers := []map[string]any{
+		{"issuerURL": "https://own.example.org", "clientID": "a", "certificateAuthority": own},
+		{"issuerURL": "https://site.example.org", "clientID": "b"},
+	}
+	out := helmTemplateWith(t, "templates/rke2.yaml", map[string]any{"siteCA": site, "clusterOIDC": providers})
+	if !strings.Contains(out, certificateBody(site)) {
+		t.Error("the provider without a CA did not get the site CA")
+	}
+	if !strings.Contains(out, certificateBody(own)) {
+		t.Error("a provider's own CA was dropped")
+	}
+	if without := helmTemplateWith(t, "templates/rke2.yaml", map[string]any{"clusterOIDC": providers}); strings.Contains(without, certificateBody(site)) {
+		t.Error("the site CA showed up although none is set")
+	}
+}
+
 func TestBackupTargetsAndIdentityProvidersInheritTheSiteCA(t *testing.T) {
 	t.Parallel()
 	site, own := siteCA(t, "site"), siteCA(t, "own")
@@ -139,7 +159,7 @@ func TestBackupTargetsAndIdentityProvidersInheritTheSiteCA(t *testing.T) {
 	if targets[0]["caCertificate"] != own {
 		t.Errorf("a target's own CA = %v, want it kept", targets[0]["caCertificate"])
 	}
-	if got, _ := targets[1]["caCertificate"].(string); !strings.Contains(got, certificateBody(site)) {
+	if got := fmt.Sprint(targets[1]["caCertificate"]); !strings.Contains(got, certificateBody(site)) {
 		t.Errorf("an endpoint without a CA = %q, want the site CA", got)
 	}
 	if _, has := targets[2]["caCertificate"]; has {
