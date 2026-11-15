@@ -29,11 +29,13 @@ const storePod = "kubehenge-backup-store-5d8f7c9b4-abcde"
 
 // kubelet stands in for the kubelet's port-forward over SPDY, to the store at target. cut, where
 // set, says how many bytes of the store's answer reach the client before the pod goes. stall, set,
-// stops passing the answer on without ending anything, as a node lost does.
+// passes nothing of the answer on without ending anything, as a node lost does. drip, set, passes
+// the answer on in pieces this far apart.
 type kubelet struct {
 	target string
 	cut    int
 	stall  bool
+	drip   time.Duration
 	pods   chan string
 }
 
@@ -69,8 +71,16 @@ func (k *kubelet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	go func() { _, _ = io.Copy(store, data) }()
 	switch {
 	case k.stall:
-		_, _ = io.CopyN(data, store, 1024)
 		<-r.Context().Done()
+	case k.drip > 0:
+		for {
+			if _, err := io.CopyN(data, store, 4096); err != nil {
+				break
+			}
+			time.Sleep(k.drip)
+		}
+		_ = errStream.Close()
+		_ = data.Close()
 	case k.cut > 0:
 		_, _ = io.CopyN(data, store, int64(k.cut))
 		_, _ = io.WriteString(errStream, "pod "+storePod+" was deleted")
@@ -183,6 +193,23 @@ func TestForwardEndsAStalledTransfer(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "sent nothing for 300ms") || errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want the stall named", err)
+	}
+}
+
+// A transfer that keeps moving outlasts Idle, however long it takes in all.
+func TestForwardKeepsATransferThatMoves(t *testing.T) {
+	t.Parallel()
+	k := &kubelet{target: storeAt(t, 12*4096), drip: 100 * time.Millisecond, pods: make(chan string, 4)}
+	f, c := forwardTo(t, k)
+	f.Idle = 400 * time.Millisecond
+	r, err := c.Get(t.Context(), "big")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(r)
+	_ = r.Close()
+	if err != nil || len(got) != 12*4096 {
+		t.Fatalf("read %d bytes: %v", len(got), err)
 	}
 }
 
