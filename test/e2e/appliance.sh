@@ -449,7 +449,11 @@ volume_snapshots() {
         --client-certificate "${work}/management.crt" --client-key "${work}/management.key" \
         -n kubehenge-system port-forward deployment/kubehenge-backup-store 0:8080 > "${work}/store-forward" 2>&1 &
     forward_pid=$!
-    forwarded() { grep -q '^Forwarding from 127.0.0.1:' "${work}/store-forward"; }
+    forwarded() {
+        seen=$(tr '\n' ' ' < "${work}/store-forward")
+        kill -0 "${forward_pid}" 2> /dev/null || fail "kubectl port-forward to the backup volume's store ended: ${seen}"
+        grep -q '^Forwarding from 127.0.0.1:' "${work}/store-forward"
+    }
     until_true 60 "a port-forward to the backup volume's store" forwarded
     port=$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]*\) .*/\1/p' "${work}/store-forward" | head -n 1)
     listed=true
