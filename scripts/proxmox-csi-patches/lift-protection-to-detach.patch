@@ -45,10 +45,10 @@ index f56f8eb..38bf359 100644
  		return nil, status.Error(codes.Internal, err.Error())
 diff --git a/pkg/csi/protection.go b/pkg/csi/protection.go
 new file mode 100644
-index 0000000..e28e35c
+index 0000000..9cb137e
 --- /dev/null
 +++ b/pkg/csi/protection.go
-@@ -0,0 +1,257 @@
+@@ -0,0 +1,311 @@
 +/*
 +Copyright 2023 The Kubernetes Authors.
 +
@@ -71,6 +71,8 @@ index 0000000..e28e35c
 +	"context"
 +	"errors"
 +	"fmt"
++	"os"
++	"regexp"
 +	"strings"
 +	"sync"
 +	"time"
@@ -79,6 +81,7 @@ index 0000000..e28e35c
 +
 +	goproxmox "github.com/sergelogvinov/go-proxmox"
 +
++	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 +	"k8s.io/klog/v2"
 +)
 +
@@ -284,20 +287,18 @@ index 0000000..e28e35c
 +// KeepProtection sets protection again on every VM a detach left unprotected, as one cut off
 +// between lifting and setting it does, at once and then every minute until ctx ends.
 +func (d *ControllerService) KeepProtection(ctx context.Context) {
++	identity, err := os.Hostname()
++	if err != nil {
++		klog.ErrorS(err, "Failed to read the pod's name, so VMs a detach left unprotected are not protected again")
++
++		return
++	}
++
 +	t := time.NewTicker(keepProtectionEvery)
 +	defer t.Stop()
 +
 +	for {
-+		for _, region := range d.pxpool.GetRegions() {
-+			cl, err := d.pxpool.GetProxmoxCluster(region)
-+			if err == nil {
-+				err = d.lifted.protectMarked(ctx, cl)
-+			}
-+
-+			if err != nil {
-+				klog.ErrorS(err, "Failed to set protection again on VMs a detach left unprotected", "region", region)
-+			}
-+		}
++		d.sweep(ctx, podNamespace(), identity)
 +
 +		select {
 +		case <-ctx.Done():
@@ -306,12 +307,65 @@ index 0000000..e28e35c
 +		}
 +	}
 +}
++
++// sweep sets protection again on the marked VMs of every region, in the pod whose attacher leads
++// alone. The in-flight set is this process's, and only the leading attacher detaches, so a second
++// pod, as a rollout starts, would protect a VM again between another pod's lift and unlink.
++func (d *ControllerService) sweep(ctx context.Context, namespace, identity string) {
++	lease, err := d.kclient.CoordinationV1().Leases(namespace).Get(ctx, attacherLease, metav1.GetOptions{})
++	if err != nil {
++		klog.ErrorS(err, "Failed to read the attacher's lease, so VMs a detach left unprotected are not protected again", "lease", attacherLease)
++
++		return
++	}
++
++	if holder := lease.Spec.HolderIdentity; holder == nil || *holder != leaseName(identity) {
++		return
++	}
++
++	for _, region := range d.pxpool.GetRegions() {
++		cl, err := d.pxpool.GetProxmoxCluster(region)
++		if err == nil {
++			err = d.lifted.protectMarked(ctx, cl)
++		}
++
++		if err != nil {
++			klog.ErrorS(err, "Failed to set protection again on VMs a detach left unprotected", "region", region)
++		}
++	}
++}
++
++// attacherLease is the lease the external-attacher's leader holds, under its pod's name, as
++// kubernetes-csi/csi-lib-utils names both.
++var attacherLease = leaseName("external-attacher-leader-" + DriverName)
++
++func leaseName(name string) string {
++	name = regexp.MustCompile("[^a-zA-Z0-9-]").ReplaceAllString(name, "-")
++	if strings.HasSuffix(name, "-") {
++		name += "X"
++	}
++
++	return name
++}
++
++// podNamespace is the namespace this pod runs in, where the attacher keeps its lease.
++func podNamespace() string {
++	if ns := os.Getenv("POD_NAMESPACE"); ns != "" {
++		return ns
++	}
++
++	if ns, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
++		return strings.TrimSpace(string(ns))
++	}
++
++	return "default"
++}
 diff --git a/pkg/csi/protection_test.go b/pkg/csi/protection_test.go
 new file mode 100644
-index 0000000..f180834
+index 0000000..d95425a
 --- /dev/null
 +++ b/pkg/csi/protection_test.go
-@@ -0,0 +1,309 @@
+@@ -0,0 +1,369 @@
 +/*
 +Copyright 2023 The Kubernetes Authors.
 +
@@ -336,6 +390,7 @@ index 0000000..f180834
 +	"net/http"
 +	"net/http/httptest"
 +	"strconv"
++	"strings"
 +	"sync"
 +	"testing"
 +	"time"
@@ -344,7 +399,12 @@ index 0000000..f180834
 +	"github.com/stretchr/testify/require"
 +
 +	goproxmox "github.com/sergelogvinov/go-proxmox"
++	pxpool "github.com/sergelogvinov/proxmox-csi-plugin/pkg/proxmoxpool"
 +	volume "github.com/sergelogvinov/proxmox-csi-plugin/pkg/utils/volume"
++
++	coordinationv1 "k8s.io/api/coordination/v1"
++	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	"k8s.io/client-go/kubernetes/fake"
 +)
 +
 +const (
@@ -366,9 +426,16 @@ index 0000000..f180834
 +	failLift    bool
 +	failUnlink  bool
 +	failProtect bool
++
++	// beforeUnlink runs as an unlink request arrives, before the fake answers it.
++	beforeUnlink func()
 +}
 +
 +func (f *fakePVE) serveHTTP(w http.ResponseWriter, r *http.Request) {
++	if r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/unlink") && f.beforeUnlink != nil {
++		f.beforeUnlink()
++	}
++
 +	f.mu.Lock()
 +	defer f.mu.Unlock()
 +
@@ -467,13 +534,19 @@ index 0000000..f180834
 +func newFakePVE(t *testing.T, f *fakePVE) *goproxmox.APIClient {
 +	t.Helper()
 +
-+	srv := httptest.NewServer(http.HandlerFunc(f.serveHTTP))
-+	t.Cleanup(srv.Close)
-+
-+	cl, err := goproxmox.NewAPIClient(srv.URL + "/api2/json")
++	cl, err := goproxmox.NewAPIClient(fakePVEURL(t, f))
 +	require.NoError(t, err)
 +
 +	return cl
++}
++
++func fakePVEURL(t *testing.T, f *fakePVE) string {
++	t.Helper()
++
++	srv := httptest.NewServer(http.HandlerFunc(f.serveHTTP))
++	t.Cleanup(srv.Close)
++
++	return srv.URL + "/api2/json"
 +}
 +
 +func attachedVM(protection int) *fakePVE {
@@ -609,6 +682,47 @@ index 0000000..f180834
 +
 +	assert.Equal(t, 0, f.protection)
 +	assert.Empty(t, f.calls)
++}
++
++func TestSweepDuringDetachLeavesTheVMToIt(t *testing.T) {
++	f := attachedVM(1)
++	cl := newFakePVE(t, f)
++	lifted := &liftedVMs{}
++	f.beforeUnlink = func() { assert.NoError(t, lifted.protectMarked(context.Background(), cl)) }
++
++	require.NoError(t, detach(t, cl, lifted))
++
++	assert.Empty(t, f.scsi1)
++	assert.Equal(t, 1, f.protection)
++	assert.Equal(t, []string{"config protection=0", "unlink", "config protection=1"}, f.calls)
++}
++
++func TestSweepRunsInTheLeadingPodAlone(t *testing.T) {
++	assert.Equal(t, "external-attacher-leader-csi-proxmox-sinextra-dev", attacherLease)
++
++	lease := func(holder string) *coordinationv1.Lease {
++		return &coordinationv1.Lease{
++			ObjectMeta: metav1.ObjectMeta{Namespace: "csi", Name: attacherLease},
++			Spec:       coordinationv1.LeaseSpec{HolderIdentity: &holder},
++		}
++	}
++
++	for _, c := range []struct {
++		holder     string
++		protection int
++	}{
++		{"proxmox-csi-plugin-controller-old", 0},
++		{"proxmox-csi-plugin-controller-new", 1},
++	} {
++		f := &fakePVE{description: liftedMarker}
++		pool, err := pxpool.NewProxmoxPool([]*pxpool.ProxmoxCluster{{URL: fakePVEURL(t, f), Region: "region"}})
++		require.NoError(t, err)
++
++		d := &ControllerService{kclient: fake.NewClientset(lease(c.holder)), pxpool: pool, lifted: &liftedVMs{}}
++		d.sweep(context.Background(), "csi", "proxmox-csi-plugin-controller-new")
++
++		assert.Equal(t, c.protection, f.protection, "lease held by %s", c.holder)
++	}
 +}
 +
 +func TestMarkerRoundTrip(t *testing.T) {

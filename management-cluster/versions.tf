@@ -231,7 +231,7 @@ locals {
     # The plugin's own image is built with Go 1.26 on distroless static.
     go         = "go1.26.10"
     base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
-    image      = "ghcr.io/kubehenge/proxmox-csi-controller@sha256:e4debc9fe698ac3f0d7fc7c08c620c71224f50a9ec4d2bc2b20d47352c39f443"
+    image      = "ghcr.io/kubehenge/proxmox-csi-controller@sha256:174ef40d3c90ef425114b76719c5a2cc6c5201bf65162d57828293803485272a"
     # The patched package's tests, which the build runs first. They build on Linux only.
     tests = "./pkg/csi/"
   }
