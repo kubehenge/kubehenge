@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -21,7 +20,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/kubehenge/kubehenge/pkg/backupstore"
@@ -199,7 +197,7 @@ func (a *Appliance) volumeBackupDue(now time.Time) bool {
 	return st != nil && !now.Before(*st.Next)
 }
 
-// openVolume reaches the store on the backup volume through the management cluster's API, as the
+// openVolume reaches the store on the backup volume through a port-forward to its pod, as the
 // interface.
 func (a *Appliance) openVolume(ctx context.Context) (provisioner.ObjectStore, error) { //nolint:ireturn // tests stand in for the store
 	if a.OpenVolume != nil {
@@ -216,14 +214,14 @@ func (a *Appliance) openVolume(ctx context.Context) (provisioner.ObjectStore, er
 	if err != nil {
 		return nil, fmt.Errorf("the backup volume's token: %w", err)
 	}
-	return &backupstore.Client{Base: backupstore.ProxyBase(api.host), Token: string(secret.Data[backupstore.TokenKey]), HTTP: api.http}, nil
+	return &backupstore.Client{Base: backupstore.ForwardBase, Token: string(secret.Data[backupstore.TokenKey]), HTTP: api.store.HTTPClient()}, nil
 }
 
-// interfaceAPI is the management cluster's API as the interface reaches it.
+// interfaceAPI is the management cluster's API as the interface reaches it, and the store through
+// a port-forward to its pod.
 type interfaceAPI struct {
-	host string
-	kube kubernetes.Interface
-	http *http.Client
+	kube  kubernetes.Interface
+	store *backupstore.Forward
 }
 
 func (a *Appliance) interfaceAPI() (*interfaceAPI, error) {
@@ -239,22 +237,22 @@ func (a *Appliance) interfaceAPI() (*interfaceAPI, error) {
 	if err != nil {
 		return nil, fmt.Errorf("a client for the management cluster: %w", err)
 	}
-	client, err := rest.HTTPClientFor(cfg)
+	store, err := backupstore.NewForward(cfg, kube)
 	if err != nil {
-		return nil, fmt.Errorf("a client for the management cluster: %w", err)
+		return nil, err //nolint:wrapcheck // NewForward names what failed
 	}
-	return &interfaceAPI{host: cfg.Host, kube: kube, http: client}, nil
+	return &interfaceAPI{kube: kube, store: store}, nil
 }
 
 // SnapshotVolume is the backup volume as the interface reaches it for the clusters' etcd
-// snapshots, through the API server. Opening it asks the appliance to wake it, under a request of
-// the interface's own.
+// snapshots, through a port-forward to the store's pod. Opening it asks the appliance to wake it,
+// under a request of the interface's own.
 func (a *Appliance) SnapshotVolume() (provisioner.BackupVolume, error) { //nolint:ireturn // the controller's and the interface's volume are one interface
 	api, err := a.interfaceAPI()
 	if err != nil {
 		return nil, err
 	}
-	return &backupstore.Volume{Kube: api.kube, HTTP: api.http, Base: backupstore.ProxyBase(api.host), Annotation: backupstore.InterfaceWakeAnnotation}, nil
+	return &backupstore.Volume{Kube: api.kube, HTTP: api.store.HTTPClient(), Base: backupstore.ForwardBase, Annotation: backupstore.InterfaceWakeAnnotation}, nil
 }
 
 // idleReplicas annotates the store's Deployment with the replicas it keeps between backups. The

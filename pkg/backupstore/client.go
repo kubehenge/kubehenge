@@ -20,7 +20,6 @@ import (
 const (
 	Namespace = "kubehenge-system"
 	Service   = "kubehenge-backup-store"
-	Port      = "http"
 	// TokenSecret holds the store's token under TokenKey.
 	TokenSecret = "kubehenge-backup-store"
 	TokenKey    = "token"
@@ -39,11 +38,6 @@ type Client struct {
 }
 
 var _ provisioner.ObjectStore = (*Client)(nil)
-
-// ProxyBase is the store's address through the API server's service proxy at host.
-func ProxyBase(host string) string {
-	return strings.TrimSuffix(host, "/") + "/api/v1/namespaces/" + Namespace + "/services/" + Service + ":" + Port + "/proxy"
-}
 
 func objectPath(key string) string {
 	parts := strings.Split(key, "/")

@@ -5,16 +5,13 @@ package backupstore
 import (
 	"context"
 	"errors"
-	"fmt"
-	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -31,7 +28,6 @@ func TestIntegrationControllerAsksForTheVolume(t *testing.T) { //nolint:parallel
 		t.Fatal(err)
 	}
 	objects := integration.RenderChart(t, "kubehenge-storage", "../../management-cluster/charts/storage", "kube-system", "../appliance/testdata/storage-zones-values.yaml")
-	checkStorePortOpen(t, objects)
 	api := integration.Start(t, &integration.Options{Objects: objects, Namespaces: []string{Namespace, "kube-system"}})
 	admin, err := kubernetes.NewForConfig(api.Config)
 	if err != nil {
@@ -105,35 +101,62 @@ func TestIntegrationControllerAsksForTheVolume(t *testing.T) { //nolint:parallel
 	}
 }
 
-// storePort is the store's port in the storage chart.
-const storePort = 8080
-
-// checkStorePortOpen holds the store's NetworkPolicy to letting any source reach its port: the API
-// server's service proxy, through which the appliance and the interface reach the store, comes from
-// a node's address or from the pod network's own on another node, and no pod selector covers it.
-func checkStorePortOpen(t *testing.T, objects []*unstructured.Unstructured) {
-	t.Helper()
-	for _, o := range objects {
-		if o.GetKind() != "NetworkPolicy" {
-			continue
-		}
-		rules, _, _ := unstructured.NestedSlice(o.Object, "spec", "ingress")
-		for _, r := range rules {
-			rule, ok := r.(map[string]any)
-			if !ok {
-				continue
-			}
-			ports, _, _ := unstructured.NestedSlice(rule, "ports")
-			_, narrowed := rule["from"]
-			if !narrowed && slices.ContainsFunc(ports, func(p any) bool {
-				port, isMap := p.(map[string]any)
-				return isMap && fmt.Sprint(port["port"]) == strconv.Itoa(storePort)
-			}) {
-				return
-			}
-		}
-		t.Errorf("NetworkPolicy %s lets only some sources reach the store's port %d: %v", o.GetName(), storePort, rules)
-		return
+// TestIntegrationInterfaceForwardsToTheStoreAlone runs the interface's account against the storage
+// chart. It finds the store's pod in the Service's EndpointSlices and may open a port-forward to it,
+// and to no other pod. The harness runs no kubelet, so a forward the policy lets through ends where
+// the API server looks for the pod's node.
+func TestIntegrationInterfaceForwardsToTheStoreAlone(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
+	if err := integration.OwnChildren(); err != nil {
+		t.Fatal(err)
 	}
-	t.Error("the storage chart holds no NetworkPolicy for the store")
+	objects := integration.RenderChart(t, "kubehenge-storage", "../../management-cluster/charts/storage", "kube-system", "../appliance/testdata/storage-zones-values.yaml")
+	api := integration.Start(t, &integration.Options{Objects: objects, Namespaces: []string{Namespace, "kube-system"}})
+	admin, err := kubernetes.NewForConfig(api.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	as := rest.CopyConfig(api.Config)
+	as.Impersonate = rest.ImpersonationConfig{
+		UserName: "system:serviceaccount:" + Namespace + ":kubehenge-interface",
+		Groups:   []string{"system:serviceaccounts", "system:serviceaccounts:" + Namespace, "system:authenticated"},
+	}
+	iface, err := kubernetes.NewForConfig(as)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	const store, other = "kubehenge-backup-store-5d8f7c9b4-abcde", "kubehenge-backup-store-zones-29384756-abcde"
+	for _, name := range []string{store, other} {
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: Namespace}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: "x"}}}}
+		if _, err = admin.CoreV1().Pods(Namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	forward := func(name string) error {
+		return iface.CoreV1().RESTClient().Post().Namespace(Namespace).Resource("pods").Name(name).SubResource("portforward").Do(ctx).Error()
+	}
+	const refused = "the interface forwards to the backup store's pods only"
+	// The policy takes a moment to be enforced after it is made.
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+		err = forward(other)
+		if err != nil && strings.Contains(err.Error(), refused) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("a forward to %s: %v, want refused", other, err)
+		}
+	}
+	if err = forward(store); err == nil || strings.Contains(err.Error(), refused) || apierrors.IsForbidden(err) {
+		t.Errorf("a forward to the store's pod: %v, want it past RBAC and the policy", err)
+	}
+	if _, err = iface.DiscoveryV1().EndpointSlices(Namespace).List(ctx, metav1.ListOptions{}); err != nil {
+		t.Errorf("listing the store's EndpointSlices: %v", err)
+	}
+	proxy := iface.CoreV1().RESTClient().Get().Namespace(Namespace).Resource("services").Name(Service + ":http").SubResource("proxy").Do(ctx).Error()
+	if !apierrors.IsForbidden(proxy) {
+		t.Errorf("the store's service proxy: %v, want forbidden", proxy)
+	}
+	if err = iface.CoreV1().RESTClient().Post().Namespace("kube-system").Resource("pods").Name(store).SubResource("portforward").Do(ctx).Error(); !apierrors.IsForbidden(err) {
+		t.Errorf("a forward in kube-system: %v, want forbidden", err)
+	}
 }

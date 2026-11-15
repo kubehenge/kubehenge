@@ -106,7 +106,9 @@ spec:
           persistentVolumeClaim:
             claimName: {{ .Values.backupVolume.claim }}
 ---
-# The appliance reaches the store through the API server as the interface, and reads its token.
+# The appliance reaches the store as the interface through a port-forward to its ready pod, which
+# it finds in the Service's EndpointSlices, and reads its token. RBAC cannot name a Deployment's
+# pods, so the policy below holds the port-forwards to the store's.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -114,9 +116,11 @@ metadata:
   namespace: {{ $ns }}
 rules:
   - apiGroups: [""]
-    resources: [services/proxy]
-    resourceNames: [{{ $name }}, "{{ $name }}:http"]
-    verbs: [get, update, delete]
+    resources: [pods/portforward]
+    verbs: [create]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [list]
   - apiGroups: [""]
     resources: [secrets]
     resourceNames: [{{ $name }}]
@@ -140,6 +144,34 @@ subjects:
   - kind: ServiceAccount
     name: kubehenge-interface
     namespace: {{ $ns }}
+---
+# The interface's port-forwards reach the store's pods alone, named as its Deployment names them.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}-client
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CONNECT]
+        resources: [pods/portforward]
+  matchConditions:
+    - name: interface
+      expression: request.userInfo.username == 'system:serviceaccount:{{ $ns }}:kubehenge-interface'
+  validations:
+    - expression: request.namespace == '{{ $ns }}' && request.name.matches('^{{ $name }}-[a-z0-9]{1,10}-[a-z0-9]{5}$')
+      message: the interface forwards to the backup store's pods only
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}-client
+spec:
+  policyName: {{ $name }}-client
+  validationActions: [Deny]
 {{- $controller := "kubehenge-controller" }}
 ---
 # The controller stores the etcd snapshots of clusters without a bucket target. It reaches the store
@@ -211,10 +243,8 @@ spec:
   policyName: {{ $name }}-snapshots
   validationActions: [Deny]
 ---
-# The store's port, for the controller's pods and for the API server's service proxy, through which
-# the appliance and the interface reach it. The API server comes from a node's address, or from the
-# pod network's own on another node: no source narrower than any covers both. The store answers
-# only its token.
+# The controller's pods alone reach the store's port over the network. The interface's port-forward
+# arrives inside the store's pod, past any NetworkPolicy. Both still send the store's token.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -226,7 +256,11 @@ spec:
       app.kubernetes.io/name: {{ $name }}
   policyTypes: [Ingress]
   ingress:
-    - ports:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ $controller }}
+      ports:
         - protocol: TCP
           port: 8080
 {{- $zones := printf "%s-zones" $name }}

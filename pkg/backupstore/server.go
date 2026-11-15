@@ -1,6 +1,6 @@
 // Package backupstore keeps objects as files on a volume and serves them over HTTP to holders of a
 // token. It runs in the management cluster on the backup volume. The appliance reaches it through
-// the Kubernetes API's service proxy, and the controller through its Service.
+// a port-forward to its pod (Forward), and the controller through its Service.
 package backupstore
 
 import (
@@ -17,8 +17,7 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
-// TokenHeader carries the store's token. The API server's service proxy drops the authorisation header, so
-// the token travels in a header of its own.
+// TokenHeader carries the store's token.
 const TokenHeader = "X-Kubehenge-Store-Token" //nolint:gosec // a header's name
 
 // MetadataHeader carries an object's metadata as a JSON object.
