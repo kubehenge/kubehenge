@@ -10,7 +10,6 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -38,7 +37,7 @@ func TestControllerStartsWithAnExpiredSiteCAAndReportsIt(t *testing.T) {
 	if err = o.parseReleaseMirror(); err != nil {
 		t.Fatalf("an expired site CA stopped the controller: %v", err)
 	}
-	if !strings.Contains(o.r.SiteCAProblem, "expired") {
-		t.Errorf("the problem reported to the clusters is %q, want that the authority expired", o.r.SiteCAProblem)
+	if o.r.SiteCA == "" {
+		t.Error("the expired site CA was dropped, so the clusters could not report it")
 	}
 }

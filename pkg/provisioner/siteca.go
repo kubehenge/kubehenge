@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -74,6 +75,27 @@ func NormalizeCertificateBundle(bundle string) string {
 		}
 		if block.Type == certificateBlock {
 			out.Write(pem.EncodeToMemory(&pem.Block{Type: certificateBlock, Bytes: block.Bytes}))
+		}
+	}
+}
+
+// siteCALapse says which certificate of the bundle has expired or is not yet valid at now, empty
+// when none is. A certificate that does not parse is left to the checks that refuse it.
+func siteCALapse(bundle string, now time.Time) string {
+	rest := []byte(bundle)
+	for n := 1; ; n++ {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			return ""
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		switch {
+		case err != nil:
+		case now.After(cert.NotAfter):
+			return fmt.Sprintf("has certificate %d (%s) expired on %s", n, cert.Subject.CommonName, cert.NotAfter.UTC().Format(time.DateOnly))
+		case now.Before(cert.NotBefore):
+			return fmt.Sprintf("has certificate %d (%s) valid only from %s", n, cert.Subject.CommonName, cert.NotBefore.UTC().Format(time.DateOnly))
 		}
 	}
 }
@@ -259,13 +281,12 @@ func (r *Reconciler) ensureNodeSite(ctx context.Context, cluster *clusterv1.Clus
 // trustedCAs of its own is kept current at once, as its nodes ignore the variable. It returns when to look again, 0 for the usual resync.
 func (r *Reconciler) rollSiteCA(ctx context.Context, cluster *clusterv1.Cluster) (time.Duration, error) {
 	key := client.ObjectKeyFromObject(cluster)
-	if appliedSiteCA(cluster) == r.SiteCA {
-		return 0, nil
+	// Read on every resync, so that a site CA that lapses while the controller runs is reported too.
+	lapse := siteCALapse(r.SiteCA, r.now())
+	if lapse != "" && r.Events != nil {
+		r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, "SiteCAInvalid", "RollSiteCA", "the site CA %s", lapse)
 	}
-	if r.SiteCA != "" && r.SiteCAProblem != "" {
-		if r.Events != nil {
-			r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, "SiteCAInvalid", "RollSiteCA", "the site CA is not given to the nodes: %s", r.SiteCAProblem)
-		}
+	if appliedSiteCA(cluster) == r.SiteCA || lapse != "" {
 		return 0, nil
 	}
 	if !InheritsSiteCA(cluster) {

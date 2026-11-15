@@ -2317,9 +2317,13 @@ export function AdvancedFields({
         info="Every cluster's nodes, the release mirror, backup targets and identity providers trust it unless they name an authority of their own."
         error={shown("siteCA")}
       >
-        {(id) => <textarea id={id} rows={3} value={form.siteCA} onChange={(e) => set("siteCA", e.target.value)} />}
+        {(id) => (
+          <>
+            <textarea id={id} rows={3} value={form.siteCA} onChange={(e) => set("siteCA", e.target.value)} />
+            <SiteCARollNote siteCA={form.siteCA} />
+          </>
+        )}
       </Field>
-      <SiteCARollNote siteCA={form.siteCA} />
       <Field
         label="Time zone"
         hint="For schedules that name none"

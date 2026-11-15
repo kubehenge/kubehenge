@@ -2,7 +2,15 @@ package provisioner
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"math/big"
 	"slices"
 	"strings"
 	"testing"
@@ -126,32 +134,66 @@ func TestOwnTrustedCAsKeepTheSiteCAVariableCurrentOutsidePacingAndWindows(t *tes
 	}
 }
 
-func TestExpiredSiteCAIsReportedOnTheClusterAndGivenToNoNode(t *testing.T) {
-	t.Parallel()
-	a := siteCluster("a")
-	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(&a).Build()
-	recorder := events.NewFakeRecorder(4)
-	r := &Reconciler{
-		Client: kube, Reader: kube, ClassNamespace: siteClassNamespace, SiteCA: siteCAPEM, Events: recorder,
-		SiteCAProblem: "the authority certificate 1 (site) expired on 2026-11-15", Now: func() time.Time { return siteNow },
-	}
-	if _, err := r.rollSiteCA(t.Context(), &a); err != nil {
+// siteAuthority is a CA certificate valid from an hour before siteNow to an hour after.
+func siteAuthority(t *testing.T) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
 		t.Fatal(err)
 	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "site"},
+		NotBefore: siteNow.Add(-time.Hour), NotAfter: siteNow.Add(time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})))
+}
+
+func TestSiteCAThatLapsesWhileTheControllerRunsIsReportedAndGivenToNoNode(t *testing.T) {
+	t.Parallel()
+	given, fresh := siteCluster("given"), siteCluster("fresh")
+	authority := siteAuthority(t)
+	raw, err := json.Marshal([]string{authority})
+	if err != nil {
+		t.Fatal(err)
+	}
+	given.Spec.Topology.Variables = append(given.Spec.Topology.Variables, jsonVar(SiteCAsVariable, string(raw)))
+	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(&given, &fresh).Build()
+	recorder := events.NewFakeRecorder(8)
+	clock := siteNow
+	r := &Reconciler{
+		Client: kube, Reader: kube, ClassNamespace: siteClassNamespace, SiteCA: authority, Events: recorder,
+		Now: func() time.Time { return clock },
+	}
+	// While the certificate holds, nothing is reported.
+	if _, err = r.rollSiteCA(t.Context(), &given); err != nil || len(recorder.Events) != 0 {
+		t.Fatalf("before it lapses: %v, %d events", err, len(recorder.Events))
+	}
+	// The controller keeps running past the lapse, and the next resync reports it on both.
+	clock = siteNow.Add(2 * time.Hour)
+	for _, c := range []*clusterv1.Cluster{&given, &fresh} {
+		if _, err = r.rollSiteCA(t.Context(), c); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case note := <-recorder.Events:
+			if !strings.Contains(note, "SiteCAInvalid") || !strings.Contains(note, "expired") {
+				t.Errorf("%s: event %q lacks SiteCAInvalid and the expiry", c.Name, note)
+			}
+		default:
+			t.Errorf("%s: no event after the lapse", c.Name)
+		}
+	}
 	var live clusterv1.Cluster
-	if err := kube.Get(t.Context(), client.ObjectKeyFromObject(&a), &live); err != nil {
+	if err = kube.Get(t.Context(), client.ObjectKeyFromObject(&fresh), &live); err != nil {
 		t.Fatal(err)
 	}
 	if appliedSiteCA(&live) != "" {
-		t.Error("an expired site CA was given to a cluster")
-	}
-	select {
-	case note := <-recorder.Events:
-		if !strings.Contains(note, "SiteCAInvalid") {
-			t.Errorf("event %q lacks SiteCAInvalid", note)
-		}
-	default:
-		t.Error("the cluster got no event")
+		t.Error("a lapsed site CA was given to a cluster")
 	}
 }
 

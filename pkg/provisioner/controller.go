@@ -76,9 +76,6 @@ type Reconciler struct {
 	// SiteCA is the PEM authority every cluster without trustedCAs of its own trusts. Empty when
 	// the site sets none.
 	SiteCA string
-	// SiteCAProblem says why SiteCA is not given to any node, such as that it has expired. The
-	// controller reports it on each cluster and keeps running.
-	SiteCAProblem string
 	// Registrar removes clusters from Rancher before Rancher itself is switched off.
 	Registrar *Registrar
 	// Remotes reaches the workload clusters, to take their workloads out of the mesh before Istio

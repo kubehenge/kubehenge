@@ -637,10 +637,7 @@ func (o *controllerOptions) parseReleaseMirror() error {
 		}
 		o.r.SiteCA = strings.TrimSpace(string(ca))
 		// An authority that has run out is no reason to stop the controller, which the clusters'
-		// upgrades, snapshots and deletions depend on. Each cluster reports it instead.
-		if err = provisioner.CheckCertificateBundle(o.r.SiteCA, time.Now()); err != nil {
-			o.r.SiteCAProblem = "the authority " + err.Error()
-		}
+		// upgrades, snapshots and deletions depend on. Each reconcile reports it on its cluster.
 	}
 	if err := o.releaseMirror.Check(time.Now()); err != nil {
 		return fmt.Errorf("--release-mirror: %w", err)
