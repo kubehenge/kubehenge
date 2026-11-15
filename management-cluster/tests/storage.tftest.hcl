@@ -109,9 +109,11 @@ run "csi_plugin_is_the_workload_clusters_pinned_release" {
       toset(keys(proxmox_acl.management_csi)) == toset([
         "/nodes kubehenge-audit",
         "/pool/kubehenge-management kubehenge-management-csi",
+        "/pool/kubehenge-management kubehenge-management-csi-protection",
         "/storage/fast kubehenge-cluster-storage",
       ]) &&
       toset(proxmox_virtual_environment_role.management_csi.privileges) == toset(["VM.Audit", "VM.Config.Disk"]) &&
+      toset(proxmox_virtual_environment_role.management_csi_protection.privileges) == toset(["VM.Config.Options"]) &&
       !contains(proxmox_virtual_environment_role.cluster_storage.privileges, "Datastore.Allocate") &&
       !proxmox_user_token.management_csi.privileges_separation &&
       proxmox_acl.management_csi_backups.path == "/vms/${proxmox_virtual_environment_vm.backups.vm_id}" &&

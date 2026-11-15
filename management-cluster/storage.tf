@@ -43,6 +43,14 @@ resource "proxmox_virtual_environment_role" "management_csi" {
   privileges = ["VM.Audit", "VM.Config.Disk"]
 }
 
+# Proxmox VE refuses to remove a drive from a protected VM, and every node VM is protected. The
+# plugin lifts a node VM's protection for each detach and sets it again (VM.Config.Options), on the
+# management pool alone, so never on the backups VM.
+resource "proxmox_virtual_environment_role" "management_csi_protection" {
+  role_id    = "${var.cluster_name}-management-csi-protection"
+  privileges = ["VM.Config.Options"]
+}
+
 resource "proxmox_virtual_environment_user" "management_csi" {
   user_id = "${var.cluster_name}-management-csi@pve"
   comment = "The CSI plugin in Kubehenge management cluster ${var.cluster_name}; signs in with its API token only"
@@ -59,6 +67,7 @@ locals {
   management_csi_acls = [
     { path = "/nodes", role = proxmox_virtual_environment_role.audit.role_id, propagate = true },
     { path = "/pool/${proxmox_virtual_environment_pool.management.pool_id}", role = proxmox_virtual_environment_role.management_csi.role_id, propagate = true },
+    { path = "/pool/${proxmox_virtual_environment_pool.management.pool_id}", role = proxmox_virtual_environment_role.management_csi_protection.role_id, propagate = true },
     { path = "/storage/${var.vm_datastore}", role = proxmox_virtual_environment_role.cluster_storage.role_id, propagate = false },
   ]
 }
