@@ -451,10 +451,25 @@ kubehenge.dev/addon-cpu: '{"headlamp":10,"monitoring":300,"logs":75,"backups":70
 
 {{/*
 The S3 stores an administrator set for backups, which a cluster's backups variable names one of:
-the interface offers them and the controller reads them here.
+the interface offers them and the controller reads them here. The site's default time zone and
+whether it has a site CA ride along, for the interface to show.
 */}}
 {{- define "kubehenge.backupTargets" -}}
-kubehenge.dev/backup-targets: {{ .Values.backupTargets | toJson | quote }}
+{{- $targets := list -}}
+{{- range .Values.backupTargets -}}
+{{- $target := deepCopy . -}}
+{{- if and .endpoint $.Values.siteCA (not .caCertificate) -}}
+{{- $_ := set $target "caCertificate" $.Values.siteCA -}}
+{{- end -}}
+{{- $targets = append $targets $target -}}
+{{- end -}}
+kubehenge.dev/backup-targets: {{ $targets | toJson | quote }}
+{{- if .Values.timeZone }}
+kubehenge.dev/time-zone: {{ .Values.timeZone | quote }}
+{{- end }}
+{{- if .Values.siteCA }}
+kubehenge.dev/site-ca: "set"
+{{- end }}
 {{- end -}}
 
 {{/*
@@ -764,8 +779,7 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           description: When to back up, as a cron expression of five fields or a descriptor such as @weekly.
         timeZone:
           type: string
-          default: UTC
-          description: IANA time zone the schedule is read in, such as Europe/Berlin.
+          description: IANA time zone the schedule is read in, such as Europe/Berlin. Without one, the site time zone, else UTC.
         retentionDays:
           type: integer
           minimum: 1
@@ -836,8 +850,7 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           description: When to take a snapshot, as a cron expression of five fields or a descriptor such as @daily.
         timeZone:
           type: string
-          default: UTC
-          description: IANA time zone the schedule is read in, such as Europe/Berlin.
+          description: IANA time zone the schedule is read in, such as Europe/Berlin. Without one, the site time zone, else UTC.
         keep:
           type: integer
           minimum: 1
@@ -1604,8 +1617,16 @@ root context: the default is the chart's clusterOIDC.
         ServiceAccount tokens. A token's audience has to be the provider's clientID. Headlamp and
         kubectl sign in with the first one; tokens keep working beside it.
       {{- with .Values.clusterOIDC }}
+      {{- $providers := list }}
+      {{- range . }}
+      {{- $provider := deepCopy . }}
+      {{- if and $.Values.siteCA (not .certificateAuthority) }}
+      {{- $_ := set $provider "certificateAuthority" $.Values.siteCA }}
+      {{- end }}
+      {{- $providers = append $providers $provider }}
+      {{- end }}
       default:
-        {{- toYaml . | nindent 8 }}
+        {{- toYaml $providers | nindent 8 }}
       {{- end }}
       items:
         type: object
@@ -2412,8 +2433,7 @@ reads it.
               default: 240
             timeZone:
               type: string
-              default: UTC
-              description: IANA time zone of start, such as Europe/Berlin.
+              description: IANA time zone of start, such as Europe/Berlin. Without one, the site time zone, else UTC.
 {{- end -}}
 
 {{/*

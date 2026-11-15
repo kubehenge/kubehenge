@@ -82,6 +82,9 @@ var changeableVariables = map[string]bool{
 	// Files, commands, arguments and audit settings reach the nodes' bootstrap, so a change replaces
 	// every node it reaches.
 	provisioner.NodeCustomisationVariable: true,
+	// A registry mirror, a trusted authority or a release mirror is in the nodes' boot script, so a
+	// change replaces every node, one at a time.
+	"registryMirrors": true, "trustedCAs": true, releaseMirrorVariable: true,
 }
 
 // autoUpgraded is where Kubehenge's controller records the last automatic upgrade.
@@ -118,6 +121,9 @@ type classView struct {
 
 // releaseMirrorVariable is the variable of a cluster's own release mirror.
 const releaseMirrorVariable = "releaseMirror"
+
+// siteTimeZoneAnnotation on a class names the site time zone.
+const siteTimeZoneAnnotation = "kubehenge.dev/time-zone"
 
 // nodeOSChoice is a node OS a cluster may run, and why none can be built on it yet.
 type nodeOSChoice struct {
@@ -198,6 +204,11 @@ func (s *Server) classView(ctx context.Context, c *clusterv1.ClusterClass, dist 
 		}
 	}
 	for k, val := range c.Annotations {
+		// A site time zone the controller cannot read leaves schedules in UTC, so the interface is not
+		// given it either.
+		if k == siteTimeZoneAnnotation && provisioner.CheckTimeZone(val) != nil {
+			continue
+		}
 		if strings.HasPrefix(k, "kubehenge.dev/") {
 			if v.Annotations == nil {
 				v.Annotations = map[string]string{}

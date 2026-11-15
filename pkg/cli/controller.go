@@ -153,6 +153,8 @@ type controllerOptions struct {
 	chartMirrors      []string
 	releaseMirror     provisioner.ReleaseMirror
 	releaseMirrorCA   string
+	siteCAFile        string
+	timeZone          string
 	egressProxy       string
 	egressNoProxy     string
 	podSecurityExempt string
@@ -253,6 +255,8 @@ func (o *controllerOptions) addonFlags(f *pflag.FlagSet) {
 	f.StringArrayVar(&o.chartMirrors, "chart-mirror", nil, "a mirror of a chart repository, as <host>=<address>, such as ghcr.io=oci://registry.example.org/ghcr or charts.jetstack.io=https://charts.example.org/jetstack. It serves the same charts under the same digests (repeatable)")
 	f.StringVar(&o.releaseMirror.URL, "release-mirror", "", "a mirror of the RKE2 and k3s releases, such as https://mirror.example.org/github, which serves them on GitHub's paths beneath it: <mirror>/<repository>/releases/download/<version>/<file> and <mirror>/<repository>/raw/<version>/install.sh. Nodes download from it in place of GitHub, and still install only the pinned files")
 	f.StringVar(&o.releaseMirrorCA, "release-mirror-ca", "", "a PEM file with the authority of a --release-mirror the usual authorities do not sign, which the nodes trust for their download")
+	f.StringVar(&o.siteCAFile, "site-ca", "", "a PEM file with the site's authority, which the nodes of clusters without trustedCAs of their own trust and an https release mirror without an authority of its own is verified with")
+	f.StringVar(&o.timeZone, "time-zone", provisioner.DefaultTimeZone, "the IANA time zone that schedules without one of their own run in, such as a cluster's etcd snapshots")
 	f.StringVar(&o.egressProxy, "egress-proxy", os.Getenv("HTTPS_PROXY"), "the proxy the add-ons of clusters that set none of their own go through (env HTTPS_PROXY). An address with credentials is not passed on")
 	f.StringVar(&o.egressNoProxy, "egress-no-proxy", os.Getenv("NO_PROXY"), "the exceptions to --egress-proxy, comma-separated (env NO_PROXY)")
 	f.StringVar(&o.certManagerChart, "cert-manager-chart", "", "cert-manager chart, installed with Rancher and with monitoring, as <repository>/<name>:<version>@sha256:<digest>")
@@ -412,14 +416,22 @@ func (o *controllerOptions) newHooks(mgr ctrl.Manager, registrar *provisioner.Re
 		DatastoreAllocate: o.r.DatastoreAllocate,
 		SysAuditGroup:     o.r.SysAuditGroup,
 		VolumeSnapshots:   o.r.VolumeSnapshots,
-		Releases: &provisioner.ReleaseChecksums{
-			Pins:   provisioner.DefaultReleasePins(),
-			Store:  &provisioner.PinStore{Reader: mgr.GetAPIReader(), Namespace: o.r.ClassNamespace},
-			Mirror: func() provisioner.ReleaseMirror { return o.releaseMirror },
-		},
-		Client: mgr.GetClient(),
-		Soak:   o.nodeImageSoak,
-		Now:    time.Now,
+		Releases:          o.releaseChecksums(mgr.GetAPIReader()),
+		Client:            mgr.GetClient(),
+		Soak:              o.nodeImageSoak,
+		Now:               time.Now,
+		SiteCA:            func() string { return o.r.SiteCA },
+	}
+}
+
+// releaseChecksums reads the release pins and, from the mirror when one is set, the releases. The
+// mirror's authority is its own, else the site CA.
+func (o *controllerOptions) releaseChecksums(reader client.Reader) *provisioner.ReleaseChecksums {
+	return &provisioner.ReleaseChecksums{
+		Pins:   provisioner.DefaultReleasePins(),
+		Store:  &provisioner.PinStore{Reader: reader, Namespace: o.r.ClassNamespace},
+		Mirror: func() provisioner.ReleaseMirror { return o.releaseMirror },
+		SiteCA: func() string { return o.r.SiteCA },
 	}
 }
 
@@ -607,8 +619,9 @@ func (o *controllerOptions) parseMirrors() error {
 	return o.parseReleaseMirror()
 }
 
-// parseReleaseMirror reads the release mirror and its authority, refusing either before a node
-// could fail on it.
+// parseReleaseMirror reads the release mirror, the site CA and the site time zone. It refuses a
+// mirror address a node could not be handed, or a file it cannot read, and leaves the rest to each
+// cluster's report.
 func (o *controllerOptions) parseReleaseMirror() error {
 	if o.releaseMirrorCA != "" {
 		ca, err := os.ReadFile(o.releaseMirrorCA)
@@ -617,8 +630,39 @@ func (o *controllerOptions) parseReleaseMirror() error {
 		}
 		o.releaseMirror.CABundle = string(ca)
 	}
-	if err := o.releaseMirror.Check(time.Now()); err != nil {
+	if o.timeZone != "" {
+		// Schedules stay in UTC. A wrong zone is no reason to stop the controller, which the clusters'
+		// upgrades, snapshots and deletions depend on. Each reconcile reports it on its cluster.
+		if err := provisioner.SetDefaultTimeZone(o.timeZone); err != nil {
+			o.r.SiteTimeZoneProblem = fmt.Sprintf("--time-zone: %v", err)
+		}
+	}
+	if o.siteCAFile != "" {
+		ca, err := os.ReadFile(o.siteCAFile)
+		if err != nil {
+			return fmt.Errorf("--site-ca: %w", err)
+		}
+		// A damaged authority, or one that has run out, is no reason to stop the controller, which the
+		// clusters' upgrades, snapshots and deletions depend on. Each reconcile reports it on its
+		// cluster, and a damaged one reaches no node. A sound one is given as the classes' schemas
+		// take it, whatever is written between its certificates.
+		plain, err := provisioner.NormalizeCertificateBundle(string(ca))
+		if err == nil {
+			err = provisioner.CheckCertificateBundle(plain, time.Time{})
+		}
+		if err != nil {
+			o.r.SiteCAProblem = fmt.Sprintf("--site-ca: the authority %v", err)
+		} else {
+			o.r.SiteCA = strings.TrimSpace(plain)
+		}
+	}
+	if err := o.releaseMirror.CheckAddress(); err != nil {
 		return fmt.Errorf("--release-mirror: %w", err)
+	}
+	// A damaged or lapsed authority is no reason to stop the controller either. Only the nodes'
+	// downloads from the mirror need it, and each reconcile reports it on its cluster.
+	if err := o.releaseMirror.CheckAuthority(time.Now()); err != nil {
+		o.r.ReleaseMirrorProblem = fmt.Sprintf("--release-mirror-ca: %v", err)
 	}
 	return nil
 }

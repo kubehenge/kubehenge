@@ -485,6 +485,16 @@ func TestDemoShowsTemplatesAndPins(t *testing.T) {
 	}
 }
 
+// Setup's checks of a time zone and of what a site CA replaces only read, so the demo answers them.
+func TestDemoAnswersTheSiteChecksOfSetup(t *testing.T) {
+	t.Parallel()
+	_, b := newDemo(t)
+	b.signIn()
+	expect(t, b.do("POST", "/api/setup/time-zone", `{"timeZone":"Europe/Kyiv"}`), http.StatusOK)
+	expect(t, b.do("POST", "/api/setup/time-zone", `{"timeZone":"Mars/Olympus"}`), http.StatusUnprocessableEntity)
+	expect(t, b.do("POST", "/api/setup/site-ca-roll", `{"siteCA":""}`), http.StatusOK)
+}
+
 // A Talos cluster's machines report the Talos release their nodes run, so that column is never empty.
 func TestDemoShowsTheTalosReleaseOfTalosMachines(t *testing.T) {
 	t.Parallel()

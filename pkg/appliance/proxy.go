@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"golang.org/x/net/http/httpproxy"
+
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
 // Limits on what the proxy setting may hold, so that it stays a setting and not a file store.
@@ -131,7 +133,8 @@ func (p *Proxy) Secrets() []string {
 }
 
 // check adds what is wrong with the proxy, in the words of the setup page's fields. No message
-// carries the address, which may hold a password.
+// carries the address, which may hold a password. An authority that passes is rewritten as its
+// certificates alone.
 func checkProxySetting(p *Proxy, pr *problems) {
 	if p == nil {
 		return
@@ -156,13 +159,10 @@ func checkProxySetting(p *Proxy, pr *problems) {
 	}
 	checkProxyExceptions(p, pr)
 	if p.CABundle != "" {
-		switch {
-		case len(p.CABundle) > maxProxyCABundle:
-			pr.addf("Proxy certificate authority: at most %d KiB", maxProxyCABundle/kibibyte)
-		case strings.Contains(p.CABundle, "PRIVATE KEY"):
-			pr.addf("Proxy certificate authority: certificates only, no private key")
-		case !x509.NewCertPool().AppendCertsFromPEM([]byte(p.CABundle)):
-			pr.addf("Proxy certificate authority: holds no PEM certificate")
+		if plain, err := provisioner.PlainAuthorityBundle(p.CABundle, maxProxyCABundle); err != nil {
+			pr.addf("Proxy certificate authority: %s", err)
+		} else {
+			p.CABundle = plain
 		}
 	}
 }
@@ -310,6 +310,9 @@ func (t *SavedTransport) current() (http.RoundTripper, error) {
 	if saved != nil {
 		if err = saved.ReleaseMirror.Mirror().Trust(transport); err != nil {
 			return nil, fmt.Errorf("the saved release mirror: %w", err)
+		}
+		if err = trustSiteCA(transport, saved.SiteCA); err != nil {
+			return nil, fmt.Errorf("the saved site CA: %w", err)
 		}
 	}
 	t.rt = transport

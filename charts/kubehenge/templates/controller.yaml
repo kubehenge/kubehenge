@@ -91,6 +91,11 @@ rules:
   - apiGroups: [controlplane.cluster.x-k8s.io]
     resources: [kubeadmcontrolplanes, rke2controlplanes, kthreescontrolplanes, taloscontrolplanes]
     verbs: [list, patch, delete]
+  # The site CA's rollout reads a cluster's control plane for the generation it starts from, and
+  # holds the cluster's place until the control plane has taken it up.
+  - apiGroups: [controlplane.cluster.x-k8s.io]
+    resources: [kubeadmcontrolplanes, rke2controlplanes, kthreescontrolplanes, taloscontrolplanes]
+    verbs: [get]
   - apiGroups: [bootstrap.cluster.x-k8s.io]
     resources: [kubeadmconfigs, rke2configs, kthreesconfigs, talosconfigs]
     verbs: [list, patch, delete]
@@ -349,10 +354,15 @@ spec:
     metadata:
       labels:
         {{- toYaml $labels | nindent 8 }}
-      {{- if .Values.releaseMirror.caBundle }}
+      {{- if or .Values.releaseMirror.caBundle .Values.siteCA }}
       annotations:
-        # The controller reads the authority once, as it starts.
+        # The controller reads the authorities once, as it starts.
+        {{- if .Values.releaseMirror.caBundle }}
         kubehenge.dev/release-mirror-ca: {{ .Values.releaseMirror.caBundle | sha256sum }}
+        {{- end }}
+        {{- if .Values.siteCA }}
+        kubehenge.dev/site-ca: {{ .Values.siteCA | sha256sum }}
+        {{- end }}
       {{- end }}
     spec:
       serviceAccountName: {{ $name }}
@@ -406,6 +416,12 @@ spec:
             {{- end }}
             {{- if .Values.releaseMirror.caBundle }}
             - --release-mirror-ca=/etc/kubehenge/release-mirror/ca.crt
+            {{- end }}
+            {{- if .Values.siteCA }}
+            - --site-ca=/etc/kubehenge/site-ca/ca.crt
+            {{- end }}
+            {{- if .Values.timeZone }}
+            - --time-zone={{ .Values.timeZone }}
             {{- end }}
             - --calico-images={{ join "," .Values.addons.calico.images }}
             - --rancher-kubernetes={{ .Values.addons.rancher.kubernetes }}
@@ -519,6 +535,11 @@ spec:
               mountPath: /etc/kubehenge/release-mirror
               readOnly: true
             {{- end }}
+            {{- if .Values.siteCA }}
+            - name: site-ca
+              mountPath: /etc/kubehenge/site-ca
+              readOnly: true
+            {{- end }}
             {{- include "kubehenge.proxyMount" . | nindent 12 }}
       volumes:
         # A Talos etcd restore keeps the snapshot it uploads there, as large as etcd's quota
@@ -540,6 +561,11 @@ spec:
           configMap:
             name: kubehenge-release-mirror
         {{- end }}
+        {{- if .Values.siteCA }}
+        - name: site-ca
+          configMap:
+            name: kubehenge-site-ca
+        {{- end }}
         {{- include "kubehenge.proxyVolume" . | nindent 8 }}
 {{- if .Values.releaseMirror.caBundle }}
 ---
@@ -552,6 +578,18 @@ metadata:
     {{- toYaml $labels | nindent 4 }}
 data:
   ca.crt: {{ .Values.releaseMirror.caBundle | quote }}
+{{- end }}
+{{- if .Values.siteCA }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubehenge-site-ca
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml $labels | nindent 4 }}
+data:
+  ca.crt: {{ .Values.siteCA | quote }}
 {{- end }}
 ---
 apiVersion: v1
@@ -672,10 +710,17 @@ webhooks:
 # (pkg/provisioner's ClusterDefaulter), as the interface's clusters get them: the distributions read
 # them from the Cluster. Only on creation, since changing a running cluster's ranges replaces its
 # nodes, and the same as the validating webhook while the controller is away.
+# The siteCAs variable and the kubehenge.dev/site-ca-roll note are the controller's: a new cluster
+# gets the site CA and no note, and a change of either by anyone else keeps the stored ones, so that
+# applying or replacing a manifest without them works.
+# The PEM bundles of trustedCAs, registryMirrors and releaseMirror are written as certificates alone,
+# which the classes' schemas hold them to. The API server calls mutating webhooks in the order of
+# their configurations' names, and Cluster API's (capi-mutating-webhook-configuration) checks the
+# variables against the schemas, so this configuration's name sorts before it.
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
-  name: kubehenge
+  name: 00-kubehenge
   annotations:
     cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ $extension }}
 webhooks:
@@ -684,6 +729,14 @@ webhooks:
     sideEffects: None
     failurePolicy: Fail
     reinvocationPolicy: Never
+    matchConditions:
+      - name: created-or-spec-or-note-changed
+        expression: >-
+          request.operation == 'CREATE' || object.spec != oldObject.spec ||
+          ['kubehenge.dev/site-ca-roll'].filter(k, has(object.metadata.annotations) &&
+          k in object.metadata.annotations).map(k, object.metadata.annotations[k]) !=
+          ['kubehenge.dev/site-ca-roll'].filter(k, has(oldObject.metadata.annotations) &&
+          k in oldObject.metadata.annotations).map(k, oldObject.metadata.annotations[k])
     timeoutSeconds: 5
     clientConfig:
       service:
@@ -694,7 +747,7 @@ webhooks:
     rules:
       - apiGroups: [cluster.x-k8s.io]
         apiVersions: [v1beta2]
-        operations: [CREATE]
+        operations: [CREATE, UPDATE]
         resources: [clusters]
   # A new worker of a cluster on storage local to each node goes to a node whose volumes have no
   # worker (pkg/provisioner's WorkerPlacement). While the controller is away a worker goes where

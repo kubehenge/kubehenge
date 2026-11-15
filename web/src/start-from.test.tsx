@@ -262,7 +262,7 @@ describe("a new cluster started from another", () => {
       "Ranges like 10.1.0.21-10.1.0.29, networks or addresses",
     );
     // The load balancer's example follows the gateway too.
-    await user.selectOptions(screen.getByLabelText("Load balancer"), "MetalLB (recommended)");
+    await user.selectOptions(screen.getByLabelText("Load balancer"), "MetalLB");
     expect(screen.getByLabelText("Load-balancer addresses")).toHaveAccessibleDescription(
       "Free addresses on the nodes' network, like 10.1.0.100-10.1.0.120",
     );

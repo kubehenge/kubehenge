@@ -60,6 +60,12 @@ type Settings struct {
 	ChartRepositories *ChartRepositories `json:"chartRepositories,omitempty"`
 	// ReleaseMirror serves the RKE2 and k3s releases in place of GitHub.
 	ReleaseMirror *ReleaseMirror `json:"releaseMirror,omitempty"`
+	// SiteCA is the PEM authority of the site's private CA. Every connection that names no authority
+	// of its own trusts it: the clusters' nodes, the release mirror, the backup targets, the
+	// identity providers and the appliance's own outgoing connections. Empty, none.
+	SiteCA string `json:"siteCA,omitempty"`
+	// TimeZone is the IANA time zone of schedules that name none. Empty, UTC.
+	TimeZone string `json:"timeZone,omitempty"`
 	// ControllerImage replaces the controller image the chart was released with.
 	ControllerImage string `json:"controllerImage,omitempty"`
 	// PodSubnets and ServiceSubnets are the management cluster's own ranges. When unset, the first
@@ -447,6 +453,21 @@ type familyNet struct {
 // Validate checks what the module would otherwise only refuse after starting, or what would leave
 // the management cluster unreachable. The messages name the setup page's fields.
 func (s *Settings) Validate() error {
+	return validateSettings(s, time.Now())
+}
+
+// ValidateAgainst is Validate for settings that may keep the saved ones' site CA. A site CA that
+// has run out since it was saved stops nothing then, since the controller reports it on every
+// cluster and rolls it to none. One that is new or changed has to be valid now.
+func (s *Settings) ValidateAgainst(saved *Settings) error {
+	if saved != nil && saved.SiteCA != "" && strings.TrimSpace(saved.SiteCA) == strings.TrimSpace(s.SiteCA) {
+		return validateSettings(s, time.Time{})
+	}
+	return s.Validate()
+}
+
+// validateSettings is Validate with the site CA checked for validity at siteCANow, not at all when zero.
+func validateSettings(s *Settings, siteCANow time.Time) error {
 	var p problems
 	families := s.checkFamilies(&p)
 	s.checkNodes(&p)
@@ -467,6 +488,7 @@ func (s *Settings) Validate() error {
 	s.checkMirrors(&p)
 	s.ChartRepositories.check(&p)
 	s.ReleaseMirror.check(&p, time.Now())
+	s.checkSiteDefaults(&p, siteCANow)
 	if err := ValidOIDC(s.ClusterOIDC); err != nil {
 		p.addf("Identity providers: %s", err)
 	}

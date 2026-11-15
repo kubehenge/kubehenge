@@ -690,6 +690,30 @@ variable "release_mirror" {
   }
 }
 
+variable "site_ca" {
+  description = "The PEM authority of the site's private CA, the default of every connection that names none of its own: the nodes of clusters without trustedCAs, the release mirror, the backup targets with an endpoint and the identity providers. Empty, none."
+  type        = string
+  default     = ""
+  nullable    = false
+
+  validation {
+    condition     = var.site_ca == "" || can(regex("^(-----BEGIN CERTIFICATE-----\n([A-Za-z0-9+/=]+\n)+-----END CERTIFICATE-----\n?)+$", var.site_ca))
+    error_message = "site_ca holds PEM certificates alone."
+  }
+}
+
+variable "time_zone" {
+  description = "The IANA time zone that schedules without one of their own run in, such as a cluster's etcd snapshots. Empty, UTC, and the wizard starts from the user's browser time zone."
+  type        = string
+  default     = ""
+  nullable    = false
+
+  validation {
+    condition     = var.time_zone == "" || (can(regex("^[A-Za-z0-9_+/-]+$", var.time_zone)) && var.time_zone != "Local")
+    error_message = "time_zone is an IANA time zone name such as Europe/Zurich."
+  }
+}
+
 variable "proxy" {
   description = "The HTTP(S) proxy every download from the management side goes through: url (with credentials if it needs them), no_proxy (comma-separated hosts, domains and networks that bypass it, which has to name the Proxmox VE API host, the nodes' networks and the pod and service ranges) and ca_bundle (PEM, for a proxy that re-signs TLS). Empty strings go direct."
   type = object({

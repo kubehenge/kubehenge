@@ -316,7 +316,7 @@ func (a *Appliance) ApplyUnattended(ready func(ctx context.Context, kubeconfig [
 		if s == nil || !a.Ready() {
 			return errors.New("there is no management cluster to upgrade")
 		}
-		if err := s.Validate(); err != nil {
+		if err := s.ValidateAgainst(s); err != nil {
 			return err
 		}
 		if a.ReleasesHA(s) {

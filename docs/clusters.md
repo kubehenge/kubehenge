@@ -878,7 +878,7 @@ A network that reaches few hosts needs four settings. Each works on every distri
 | Time servers | `network.ntp` | NTP servers, with the hypervisor's clock as the fallback. |
 | Proxy | `egressProxy` | The proxy for the container runtime, the installers of RKE2 and k3s, and the distribution's service. The add-ons use it too. |
 | Registry mirrors | `registryMirrors` | Mirrors that images are pulled from before the registry itself. |
-| Trusted CAs | `trustedCAs` | Authorities in the node OS's trust store, which the container runtime and the distribution read. |
+| Trusted CAs | `trustedCAs` | Authorities in the node OS's trust store, which the container runtime and the distribution read. A cluster that sets none gets the management cluster's site CA (`siteCA` in the chart values, **Site CA** in Setup), `kubehenge appliance settings set --site-ca-file` from the command line. |
 
 Where each lands on a node:
 
@@ -904,7 +904,9 @@ A change replaces every node, one at a time, as a change of the node customisati
 ### Authorities
 
 - An authority is PEM and holds certificates only.
-- Kubehenge refuses a private key, text around the certificates, and a certificate that has expired or is not yet valid.
+- Kubehenge refuses a private key, a damaged BEGIN or END line, and a certificate that has expired or is not yet valid. Names and comments between the blocks pass, as in curl's `cacert.pem`.
+- Kubehenge stores the certificates alone, also from kubectl and GitOps. Keep that form in Git, or Argo CD shows the cluster as out of sync.
+- To keep another form in Git, give the Argo CD Application the annotation `argocd.argoproj.io/compare-options: ServerSideDiff=true,IncludeMutationWebhook=true`. Flux needs nothing.
 - One mirror host has one authority, also where two registries share the host.
 
 ### RKE2 and k3s installs
@@ -1058,6 +1060,8 @@ A setting that is only on or off has a switch in its row. These are Proxmox VE H
 | Nodes | Proxmox VE HA | where the management cluster has Proxmox VE HA and the storage is shared | Takes the control-plane VMs into HA or out of it ([Machines](#machines)). |
 | Nodes | HA rule labels | unless the management cluster switched them off for every cluster, or while they are on | [Machines](#machines). |
 | Nodes | Autoscaler | always | Its expander, its timing and where it runs ([Autoscaling](#autoscaling)). |
+| Nodes | Registry mirrors, Trusted CAs, Release mirror | always, the release mirror on RKE2 and k3s | Replaces every node, one at a time. A cluster without its own Trusted CAs takes the management cluster's site CA, a few clusters at a time and inside their upgrade windows ([below](#sites-with-limited-access)). |
+| Network | Bridge, VLAN, address families | always | Fixed for the cluster's life. |
 | Network | Pod network | always | Fixed for the cluster's life ([Pod network](#pod-network)). |
 | Network | Load balancer | always | See the list below. |
 | Network | Cluster Mesh | on a cluster that runs Cilium | See the list below. |
@@ -1650,7 +1654,7 @@ A cluster with etcd snapshots on has Kubehenge's controller copy its etcd databa
 
 ### Schedule and layout
 
-The schedule is by default every 12 hours from 00:00 in the time zone chosen. The interface starts with the browser's zone. The variable without a zone means UTC. Each cluster runs a few minutes after the hour, at an offset of its own. The controller keeps the newest 14 by default and deletes older ones.
+The schedule is by default every 12 hours from 00:00 in the time zone chosen. The interface starts with the site time zone, else the browser's. The variable without a zone means the site time zone, else UTC. Each cluster runs a few minutes after the hour, at an offset of its own. The controller keeps the newest 14 by default and deletes older ones.
 
 Snapshots go under `<prefix>/<namespace>.<name>/etcd` in the target's bucket, beside the cluster's Velero backups. They are named by when they were taken in UTC and the Kubernetes version, as `20261021T120000Z-v1.36.5-rke2r1.db.age`. Each object carries the Kubernetes version, the distribution, etcd's revision and the SHA-256 and size of the database in its metadata. Snapshots work on their own, with or without Velero backups.
 
@@ -2067,6 +2071,8 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
   - The ClusterClasses stay in `kubehenge-system`, which `topology.classRef.namespace` names. Every namespace therefore uses the same ones.
 - **Ranges** come from `spec.clusterNetwork`. Without it, Kubehenge picks them as the interface does ([Network](#network)).
   - Kubehenge refuses to create a cluster whose ranges overlap its nodes' network.
+  - They are set when the cluster is created. Kubehenge refuses a change to them later.
+  - An update that leaves them out, such as `kubectl edit` deleting them or a merge patch setting `clusterNetwork` to null, keeps the cluster's.
 
 ### Pools and timeouts
 
@@ -2098,8 +2104,8 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `headlamp` | no | `enabled` (default false). `hostname`, to serve it through the cluster's ingress controller. `tlsSecret`, a Secret in the `headlamp` namespace with the certificate for `hostname`. When unset, one from the certificates add-on while it is on, else the ingress controller's default certificate. `access`, `token` (default) or `view`, read-only without sign-in ([above](#add-ons)). |
 | `monitoring` | no | `enabled` (default false), which installs cert-manager too ([above](#add-ons)). `hostname`, to serve Grafana through the cluster's ingress controller. `tlsSecret`, a Secret in the `monitoring` namespace with the certificate for `hostname`. When unset, as for `headlamp`. `alertReceivers`, `remoteWrite` and `externalAlertmanagers`, with their secrets as stored credentials ([above](#monitoring-alerts-and-remote-write)). |
 | `logs` | no | Loki and Grafana Alloy, which need `monitoring` ([above](#add-ons)). `enabled` (default false). `collector`, `node` (default) or `api`. `retentionDays` (1 to 366, default 7). `sizeGiB`, Loki's volume (1 to 1024, default 10), which only grows. `outputs`, up to 4 more destinations ([above](#add-ons)). Each has `name`, `kind` (`syslog`, `otlp` or `loki`), `endpoint`, optional `caBundle` (PEM), `streams` (a list of `containers`, `events`, `nodes` and `audit`, default all) and `auth` (`none`, `basic` or `bearer`, default `none`). |
-| `backups` | no | Velero ([above](#back-up-and-restore)). `enabled` (default false). `target`, the name of one of the administrator's targets, needed while `enabled`. `schedule`, a cron expression of five fields or a descriptor such as `@weekly` (default `0 2 * * *`). `timeZone` (default `UTC`). `retentionDays` (1 to 3650, default 7). `volumes`, `all` (default) or `annotated`, only the volumes a pod names in its `backup.velero.io/backup-volumes` annotation. `existingSecret`, a Secret of your own in the cluster's `velero` namespace. It holds the store's keys as Velero's credentials file under the key `cloud`. It replaces the credential stored through the interface for the cluster, or else for every cluster. Kubehenge creates the namespace, and switching backups off deletes it with the Secret. `readFrom`, up to 10 clusters of the same namespace backing up to the same target whose backups this one lists to restore ([Restore into another cluster](#restore-into-another-cluster)). |
-| `etcdSnapshots` | no | etcd snapshots ([above](#etcd-snapshots)). `enabled` (default false). `target`, the name of one of the administrator's targets, needed while `enabled`. `schedule`, as for `backups` (default `0 */12 * * *`). `timeZone` (default `UTC`). `keep`, the number of snapshots kept (1 to 1000, default 14). `distributionUpload` (default false), on RKE2 and k3s only and while `enabled`, the distribution's own upload ([above](#the-distributions-own-upload)). They are written with the credential stored through the interface for the cluster, or else for every cluster. While `backups` is enabled too, `target` must be the backups' target. |
+| `backups` | no | Velero ([above](#back-up-and-restore)). `enabled` (default false). `target`, the name of one of the administrator's targets, needed while `enabled`. `schedule`, a cron expression of five fields or a descriptor such as `@weekly` (default `0 2 * * *`). `timeZone` (default the site time zone, else `UTC`). `retentionDays` (1 to 3650, default 7). `volumes`, `all` (default) or `annotated`, only the volumes a pod names in its `backup.velero.io/backup-volumes` annotation. `existingSecret`, a Secret of your own in the cluster's `velero` namespace. It holds the store's keys as Velero's credentials file under the key `cloud`. It replaces the credential stored through the interface for the cluster, or else for every cluster. Kubehenge creates the namespace, and switching backups off deletes it with the Secret. `readFrom`, up to 10 clusters of the same namespace backing up to the same target whose backups this one lists to restore ([Restore into another cluster](#restore-into-another-cluster)). |
+| `etcdSnapshots` | no | etcd snapshots ([above](#etcd-snapshots)). `enabled` (default false). `target`, the name of one of the administrator's targets, needed while `enabled`. `schedule`, as for `backups` (default `0 */12 * * *`). `timeZone` (default the site time zone, else `UTC`). `keep`, the number of snapshots kept (1 to 1000, default 14). `distributionUpload` (default false), on RKE2 and k3s only and while `enabled`, the distribution's own upload ([above](#the-distributions-own-upload)). They are written with the credential stored through the interface for the cluster, or else for every cluster. While `backups` is enabled too, `target` must be the backups' target. |
 | `podSecurity` | no | `admission`, the level Pod Security Admission enforces in every namespace that labels none of its own: `privileged`, `baseline` (default) or `restricted`. Changing it replaces the control-plane machines. `kyverno`, the level Kyverno enforces in every namespace: `off` (default), `baseline` or `restricted` ([above](#add-ons)). |
 | `istio` | no | `enabled` (default false): Istio in ambient mode ([above](#add-ons)). |
 | `namespaceLabels` | no | Up to 20 labels, as key and value, put on the namespaces the add-ons install into ([above](#add-ons-and-your-policies)). Keys and values follow Kubernetes' label syntax. The webhook refuses `kubernetes.io/metadata.name`. |

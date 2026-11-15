@@ -142,7 +142,7 @@ export function OptionDialog({
   }
   const dialogs: Record<
     Exclude<OptionAction, "headlamp" | "monitoring">,
-    (props: { cluster: Cluster; onClose: () => void }) => JSX.Element
+    (props: { cluster: Cluster; onClose: () => void }) => JSX.Element | null
   > = {
     logs: LogsDialog,
     podSecurity: PodSecurityDialog,

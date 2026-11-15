@@ -27,6 +27,8 @@ import type { Cluster, ClusterClass } from "./types";
 
 const body = "MIIBTjCB9aADAgECAgEBMAoGCCqGSM49BAMCMA8xDTALBgNVBAMTBGdvb2QwHhcN";
 const certificate = `-----BEGIN CERTIFICATE-----\n${body}\n-----END CERTIFICATE-----\n`;
+// textAfter is the server's refusal of a line right after the certificate.
+const textAfter = `Has text after its last PEM block on line ${certificate.split("\n").length}`;
 
 const mirror = (over: Partial<MirrorRow> = {}): MirrorRow => ({
   registry: "docker.io",
@@ -81,7 +83,7 @@ describe("the registry mirror settings", () => {
     expect(mirrorsProblem([mirror(), mirror({ endpoints: "https://other.example" })])).toBe(
       "Mirror 2: each registry once",
     );
-    expect(mirrorsProblem([mirror({ caBundle: "not a certificate" })])).toBe("Mirror 1: paste pem certificates only");
+    expect(mirrorsProblem([mirror({ caBundle: "not a certificate" })])).toBe("Mirror 1: holds no PEM certificate");
     expect(mirrorsProblem(Array.from({ length: 17 }, (_, i) => mirror({ registry: `r${i}.example` })))).toBe(
       "At most 16 mirrors",
     );
@@ -103,10 +105,20 @@ describe("the trusted authorities", () => {
     expect(certificateProblem("")).toBeUndefined();
     expect(certificateProblem(certificate + certificate)).toBeUndefined();
     expect(certificateProblem(certificate.replaceAll("\n", "\r\n"))).toBeUndefined();
-    expect(certificateProblem("hello")).toBe("Paste PEM certificates only");
-    expect(certificateProblem(`${certificate}EOF`)).toBe("Paste PEM certificates only");
+    expect(certificateProblem("hello")).toBe("Holds no PEM certificate");
+    expect(certificateProblem(`${certificate}EOF`)).toBe(textAfter);
     expect(certificateProblem("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n")).toBe(
-      "Paste PEM certificates only",
+      "Holds a private key. Give certificates only",
+    );
+  });
+
+  it("accept a bundle laid out as curl's cacert.pem, as the server does", () => {
+    const curl = `##\n## Bundle of CA Root Certificates\n##\n\nISRG Root X1\n============\n${certificate}\n# ---------- Example Root CA ----------\n${certificate}`;
+    expect(certificateProblem(curl)).toBeUndefined();
+    expect(mirrorsProblem([mirror({ caBundle: curl })])).toBeUndefined();
+    expect(releaseMirrorProblems({ url: "https://m.example", caBundle: curl }).caBundle).toBeUndefined();
+    expect(certificateProblem(`----BEGIN CERTIFICATE-----\n${body}\n-----END CERTIFICATE-----\n`)).toBe(
+      "Has a damaged BEGIN or END line on line 1",
     );
   });
 });
@@ -163,7 +175,7 @@ describe("a cluster's own release mirror", () => {
     ["https://m.example", "not a certificate", "Holds no PEM certificate"],
     ["https://m.example", key, "Holds a private key. Give certificates only"],
     ["https://m.example", certificate + key, "Holds a private key. Give certificates only"],
-    ["https://m.example", `${certificate}EOF\n`, "Holds text besides its certificates"],
+    ["https://m.example", `${certificate}EOF\n`, textAfter],
     ["http://m.example", certificate, "A certificate is for an https:// mirror"],
     ["", certificate, "A certificate needs a release mirror"],
   ])("refuses for %s the certificate %#", (url, caBundle, want) => {
@@ -269,7 +281,7 @@ describe("the wizard's site settings", () => {
     const wrong = { ...form, registryMirrors: [mirror({ endpoints: "x" })], trustedCAs: "x" };
     expect(fieldProblems("Network", wrong, cls)).toMatchObject({
       registryMirrors: expect.stringContaining("Mirror 1") as unknown,
-      trustedCAs: "Paste PEM certificates only",
+      trustedCAs: "Holds no PEM certificate",
     });
     expect(fieldProblems("Network", wrong, bare)).not.toHaveProperty("trustedCAs");
   });
@@ -389,7 +401,7 @@ describe("a cluster's site options", () => {
     await user.clear(field);
     await user.type(field, "junk");
     await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
-    expect(within(dialog).getByText("Paste PEM certificates only")).toBeInTheDocument();
+    expect(within(dialog).getByText("Holds no PEM certificate")).toBeInTheDocument();
     await user.clear(field);
     await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());

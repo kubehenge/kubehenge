@@ -387,9 +387,13 @@ func (a *Appliance) openEtcdStore(t *BackupTarget, keys *etcdBackupKeys) (provis
 		open = provisioner.OpenTarget
 	}
 	checksums := !t.NoChecksums
+	ca := t.CACertificate
+	if ca == "" && t.Endpoint != "" {
+		ca = a.siteCA()
+	}
 	store, err := open(&provisioner.BackupTarget{
 		Name: t.Name, Endpoint: t.Endpoint, Bucket: t.Bucket, Region: t.Region, Prefix: t.Prefix,
-		CACertificate: t.CACertificate, Checksums: &checksums,
+		CACertificate: ca, Checksums: &checksums,
 	}, map[string][]byte{"accessKeyID": []byte(keys.AccessKeyID), "secretAccessKey": []byte(keys.SecretAccessKey)})
 	if err != nil {
 		return nil, fmt.Errorf("target %s: %w", t.Name, err)

@@ -127,6 +127,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	errs = append(errs, validateGitOps(c)...)
 	errs = append(errs, validateEgress(c)...)
 	errs = append(errs, validateNodeSite(old, c, time.Now())...)
+	errs = append(errs, validateUpgradeWindow(old, c)...)
 	errs = append(errs, validateAddonSettings(old, c)...)
 	errs = append(errs, v.validateNodeCustomisation(ctx, old, c)...)
 	errs = append(errs, validateAutoscaling(c)...)
@@ -161,10 +162,26 @@ func invalid(c *clusterv1.Cluster, errs field.ErrorList) error {
 	return apierrors.NewInvalid(clusterv1.GroupVersion.WithKind("Cluster").GroupKind(), c.Name, errs) //nolint:wrapcheck // made here, not passed on
 }
 
-// validateRanges holds a new cluster's pod and service ranges to checkRanges. Unset, the network is
-// the class's schema's to refuse.
+// rangesFixed is the refusal of a change to a cluster's pod or service ranges.
+const rangesFixed = "set when the cluster is created, and cannot change"
+
+// validateRanges holds a new cluster's pod and service ranges to checkRanges, and refuses any change
+// to them later: the distributions take them as the nodes start, so new ranges would replace every
+// node and leave the running pods on the old ones. Unset, the network is the class's schema's to
+// refuse.
 func validateRanges(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) field.ErrorList {
-	if _, set, _ := optionalVariable[nodeNetwork](c, networkVariable); old != nil || !set {
+	if old != nil {
+		var errs field.ErrorList
+		network := field.NewPath("spec", "clusterNetwork")
+		if !slices.Equal(old.Spec.ClusterNetwork.Pods.CIDRBlocks, c.Spec.ClusterNetwork.Pods.CIDRBlocks) {
+			errs = append(errs, field.Forbidden(network.Child("pods", "cidrBlocks"), rangesFixed))
+		}
+		if !slices.Equal(old.Spec.ClusterNetwork.Services.CIDRBlocks, c.Spec.ClusterNetwork.Services.CIDRBlocks) {
+			errs = append(errs, field.Forbidden(network.Child("services", "cidrBlocks"), rangesFixed))
+		}
+		return errs
+	}
+	if _, set, _ := optionalVariable[nodeNetwork](c, networkVariable); !set {
 		return nil
 	}
 	if err := checkRanges(c, class); err != nil {

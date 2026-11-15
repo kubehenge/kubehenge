@@ -139,6 +139,17 @@ releaseMirror:
   url: ""
   caBundle: ""
 
+# The PEM authority of the site's private CA. It is the default for every connection that names no
+# authority of its own: a cluster's nodes without trustedCAs, the release mirror, the S3 backup
+# targets with an endpoint and the identity providers. Changing it replaces the nodes of the
+# clusters that inherit it, a few at a time and inside their upgrade windows. Empty, none.
+siteCA: ""
+
+# The IANA time zone that schedules without one of their own run in, such as a cluster's etcd
+# snapshots. The wizard starts from it. Empty, schedules run in UTC and the wizard starts from the
+# user's browser time zone.
+timeZone: ""
+
 proxmox:
   # The Proxmox VE API, such as https://pve.example.org:8006. Required.
   url: ""

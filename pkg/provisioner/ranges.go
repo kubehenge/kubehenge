@@ -2,12 +2,14 @@ package provisioner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
 	"slices"
 	"strings"
 
+	admissionv1 "k8s.io/api/admission/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -182,7 +184,10 @@ func rangeSizeProblems(what string, p netip.Prefix) []string {
 // candidates, and for a cluster that runs Cilium, which may join a Cluster Mesh later, ranges clear
 // of every other cluster's too, since a peer's pod addresses must not be taken for its own pods' or
 // services'. The distributions read the ranges from the Cluster, kubeadm's podSubnet among them,
-// which the Tigera operator does not install Calico without.
+// which the Tigera operator does not install Calico without. An update that leaves the ranges out
+// keeps the stored ones (keepRanges). It also writes the variables' PEM
+// bundles as certificates alone (plainBundles) and holds the siteCAs variable to the controller
+// (holdSiteCAs).
 type ClusterDefaulter struct {
 	Hooks *Hooks
 }
@@ -191,8 +196,21 @@ var _ admission.Defaulter[*clusterv1.Cluster] = &ClusterDefaulter{}
 
 // Default implements admission.Defaulter.
 func (d *ClusterDefaulter) Default(ctx context.Context, c *clusterv1.Cluster) error {
+	if !Owns(c, d.Hooks.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
+		return nil
+	}
+	if err := plainBundlesOf(ctx, c); err != nil {
+		return err
+	}
+	if err := d.holdSiteCAs(ctx, c); err != nil {
+		return err
+	}
+	// The ranges are given on creation alone: changing a running cluster's replaces its nodes.
+	if req, err := admission.RequestFromContext(ctx); err == nil && req.Operation == admissionv1.Update {
+		return keepRanges(req.OldObject.Raw, c)
+	}
 	n := &c.Spec.ClusterNetwork
-	if !Owns(c, d.Hooks.ClassNamespace) || !c.DeletionTimestamp.IsZero() || len(n.Pods.CIDRBlocks) > 0 && len(n.Services.CIDRBlocks) > 0 {
+	if len(n.Pods.CIDRBlocks) > 0 && len(n.Services.CIDRBlocks) > 0 {
 		return nil
 	}
 	class, err := d.Hooks.classOf(c)(ctx)
@@ -216,6 +234,41 @@ func (d *ClusterDefaulter) Default(ctx context.Context, c *clusterv1.Cluster) er
 			field.ErrorList{field.Invalid(field.NewPath("spec", "clusterNetwork"), n, err.Error())})
 	}
 	n.Pods.CIDRBlocks, n.Services.CIDRBlocks = pods, services
+	return nil
+}
+
+// keepRanges gives an update that leaves out the pod or service ranges the stored cluster's, as a
+// kubectl replace or a GitOps sync of the manifest the cluster was created from leaves them out.
+// Without them the k3s class takes the ranges off its servers, and new nodes of the other
+// distributions start with their own defaults.
+func keepRanges(stored []byte, c *clusterv1.Cluster) error {
+	var old clusterv1.Cluster
+	if err := json.Unmarshal(stored, &old); err != nil {
+		return fmt.Errorf("reading the stored cluster: %w", err)
+	}
+	n, was := &c.Spec.ClusterNetwork, old.Spec.ClusterNetwork
+	if len(n.Pods.CIDRBlocks) == 0 {
+		n.Pods.CIDRBlocks = was.Pods.CIDRBlocks
+	}
+	if len(n.Services.CIDRBlocks) == 0 {
+		n.Services.CIDRBlocks = was.Services.CIDRBlocks
+	}
+	return nil
+}
+
+// plainBundlesOf runs plainBundles on the cluster of an admission request, against the stored one
+// on an update.
+func plainBundlesOf(ctx context.Context, c *clusterv1.Cluster) error {
+	var old *clusterv1.Cluster
+	if req, err := admission.RequestFromContext(ctx); err == nil && req.Operation == admissionv1.Update {
+		old = &clusterv1.Cluster{}
+		if err = json.Unmarshal(req.OldObject.Raw, old); err != nil {
+			return fmt.Errorf("reading the stored cluster: %w", err)
+		}
+	}
+	if errs := plainBundles(old, c); len(errs) > 0 {
+		return apierrors.NewInvalid(clusterv1.GroupVersion.WithKind("Cluster").GroupKind(), c.Name, errs) //nolint:wrapcheck // made here, not passed on
+	}
 	return nil
 }
 

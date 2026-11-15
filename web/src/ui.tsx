@@ -563,6 +563,45 @@ export function saveFile(blob: Blob, name: string): void {
 /** browserZone is the browser's IANA time zone, UTC when it names none. */
 export const browserZone = (): string => new Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
+/** siteZoneOf is the time zone the site set for schedules, which every class carries. Empty when it set none. */
+export const siteZoneOf = (classes: { annotations?: Record<string, string> | undefined }[]): string =>
+  classes.map((c) => c.annotations?.["kubehenge.dev/time-zone"] ?? "").find((zone) => zone !== "") ?? "";
+
+/** SiteZone is where a cluster's schedules start and run when they name no zone. */
+export interface SiteZone {
+  /** start is the zone a new schedule starts in: the site's, else the browser's. */
+  start: string;
+  /** inEffect is the zone a schedule naming none runs in: the site's, else UTC. */
+  inEffect: string;
+}
+
+/**
+ * useSiteZone reads the site time zone from the server. It is undefined until the server has
+ * answered, so that a form never starts in a zone it has to leave.
+ */
+export function useSiteZone(): SiteZone | undefined {
+  const [zone, setZone] = useState<SiteZone>();
+  useEffect(() => {
+    let current = true;
+    async function load(): Promise<void> {
+      let zoneRead = "";
+      try {
+        zoneRead = siteZoneOf(await api.classes());
+      } catch {
+        // The browser's zone serves where the classes cannot be read.
+      }
+      if (current) {
+        setZone({ start: zoneRead || browserZone(), inEffect: zoneRead || "UTC" });
+      }
+    }
+    void load();
+    return () => {
+      current = false;
+    };
+  }, []);
+  return zone;
+}
+
 /** timeZones lists the IANA time zones, with UTC and the current one, which the browser may not list. */
 export function timeZones(current: string): string[] {
   return [...new Set(["UTC", current, ...Intl.supportedValuesOf("timeZone")])];

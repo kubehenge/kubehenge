@@ -21,6 +21,7 @@ import {
   settings,
   setupFieldProblems,
   setupProblems,
+  siteCARollText,
   type SetupForm,
 } from "./Setup";
 
@@ -48,6 +49,8 @@ const form: SetupForm = {
   chartMirrorCA: "",
   releaseMirror: "",
   releaseMirrorCA: "",
+  siteCA: "",
+  timeZone: "",
   proxyURL: "",
   proxyUser: "",
   proxyPassword: "",
@@ -369,11 +372,21 @@ describe("setup", () => {
     expect(accepted).toStrictEqual([]);
     expect(problems({ chartMirrors: `${ok}\nbroken` }).chartMirrors).toMatch(/^broken is not/u);
     expect(problems({ chartMirrors: ok, chartMirrorCA: pem })).toStrictEqual({});
-    expect(problems({ chartMirrors: ok, chartMirrorCA: "junk" }).chartMirrorCA).toBe("Paste PEM certificates.");
+    expect(problems({ chartMirrors: ok, chartMirrorCA: "junk" }).chartMirrorCA).toBe("Holds no PEM certificate.");
     expect(problems({ chartMirrors: ok, chartMirrorCA: "-----BEGIN PRIVATE KEY-----\nx" }).chartMirrorCA).toBe(
-      "Paste certificates only, no private key.",
+      "Block 1 is no complete PEM block.",
     );
     expect(problems({ chartMirrorCA: pem }).chartMirrorCA).toBe("Add a chart mirror first.");
+    // The appliance's rule: the layout of a cluster's bundles, up to 256 KiB.
+    const authority = (chartMirrorCA: string): string | undefined =>
+      problems({ chartMirrors: ok, chartMirrorCA }).chartMirrorCA;
+    expect(
+      authority(`##\n## Bundle of CA Root Certificates\n##\n\nISRG Root X1\n============\n${pem}`),
+    ).toBeUndefined();
+    expect(authority(`${pem}\n`.repeat(2000))).toBeUndefined();
+    expect(authority(`${pem}\n`.repeat(5000))).toBe("At most 256 KiB.");
+    expect(authority(`${pem.slice(1)}\n${pem}`)).toBe("Has a damaged BEGIN or END line on line 1.");
+    expect(authority("# -----BEGIN CERTIFICATE----- follows")).toBe("Block 1 is no complete PEM block.");
   });
 
   it("sends the release mirror and its authority only when set, and reads them back", () => {
@@ -405,12 +418,64 @@ describe("setup", () => {
     expect(accepted).toStrictEqual([]);
     expect(problems({ releaseMirror: "https://m.example", releaseMirrorCA: pem })).toStrictEqual({});
     expect(problems({ releaseMirror: "https://m.example", releaseMirrorCA: "junk" }).releaseMirrorCA).toBe(
-      "Paste PEM certificates.",
+      "Holds no PEM certificate.",
     );
     expect(problems({ releaseMirror: "http://m.example", releaseMirrorCA: pem }).releaseMirrorCA).toBe(
       "A certificate needs an https:// mirror.",
     );
     expect(problems({ releaseMirrorCA: pem }).releaseMirrorCA).toBe("Add a release mirror first.");
+  });
+
+  it("sends the site CA and time zone only when set, and reads them back", () => {
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    expect(settings(form)).not.toHaveProperty("siteCA");
+    expect(settings(form)).not.toHaveProperty("timeZone");
+    const sent = settings({ ...form, siteCA: ` ${pem}\n\n`, timeZone: " Europe/Zurich " });
+    expect(sent.siteCA).toBe(`${pem}\n`);
+    expect(sent.timeZone).toBe("Europe/Zurich");
+    const again = formOf(sent);
+    expect(again.siteCA).toBe(`${pem}\n`);
+    expect(again.timeZone).toBe("Europe/Zurich");
+    expect(formOf(settings(form)).siteCA).toBe("");
+  });
+
+  it("checks the site CA and time zone", () => {
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    expect(problems({ siteCA: pem, timeZone: "Europe/Zurich" })).toStrictEqual({});
+    expect(problems({ timeZone: "UTC" })).toStrictEqual({});
+    expect(problems({ siteCA: "junk" }).siteCA).toBe("Holds no PEM certificate.");
+    // A key block made from the certificate's, so that no key text sits in the source.
+    const keyBlock = pem.replaceAll("CERTIFICATE", "PRIVATE KEY");
+    const keyHead = keyBlock.slice(0, keyBlock.indexOf("\n"));
+    expect(problems({ siteCA: keyHead }).siteCA).toBe("Block 1 is no complete PEM block.");
+    expect(problems({ siteCA: keyBlock }).siteCA).toBe("Holds a private key. Give certificates only.");
+    // What the server accepts and refuses, curl's cacert.pem layout among it.
+    const curl = `##\n## Bundle of CA Root Certificates\n##\n\nISRG Root X1\n============\n${pem}\n# ---------- Example Root CA ----------\n${pem}`;
+    expect(problems({ siteCA: curl })).toStrictEqual({});
+    expect(problems({ releaseMirror: "https://m.example", releaseMirrorCA: curl })).toStrictEqual({});
+    expect(problems({ siteCA: `${pem}\nextra` }).siteCA).toBe("Has text after its last PEM block on line 4.");
+    expect(problems({ siteCA: pem.replace("-----BEGIN", "----BEGIN") }).siteCA).toBe(
+      "Has a damaged BEGIN or END line on line 1.",
+    );
+    // The server's time zone database judges a zone, so no name is refused here.
+    for (const zone of ["Mars/Olympus", "Europe/zurich", "Factory", "Europe/Kyiv", "Etc/GMT+1"]) {
+      expect(problems({ timeZone: zone })).toStrictEqual({});
+    }
+  });
+
+  it("says how many clusters a site CA replaces, and when, in one short sentence", () => {
+    expect(siteCARollText({ inherits: 3, now: 0, windows: 0, waiting: 0 })).toBe("");
+    expect(siteCARollText({ inherits: 3, now: 2, windows: 1, waiting: 0 })).toBe(
+      "Replaces nodes (2 now, 1 at window).",
+    );
+    expect(siteCARollText({ inherits: 6, now: 4, windows: 1, waiting: 1 })).toBe(
+      "Replaces nodes (4 now, 1 at window, 1 queued).",
+    );
+    expect(siteCARollText({ inherits: 1, now: 0, windows: 1, waiting: 0 })).toBe("Replaces nodes (1 at window).");
+    const longest = siteCARollText({ inherits: 99, now: 99, windows: 99, waiting: 99 });
+    expect(longest.split(/\s+/u).length).toBeLessThanOrEqual(10);
+    // WRITING.md allows five words after a colon, and the note has none.
+    expect(longest).not.toContain(":");
   });
 
   it("sends a proxy only when it has an address", () => {
@@ -477,10 +542,17 @@ describe("setup", () => {
     expect(problems({ proxyURL: "http://p.example", proxyExceptions: ".corp, 10.0.0.0/8, [::1]" })).not.toHaveProperty(
       "proxyExceptions",
     );
-    expect(problems({ proxyURL: "http://p.example", proxyCA: "junk" }).proxyCA).toBe("Paste PEM certificates.");
+    expect(problems({ proxyURL: "http://p.example", proxyCA: "junk" }).proxyCA).toBe("Holds no PEM certificate.");
     expect(problems({ proxyURL: "http://p.example", proxyCA: "-----BEGIN PRIVATE KEY-----\nx" }).proxyCA).toBe(
-      "Paste certificates only, no private key.",
+      "Block 1 is no complete PEM block.",
     );
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n";
+    const authority = (proxyCA: string): string | undefined =>
+      problems({ proxyURL: "http://p.example", proxyCA }).proxyCA;
+    expect(authority(`subject=CN=proxy\n${pem}`)).toBeUndefined();
+    expect(authority(pem.repeat(2000))).toBeUndefined();
+    expect(authority(pem.repeat(5000))).toBe("At most 256 KiB.");
+    expect(authority(`${pem.slice(1)}${pem}`)).toBe("Has a damaged BEGIN or END line on line 1.");
   });
 
   it("asks for Proxmox VE HA only when it is switched on", () => {

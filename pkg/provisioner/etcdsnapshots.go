@@ -98,7 +98,7 @@ type EtcdSnapshots struct {
 // withDefaults fills in what the cluster left to the chart's schema.
 func (s *EtcdSnapshots) withDefaults() {
 	s.Schedule = cmp.Or(s.Schedule, defaultEtcdSnapshotSchedule)
-	s.TimeZone = cmp.Or(s.TimeZone, defaultBackupTimeZone)
+	s.TimeZone = cmp.Or(s.TimeZone, siteZone())
 	s.Keep = cmp.Or(s.Keep, defaultEtcdSnapshotKeep)
 }
 

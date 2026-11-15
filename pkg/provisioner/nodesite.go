@@ -3,6 +3,7 @@ package provisioner
 import (
 	"bytes"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -167,39 +168,261 @@ func mirrorAddress(endpoint string) (*url.URL, error) {
 }
 
 // checkCertificates holds a PEM bundle to certificates alone, none of them expired or not yet valid,
-// as Talos and the nodes' trust stores would otherwise refuse it only after a node was built.
+// as Talos and the nodes' trust stores would otherwise refuse it only after a node was built. A zero
+// now leaves the validity unchecked.
 func checkCertificates(bundle string, now time.Time) error {
-	if len(bundle) > maxNodePEMBytes {
-		return fmt.Errorf("at most %d KiB", maxNodePEMBytes/kibibyte)
+	_, err := certificatesWithin(bundle, maxNodePEMBytes, now)
+	return err
+}
+
+// PlainAuthorityBundle holds a bundle of at most maxBytes, such as the appliance's proxy authority,
+// to the layout and the certificates a cluster's bundles are held to, their validity aside. It
+// gives the bundle as NormalizeCertificateBundle writes it, so no text between the blocks is kept.
+func PlainAuthorityBundle(bundle string, maxBytes int) (string, error) {
+	blocks, err := certificatesWithin(bundle, maxBytes, time.Time{})
+	if err != nil {
+		return "", err
 	}
-	rest := []byte(bundle)
-	found := 0
-	for {
-		var block *pem.Block
-		block, rest = pem.Decode(rest)
-		if block == nil {
-			break
-		}
-		if block.Type != certificateBlock {
-			return fmt.Errorf("holds a %s. Give certificates only", strings.ToLower(block.Type))
-		}
+	return encodeCertificates(blocks), nil
+}
+
+// certificatesWithin is the bundle's certificate blocks, each a valid certificate. A zero now leaves
+// their validity unchecked.
+func certificatesWithin(bundle string, maxBytes int, now time.Time) ([]*pem.Block, error) {
+	blocks, err := certificateBlocksWithin(bundle, maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	for i, block := range blocks {
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
-			return fmt.Errorf("certificate %d is no valid X.509 certificate", found+1)
+			return nil, fmt.Errorf("certificate %d is no valid X.509 certificate", i+1)
 		}
 		switch {
+		case now.IsZero():
 		case now.After(cert.NotAfter):
-			return fmt.Errorf("certificate %d (%s) expired on %s", found+1, cert.Subject.CommonName, cert.NotAfter.UTC().Format(time.DateOnly))
+			return nil, fmt.Errorf("certificate %d (%s) expired on %s", i+1, cert.Subject.CommonName, cert.NotAfter.UTC().Format(time.DateOnly))
 		case now.Before(cert.NotBefore):
-			return fmt.Errorf("certificate %d (%s) is valid only from %s", found+1, cert.Subject.CommonName, cert.NotBefore.UTC().Format(time.DateOnly))
+			return nil, fmt.Errorf("certificate %d (%s) is valid only from %s", i+1, cert.Subject.CommonName, cert.NotBefore.UTC().Format(time.DateOnly))
 		}
-		found++
 	}
+	return blocks, nil
+}
+
+// certificateBlocks splits a bundle into its PEM blocks and holds them to one or more certificates.
+// The interface checks the same layout (web/src/pem.ts), and web/src/testdata/pem-bundles.json
+// holds both to the same verdicts.
+func certificateBlocks(bundle string) ([]*pem.Block, error) {
+	return certificateBlocksWithin(bundle, maxNodePEMBytes)
+}
+
+func certificateBlocksWithin(bundle string, maxBytes int) ([]*pem.Block, error) {
+	if len(bundle) > maxBytes {
+		return nil, fmt.Errorf("at most %d KiB", maxBytes/kibibyte)
+	}
+	blocks, err := pemBlocks(bundle)
+	if err != nil {
+		return nil, err
+	}
+	for _, block := range blocks {
+		if block.Type != certificateBlock {
+			return nil, fmt.Errorf("holds a %s. Give certificates only", strings.ToLower(block.Type))
+		}
+	}
+	if len(blocks) == 0 {
+		return nil, errors.New("holds no PEM certificate")
+	}
+	return blocks, nil
+}
+
+// NormalizeCertificateBundle writes a bundle whose layout passes as the classes' schemas, the chart
+// and the module take it: its certificates alone, with LF line ends and one after the last.
+func NormalizeCertificateBundle(bundle string) (string, error) {
+	blocks, err := certificateBlocks(bundle)
+	if err != nil {
+		return "", err
+	}
+	return encodeCertificates(blocks), nil
+}
+
+// encodeCertificates writes certificate blocks with nothing but their data.
+func encodeCertificates(blocks []*pem.Block) string {
+	var out strings.Builder
+	for _, block := range blocks {
+		out.Write(pem.EncodeToMemory(&pem.Block{Type: certificateBlock, Bytes: block.Bytes}))
+	}
+	return out.String()
+}
+
+// bundleMembers are the cluster variables that hold PEM bundles, each with the member of the
+// variable, or of each of its items, that holds one. "" is the item itself.
+var bundleMembers = map[string]string{
+	trustedCAsVariable:      "",
+	registryMirrorsVariable: "caBundle",
+	releaseMirrorVariable:   "caBundle",
+}
+
+// plainBundles writes the PEM bundles of a cluster's variables as NormalizeCertificateBundle does,
+// so that a bundle laid out as curl's cacert.pem or openssl's text output is taken from kubectl as
+// from the interface, and the classes' schemas, which Cluster API checks after this webhook, see
+// certificates alone. On an update only a variable that changes is rewritten. A bundle whose layout
+// is refused is named by its line, never repeated in the message.
+func plainBundles(old, c *clusterv1.Cluster) field.ErrorList {
+	variables := field.NewPath("spec", "topology", "variables")
+	var errs field.ErrorList
+	for i := range c.Spec.Topology.Variables {
+		v := &c.Spec.Topology.Variables[i]
+		member, ok := bundleMembers[v.Name]
+		if ok && (old == nil || variableChanged(old, c, v.Name)) {
+			errs = append(errs, plainVariable(v, member, variables.Key(v.Name))...)
+		}
+	}
+	return errs
+}
+
+// plainVariable rewrites the bundles of one variable, at member of it or of each of its items.
+func plainVariable(v *clusterv1.ClusterVariable, member string, path *field.Path) field.ErrorList {
+	var value any
+	if json.Unmarshal(v.Value.Raw, &value) != nil {
+		// The schema refuses it.
+		return nil
+	}
+	var b bundleRewrite
+	if items, isList := value.([]any); isList {
+		for j := range items {
+			items[j] = b.at(items[j], member, path.Index(j))
+		}
+	} else {
+		value = b.at(value, member, path)
+	}
+	if !b.changed {
+		return b.errs
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return append(b.errs, field.InternalError(path, err))
+	}
+	v.Value.Raw = raw
+	return b.errs
+}
+
+// bundleRewrite is what plainVariable has found: the bundles it refused and whether it rewrote one.
+type bundleRewrite struct {
+	errs    field.ErrorList
+	changed bool
+}
+
+// at rewrites the bundle that value is, or holds at member.
+func (b *bundleRewrite) at(value any, member string, path *field.Path) any {
+	if member == "" {
+		return b.plain(value, path)
+	}
+	if object, isObject := value.(map[string]any); isObject && object[member] != nil {
+		object[member] = b.plain(object[member], path.Child(member))
+	}
+	return value
+}
+
+func (b *bundleRewrite) plain(bundle any, path *field.Path) any {
+	s, isString := bundle.(string)
+	if !isString || s == "" {
+		return bundle
+	}
+	out, err := NormalizeCertificateBundle(s)
+	if err != nil {
+		b.errs = append(b.errs, field.Invalid(path, nil, err.Error()))
+		return bundle
+	}
+	b.changed = b.changed || out != s
+	return out
+}
+
+var (
+	// pemLabelLine finds a BEGIN or END with an upper-case label, as left of a boundary that lost
+	// its dashes or some of them. A comment such as "# BEGIN of the chain" has no label.
+	pemLabelLine = regexp.MustCompile(`\b(BEGIN|END) [A-Z][A-Z0-9 ]*[A-Z0-9](-|$)`)
+	// pemBodyLine is a line of base64 as long as most of a PEM block's lines, which openssl's own
+	// text (attributes, subject, hex dumps with colons) never holds.
+	pemBodyLine = regexp.MustCompile(`^[A-Za-z0-9+/=]{40,}$`)
+)
+
+// checkOutsidePEMBlocks refuses line n, which lies outside the PEM blocks, when it is what is left
+// of a boundary or a block's body. Comment separators made of dashes and the line of = under each
+// name in curl's cacert.pem are neither.
+func checkOutsidePEMBlocks(line string, n int) error {
+	line = strings.TrimSpace(line)
 	switch {
-	case found == 0:
-		return errors.New("holds no PEM certificate")
-	case len(bytes.TrimSpace(rest)) > 0:
-		return errors.New("holds text besides its certificates")
+	case pemLabelLine.MatchString(line) || (strings.Contains(line, "--") && strings.Contains(line, certificateBlock)):
+		return fmt.Errorf("has a damaged BEGIN or END line on line %d", n)
+	case pemBodyLine.MatchString(line) && strings.Trim(line, line[:1]) != "":
+		return fmt.Errorf("has certificate text without its BEGIN line on line %d", n)
 	}
 	return nil
+}
+
+// numberedLine is a line of a bundle with its number, as messages name it.
+type numberedLine struct {
+	n    int
+	text string
+}
+
+// pemLines splits a bundle into its lines without their line ends.
+func pemLines(bundle string) []numberedLine {
+	var lines []numberedLine
+	for i, line := range strings.Split(bundle, "\n") {
+		line = strings.TrimRight(line, "\r")
+		// A block may start on the line another ends on, as when bundles are joined without a break.
+		for j := strings.Index(line[min(1, len(line)):], "-----BEGIN "); j >= 0; j = strings.Index(line[1:], "-----BEGIN ") {
+			lines = append(lines, numberedLine{i + 1, line[:j+1]})
+			line = line[j+1:]
+		}
+		lines = append(lines, numberedLine{i + 1, line})
+	}
+	return lines
+}
+
+// pemBlocks splits a bundle into its PEM blocks, line by line. Decoding the whole bundle at once
+// would pass over a block whose BEGIN or END line is damaged and keep the next. Text outside the
+// blocks is kept for openssl's output and the names and comments of hand-kept bundles, but a line
+// that looks like a damaged boundary or a certificate's body refuses the bundle, naming its line.
+func pemBlocks(bundle string) ([]*pem.Block, error) {
+	lines := pemLines(bundle)
+	var blocks []*pem.Block
+	var open []string
+	inBlock := false
+	// after is the index of the first line after the last block.
+	after := 0
+	for i, l := range lines {
+		line := l.text
+		switch {
+		case inBlock && strings.HasPrefix(line, "-----BEGIN "):
+			return nil, fmt.Errorf("block %d is no complete PEM block", len(blocks)+1)
+		case inBlock:
+			open = append(open, line)
+			if !strings.HasPrefix(line, "-----END ") {
+				continue
+			}
+			block, rest := pem.Decode([]byte(strings.Join(open, "\n") + "\n"))
+			if block == nil || len(bytes.TrimSpace(rest)) > 0 {
+				return nil, fmt.Errorf("block %d is no complete PEM block", len(blocks)+1)
+			}
+			blocks, open, inBlock, after = append(blocks, block), nil, false, i+1
+		case strings.HasPrefix(line, "-----BEGIN "):
+			open, inBlock = []string{line}, true
+		default:
+			if err := checkOutsidePEMBlocks(line, l.n); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if inBlock {
+		return nil, fmt.Errorf("block %d is no complete PEM block", len(blocks)+1)
+	}
+	for _, l := range lines[after:] {
+		// openssl writes its text before each block, so text after the last one is no part of it.
+		if len(blocks) > 0 && strings.TrimSpace(l.text) != "" {
+			return nil, fmt.Errorf("has text after its last PEM block on line %d", l.n)
+		}
+	}
+	return blocks, nil
 }

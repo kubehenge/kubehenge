@@ -1191,8 +1191,7 @@
                   "type": "string"
                 },
                 "timeZone": {
-                  "default": "UTC",
-                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin.",
+                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                   "type": "string"
                 },
                 "volumes": {
@@ -1252,8 +1251,7 @@
                   "type": "string"
                 },
                 "timeZone": {
-                  "default": "UTC",
-                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin.",
+                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                   "type": "string"
                 }
               },
@@ -2204,8 +2202,7 @@
                       "type": "string"
                     },
                     "timeZone": {
-                      "default": "UTC",
-                      "description": "IANA time zone of start, such as Europe/Berlin.",
+                      "description": "IANA time zone of start, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                       "type": "string"
                     },
                     "weekdays": {
@@ -2930,7 +2927,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read.",
+              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read. A cluster that sets none trusts the site CA.",
               "items": {
                 "maxLength": 65536,
                 "minLength": 64,
@@ -2938,6 +2935,23 @@
                 "type": "string"
               },
               "maxItems": 8,
+              "type": "array"
+            }
+          }
+        },
+        {
+          "name": "siteCAs",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "The site CA the controller gives a cluster that sets no trustedCAs.",
+              "items": {
+                "maxLength": 65536,
+                "minLength": 64,
+                "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                "type": "string"
+              },
+              "maxItems": 1,
               "type": "array"
             }
           }
@@ -4153,8 +4167,7 @@
                   "type": "string"
                 },
                 "timeZone": {
-                  "default": "UTC",
-                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin.",
+                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                   "type": "string"
                 },
                 "volumes": {
@@ -4214,8 +4227,7 @@
                   "type": "string"
                 },
                 "timeZone": {
-                  "default": "UTC",
-                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin.",
+                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                   "type": "string"
                 }
               },
@@ -5166,8 +5178,7 @@
                       "type": "string"
                     },
                     "timeZone": {
-                      "default": "UTC",
-                      "description": "IANA time zone of start, such as Europe/Berlin.",
+                      "description": "IANA time zone of start, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                       "type": "string"
                     },
                     "weekdays": {
@@ -5892,7 +5903,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read.",
+              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read. A cluster that sets none trusts the site CA.",
               "items": {
                 "maxLength": 65536,
                 "minLength": 64,
@@ -5900,6 +5911,23 @@
                 "type": "string"
               },
               "maxItems": 8,
+              "type": "array"
+            }
+          }
+        },
+        {
+          "name": "siteCAs",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "The site CA the controller gives a cluster that sets no trustedCAs.",
+              "items": {
+                "maxLength": 65536,
+                "minLength": 64,
+                "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                "type": "string"
+              },
+              "maxItems": 1,
               "type": "array"
             }
           }
@@ -7124,8 +7152,7 @@
                   "type": "string"
                 },
                 "timeZone": {
-                  "default": "UTC",
-                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin.",
+                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                   "type": "string"
                 },
                 "volumes": {
@@ -7185,8 +7212,7 @@
                   "type": "string"
                 },
                 "timeZone": {
-                  "default": "UTC",
-                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin.",
+                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                   "type": "string"
                 }
               },
@@ -8137,8 +8163,7 @@
                       "type": "string"
                     },
                     "timeZone": {
-                      "default": "UTC",
-                      "description": "IANA time zone of start, such as Europe/Berlin.",
+                      "description": "IANA time zone of start, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                       "type": "string"
                     },
                     "weekdays": {
@@ -8859,7 +8884,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read.",
+              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read. A cluster that sets none trusts the site CA.",
               "items": {
                 "maxLength": 65536,
                 "minLength": 64,
@@ -8867,6 +8892,23 @@
                 "type": "string"
               },
               "maxItems": 8,
+              "type": "array"
+            }
+          }
+        },
+        {
+          "name": "siteCAs",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "The site CA the controller gives a cluster that sets no trustedCAs.",
+              "items": {
+                "maxLength": 65536,
+                "minLength": 64,
+                "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                "type": "string"
+              },
+              "maxItems": 1,
               "type": "array"
             }
           }
@@ -10049,8 +10091,7 @@
                   "type": "string"
                 },
                 "timeZone": {
-                  "default": "UTC",
-                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin.",
+                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                   "type": "string"
                 },
                 "volumes": {
@@ -10110,8 +10151,7 @@
                   "type": "string"
                 },
                 "timeZone": {
-                  "default": "UTC",
-                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin.",
+                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                   "type": "string"
                 }
               },
@@ -11062,8 +11102,7 @@
                       "type": "string"
                     },
                     "timeZone": {
-                      "default": "UTC",
-                      "description": "IANA time zone of start, such as Europe/Berlin.",
+                      "description": "IANA time zone of start, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                       "type": "string"
                     },
                     "weekdays": {
@@ -11739,7 +11778,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read.",
+              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read. A cluster that sets none trusts the site CA.",
               "items": {
                 "maxLength": 65536,
                 "minLength": 64,
@@ -11747,6 +11786,23 @@
                 "type": "string"
               },
               "maxItems": 8,
+              "type": "array"
+            }
+          }
+        },
+        {
+          "name": "siteCAs",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "The site CA the controller gives a cluster that sets no trustedCAs.",
+              "items": {
+                "maxLength": 65536,
+                "minLength": 64,
+                "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                "type": "string"
+              },
+              "maxItems": 1,
               "type": "array"
             }
           }

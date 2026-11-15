@@ -162,7 +162,7 @@ func TestAClustersReleaseMirrorIsHeldLikeTheManagementOne(t *testing.T) {
 		"an authority":              {value: `{"url":"https://m.example.org","caBundle":` + quoted(t, valid) + `}`},
 		"a private key":             {value: `{"url":"https://m.example.org","caBundle":` + quoted(t, valid+key) + `}`, want: "private key"},
 		"an expired authority":      {value: `{"url":"https://m.example.org","caBundle":` + quoted(t, expired) + `}`, want: "expired on"},
-		"text after the authority":  {value: `{"url":"https://m.example.org","caBundle":` + quoted(t, valid+"EOF\n") + `}`, want: "text besides"},
+		"text after the authority":  {value: `{"url":"https://m.example.org","caBundle":` + quoted(t, valid+"EOF\n") + `}`, want: "text after its last PEM block"},
 		"too large an authority":    {value: `{"url":"https://m.example.org","caBundle":` + quoted(t, strings.Repeat(valid, maxNodePEMBytes/len(valid)+1)) + `}`, want: "at most 64 KiB"},
 		"an authority for http":     {value: `{"url":"http://m.example.org","caBundle":` + quoted(t, valid) + `}`, want: "for an https:// mirror"},
 		"credentials":               {value: `{"url":"https://user:secret@m.example.org"}`, want: "holds credentials"}, //nolint:gosec // a fake address

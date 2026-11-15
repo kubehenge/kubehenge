@@ -320,6 +320,8 @@ func (s *Server) applianceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/setup", s.signedIn(s.setupStatus))
 	mux.HandleFunc("POST /api/setup", s.signedIn(s.setup))
 	mux.HandleFunc("POST /api/setup/check", s.signedIn(s.setupCheck))
+	mux.HandleFunc("POST /api/setup/site-ca-roll", s.signedIn(s.siteCARollPreview))
+	mux.HandleFunc("POST /api/setup/time-zone", s.signedIn(s.timeZoneCheck))
 	mux.HandleFunc("POST /api/setup/credential", s.signedIn(s.credential))
 	mux.HandleFunc("POST /api/setup/remove", s.signedIn(s.remove))
 	mux.HandleFunc("POST /api/setup/take-over", s.signedIn(s.takeOver))

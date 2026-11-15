@@ -1062,6 +1062,7 @@ describe("create", () => {
     loadBalancerPeers: "",
     loadBalancerRouterID: "",
     loadBalancerAuthenticated: false,
+    loadBalancerPicked: false,
     loadBalancerPassword: "",
     pods: "",
     services: "",
@@ -1106,6 +1107,7 @@ describe("create", () => {
     egress: newForm().egress,
     oidc: [],
     upgradeMode: "off",
+    siteZone: newForm().siteZone,
     nodeImages: true,
     backups: false,
     backupFields: {
@@ -1492,7 +1494,9 @@ describe("create", () => {
       variables: [...rke2.variables, { name: "upgrades", required: false, schema: { type: "object" } }],
     };
     const zone = new Intl.DateTimeFormat().resolvedOptions().timeZone;
-    expect(request({ ...form, upgradeMode: "patch" }, withUpgrades).variables["upgrades"]).toStrictEqual({
+    expect(
+      request({ ...form, siteZone: zone, upgradeMode: "patch" }, withUpgrades).variables["upgrades"],
+    ).toStrictEqual({
       mode: "patch",
       window: { start: "02:00", durationMinutes: 240, timeZone: zone },
     });

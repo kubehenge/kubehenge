@@ -36,6 +36,7 @@ import {
   type FamilyChoice,
 } from "./network";
 import { OIDCProviders, cleanProviders, oidcProblems } from "./OIDCProviders";
+import { certificateBundleProblem, sentence } from "./pem";
 import { nodeNote } from "./Placement";
 import type {
   BackupTarget,
@@ -47,6 +48,7 @@ import type {
   PveNode,
   SetupFindings,
   SetupStatus,
+  SiteCARoll,
   Storage,
 } from "./types";
 import {
@@ -115,6 +117,10 @@ export interface SetupForm {
   releaseMirror: string;
   // PEM certificates of the release mirror's authority.
   releaseMirrorCA: string;
+  // PEM certificates of the site's private CA, the default of every connection with none of its own.
+  siteCA: string;
+  // The IANA time zone of schedules that name none.
+  timeZone: string;
   // The address alone, with no user name or password.
   proxyURL: string;
   proxyUser: string;
@@ -337,6 +343,12 @@ function outboundSettings(f: SetupForm): Partial<ManagementSettings> {
   const release = releaseMirror(f);
   if (release) {
     s.releaseMirror = release;
+  }
+  if (filled(f.siteCA)) {
+    s.siteCA = `${f.siteCA.trim()}\n`;
+  }
+  if (filled(f.timeZone)) {
+    s.timeZone = f.timeZone.trim();
   }
   const proxy = proxySettings(f);
   if (proxy) {
@@ -564,6 +576,8 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     mirrors: formatMirrors(saved.registryMirrors),
     ...chartFields(saved),
     ...releaseFields(saved),
+    siteCA: saved.siteCA ?? "",
+    timeZone: saved.timeZone ?? "",
     ...proxyFields(saved),
     podSubnets: (saved.podSubnets ?? []).join(", "),
     serviceSubnets: (saved.serviceSubnets ?? []).join(", "),
@@ -611,6 +625,8 @@ export type SetupField =
   | "chartMirrorCA"
   | "releaseMirror"
   | "releaseMirrorCA"
+  | "siteCA"
+  | "timeZone"
   | "proxyURL"
   | "proxyUser"
   | "proxyPassword"
@@ -649,6 +665,8 @@ const stepFields: Record<SetupStep, SetupField[]> = {
     "chartMirrorCA",
     "releaseMirror",
     "releaseMirrorCA",
+    "siteCA",
+    "timeZone",
     "proxyURL",
     "proxyUser",
     "proxyPassword",
@@ -670,6 +688,8 @@ const advancedFields: SetupField[] = [
   "chartMirrorCA",
   "releaseMirror",
   "releaseMirrorCA",
+  "siteCA",
+  "timeZone",
   "proxyURL",
   "proxyUser",
   "proxyPassword",
@@ -963,12 +983,9 @@ function proxyProblems(f: SetupForm): SetupProblems {
   if (wrong !== undefined) {
     p.proxyExceptions = `${wrong} is no host, domain, address or network.`;
   }
-  if (filled(f.proxyCA)) {
-    if (f.proxyCA.includes("PRIVATE KEY")) {
-      p.proxyCA = "Paste certificates only, no private key.";
-    } else if (!f.proxyCA.includes("-----BEGIN CERTIFICATE-----")) {
-      p.proxyCA = "Paste PEM certificates.";
-    }
+  const caProblem = filled(f.proxyCA) ? bundleProblem(f.proxyCA, applianceAuthorityKiB) : undefined;
+  if (caProblem !== undefined) {
+    p.proxyCA = caProblem;
   }
   return p;
 }
@@ -1012,12 +1029,12 @@ function chartMirrorProblems(f: SetupForm): SetupProblems {
     p.chartMirrors = `${bad} is not in the form host=oci://mirror.example/path.`;
   }
   if (filled(f.chartMirrorCA)) {
-    if (f.chartMirrorCA.includes("PRIVATE KEY")) {
-      p.chartMirrorCA = "Paste certificates only, no private key.";
-    } else if (!f.chartMirrorCA.includes("-----BEGIN CERTIFICATE-----")) {
-      p.chartMirrorCA = "Paste PEM certificates.";
-    } else if (mirrorLines(f.chartMirrors).length === 0) {
-      p.chartMirrorCA = "Add a chart mirror first.";
+    const problem =
+      mirrorLines(f.chartMirrors).length === 0
+        ? "Add a chart mirror first."
+        : bundleProblem(f.chartMirrorCA, applianceAuthorityKiB);
+    if (problem !== undefined) {
+      p.chartMirrorCA = problem;
     }
   }
   return p;
@@ -1034,10 +1051,9 @@ function releaseMirrorProblems(f: SetupForm): SetupProblems {
     p.releaseMirror = "Use an http:// or https:// address with no trailing slash, query or credentials.";
   }
   if (filled(f.releaseMirrorCA)) {
-    if (f.releaseMirrorCA.includes("PRIVATE KEY")) {
-      p.releaseMirrorCA = "Paste certificates only, no private key.";
-    } else if (!f.releaseMirrorCA.includes("-----BEGIN CERTIFICATE-----")) {
-      p.releaseMirrorCA = "Paste PEM certificates.";
+    const problem = bundleProblem(f.releaseMirrorCA);
+    if (problem !== undefined) {
+      p.releaseMirrorCA = problem;
     } else if (address === "") {
       p.releaseMirrorCA = "Add a release mirror first.";
     } else if (!address.startsWith("https://")) {
@@ -1045,6 +1061,111 @@ function releaseMirrorProblems(f: SetupForm): SetupProblems {
     }
   }
   return p;
+}
+
+// siteDefaultProblems are those of the site CA. The server judges the time zone, with its own
+// time zone database, as useTimeZoneProblem asks it.
+function siteDefaultProblems(f: SetupForm): SetupProblems {
+  const p: SetupProblems = {};
+  const problem = filled(f.siteCA) ? bundleProblem(f.siteCA) : undefined;
+  if (problem !== undefined) {
+    p.siteCA = problem;
+  }
+  return p;
+}
+
+// bundleProblem is what the server says of the layout of a bundle as it is saved, as an error.
+// The appliance's limit of the proxy's and the chart mirrors' authorities.
+const applianceAuthorityKiB = 256;
+
+function bundleProblem(bundle: string, maxKiB?: number): string | undefined {
+  const problem = certificateBundleProblem(`${bundle.trim()}\n`, maxKiB);
+  return problem === undefined ? undefined : `${sentence(problem)}.`;
+}
+
+// useTimeZoneProblem asks the server whether it knows the time zone, once the typing has paused.
+// Empty is no problem: the schedules then stay in UTC.
+export function useTimeZoneProblem(timeZone: string): string | undefined {
+  const zone = timeZone.trim();
+  const [verdict, setVerdict] = useState<{ zone: string; problem: string | undefined }>();
+  useEffect(() => {
+    let current = true;
+    async function ask(): Promise<void> {
+      if (zone === "") {
+        return;
+      }
+      try {
+        await api.timeZoneCheck(zone);
+        if (current) {
+          setVerdict({ zone, problem: undefined });
+        }
+      } catch (err) {
+        if (current) {
+          // A field error carries no request id, which only ErrorBox shows.
+          setVerdict({ zone, problem: err instanceof Error ? err.message : String(err) });
+        }
+      }
+    }
+    const timer = window.setTimeout(() => {
+      void ask();
+    }, timeZoneAskDelayMs);
+    return () => {
+      current = false;
+      window.clearTimeout(timer);
+    };
+  }, [zone]);
+  return verdict?.zone === zone ? verdict.problem : undefined;
+}
+
+const timeZoneAskDelayMs = 400;
+
+/** siteCARollText says what saving a site CA does to the clusters, empty where nothing changes. */
+export function siteCARollText(roll: SiteCARoll): string {
+  const total = roll.now + roll.windows + roll.waiting;
+  if (total === 0) {
+    return "";
+  }
+  const parts = [
+    ...(roll.now > 0 ? [`${roll.now} now`] : []),
+    ...(roll.windows > 0 ? [`${roll.windows} at window`] : []),
+    ...(roll.waiting > 0 ? [`${roll.waiting} queued`] : []),
+  ];
+  return `Replaces nodes (${parts.join(", ")}).`;
+}
+
+// SiteCARollNote tells, before the site CA is saved, how many clusters take it and when.
+function SiteCARollNote({ siteCA }: { siteCA: string }): JSX.Element | null {
+  const [text, setText] = useState("");
+  // Clearing a site CA that was there replaces the nodes of the clusters that hold it too.
+  const complete = siteCA.includes("-----END CERTIFICATE-----");
+  const blank = siteCA.trim() === "";
+  const [wasFilled, setWasFilled] = useState(!blank);
+  if (!blank && !wasFilled) {
+    setWasFilled(true);
+  }
+  const candidate = complete ? `${siteCA.trim()}\n` : "";
+  const asks = complete || (blank && wasFilled);
+  useEffect(() => {
+    let current = true;
+    async function load(): Promise<void> {
+      try {
+        const roll = asks ? await api.siteCARoll(candidate) : undefined;
+        if (current) {
+          setText(roll === undefined ? "" : siteCARollText(roll));
+        }
+      } catch {
+        // Saving says what is wrong with the authority.
+        if (current) {
+          setText("");
+        }
+      }
+    }
+    void load();
+    return () => {
+      current = false;
+    };
+  }, [asks, candidate]);
+  return text === "" ? null : <div>{text}</div>;
 }
 
 // offerProblems are those of what the management cluster offers the clusters it makes.
@@ -1067,7 +1188,7 @@ function offerProblems(f: SetupForm): SetupProblems {
   if (bad !== undefined) {
     p.mirrors = `${bad} is not in the form ghcr.io=https://mirror.example:5000.`;
   }
-  Object.assign(p, chartMirrorProblems(f), releaseMirrorProblems(f), proxyProblems(f));
+  Object.assign(p, chartMirrorProblems(f), releaseMirrorProblems(f), siteDefaultProblems(f), proxyProblems(f));
   for (const key of ["podSubnets", "serviceSubnets"] as const) {
     const wrong = list(f[key]).find((r) => rangeProblem(r) !== undefined);
     if (wrong !== undefined) {
@@ -2226,6 +2347,27 @@ export function AdvancedFields({
         )}
       </Field>
       <Field
+        label="Site CA"
+        hint={
+          <>
+            PEM, the default for every connection
+            <SiteCARollNote siteCA={form.siteCA} />
+          </>
+        }
+        info="Every cluster's nodes, the release mirror, backup targets and identity providers trust it unless they name an authority of their own."
+        error={shown("siteCA")}
+      >
+        {(id) => <textarea id={id} rows={3} value={form.siteCA} onChange={(e) => set("siteCA", e.target.value)} />}
+      </Field>
+      <Field
+        label="Time zone"
+        hint="For schedules that name none"
+        info="New etcd snapshots, backups and upgrade windows start in it. A cluster's own zone wins."
+        error={shown("timeZone")}
+      >
+        {(id) => <input id={id} value={form.timeZone} onChange={(e) => set("timeZone", e.target.value)} />}
+      </Field>
+      <Field
         label="Release mirror"
         hint="Like https://mirror.example/github"
         info="RKE2 and k3s nodes download their release from it in place of GitHub, on GitHub's paths. They still install only pinned files."
@@ -2417,7 +2559,11 @@ function SetupWizard({
   };
   // A new passphrase is chosen, and repeated, only when no earlier run left a state to open.
   const firstRun = !manage && status.resumes !== true;
-  const byField = setupFieldProblems(effective, firstRun, fixed);
+  const zoneProblem = useTimeZoneProblem(effective.timeZone);
+  const byField = {
+    ...setupFieldProblems(effective, firstRun, fixed),
+    ...(zoneProblem === undefined ? {} : { timeZone: zoneProblem }),
+  };
   const problemsIn = (s: SetupStep): boolean => stepFields[s].some((k) => byField[k] !== undefined);
   const shown = (k: SetupField): string | undefined =>
     attempted.has(stepOf(k)) || touched.has(k) ? byField[k] : undefined;

@@ -16,6 +16,8 @@ import {
   Status,
   age,
   browserZone,
+  type SiteZone,
+  useSiteZone,
   errorMessage,
   filled,
   pollCache,
@@ -251,23 +253,23 @@ export interface BackupFields {
   readFrom: string[];
 }
 
-/** newBackupFields are a new cluster's settings: daily at 02:00 in the browser's time zone, kept a week. */
-export const newBackupFields = (): BackupFields => ({
+/** newBackupFields are a new cluster's settings: daily at 02:00 in the site's time zone, kept a week. */
+export const newBackupFields = (zone = browserZone()): BackupFields => ({
   target: "",
   schedule: defaultSchedule,
-  timeZone: browserZone(),
+  timeZone: zone,
   retention: String(defaultRetentionDays),
   volumes: "all",
   readFrom: [],
 });
 
 /** backupFieldsOf are the fields of a cluster's settings. What it leaves unset is the chart's default. */
-export function backupFieldsOf(b: BackupsValue): BackupFields {
+export function backupFieldsOf(b: BackupsValue, zone = browserZone(), inEffect = "UTC"): BackupFields {
   return {
     target: b.target ?? "",
     schedule: b.schedule ?? defaultSchedule,
-    // What is in effect: UTC when backups name none. Backups switched on start in the browser's zone.
-    timeZone: b.timeZone ?? (b.enabled ? "UTC" : browserZone()),
+    // What is in effect: inEffect when backups name none. Backups switched on start in zone.
+    timeZone: b.timeZone ?? (b.enabled ? inEffect : zone),
     retention: String(b.retentionDays ?? defaultRetentionDays),
     volumes: b.volumes ?? "all",
     readFrom: b.readFrom ?? [],
@@ -556,12 +558,25 @@ export function backupsRows(c: Cluster, offered: boolean): OptionRow<"backups">[
 }
 
 /** BackupsDialog switches a cluster's backups on or off and changes how they run. */
-export function BackupsDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+export function BackupsDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element | null {
+  const zone = useSiteZone();
+  return zone === undefined ? null : <BackupsForm cluster={c} zone={zone} onClose={onClose} />;
+}
+
+function BackupsForm({
+  cluster: c,
+  zone,
+  onClose,
+}: {
+  cluster: Cluster;
+  zone: SiteZone;
+  onClose: () => void;
+}): JSX.Element {
   const current = backupsOf(c.variables["backups"]);
   const offered = useClassTargets(c.class);
   const targets = offered ?? [];
   const [enabled, setEnabled] = useState(current.enabled);
-  const [typed, setTyped] = useState<BackupFields>(() => backupFieldsOf(current));
+  const [typed, setTyped] = useState<BackupFields>(() => backupFieldsOf(current, zone.start, zone.inEffect));
   const { busy, error, send } = useChange(c, onClose);
   const hint = useId();
   const fields = withTarget(typed, targets);

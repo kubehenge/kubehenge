@@ -922,6 +922,7 @@ export function NetworkStep({
       {variable(cls, "loadBalancer") && (
         <LoadBalancerFields
           distribution={cls?.distribution}
+          rangeOffered={!form.loadBalancerPicked}
           example={`${sample(primary, exampleRangeFirst)}-${sample(primary, exampleRangeLast)}`}
           families={form.families}
           value={formLoadBalancerValue(form)}
@@ -932,7 +933,7 @@ export function NetworkStep({
             routerID: shown("loadBalancerRouterID"),
           }}
           onChange={(patch) => {
-            setLoadBalancer(set, patch);
+            setLoadBalancer(set, patch, form.loadBalancerPicked);
           }}
           password={
             <Field label={passwordLabel} hint={passwordInfo} error={shown("loadBalancerPassword")}>

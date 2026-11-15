@@ -77,6 +77,7 @@ import {
   loadBalancerProblems,
   loadBalancerText,
   loadBalancerVariable,
+  recommendedImplementation,
   bgpOffered,
   type Implementation,
   type LoadBalancer,
@@ -290,6 +291,8 @@ export interface Form {
   loadBalancerPeers: string;
   loadBalancerRouterID: string;
   loadBalancerAuthenticated: boolean;
+  /** Whether the load balancer was chosen by hand, which the address range then never changes. */
+  loadBalancerPicked: boolean;
   /** Typed here and stored as the cluster's bgp credential once it exists. Never copied from another cluster. */
   loadBalancerPassword: string;
   pods: string;
@@ -348,6 +351,8 @@ export interface Form {
   /** Whether the nodes move to new node images (on Talos, patch releases) inside the window. */
   nodeImages: boolean;
   backups: boolean;
+  /** The time zone a schedule not yet named starts in: the site's once the classes are read, else the browser's. */
+  siteZone: string;
   backupFields: BackupFields;
   /** Whether the cluster gets an access key of its own, stored once it is created. */
   // storeBackupKey is whether the form stores the cluster's own access key for its backups.
@@ -1028,6 +1033,7 @@ export const newForm = (): Form => ({
   loadBalancerPeers: "",
   loadBalancerRouterID: "",
   loadBalancerAuthenticated: false,
+  loadBalancerPicked: false,
   loadBalancerPassword: "",
   pods: "",
   services: "",
@@ -1073,6 +1079,7 @@ export const newForm = (): Form => ({
   upgradeMode: "patch",
   nodeImages: true,
   backups: true,
+  siteZone: browserZone(),
   backupFields: newBackupFields(),
   storeBackupKey: true,
   backupKey: {},
@@ -1470,7 +1477,7 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   // A cluster whose nodes move to new template builds needs its window in the browser's time zone
   // even with Kubernetes upgrades off.
   if (form.upgradeMode !== "off" || defined.has("upgrades")) {
-    variables["upgrades"] = newUpgrades(form.upgradeMode, browserZone(), form.nodeImages);
+    variables["upgrades"] = newUpgrades(form.upgradeMode, form.siteZone, form.nodeImages);
   }
   const req: CreateRequest = {
     ...(form.namespace ? { namespace: form.namespace } : {}),
@@ -1679,7 +1686,7 @@ export function summary(form: Form, c: ClusterClass, offered: SummaryOffered = {
   }
   rows.push(...customisationRows(form, defined), ...addOnRows(form, c, defined));
   if (defined.has("upgrades")) {
-    const upgrades = newUpgrades(form.upgradeMode, browserZone(), form.nodeImages);
+    const upgrades = newUpgrades(form.upgradeMode, form.siteZone, form.nodeImages);
     rows.push(["Automatic upgrades", describe(upgrades, refreshesNodes(upgrades), c.distribution)]);
   }
   if (defined.has("oidc")) {
@@ -2104,16 +2111,32 @@ function balancerProblems(form: Form, c: ClusterClass | undefined): Problems {
   return p;
 }
 
-/** setLoadBalancer sets the form fields behind the load-balancer fields that a patch holds. */
+/** withSiteZone moves the schedules that still start in the form's zone to the site's zone. */
+export const withSiteZone = (f: Form, zone: string): Form => ({
+  ...f,
+  siteZone: zone,
+  etcdFields: f.etcdFields.timeZone === f.siteZone ? { ...f.etcdFields, timeZone: zone } : f.etcdFields,
+  backupFields: f.backupFields.timeZone === f.siteZone ? { ...f.backupFields, timeZone: zone } : f.backupFields,
+});
+
+/**
+ * setLoadBalancer sets the form fields behind the load-balancer fields that a patch holds. A load
+ * balancer nobody chose follows the address range: MetalLB once there is one.
+ */
 export function setLoadBalancer(
   set: <K extends keyof Form>(k: K, v: Form[K]) => void,
   patch: Partial<LoadBalancerValue>,
+  picked: boolean,
 ): void {
   if (patch.implementation !== undefined) {
     set("loadBalancer", patch.implementation);
+    set("loadBalancerPicked", true);
   }
   if (patch.addresses !== undefined) {
     set("loadBalancerAddresses", patch.addresses);
+    if (!picked && patch.implementation === undefined) {
+      set("loadBalancer", recommendedImplementation(patch.addresses));
+    }
   }
   if (patch.mode !== undefined) {
     set("loadBalancerMode", patch.mode);
