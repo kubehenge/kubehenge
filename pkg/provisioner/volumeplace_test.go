@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	jsonpatch "github.com/evanphx/json-patch/v5"
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
 	admissionv1 "k8s.io/api/admission/v1"
@@ -52,6 +54,8 @@ func poolWorker(name, pool, set, node string) *unstructured.Unstructured {
 	pm.SetLabels(map[string]string{
 		clusterv1.ClusterNameLabel: "web", clusterv1.MachineDeploymentNameLabel: pool, clusterv1.MachineSetNameLabel: set,
 	})
+	// The spec every pool's machine template gives its machines.
+	pm.Object["spec"] = map[string]any{"sourceNode": "pve1", "templateID": int64(100)}
 	if node != "" {
 		_ = unstructured.SetNestedField(pm.Object, node, "status", "proxmoxNode")
 	}
@@ -561,13 +565,28 @@ func TestPlacerUnpinsAMachineKeptToAnOfflineNode(t *testing.T) {
 // nil where it is let through as it is.
 func placeWorker(t *testing.T, web *clusterv1.Cluster, created *unstructured.Unstructured, objs ...client.Object) []string {
 	t.Helper()
+	placed := patchedWorker(t, web, created, objs...)
+	if placed == nil {
+		return nil
+	}
+	nodes, ok, _ := unstructured.NestedStringSlice(placed.Object, "spec", "allowedNodes")
+	if !ok {
+		t.Fatalf("the patched machine has no allowedNodes: %v", placed.Object["spec"])
+	}
+	return nodes
+}
+
+// patchedWorker is the new ProxmoxMachine as the API server stores it after WorkerPlacement's
+// patches, nil where it is let through as it is.
+func patchedWorker(t *testing.T, web *clusterv1.Cluster, created *unstructured.Unstructured, objs ...client.Object) *unstructured.Unstructured {
+	t.Helper()
 	c := fake.NewClientBuilder().WithScheme(volumeScheme(t)).WithObjects(append([]client.Object{web}, objs...)...).Build()
-	raw, err := json.Marshal(created.Object)
+	doc, err := json.Marshal(created.Object)
 	if err != nil {
 		t.Fatal(err)
 	}
 	resp := (&WorkerPlacement{Reader: c}).Handle(t.Context(), admission.Request{
-		Namespace: "team-a", Operation: admissionv1.Create, Object: runtime.RawExtension{Raw: raw},
+		Namespace: "team-a", Operation: admissionv1.Create, Object: runtime.RawExtension{Raw: doc},
 	})
 	if !resp.Allowed {
 		t.Fatalf("refused: %v", resp.Result)
@@ -575,14 +594,38 @@ func placeWorker(t *testing.T, web *clusterv1.Cluster, created *unstructured.Uns
 	if len(resp.Patches) == 0 {
 		return nil
 	}
-	if len(resp.Patches) != 2 || resp.Patches[0].Path != "/spec/allowedNodes" || resp.Patches[1].Path != "/metadata/annotations" {
+	if len(resp.Patches) != 2 || resp.Patches[1].Path != "/metadata/annotations" {
 		t.Fatalf("patches %+v", resp.Patches)
 	}
-	nodes, ok := resp.Patches[0].Value.([]string)
-	if !ok {
-		t.Fatalf("allowedNodes is a %T", resp.Patches[0].Value)
+	ops, err := json.Marshal(resp.Patches)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return nodes
+	patch, err := jsonpatch.DecodePatch(ops)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc, err = patch.Apply(doc); err != nil {
+		t.Fatalf("the patches do not apply to the new machine: %v", err)
+	}
+	placed := &unstructured.Unstructured{}
+	if err := placed.UnmarshalJSON(doc); err != nil {
+		t.Fatal(err)
+	}
+	return placed
+}
+
+// A new worker whose template gave it a spec keeps every field of it once it is kept to a node.
+func TestWorkerPlacementKeepsTheWorkersSpec(t *testing.T) {
+	t.Parallel()
+	placed := patchedWorker(t, placedCluster(t, "pve2"), worker("web-b", "ms-1", ""), worker("web-a", "ms-1", "pve1"))
+	if placed == nil {
+		t.Fatal("the worker was let through as it is, want it kept to pve2")
+	}
+	spec, _, _ := unstructured.NestedMap(placed.Object, "spec")
+	if want := map[string]any{"sourceNode": "pve1", "templateID": int64(100), "allowedNodes": []any{"pve2"}}; !reflect.DeepEqual(spec, want) {
+		t.Errorf("spec %v, want %v", spec, want)
+	}
 }
 
 func placedCluster(t *testing.T, volumeNodes string, variables ...clusterv1.ClusterVariable) *clusterv1.Cluster {
