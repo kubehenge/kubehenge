@@ -403,7 +403,7 @@ func checkKeptAlone(t *testing.T, f *restoreFixture, name string) {
 // cluster of their own beside the first node's.
 func TestEtcdRestoreFromTheVolumeKeepsTheOthersStoppedPastTheReset(t *testing.T) {
 	t.Parallel()
-	for _, d := range []templates.Distribution{templates.Kubeadm, templates.RKE2} {
+	for _, d := range []templates.Distribution{templates.Kubeadm, templates.RKE2, templates.K3s} {
 		for name, tc := range map[string]struct {
 			cut      int64
 			stopFail bool

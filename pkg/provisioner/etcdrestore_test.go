@@ -23,6 +23,7 @@ import (
 	"filippo.io/age"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
@@ -537,6 +538,10 @@ func TestEtcdRestorerUndoesWhatFailedBeforeRestoring(t *testing.T) {
 			if got := f.deleting(); (len(got) == 2) != tc.replaced {
 				t.Errorf("deleting %v", got)
 			}
+			// The status names as replaced only machines that were.
+			if (len(st.Replaced) == 2) != tc.replaced {
+				t.Errorf("replaced %v", st.Replaced)
+			}
 			if left := f.transcoded(); len(left) != 0 {
 				t.Errorf("left %v in the target", left)
 			}
@@ -612,6 +617,50 @@ func TestEtcdRestorerReadsPastTheCache(t *testing.T) {
 	}
 	if st := f.status(); st.Phase != RestoreFailed || st.Message != ended.Message {
 		t.Errorf("the restore that ended %q now says %q", ended.Message, st.Message)
+	}
+}
+
+// A restore whose pause of the cluster fails changes nothing, and its status names no machine as
+// replaced.
+func TestEtcdRestorerThatCannotPauseReplacesNothing(t *testing.T) {
+	t.Parallel()
+	f := newRestoreFixture(t, nil)
+	kube, ok := f.kube.(client.WithWatch)
+	if !ok {
+		t.Fatal("the fixture's client does not watch")
+	}
+	failed := false
+	f.r.Client = interceptor.NewClient(kube, interceptor.Funcs{
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if data, err := patch.Data(obj); err == nil && !failed && strings.Contains(string(data), `"paused":true`) {
+				failed = true
+				return errors.New("the API server timed out")
+			}
+			return c.Patch(ctx, obj, patch, opts...)
+		},
+	})
+	f.reconcile()
+	st := f.status()
+	if !failed || st.Phase != RestoreFailed || len(st.Replaced) != 0 {
+		t.Errorf("pause failed %v, status %+v", failed, st)
+	}
+	if runs := f.guests.runs(); slices.ContainsFunc(runs, func(r string) bool { return !strings.HasSuffix(r, stepPing) }) {
+		t.Errorf("ran %v", runs)
+	}
+}
+
+// A restore that succeeds after one left etcd on the first node alone takes that condition away.
+func TestEtcdRestorerClearsEtcdOnOneNode(t *testing.T) {
+	t.Parallel()
+	f := newRestoreFixture(t, func(c *clusterv1.Cluster) {
+		meta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{Type: EtcdAloneCondition, Status: metav1.ConditionTrue, Reason: EtcdAloneReason, Message: "etcd runs on web-cp-0 alone"})
+	})
+	f.reconcile()
+	if st := f.status(); st.Phase != RestoreSucceeded {
+		t.Fatalf("status %+v", st)
+	}
+	if c := meta.FindStatusCondition(f.cluster().Status.Conditions, EtcdAloneCondition); c != nil {
+		t.Errorf("the condition stayed: %+v", c)
 	}
 }
 
