@@ -125,7 +125,8 @@ export function etcdProblems(
   held: { kept?: string | undefined; backups?: string | undefined } = {},
 ): Partial<Record<EtcdSnapshotField, string>> {
   const p: Partial<Record<EtcdSnapshotField, string>> = {};
-  const target = targetProblem(f.target, targets, held.kept);
+  // With no target offered, the snapshots go to the backup volume.
+  const target = onVolume(f.target, targets, held.kept) ? undefined : targetProblem(f.target, targets, held.kept);
   if (target !== undefined) {
     p.target = target;
   } else if (filled(held.backups) && f.target !== held.backups) {
@@ -142,10 +143,17 @@ export function etcdProblems(
   return p;
 }
 
-/** etcdSnapshotsVariable is the variable the fields set. */
+/** onVolume says whether snapshots go to the management cluster's backup volume: no target, and none offered. */
+export const onVolume = (target: string, targets: OfferedTarget[], kept?: string): boolean =>
+  !filled(target) && targets.length === 0 && !filled(kept);
+
+/** volumeName is what the interface calls the management cluster's backup volume. */
+export const volumeName = "Backup volume";
+
+/** etcdSnapshotsVariable is the variable the fields set. No target is the backup volume. */
 export const etcdSnapshotsVariable = (f: EtcdSnapshotFields): EtcdSnapshotsValue => ({
   enabled: true,
-  target: f.target,
+  ...(filled(f.target) ? { target: f.target } : {}),
   schedule: f.schedule.trim(),
   timeZone: f.timeZone,
   keep: Number(f.keep),
@@ -159,7 +167,8 @@ export function etcdSnapshotsText(v: EtcdSnapshotsValue, distribution = ""): str
   }
   const f = etcdFieldsOf(v);
   const upload = f.upload ? `, plus ${distributionName(distribution)}'s own` : "";
-  return `${scheduleText(f.schedule)} (${f.timeZone}), keeps ${f.keep}, to ${f.target}${upload}`;
+  const to = filled(f.target) ? f.target : "the backup volume";
+  return `${scheduleText(f.schedule)} (${f.timeZone}), keeps ${f.keep}, to ${to}${upload}`;
 }
 
 /** etcdSnapshotsRows is the Options view's row of a cluster's etcd snapshots, where its class offers a target. */
@@ -210,7 +219,13 @@ export function EtcdSnapshotFieldset({
   const update = (patch: Partial<EtcdSnapshotFields>): void => onChange({ ...value, ...patch });
   return (
     <>
-      <TargetScheduleFields value={value} update={update} targets={targets} problems={problems} />
+      <TargetScheduleFields
+        value={value}
+        update={update}
+        targets={targets}
+        problems={problems}
+        volume={onVolume(value.target, targets)}
+      />
       <Field label="Snapshots to keep" error={problems.keep}>
         {(id) => (
           <input
@@ -496,7 +511,7 @@ function SnapshotsSummary({ cluster: c, view: v }: { cluster: Cluster; view: Clu
   return (
     <dl className="summary">
       <dt>Target</dt>
-      <dd>{v.target ?? ""}</dd>
+      <dd>{filled(v.target) ? v.target : volumeName}</dd>
       <dt>Schedule</dt>
       <dd>{etcdSnapshotsText({ ...etcdSnapshotsOf(c.variables["etcdSnapshots"]), distributionUpload: false })}</dd>
       {v.distributionUpload === true && (

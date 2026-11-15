@@ -74,7 +74,7 @@ const (
 // etcd to one control-plane machine's own.
 type EtcdRestoreRequest struct {
 	Snapshot string `json:"snapshot,omitempty"`
-	// Target is the backup target the snapshot is in.
+	// Target is the backup target the snapshot is in, empty for the backup volume.
 	Target string `json:"target,omitempty"`
 	// Machine asks, in place of a snapshot, for etcd to be reset to what this control-plane
 	// machine's own member holds, as a cluster of one, and the other control-plane machines to be
@@ -137,8 +137,8 @@ func EtcdRestoreRequestOf(c *clusterv1.Cluster) (EtcdRestoreRequest, bool, error
 		return r, true, errors.New("the restore request names no time (at)")
 	case r.Machine != "" && (r.Snapshot != "" || r.Target != ""):
 		return r, true, errors.New("the restore request names both a control-plane machine and a snapshot: name one")
-	case r.Machine == "" && (!ValidSnapshotName(r.Snapshot) || r.Target == ""):
-		return r, true, errors.New("the restore request names neither a snapshot with its target nor a control-plane machine")
+	case r.Machine == "" && !ValidSnapshotName(r.Snapshot):
+		return r, true, errors.New("the restore request names neither a snapshot nor a control-plane machine")
 	}
 	return r, true, nil
 }
@@ -297,6 +297,11 @@ func (run *restoreRun) do(ctx context.Context) error {
 		return err
 	}
 	defer run.dropOwn()
+	defer func() {
+		if run.target != nil {
+			_ = run.target.Release(ctx)
+		}
+	}()
 	ctrl.LoggerFrom(ctx).Info("restoring etcd", "from", run.source(), "by", run.request.By)
 	err := run.prepare(ctx)
 	if err == nil && run.status.Answered {
@@ -460,11 +465,34 @@ func (run *restoreRun) reach(ctx context.Context, n *RestoreNode) error {
 	return nil
 }
 
+// volumeWakePoll is how often a restore looks whether the appliance has woken the backup volume.
+var volumeWakePoll = 5 * time.Second
+
+// openTarget opens the restore's target. The backup volume is waited for while it sleeps, within
+// the restore's time.
+func (run *restoreRun) openTarget(ctx context.Context) (*ClusterTarget, error) {
+	for {
+		t, err := run.r.Targets.Open(ctx, run.cluster, run.request.Target, false)
+		if !errors.Is(err, ErrVolumeAsleep) {
+			return t, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("%w: %w", err, ctx.Err())
+		case <-time.After(volumeWakePoll):
+		}
+	}
+}
+
 // readSnapshot opens the target and checks that the cluster can be restored from the snapshot.
 func (run *restoreRun) readSnapshot(ctx context.Context) error {
-	t, err := run.r.Targets.Open(ctx, run.cluster, run.request.Target, false)
+	t, err := run.openTarget(ctx)
 	if err != nil {
 		return err
+	}
+	if t.OnVolume() && !run.talos {
+		_ = t.Release(ctx)
+		return errors.New("the nodes of kubeadm, RKE2 and k3s clusters fetch the snapshot by a link, which the backup volume hands out to no workload network. Restore by hand as the steps say, or from a bucket target")
 	}
 	s, err := ReadEtcdSnapshot(ctx, t.Store, t.Folder, run.request.Snapshot)
 	if err != nil {
@@ -769,8 +797,10 @@ func (run *restoreRun) removeTranscoded(ctx context.Context) error {
 	if t == nil {
 		var err error
 		if t, err = run.r.Targets.Open(ctx, run.cluster, run.request.Target, false); err != nil {
-			return nil //nolint:nilerr // without its target, the restore stored nothing there either
+			// Without its target, the restore stored nothing there either.
+			return nil
 		}
+		defer func() { _ = t.Release(ctx) }()
 	}
 	objects, err := t.Store.List(ctx, t.Folder+"/"+restoreObjectFolder+"/")
 	if err != nil {

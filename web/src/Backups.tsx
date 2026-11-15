@@ -441,11 +441,14 @@ export function TargetScheduleFields({
   update,
   targets,
   problems,
+  volume = false,
 }: {
   value: ScheduledTarget;
   update: (patch: Partial<ScheduledTarget>) => void;
   targets: OfferedTarget[];
   problems: { target?: string | undefined; schedule?: string | undefined };
+  /** volume offers the management cluster's backup volume as the empty choice. */
+  volume?: boolean;
 }): JSX.Element {
   const listed = targets.some((t) => t.name === value.target);
   return (
@@ -453,8 +456,8 @@ export function TargetScheduleFields({
       <Field label="Target" error={problems.target}>
         {(id) => (
           <select id={id} value={value.target} onChange={(e) => update({ target: e.target.value })}>
-            <option value="" disabled>
-              Choose…
+            <option value="" disabled={!volume}>
+              {volume ? "Backup volume" : "Choose…"}
             </option>
             {targets.map((t) => (
               <option key={t.name} value={t.name}>

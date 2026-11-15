@@ -1646,7 +1646,19 @@ etcd gives file space back only when a member is defragmented, and the member se
 
 ## etcd snapshots
 
-A cluster with etcd snapshots on has Kubehenge's controller copy its etcd database to one of the backup targets an administrator set. The database holds every object the cluster's API holds. The copy happens on the cluster's schedule and whenever asked.
+Every cluster has etcd snapshots on by default. Kubehenge's controller copies the cluster's etcd database to one of the backup targets an administrator set, or without a target to the management cluster's backup volume. The database holds every object the cluster's API holds. The copy happens on the cluster's schedule and whenever asked.
+
+### On the backup volume
+
+Without a target, snapshots go to `clusters/<namespace>.<name>/etcd` on the backup volume (`kubehenge-system/kubehenge-backups`), encrypted with age as in a bucket. A bucket target keeps a cluster's snapshots alone, and the volume holds no copy of them. A bucket is the place for copies off the management cluster's storage.
+
+A snapshot that would leave less than a tenth of the volume free is refused. The condition `EtcdSnapshotSucceeded` then reads `VolumeFull` with the room left. Lower `keep`, move the cluster to a bucket target, or grow the volume.
+
+On a node's own storage the volume sleeps between backups. The controller asks for it, and the appliance wakes it within a minute. Until then the condition reads `WaitingForVolume`.
+
+Talos clusters restore from the volume as from a bucket. The nodes of kubeadm, RKE2 and k3s fetch a snapshot by a link, which the volume hands out to no workload network. Download the snapshot in the Backups view and restore by hand. The distributions' own upload needs a bucket target.
+
+Deleting a cluster keeps its snapshots on the volume, as in a bucket.
 
 ### Schedule and layout
 

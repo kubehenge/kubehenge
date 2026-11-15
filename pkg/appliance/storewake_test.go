@@ -101,7 +101,7 @@ func TestTheStoreSleepsBetweenBackupsOnLocalStorage(t *testing.T) {
 	if err := <-woke; err != nil {
 		t.Fatal(err)
 	}
-	if err := restStore(ctx, kube); err != nil {
+	if err := restStore(ctx, kube, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := deps.Get(ctx, backupstore.Service, metav1.GetOptions{}); *got.Spec.Replicas != 0 {
@@ -123,7 +123,7 @@ func TestTheStoreStaysUpOnSharedStorage(t *testing.T) {
 	if err := a.wakeStore(ctx, kube); err != nil {
 		t.Fatal(err)
 	}
-	if err := restStore(ctx, kube); err != nil {
+	if err := restStore(ctx, kube, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := kube.AppsV1().Deployments(backupstore.Namespace).Get(ctx, backupstore.Service, metav1.GetOptions{}); *got.Spec.Replicas != 1 {

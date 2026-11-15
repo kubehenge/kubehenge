@@ -185,6 +185,9 @@ type Server struct {
 	ConnectWorkload func(server string, ca []byte, token string) (*Workload, error)
 	// OpenStore reaches the backup targets clusters' etcd snapshots are in. Unset, over HTTPS.
 	OpenStore provisioner.OpenStore
+	// Volume is the backup volume, for the snapshots of clusters without a target. Unset, the
+	// appliance's.
+	Volume provisioner.BackupVolume
 	// NewClientset reaches the management cluster for what its controller-runtime client cannot
 	// read, the providers' logs a support bundle carries. Nil leaves bundles without them.
 	NewClientset func() (kubernetes.Interface, error)

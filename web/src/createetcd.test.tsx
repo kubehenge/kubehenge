@@ -116,15 +116,27 @@ describe("a new cluster's etcd snapshots", () => {
     expect(filledForm(rke2).etcdFields.target).toBe("store");
   });
 
-  it("are off and absent where no target or no variable is offered", () => {
-    for (const c of [bare, withoutVariable]) {
-      const form = filledForm(c);
-      expect({ chosen: etcdChosen(form, c) }).toStrictEqual({ chosen: false });
-      expect(fieldProblems("Add-ons", form, c)).toStrictEqual({});
-      expect(request(form, c).variables).not.toHaveProperty("etcdSnapshots");
-      expect(Object.fromEntries(summary(form, c))).not.toHaveProperty("etcd snapshots");
-      expect(pendingCredentials(form, c)).toStrictEqual([]);
-    }
+  it("are off and absent where no variable is offered", () => {
+    const form = filledForm(withoutVariable);
+    expect({ chosen: etcdChosen(form, withoutVariable) }).toStrictEqual({ chosen: false });
+    expect(fieldProblems("Add-ons", form, withoutVariable)).toStrictEqual({});
+    expect(request(form, withoutVariable).variables).not.toHaveProperty("etcdSnapshots");
+    expect(Object.fromEntries(summary(form, withoutVariable))).not.toHaveProperty("etcd snapshots");
+    expect(pendingCredentials(form, withoutVariable)).toStrictEqual([]);
+  });
+
+  it("go to the backup volume where no target is offered, with no key and no wait", () => {
+    const form = filledForm(bare, { noSharedKey: true });
+    expect({ chosen: etcdChosen(form, bare) }).toStrictEqual({ chosen: true });
+    expect(fieldProblems("Add-ons", form, bare)).toStrictEqual({});
+    expect(request(form, bare).variables["etcdSnapshots"]).toStrictEqual({
+      enabled: true,
+      schedule: "0 */12 * * *",
+      timeZone: form.etcdFields.timeZone,
+      keep: 14,
+    });
+    expect(Object.fromEntries(summary(form, bare))["etcd snapshots"]).toMatch(/to the backup volume/u);
+    expect(pendingCredentials(form, bare)).toStrictEqual([]);
   });
 
   it("take the backups' target when it is one of the offered", () => {
@@ -338,12 +350,15 @@ describe("the add-ons step", () => {
     expect(screen.getByText("Empty uses the key stored for every cluster")).toBeInTheDocument();
   });
 
-  it("says where snapshots go without a backup target, by distribution", () => {
-    const { unmount } = render(<Step cls={bare} />);
-    expect(screen.getByText("Snapshots stay on the control-plane nodes without a backup target")).toBeInTheDocument();
-    unmount();
-    render(<Step cls={classOf("kubeadm", undefined)} />);
-    expect(screen.getByText("No etcd snapshots without a backup target")).toBeInTheDocument();
+  it("offers the backup volume where the class offers no target, for every distribution", () => {
+    for (const d of ["rke2", "kubeadm", "k3s", "talos"]) {
+      const { unmount } = render(<Step cls={classOf(d, undefined)} first={{ noSharedKey: true }} />);
+      expect(screen.getByLabelText("Take etcd snapshots")).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "Backup volume" })).toBeInTheDocument();
+      expect(screen.queryByLabelText("Access key ID")).not.toBeInTheDocument();
+      expect(screen.queryByText(/No snapshots until a key/u)).not.toBeInTheDocument();
+      unmount();
+    }
   });
 
   it("keeps the step's hints within the hint limit", () => {
@@ -365,8 +380,8 @@ describe("the add-ons step", () => {
     expect(screen.queryByLabelText("Access key ID")).not.toBeInTheDocument();
   });
 
-  it("does not show them where the class offers no target", () => {
-    render(<Step cls={bare} />);
+  it("does not show them where the class has no etcdSnapshots variable", () => {
+    render(<Step cls={withoutVariable} />);
     expect(screen.queryByLabelText("Take etcd snapshots")).not.toBeInTheDocument();
   });
 });

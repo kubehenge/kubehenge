@@ -780,15 +780,17 @@ const keyTyped = (f: Form): boolean => backupKeys.some((k) => filled(f.backupKey
 /** backupsWait says whether Velero's backups are on but have no access key of the cluster's own yet. */
 export const backupsWait = (f: Form, c: ClusterClass | undefined): boolean => backupsChosen(f, c) && !keyTyped(f);
 
-/** etcdOffered says whether a class has etcd snapshots and a backup target to take them to. */
-export const etcdOffered = (c: ClusterClass | undefined): boolean =>
-  variable(c, "etcdSnapshots") !== undefined && classTargets(c).length > 0;
+/** etcdOffered says whether a class has etcd snapshots, to a backup target or else the backup volume. */
+export const etcdOffered = (c: ClusterClass | undefined): boolean => variable(c, "etcdSnapshots") !== undefined;
 
 /** etcdChosen says whether the form's etcd snapshots are on and its class offers them. */
 export const etcdChosen = (f: Form, c: ClusterClass | undefined): boolean => f.etcdSnapshots && etcdOffered(c);
 
+/** etcdToTarget says whether the form's etcd snapshots go to a bucket target, which needs an access key. */
+const etcdToTarget = (f: Form, c: ClusterClass | undefined): boolean => etcdChosen(f, c) && filled(f.etcdFields.target);
+
 /** keyNeeded says whether the cluster gets the access key that its backups or etcd snapshots are written with. */
-export const keyNeeded = (f: Form, c: ClusterClass | undefined): boolean => backupsChosen(f, c) || etcdChosen(f, c);
+export const keyNeeded = (f: Form, c: ClusterClass | undefined): boolean => backupsChosen(f, c) || etcdToTarget(f, c);
 
 /**
  * keyRequired says whether the access key must be entered to go on: only for an upload by the nodes
@@ -804,7 +806,7 @@ export const keyRequired = (f: Form, c: ClusterClass | undefined): boolean =>
  * none entered. The controller takes none until a key for their target is stored.
  */
 export const snapshotsWait = (f: Form, c: ClusterClass | undefined): boolean =>
-  etcdChosen(f, c) && f.noSharedKey && !keyTyped(f);
+  etcdToTarget(f, c) && f.noSharedKey && !keyTyped(f);
 
 /** snapshotsWaitText is what the snapshot step and Confirm say of snapshots that wait for a key. */
 export const snapshotsWaitText = (target: string): string => `No snapshots until a key for ${target} is stored`;
