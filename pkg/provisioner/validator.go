@@ -58,11 +58,14 @@ func (v *ClusterValidator) validateOf(ctx context.Context, old, c *clusterv1.Clu
 	if !Owns(c, v.Hooks.ClassNamespace) {
 		return nil, nil
 	}
-	if err := validateAbandon(old, c); err != nil || !c.DeletionTimestamp.IsZero() {
+	if err := validateAbandon(old, c); err != nil {
 		return nil, err
 	}
 	if errs := validateDeleteSnapshots(c); len(errs) > 0 {
 		return nil, invalid(c, errs)
+	}
+	if !c.DeletionTimestamp.IsZero() {
+		return nil, validateDeleting(ctx, old, c, classOf)
 	}
 	// The spec checks read the clock, Proxmox VE and the class, so a cluster can fall short of them
 	// without a change. Annotations, labels and finalizers must still go through: deleting a cluster
@@ -100,7 +103,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	errs = append(errs, v.validateFirewall(pveCtx, old, c)...)
 	errs = append(errs, v.validateNodeOS(pveCtx, reads, old, c)...)
 	errs = append(errs, v.validateNUMA(pveCtx, reads, old, c, class)...)
-	errs = append(errs, v.validatePlacement(pveCtx, reads, old, c, class)...)
+	errs = append(errs, v.validateSettings(pveCtx, reads, old, c, class)...)
 	if err := checkControlPlaneSize(old, c, class); err != nil {
 		errs = append(errs, field.Forbidden(topology, err.Error()))
 	}
@@ -205,6 +208,15 @@ func (v *ClusterValidator) validateNodeOS(ctx context.Context, reads *pveReads, 
 		return field.ErrorList{field.Forbidden(field.NewPath("spec", "topology", "variables").Key(NodeOSVariable), err.Error())}
 	}
 	return nil
+}
+
+// validateSettings holds a cluster's placement, and the settings that say where its VMs and API
+// address are, to the rules the interface holds them to.
+func (v *ClusterValidator) validateSettings(ctx context.Context, reads *pveReads, old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) field.ErrorList {
+	errs := validateFixed(old, c)
+	errs = append(errs, v.validatePlacement(ctx, reads, old, c, class)...)
+	errs = append(errs, v.validateAllowedNodes(ctx, reads, old, c)...)
+	return append(errs, v.validateVLAN(ctx, reads, old, c)...)
 }
 
 // validatePlacement holds a cluster to a storage the management cluster gives rights on, and to

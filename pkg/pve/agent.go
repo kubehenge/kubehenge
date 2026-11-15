@@ -31,13 +31,11 @@ func Backoff(interval time.Duration) time.Duration {
 // err-truncated and signal bools, which Proxmox VE sends as numbers, so any command that writes to
 // standard error, or is killed by a signal, fails to decode there.
 type ExecStatus struct {
-	Exited       int    `json:"exited"`
-	ExitCode     int    `json:"exitcode"`
-	Signal       int    `json:"signal"`
-	OutData      string `json:"out-data"`
-	ErrData      string `json:"err-data"`
-	OutTruncated any    `json:"out-truncated"`
-	ErrTruncated any    `json:"err-truncated"`
+	Exited   int    `json:"exited"`
+	ExitCode int    `json:"exitcode"`
+	Signal   int    `json:"signal"`
+	OutData  string `json:"out-data"`
+	ErrData  string `json:"err-data"`
 }
 
 // Output is what the command printed, on standard output and standard error.

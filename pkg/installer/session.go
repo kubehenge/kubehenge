@@ -3,6 +3,7 @@ package installer
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"os"
 	"slices"
 	"strings"
@@ -17,6 +18,9 @@ type Session struct {
 	CA    *CAChoice
 	// Notices are the one-line decisions made without asking, such as the storage picked.
 	Notices []string
+	// Cautions are what the person has to know before installing, shown in the summary as well as
+	// in the plain output: a choice that leaves part of what they run unable to reach the API.
+	Cautions []string
 
 	// vlanAware holds what routeVLANError read of each bridge, as a form checks on every key.
 	vlanAware map[string]bool
@@ -194,11 +198,13 @@ func hasStorage(list []Storage, name string) bool {
 func (s *Session) ResolveAPI(ctx context.Context, ties Ties) error {
 	c := &s.Cfg
 	if c.ProxmoxURL == "" {
+		s.Cautions = nil
 		asked, err := s.pickAPIHost(ties)
 		if err != nil || asked {
 			return err
 		}
 		c.ProxmoxURL = APIURL(c.APIHost)
+		s.noteAPIFamily()
 	}
 	ca, err := s.Node.DecideCA(ctx, c, c.ProxmoxURL)
 	if err != nil {
@@ -271,6 +277,32 @@ func (s *Session) pickAPIHost(ties Ties) (bool, error) {
 		s.noticef("the Proxmox VE API at %s has a certificate that is also valid for %s", c.APIHost, joinHosts(cands[1:]))
 	}
 	return false, nil
+}
+
+// noteAPIFamily notes that the API is reached at an IPv6 address because Proxmox VE's own
+// certificate lacks this node's IPv4 address on the bridge, as on a dual-stack node whose name
+// resolves to its IPv6 address first. Clusters without IPv6 cannot reach it there. A certificate of
+// the administrator's is theirs to choose.
+func (s *Session) noteAPIFamily() {
+	bridge := s.Facts.Prefix.Addr()
+	host, err := netip.ParseAddr(s.Cfg.APIHost)
+	if err != nil || !host.Unmap().Is6() || !bridge.Is4() {
+		return
+	}
+	cert, file, err := s.Node.servedCertificate()
+	if err != nil || file != pveNodePEM {
+		return
+	}
+	if _, ips := certNames(cert); slices.Contains(ips, bridge.String()) {
+		return
+	}
+	s.Cautions = append(s.Cautions, apiFamilyCaution(bridge.String(), s.Cfg.APIHost))
+}
+
+// apiFamilyCaution is the text of that note, short enough for three lines of the summary at 80
+// columns.
+func apiFamilyCaution(ipv4, ipv6 string) string {
+	return fmt.Sprintf("The certificate lacks %[1]s, so clusters without IPv6 cannot reach the API at %[2]s. Add it to the certificate, then pass --proxmox-url https://%[1]s:8006", ipv4, ipv6)
 }
 
 // checkRouteVLAN refuses the VLAN of the node's default route on its bridge, taken from the route

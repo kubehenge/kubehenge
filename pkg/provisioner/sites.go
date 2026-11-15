@@ -50,6 +50,12 @@ type Sites struct {
 	// Space is each storage on each node with its free space and how it allocates a disk, read as
 	// the interface reads it (pve.StoragesOf).
 	Space []pve.Storage
+	// Nodes are all the nodes Proxmox VE lists, offline ones too. Nil where they could not be read.
+	Nodes []string
+	// TaggingVNets are the VNets whose zone puts every frame in a VLAN of its own, so that a VLAN
+	// tag on a VM's device would add a second one. A VNet whose zone the token cannot read is not
+	// listed.
+	TaggingVNets map[string]bool
 }
 
 // SiteSource looks at the storages and templates; *Proxmox is the real one.
@@ -106,6 +112,10 @@ func (p *Proxmox) readNetworks(ctx context.Context, s *Sites) {
 		return
 	}
 	s.Bridges = map[string][]string{}
+	s.Nodes = make([]string, len(nodes))
+	for i, n := range nodes {
+		s.Nodes[i] = n.Node
+	}
 	for _, n := range nodes {
 		if n.Status != nodeOnline {
 			continue
@@ -123,10 +133,7 @@ func (p *Proxmox) readNetworks(ctx context.Context, s *Sites) {
 		}
 		s.Bridges[n.Node] = bridges
 	}
-	var vnets []struct {
-		VNet string `json:"vnet"`
-		Zone string `json:"zone"`
-	}
+	var vnets []sdnVNet
 	if err := p.Client.Get(ctx, "/cluster/sdn/vnets", &vnets); err != nil {
 		log.V(1).Info("reading the SDN VNets", "error", err.Error())
 		return
@@ -135,6 +142,7 @@ func (p *Proxmox) readNetworks(ctx context.Context, s *Sites) {
 	for _, v := range vnets {
 		s.VNets[v.VNet] = v.Zone
 	}
+	s.TaggingVNets = p.taggingVNets(ctx, vnets)
 	var zones []struct {
 		SDN    string `json:"sdn"`
 		Node   string `json:"node"`
@@ -152,6 +160,37 @@ func (p *Proxmox) readNetworks(ctx context.Context, s *Sites) {
 		}
 		s.ZoneNodes[z.SDN] = applied
 	}
+}
+
+// sdnVNet is a VNet as Proxmox VE lists it.
+type sdnVNet struct {
+	VNet      string  `json:"vnet"`
+	Zone      string  `json:"zone"`
+	VLANAware pveFlag `json:"vlanaware"`
+}
+
+// taggingVNets are the VNets whose zone tags all its traffic. Where the zones cannot be read, none
+// is known to, so none is listed.
+func (p *Proxmox) taggingVNets(ctx context.Context, vnets []sdnVNet) map[string]bool {
+	var zones []struct {
+		Zone string `json:"zone"`
+		Type string `json:"type"`
+	}
+	if err := p.Client.Get(ctx, "/cluster/sdn/zones", &zones); err != nil {
+		ctrl.LoggerFrom(ctx).V(1).Info("reading the SDN zones", "error", err.Error())
+		return nil
+	}
+	types := make(map[string]string, len(zones))
+	for _, z := range zones {
+		types[z.Zone] = z.Type
+	}
+	tagging := map[string]bool{}
+	for _, v := range vnets {
+		if (pve.Network{ZoneType: types[v.Zone], VLANAware: bool(v.VLANAware)}).TagsTraffic() {
+			tagging[v.VNet] = true
+		}
+	}
+	return tagging
 }
 
 // Hosts are the names of the online nodes that can run the cluster's VMs: whose CPU reaches the
