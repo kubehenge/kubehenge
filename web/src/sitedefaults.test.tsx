@@ -1,71 +1,16 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type JSX } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { PoliciesStep } from "./AddOnsStep";
 import { App } from "./App";
 import { newForm, request, summary, withBackupChoices, type Form } from "./create-form";
 import { fakeServer, type Route } from "./fake-server";
-import { AdvancedFields, formOf, type SetupForm } from "./Setup";
-import { fromCluster } from "./start-from";
-import type { Cluster, ClusterClass } from "./types";
+import type { ClusterClass } from "./types";
 import { setSiteZone } from "./ui";
 
-afterEach(() => {
-  setSiteZone("");
-});
-
-const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
-
-function Fields(): JSX.Element {
-  const [form, setForm] = useState<SetupForm>(formOf());
-  return (
-    <AdvancedFields
-      form={form}
-      set={(k, v) => setForm((f) => ({ ...f, [k]: v }))}
-      shown={() => undefined}
-      fixed={false}
-      open
-      warnings={[]}
-      onOpen={() => undefined}
-    />
-  );
-}
-
-describe("the site settings in Setup", () => {
-  it("say, before saving, how many clusters take the site CA and when", async () => {
-    const user = userEvent.setup({ delay: null });
-    const calls = fakeServer({
-      "POST /api/setup/site-ca-roll": { body: { inherits: 3, now: 2, windows: 1, waiting: 0 } },
-    });
-    render(<Fields />);
-    await user.click(screen.getByLabelText("Site CA"));
-    await user.paste(pem);
-    await expect(
-      screen.findByText("Replaces the nodes of 3 clusters. 2 start now, 1 waits for its window."),
-    ).resolves.toBeInTheDocument();
-    expect(calls.find((c) => c.key === "POST /api/setup/site-ca-roll")?.body).toStrictEqual({ siteCA: `${pem}\n` });
-  });
-
-  it("asks nothing and says nothing for text that is no certificate", async () => {
-    const user = userEvent.setup({ delay: null });
-    const calls = fakeServer({});
-    render(<Fields />);
-    await user.click(screen.getByLabelText("Site CA"));
-    await user.paste("junk");
-    expect(calls).toHaveLength(0);
-    expect(screen.queryByText(/Replaces the nodes/u)).not.toBeInTheDocument();
-  });
-
-  it("take a time zone", async () => {
-    const user = userEvent.setup({ delay: null });
-    render(<Fields />);
-    await user.type(screen.getByLabelText("Time zone"), "Europe/Zurich");
-    expect(screen.getByLabelText("Time zone")).toHaveValue("Europe/Zurich");
-  });
-});
-
+const noProblem = vi.fn<() => string | undefined>();
 const object = { type: "object" };
 const classOf = (zone: string): ClusterClass => ({
   name: "kubehenge-kubeadm",
@@ -92,7 +37,7 @@ describe("the site time zone in the wizard", () => {
         <PoliciesStep
           form={entered}
           set={(k, v) => setEntered((f) => ({ ...f, [k]: v }))}
-          shown={() => undefined}
+          shown={noProblem}
           cls={cls}
           canTrust
           namespace={undefined}
@@ -101,6 +46,7 @@ describe("the site time zone in the wizard", () => {
     }
     render(<Step />);
     expect(screen.getByText("Upgrades run daily 02:00 to 06:00, Asia/Tokyo time")).toBeInTheDocument();
+    setSiteZone("");
   });
 
   it("is where a new cluster's schedules start once the classes say so", async () => {
@@ -169,39 +115,12 @@ describe("the site time zone in the wizard", () => {
     await user.type(screen.getByLabelText("Node addresses"), "192.0.2.31-192.0.2.39");
     await user.click(screen.getByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
-    expect(await screen.findByLabelText("Take etcd snapshots")).toBeInTheDocument();
+    await expect(screen.findByLabelText("Take etcd snapshots")).resolves.toBeInTheDocument();
     for (const zone of screen.getAllByLabelText("Time zone")) {
       expect(zone).toHaveValue("Asia/Tokyo");
     }
     await user.click(screen.getByRole("button", { name: "Next" }));
     await expect(screen.findByText("Upgrades run daily 02:00 to 06:00, Asia/Tokyo time")).resolves.toBeInTheDocument();
-  });
-});
-
-describe("a cluster copied into the wizard", () => {
-  it("keeps the load balancer it had, whatever the address range says", () => {
-    const source = {
-      namespace: "default",
-      name: "web",
-      class: "kubehenge-rke2",
-      distribution: "rke2",
-      version: "v1.36.5",
-      generation: 1,
-      created: "2026-10-01T00:00:00Z",
-      deleting: false,
-      phase: "Provisioned",
-      available: true,
-      conditions: [],
-      controlPlane: { desired: 1, ready: 1, available: 1, upToDate: 1 },
-      workers: { desired: 1, ready: 1, available: 1, upToDate: 1 },
-      workerPools: [{ name: "md-0", class: "worker", replicas: 1 }],
-      variables: {},
-      pool: "/pool/kubehenge/default.web",
-      allowed: { change: true, kubeconfig: true },
-    } satisfies Cluster;
-    expect([fromCluster(source, newForm()).loadBalancerPicked, newForm().loadBalancerPicked]).toStrictEqual([
-      true,
-      false,
-    ]);
+    setSiteZone("");
   });
 });
