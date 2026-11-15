@@ -860,8 +860,8 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
             target. Switching it, or changing the schedule or keep while it is on, replaces the
             control-plane machines.
       x-kubernetes-validations:
-        - rule: "!self.enabled || has(self.target)"
-          message: etcd snapshots need a target.
+        - rule: "!has(self.distributionUpload) || !self.distributionUpload || has(self.target)"
+          message: The distribution's own upload needs a target, as the servers upload to a bucket.
         - rule: "!has(self.distributionUpload) || !self.distributionUpload || self.enabled"
           message: The distribution's own upload takes the target, schedule and keep of etcd snapshots, which are off.
 - name: podSecurity
