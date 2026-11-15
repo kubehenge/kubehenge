@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/luthermonson/go-proxmox"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -40,6 +42,7 @@ func TestWindowOpen(t *testing.T) {
 	}{
 		{"default every day 02:00 for 4 h", Window{}, "2026-10-13T03:00:00Z", true},
 		{"before", Window{}, "2026-10-13T01:59:00Z", false},
+		{"start is inclusive", Window{}, "2026-10-13T02:00:00Z", true},
 		{"end is exclusive", Window{}, "2026-10-13T06:00:00Z", false},
 		{"weekday listed", Window{Weekdays: []string{"Tue"}, Start: "22:00", DurationMinutes: 60}, "2026-10-13T22:30:00Z", true},
 		{"weekday not listed", Window{Weekdays: []string{"Sat", "Sun"}}, "2026-10-13T03:00:00Z", false},
@@ -306,5 +309,170 @@ func TestUpgraderNeverOverwritesAChangeMadeMeanwhile(t *testing.T) {
 	}
 	if got.Spec.Topology.Version != "v1.35.9+rke2r1" || got.Annotations[autoUpgraded] != "" {
 		t.Errorf("version %s, annotation %q: the user's change was overwritten", got.Spec.Topology.Version, got.Annotations[autoUpgraded])
+	}
+}
+
+// upgradeRound runs one round of u, at a time inside the default window, over clusters.
+func upgradeRound(t *testing.T, u *Upgrader, clusters ...*clusterv1.Cluster) client.Client {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := clusterv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	objects := make([]client.Object, len(clusters))
+	for i, c := range clusters {
+		objects[i] = c
+	}
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).WithStatusSubresource(&clusterv1.Cluster{}).Build()
+	for _, c := range clusters {
+		if err := kube.Status().Update(context.Background(), c.DeepCopy()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	u.Client, u.ClassNamespace = kube, "kubehenge-system"
+	if u.Now == nil {
+		u.Now = func() time.Time { return time.Date(2026, 10, 13, 3, 0, 0, 0, time.UTC) }
+	}
+	u.RunOnce(context.Background())
+	return kube
+}
+
+func clusterAfter(t *testing.T, kube client.Client, name string) *clusterv1.Cluster {
+	t.Helper()
+	c := &clusterv1.Cluster{}
+	if err := kube.Get(context.Background(), client.ObjectKey{Namespace: "clusters", Name: name}, c); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func settledRancherCluster(version, policy string) *clusterv1.Cluster {
+	return settledCluster("rancher", version, map[string]string{"upgrades": policy, "rancher": `{"install":true,"hostname":"r.example"}`})
+}
+
+// The hook and the controller allow any version where no Rancher range is set, and 0-0 parses to
+// that.
+func TestUpgraderTakesAnyVersionWhereNoRancherRangeIsSet(t *testing.T) {
+	t.Parallel()
+	unset, err := ParseKubernetesMinors("0-0")
+	if err != nil || unset != (KubernetesMinors{}) {
+		t.Fatalf("0-0 parsed to %+v, %v", unset, err)
+	}
+	u := &Upgrader{Releases: fixedReleases{"rke2": channels(36, "v1.36.5+rke2r1")}, RancherKubernetes: unset}
+	kube := upgradeRound(t, u, settledRancherCluster("v1.36.2+rke2r1", `{"mode":"patch"}`))
+	if got := clusterAfter(t, kube, "rancher").Spec.Topology.Version; got != "v1.36.5+rke2r1" {
+		t.Errorf("no Rancher range set: the cluster stays on %s, want v1.36.5+rke2r1", got)
+	}
+}
+
+// A hold on the next minor leaves the cluster the patch releases of its own, and says why where
+// there is nothing else to take.
+func TestRancherHoldOnTheNextMinorStillTakesPatchReleases(t *testing.T) {
+	t.Parallel()
+	releases := fixedReleases{"rke2": channels(37, "v1.36.5+rke2r1", "v1.37.1+rke2r1")}
+	for _, c := range []struct{ name, from, want, reason string }{
+		{"a patch release is due", "v1.36.2+rke2r1", "v1.36.5+rke2r1", ""},
+		{"the newest patch is running", "v1.36.5+rke2r1", "v1.36.5+rke2r1", UpgradeHeldRancherKubernetes},
+	} {
+		u := &Upgrader{Releases: releases, RancherKubernetes: KubernetesMinors{Min: 34, Max: 36}}
+		got := clusterAfter(t, upgradeRound(t, u, settledRancherCluster(c.from, `{"mode":"minor"}`)), "rancher")
+		if got.Spec.Topology.Version != c.want {
+			t.Errorf("%s: Rancher runs on 1.34 to 1.36 and the cluster stays on %s, want %s", c.name, got.Spec.Topology.Version, c.want)
+		}
+		cond := meta.FindStatusCondition(got.Status.Conditions, AutoUpgradeSkippedCondition)
+		switch {
+		case c.reason == "" && cond != nil:
+			t.Errorf("%s: the upgrade it took carries the note %+v", c.name, cond)
+		case c.reason != "" && (cond == nil || cond.Reason != c.reason || !strings.Contains(cond.Message, "v1.37.1+rke2r1")):
+			t.Errorf("%s: note %+v, want the reason %s and the version it holds back", c.name, cond, c.reason)
+		}
+	}
+}
+
+// Where the next minor is stable but missing from the list, as when it is unpinned, the cluster
+// still takes the newest patch of its own.
+func TestTargetTakesPatchReleasesWhereTheStableMinorIsNotListed(t *testing.T) {
+	t.Parallel()
+	ch := channels(37, "v1.35.9+rke2r1", "v1.36.5+rke2r2")
+	if got := ch.Target("v1.36.2+rke2r1", "minor"); got != "v1.36.5+rke2r2" {
+		t.Errorf("Target = %q, want v1.36.5+rke2r2", got)
+	}
+}
+
+func twoVersions() []clusterv1.StatusVersion {
+	return []clusterv1.StatusVersion{{Version: "v1.36.1"}, {Version: "v1.36.2"}}
+}
+
+// The restore, the pause, the Available condition, the mixed versions and the worker rollout each
+// hold an upgrade back on their own.
+func TestEachSignOfAnUnsettledClusterHoldsAnUpgradeBack(t *testing.T) {
+	t.Parallel()
+	one, none := int32(1), int32(0)
+	policy := map[string]string{"upgrades": `{"mode":"patch"}`}
+	for name, unsettle := range map[string]func(*clusterv1.Cluster){
+		"restore":     func(c *clusterv1.Cluster) { c.Annotations = map[string]string{EtcdRestoreAnnotation: "{}"} },
+		"pause":       func(c *clusterv1.Cluster) { c.Spec.Paused = &[]bool{true}[0] },
+		"available":   func(c *clusterv1.Cluster) { c.Status.Conditions[0].Status = metav1.ConditionFalse },
+		"topology":    func(c *clusterv1.Cluster) { c.Status.Conditions[1].Status = metav1.ConditionFalse },
+		"generation":  func(c *clusterv1.Cluster) { c.Status.ObservedGeneration = 1 },
+		"cp-versions": func(c *clusterv1.Cluster) { c.Status.ControlPlane.Versions = twoVersions() },
+		"wk-versions": func(c *clusterv1.Cluster) { c.Status.Workers.Versions = twoVersions() },
+		"workers": func(c *clusterv1.Cluster) {
+			c.Status.Workers.DesiredReplicas, c.Status.Workers.UpToDateReplicas = &one, &none
+		},
+	} {
+		c := settledCluster("c", "v1.36.2+rke2r1", policy)
+		unsettle(c)
+		u := &Upgrader{Releases: fixedReleases{"rke2": channels(36, "v1.36.5+rke2r1")}}
+		if got := clusterAfter(t, upgradeRound(t, u, c), "c").Spec.Topology.Version; got != "v1.36.2+rke2r1" {
+			t.Errorf("%s: upgraded to %s", name, got)
+		}
+	}
+}
+
+type osReleases map[string]Channels
+
+func (f osReleases) Channels(_ context.Context, _ string, os templates.NodeOS) (Channels, error) {
+	return f[os.String()], nil
+}
+
+// Clusters of one distribution on two node OSes get the versions of their own, in one round.
+func TestUpgraderReadsTheChannelsOfEachNodeOS(t *testing.T) {
+	t.Parallel()
+	kubeadm := func(name, osVar string) *clusterv1.Cluster {
+		vars := map[string]string{"upgrades": `{"mode":"patch"}`}
+		if osVar != "" {
+			vars[NodeOSVariable] = osVar
+		}
+		c := settledCluster(name, "v1.36.2", vars)
+		c.Spec.Topology.ClassRef.Name = ClassPrefix + "kubeadm"
+		return c
+	}
+	releases := osReleases{}
+	releases[templates.DefaultNodeOS.String()] = channels(36, "v1.36.5")
+	releases[templates.NodeOS{Family: "rocky", Release: "10"}.String()] = channels(36, "v1.36.7")
+	u := &Upgrader{Releases: releases}
+	kube := upgradeRound(t, u, kubeadm("alma", ""), kubeadm("rocky", `{"family":"rocky","release":"10"}`))
+	for name, want := range map[string]string{"alma": "v1.36.5", "rocky": "v1.36.7"} {
+		if got := clusterAfter(t, kube, name).Spec.Topology.Version; got != want {
+			t.Errorf("%s: version %s, want %s", name, got, want)
+		}
+	}
+}
+
+// A cluster being deleted, and one of a class that is not Kubehenge's, are left alone.
+func TestUpgraderLeavesAClusterBeingDeletedOrOfAnotherClassAlone(t *testing.T) {
+	t.Parallel()
+	deleting := settledCluster("deleting", "v1.36.2+rke2r1", map[string]string{"upgrades": `{"mode":"patch"}`})
+	deleting.Finalizers = []string{"test"}
+	deleting.DeletionTimestamp = &metav1.Time{Time: time.Date(2026, 10, 13, 2, 0, 0, 0, time.UTC)}
+	foreign := settledCluster("foreign", "v1.36.2+rke2r1", map[string]string{"upgrades": `{"mode":"patch"}`})
+	foreign.Spec.Topology.ClassRef.Name = "someone-elses-rke2"
+	u := &Upgrader{Releases: fixedReleases{"rke2": channels(36, "v1.36.5+rke2r1"), "someone-elses-rke2": channels(36, "v1.36.5+rke2r1")}}
+	kube := upgradeRound(t, u, deleting, foreign)
+	for _, name := range []string{"deleting", "foreign"} {
+		if got := clusterAfter(t, kube, name).Spec.Topology.Version; got != "v1.36.2+rke2r1" {
+			t.Errorf("%s: upgraded to %s", name, got)
+		}
 	}
 }

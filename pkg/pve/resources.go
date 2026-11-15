@@ -136,6 +136,11 @@ type Network struct {
 // a VM's device would add a second one. A VLAN-aware VNet leaves the tag to the device.
 func (n Network) TagsTraffic() bool { return n.ZoneType == "vlan" && !n.VLANAware }
 
+// VLANOnTaggedNetwork is the refusal of a VLAN tag on a VNet whose zone tags its traffic already.
+func VLANOnTaggedNetwork(vnet string) string {
+	return "VNet " + vnet + " is in a VLAN zone and tags already. Leave the VLAN tag empty."
+}
+
 // flag is a Proxmox VE boolean, which its API writes as 1 or true.
 type flag bool
 
@@ -255,12 +260,6 @@ func (a *Accounts) Realms(ctx context.Context) ([]Realm, error) {
 // isZFS is a storage plugin that makes a ZFS volume per disk, which holds its space back unless the
 // storage is sparse.
 func isZFS(plugin string) bool { return plugin == "zfspool" || plugin == "zfs" }
-
-// Disk formats a VM disk is made in on a storage that keeps files.
-const (
-	FormatRaw   = "raw"
-	FormatQCOW2 = "qcow2"
-)
 
 // AllocatesOnWrite tells whether a disk takes its space as the guest writes, which Proxmox VE lets
 // exceed the free space. LVM-thin and Ceph RBD always do. A ZFS volume does when the storage is
@@ -434,7 +433,7 @@ func (a *Accounts) forwardFault(ctx context.Context, t *Ticket, node string) str
 	err := a.get(ctx, t, "/nodes/"+url.PathEscape(node)+"/status", &json.RawMessage{})
 	var api *APIError
 	switch {
-	case err == nil, errors.Is(err, ErrForbidden), errors.Is(err, ErrAuthentication), errors.Is(err, ErrNodesDisagree):
+	case err == nil, errors.Is(err, ErrForbidden), errors.Is(err, ErrAuthentication):
 		return ""
 	case errors.As(err, &api) && !strings.HasPrefix(api.Status, "5"):
 		return ""

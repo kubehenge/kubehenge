@@ -132,6 +132,40 @@ func TestClusterWebhookSkipsUpdatesItDoesNotCheck(t *testing.T) {
 	}
 }
 
+// A cluster being deleted calls the webhook for a changed spec, which it refuses, and for a newly
+// written abandon-deletion. Every other update, the finalizers and the annotations of the deletion
+// among them, never calls it, so the deletion cannot stall.
+func TestClusterWebhookIsCalledForASpecChangeOfAClusterBeingDeleted(t *testing.T) {
+	t.Parallel()
+	w := clusterWebhook(t)
+	const abandon, allow = "kubehenge.dev/abandon-deletion", "kubehenge.dev/allow-deletion"
+	deleting := func(c map[string]any) map[string]any {
+		meta, ok := c["metadata"].(map[string]any)
+		if !ok {
+			t.Fatal("the cluster has no metadata")
+		}
+		meta["deletionTimestamp"] = "2026-11-15T10:00:00Z"
+		return c
+	}
+	held := []any{"cluster.cluster.x-k8s.io", "kubehenge.dev/cluster"}
+	before := deleting(webhookCluster("v1.36.5", map[string]string{allow: "true"}, nil, held))
+	for name, tc := range map[string]struct {
+		object map[string]any
+		called bool
+	}{
+		"the spec changed":            {deleting(webhookCluster("v1.37.1", map[string]string{allow: "true"}, nil, held)), true},
+		"a finalizer removed":         {deleting(webhookCluster("v1.36.5", map[string]string{allow: "true"}, nil, held[:1])), false},
+		"every finalizer gone":        {deleting(webhookCluster("v1.36.5", map[string]string{allow: "true"}, nil, []any{})), false},
+		"the deletion status written": {deleting(webhookCluster("v1.36.5", map[string]string{allow: "true", "kubehenge.dev/deletion-status": "{}"}, nil, held)), false},
+		"abandon-deletion written":    {deleting(webhookCluster("v1.36.5", map[string]string{allow: "true", abandon: "web"}, nil, held)), true},
+		"nothing changed":             {before, false},
+	} {
+		if got := called(t, w, "UPDATE", tc.object, before); got != tc.called {
+			t.Errorf("%s: webhook called %v, want %v", name, got, tc.called)
+		}
+	}
+}
+
 // The deletion policy matches one version of Cluster, so the API server converts a delete through
 // v1beta1, whose class has another shape, before the policy reads it.
 func TestTheDeletionPolicyReadsOneVersion(t *testing.T) {

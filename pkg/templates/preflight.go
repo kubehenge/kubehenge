@@ -79,33 +79,10 @@ type nodeStorage struct {
 	Content string `json:"content"`
 	Active  int    `json:"active"`
 	Enabled int    `json:"enabled"`
-	Shared  int    `json:"shared"`
 }
 
 func (s *nodeStorage) takes(content string) bool {
 	return slices.Contains(strings.Split(s.Content, ","), content)
-}
-
-// StorageNode is one storage of a node as Proxmox VE lists it, for the caller that has to choose
-// one.
-type StorageNode struct {
-	Name    string
-	Content []string
-	Shared  bool
-	Active  bool
-}
-
-// NodeStorages lists the storages on a node.
-func NodeStorages(ctx context.Context, c *proxmox.Client, node string) ([]StorageNode, error) {
-	list, err := listNodeStorages(ctx, c, node)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]StorageNode, len(list))
-	for i, s := range list {
-		out[i] = StorageNode{Name: s.Storage, Content: strings.Split(s.Content, ","), Shared: s.Shared != 0, Active: s.Active != 0 && s.Enabled != 0}
-	}
-	return out, nil
 }
 
 func listNodeStorages(ctx context.Context, c *proxmox.Client, node string) ([]nodeStorage, error) {

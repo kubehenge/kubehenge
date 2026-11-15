@@ -85,7 +85,7 @@ func (s *Server) clusterCredentialTarget(w http.ResponseWriter, r *http.Request,
 func (s *Server) changedClusterCredential(w http.ResponseWriter, r *http.Request, u user) *credentialTarget {
 	t := s.clusterCredentialTarget(w, r, u, privSee, privKubeconfig)
 	if t != nil && !t.cluster.DeletionTimestamp.IsZero() {
-		writeError(w, http.StatusConflict, "the cluster is being deleted")
+		writeError(w, http.StatusConflict, provisioner.ClusterBeingDeleted)
 		return nil
 	}
 	return t
