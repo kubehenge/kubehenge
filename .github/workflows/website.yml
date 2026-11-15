@@ -28,6 +28,13 @@ on:
   schedule:
     - cron: '23 4 * * 1'
   workflow_dispatch:
+    inputs:
+      check:
+        description: >-
+          Build and check the site as a pull request does, without signing or publishing
+          anything; renovate.yml asks for this on Renovate's branch.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -44,7 +51,9 @@ jobs:
   # renews only an index its release keys signed and signs only with those keys.
   index:
     name: Release index
-    if: github.event_name != 'pull_request' && github.repository == 'kubehenge/kubehenge'
+    if: >-
+      github.event_name != 'pull_request' && !inputs.check
+      && github.repository == 'kubehenge/kubehenge'
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     environment: release-index
@@ -109,7 +118,7 @@ jobs:
   build:
     name: Build
     needs: index
-    # A pull request skips the index; the site is built all the same.
+    # A pull request and a dispatched check skip the index; the site is built all the same.
     if: ${{ !cancelled() && needs.index.result != 'failure' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 10
@@ -136,7 +145,7 @@ jobs:
       # them. A missing file means the first deploy. Any other failure stops the build, as an empty
       # start would give every page today's date.
       - name: Published page dates
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && !inputs.check
         run: |
           set -eu
           dates=$RUNNER_TEMP/page-dates
@@ -151,14 +160,14 @@ jobs:
       - run: make website
         env:
           PAGES_PREVIOUS: >-
-            ${{ github.event_name != 'pull_request'
+            ${{ github.event_name != 'pull_request' && !inputs.check
             && format('{0}/page-dates/before.json', runner.temp) || '' }}
       # A link to a page or heading the site does not make fails here, on main as well.
       - run: make website-links
       # What IndexNow compares: the dates before this deploy and the ones it publishes.
-      - if: github.event_name != 'pull_request'
+      - if: github.event_name != 'pull_request' && !inputs.check
         run: cp website/.vitepress/dist/pages.json "$RUNNER_TEMP/page-dates/after.json"
-      - if: github.event_name != 'pull_request'
+      - if: github.event_name != 'pull_request' && !inputs.check
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: page-dates
@@ -177,7 +186,7 @@ jobs:
         with:
           name: release-index
           path: website/.vitepress/dist
-      - if: github.event_name != 'pull_request'
+      - if: github.event_name != 'pull_request' && !inputs.check
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: website/.vitepress/dist
@@ -186,7 +195,7 @@ jobs:
   # website/lighthouserc.cjs. The reports stay with the run, never on a public host.
   lighthouse:
     name: Lighthouse
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || inputs.check
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
@@ -223,7 +232,8 @@ jobs:
     name: Deploy
     needs: build
     if: >-
-      ${{ !cancelled() && needs.build.result == 'success' && github.event_name != 'pull_request' }}
+      ${{ !cancelled() && needs.build.result == 'success' && github.event_name != 'pull_request'
+      && !inputs.check }}
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:

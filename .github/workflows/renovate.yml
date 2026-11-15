@@ -135,9 +135,12 @@ jobs:
             }' > "$RUNNER_TEMP/commit.json"
           gh api graphql --input "$RUNNER_TEMP/commit.json" \
             --jq '.data.createCommitOnBranch.commit.oid'
-          # The workflows of the ruleset's required checks: Test and Dependencies, CodeQL's, e2e.
+          # The workflows of the ruleset's required checks (Test and Dependencies, CodeQL's, e2e),
+          # and the pull request's other checks.
           gh workflow run ci.yml --ref "$BRANCH"
           gh workflow run codeql.yml --ref "$BRANCH"
+          gh workflow run subjects.yml --ref "$BRANCH"
+          gh workflow run website.yml --ref "$BRANCH" -f check=true
           if [ -n "$TESTS" ]; then
             gh workflow run e2e.yml --ref "$BRANCH" -f tests="$TESTS"
           fi

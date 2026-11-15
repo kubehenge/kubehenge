@@ -806,7 +806,8 @@ fi
 boot_log=$(boot_logs "${ns}" "${name}" ${control_planes} ${workers})
 # expect_boot_log <Machine> <log> <pattern>: the machine's boot log holds the log with a line
 # matching the pattern; when not, what was read, and on a node with a guest agent that runs commands
-# what SELinux denied there, the likeliest reason its agent could not read a file.
+# what SELinux denied there, the likeliest reason its agent could not read a file, and how the timer
+# that writes the boot log has run.
 expect_boot_log() {
     # shellcheck disable=SC2310 # its failure is reported below.
     if boot_log_shows "${boot_log}" "$@"; then
@@ -818,6 +819,9 @@ expect_boot_log() {
         echo "SELinux's denials on $1:" >&2
         # shellcheck disable=SC2310 # what the node says is printed whether or not anything was denied.
         on_machines "$1" "journalctl -b -k -o cat --no-pager | grep -F 'avc:  denied'; ausearch -m AVC -ts boot 2> /dev/null" >&2 || true
+        echo "The boot log's timer and service on $1:" >&2
+        # shellcheck disable=SC2310 # printed whatever state the units are in.
+        on_machines "$1" "date -u +%FT%TZ; ls -l --time-style=full-iso /var/log/kubehenge; systemctl status --no-pager --full kubehenge-boot-log.timer kubehenge-boot-log.service; systemctl list-timers --all --no-pager kubehenge-boot-log.timer; journalctl -b --no-pager -o short-iso-precise -u kubehenge-boot-log.service -u kubehenge-boot-log.timer | tail -n 60" >&2 || true
     fi
     fail "the boot log of $1 holds no $2 with a line matching '$3'"
 }
