@@ -211,6 +211,7 @@ func TestRemoveLiftsTheNodeVMsProtectionBeforeTheDestroy(t *testing.T) {
 	}
 	p := recordProtections(a, nil)
 	writePlan(t, a, change{nodeVMAddress + "[0]", []string{"delete"}, 1001}, change{nodeVMAddress + "[1]", []string{"delete"}, 1002})
+	ran := len(tofuCalls(t, a))
 	if err := a.Remove("correct horse battery staple", KeepBackups, ticket(), func(context.Context, *Job) error { return nil }, func() {}); err != nil {
 		t.Fatal(err)
 	}
@@ -221,13 +222,8 @@ func TestRemoveLiftsTheNodeVMsProtectionBeforeTheDestroy(t *testing.T) {
 	if got := p.list(); !slices.Equal(got, want) {
 		t.Fatalf("protection calls %+v, want %+v", got, want)
 	}
-	var planned bool
-	for _, args := range tofuCalls(t, a) {
-		planned = planned || args[0] == "plan" && slices.Contains(args, "-destroy")
-	}
-	if !planned {
-		t.Fatal("the removal planned no destroy")
-	}
+	// Each lift ran after the plan was shown, and the destroy's apply after them.
+	destroyApplied(t, tofuCalls(t, a)[ran:])
 }
 
 // Recreating the VMs of a lost node lifts protection on a VM the targeted plan replaces.
@@ -243,6 +239,9 @@ func TestRecreatingTheVMsLiftsProtectionOnThoseReplaced(t *testing.T) {
 	want := []protectCall{{1002, false, "show"}}
 	if got := p.list(); !slices.Equal(got, want) {
 		t.Fatalf("protection calls %+v, want %+v", got, want)
+	}
+	if plans := appliedPlans(tofuCalls(t, a)); len(plans) != 1 || !slices.Equal(plans[0][len(plans[0])-2:], r.targets) {
+		t.Fatalf("applied plans %q, want the targeted one", plans)
 	}
 }
 

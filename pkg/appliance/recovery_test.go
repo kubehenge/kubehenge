@@ -3,6 +3,7 @@ package appliance
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -329,15 +330,22 @@ func (f *tracedTalos) Restore(ctx context.Context, admin []byte, nodes []string,
 	return f.fakeManagementTalos.Restore(ctx, admin, nodes, open, log)
 }
 
-// appliesIn lists the applies the fake OpenTofu was asked for, in order, by the plan each runs,
-// which carries its targets.
+// appliesIn lists the applies the fake OpenTofu ran, in order, each by the arguments of the plan it
+// applied, which carry its targets.
 func appliesIn(log string) []string {
 	raw, _ := os.ReadFile(filepath.Clean(log))
-	var out []string
+	var calls [][]string
 	for line := range strings.SplitSeq(string(raw), "\n") {
-		if strings.HasPrefix(line, `{"args":["plan"`) {
-			out = append(out, line)
+		var rec struct {
+			Args []string `json:"args"`
 		}
+		if json.Unmarshal([]byte(line), &rec) == nil && len(rec.Args) > 0 {
+			calls = append(calls, rec.Args)
+		}
+	}
+	var out []string
+	for _, plan := range appliedPlans(calls) {
+		out = append(out, strings.Join(plan, " "))
 	}
 	return out
 }

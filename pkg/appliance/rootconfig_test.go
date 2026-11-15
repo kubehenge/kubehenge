@@ -121,6 +121,31 @@ func (c tofuConfig) check(args []string) []string {
 	return bad
 }
 
+// appliedPlans lists, in order, the plans among calls that an apply of their saved plan followed,
+// each by its arguments. A plan that no apply ran is left out.
+func appliedPlans(calls [][]string) [][]string {
+	var out [][]string
+	var pending []string
+	for _, args := range calls {
+		switch {
+		case args[0] == "plan" && slices.Contains(args, "-out="+planFile):
+			pending = args
+		case args[0] == "apply" && args[len(args)-1] == planFile && pending != nil:
+			out = append(out, pending)
+			pending = nil
+		}
+	}
+	return out
+}
+
+// destroyApplied fails the test unless calls hold exactly one applied plan, and that a destroy.
+func destroyApplied(t *testing.T, calls [][]string) {
+	t.Helper()
+	if plans := appliedPlans(calls); len(plans) != 1 || !slices.Contains(plans[0], "-destroy") {
+		t.Errorf("the removal applied the plans %q, not one destroy", plans)
+	}
+}
+
 func tofuCalls(t *testing.T, a *Appliance) [][]string {
 	t.Helper()
 	f, err := os.Open(filepath.Join(a.Dir, "fake-tofu.log"))
@@ -223,6 +248,7 @@ func TestRemovingAPartMadeClusterAppliesNothing(t *testing.T) {
 		t.Fatalf("remove: %+v", j)
 	}
 	// The destroy is the one plan, and the one apply runs it.
+	destroyApplied(t, tofuCalls(t, a)[applied:])
 	for _, args := range tofuCalls(t, a)[applied:] {
 		if args[0] == "plan" && !slices.Contains(args, "-destroy") || args[0] == "apply" && args[len(args)-1] != planFile {
 			t.Errorf("the removal ran tofu %q", args)
