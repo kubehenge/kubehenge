@@ -65,7 +65,7 @@ func TestIntegrationControllerAsksForTheVolume(t *testing.T) { //nolint:parallel
 	}
 
 	v := &Volume{Kube: controller}
-	if _, err := v.Open(ctx); !errors.Is(err, provisioner.ErrVolumeAsleep) {
+	if _, err = v.Open(ctx); !errors.Is(err, provisioner.ErrVolumeAsleep) {
 		t.Fatalf("asking for the sleeping store: %v, want it asleep", err)
 	}
 	d, err := admin.AppsV1().Deployments(Namespace).Get(ctx, Service, metav1.GetOptions{})
@@ -75,7 +75,7 @@ func TestIntegrationControllerAsksForTheVolume(t *testing.T) { //nolint:parallel
 	if !WakeRequested(d, time.Now()) {
 		t.Fatalf("the store carries no wake request: %v", d.Annotations)
 	}
-	if err := v.Done(ctx); err != nil {
+	if err = v.Done(ctx); err != nil {
 		t.Fatalf("taking the request away: %v", err)
 	}
 	if d, err = admin.AppsV1().Deployments(Namespace).Get(ctx, Service, metav1.GetOptions{}); err != nil || WakeRequested(d, time.Now()) {
