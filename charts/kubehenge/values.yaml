@@ -724,6 +724,7 @@ addons:
     # The images the operator runs Calico from, at its release, which it takes by digest from an
     # ImageSet named for that release. It refuses a set that lacks one it runs, so all are here.
     # They move only with the chart: Calico pushes a release's images days before it publishes it.
+    # scripts/renovate-refresh.sh sets them and the operator to the chart's release.
     images:
       # renovate: datasource=docker depName=quay.io/calico/calico
       - quay.io/calico/calico:v3.33.0@sha256:4ebc20730127bc9e8bf1db5f5a2d8b58cf37fe0e891b3c7b5471992221d213e5

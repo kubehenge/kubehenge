@@ -1,0 +1,68 @@
+---
+name: renovate
+
+# On Renovate's branches: the pins and test fixtures an update leaves stale, refreshed and
+# committed, then the checks started again, since a push with GITHUB_TOKEN starts no workflow.
+# Whoever pushes there already holds write access, so the job runs for every push.
+on:
+  push:
+    branches: ['renovate/**']
+
+permissions: {}
+
+env:
+  GOTOOLCHAIN: local
+  GOPROXY: https://proxy.golang.org|direct
+
+concurrency:
+  group: renovate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    name: Refresh
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: write # to push the refreshed files to the branch
+      actions: write # to start ci.yml and e2e.yml on the branch
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: tools
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/bin
+          key: >-
+            tools-${{ runner.os }}-${{ runner.arch }}-all-${{ hashFiles('scripts/tools.sh') }}
+      - if: steps.tools.outputs.cache-hit != 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: scripts/tools.sh "$RUNNER_TEMP/bin"
+      - run: echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - run: make release-pins
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+      - run: scripts/renovate-refresh.sh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      # renovate.json ignores this author's commits, so Renovate keeps rebasing the branch.
+      - name: Commit and start the checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          if [ -z "$(git status --porcelain --untracked-files=no)" ]; then
+            echo "nothing stale"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -u
+          git commit -m 'Refresh the pins and fixtures the updates leave stale'
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push "$remote" "HEAD:refs/heads/${BRANCH}"
+          gh workflow run ci.yml --ref "$BRANCH"
+          gh workflow run e2e.yml --ref "$BRANCH"
