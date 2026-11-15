@@ -174,7 +174,7 @@ describe("the site time zone in the wizard", () => {
       expect(zone).toHaveValue("Asia/Tokyo");
     }
     await user.click(screen.getByRole("button", { name: "Next" }));
-    expect(await screen.findByText("Upgrades run daily 02:00 to 06:00, Asia/Tokyo time")).toBeInTheDocument();
+    await expect(screen.findByText("Upgrades run daily 02:00 to 06:00, Asia/Tokyo time")).resolves.toBeInTheDocument();
   });
 });
 
@@ -199,7 +199,7 @@ describe("a cluster copied into the wizard", () => {
       pool: "/pool/kubehenge/default.web",
       allowed: { change: true, kubeconfig: true },
     } satisfies Cluster;
-    expect(fromCluster(source, newForm()).loadBalancerPicked).toBe(true);
-    expect(newForm().loadBalancerPicked).toBe(false);
+    expect(fromCluster(source, newForm()).loadBalancerPicked).toBeTruthy();
+    expect(newForm().loadBalancerPicked).toBeFalsy();
   });
 });
