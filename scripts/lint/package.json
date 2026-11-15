@@ -5,6 +5,9 @@
   "devDependencies": {
     "renovate": "44.239.1"
   },
+  "overrides": {
+    "glob@>=9.0.0 <14.0.2": "^14.0.2"
+  },
   "allowScripts": {
     "re2": true,
     "protobufjs": false,
