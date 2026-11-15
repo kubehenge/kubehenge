@@ -4,5 +4,7 @@
 - A bucket target keeps the snapshots alone. The volume keeps no second copy, so its room stays with clusters that have no bucket.
 - A snapshot that would leave less than a tenth of the volume free is refused, with the condition reason `VolumeFull`.
 - On a node's own storage the controller asks for the volume, and the appliance wakes it with its own wake. The condition reads `WaitingForVolume` until then.
-- Talos clusters restore from the volume through the interface, kubectl and the CLI. kubeadm, RKE2 and k3s download the snapshot and restore by hand.
+- Every distribution restores from the volume. kubeadm, RKE2 and k3s nodes get the snapshot through the cluster's API server, so it must answer.
+- A removed cluster keeps its volume snapshots unless the remove dialog, `--delete-etcd-snapshots` or `kubehenge.dev/delete-etcd-snapshots: "true"` asks.
+- Without a bucket target the wizard and the Options dialog offer **Backup volume** beside the class's buckets.
 - The distributions' own upload needs a bucket target.
