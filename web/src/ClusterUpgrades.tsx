@@ -138,7 +138,7 @@ interface PolicyFields {
   timeZone: string;
 }
 
-function fieldsOf(current: UpgradePolicy): PolicyFields {
+export function fieldsOf(current: UpgradePolicy): PolicyFields {
   const w = current.window ?? {};
   const nodeImages = refreshesNodes(current);
   const active = (current.mode !== undefined && current.mode !== "off") || nodeImages;

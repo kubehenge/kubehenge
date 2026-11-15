@@ -66,6 +66,49 @@ run "release_mirror_reaches_the_controller" {
   }
 }
 
+run "site_ca_and_time_zone_reach_the_controller" {
+  command = plan
+
+  variables {
+    site_ca   = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+    time_zone = "Europe/Zurich"
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).siteCA == "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n" && yamldecode(helm_release.kubehenge.values[0]).timeZone == "Europe/Zurich"
+    error_message = "the chart is given the site CA and the site time zone"
+  }
+}
+
+run "no_site_ca_leaves_the_chart_without_one" {
+  command = plan
+
+  assert {
+    condition     = !contains(keys(yamldecode(helm_release.kubehenge.values[0])), "siteCA") && yamldecode(helm_release.kubehenge.values[0]).timeZone == "UTC"
+    error_message = "without a site CA the chart gets none, and the time zone is UTC"
+  }
+}
+
+run "site_ca_refuses_text_that_is_no_certificate" {
+  command = plan
+
+  variables {
+    site_ca = "hello"
+  }
+
+  expect_failures = [var.site_ca]
+}
+
+run "time_zone_refuses_a_name_with_spaces" {
+  command = plan
+
+  variables {
+    time_zone = "Mars Olympus"
+  }
+
+  expect_failures = [var.time_zone]
+}
+
 run "release_mirror_refuses_an_authority_for_plain_http" {
   command = plan
 
@@ -519,6 +562,7 @@ run "controller_and_clusters_are_least_privilege" {
       clusterOIDC        = []
       backupTargets      = []
       image              = "ghcr.io/kubehenge/kubehenge@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+      timeZone           = "UTC"
       managementEndpoint = "https://192.0.2.10:6443"
       # Every workload cluster's firewall accepts these.
       managementAddresses = ["192.0.2.11", "192.0.2.12", "192.0.2.13"]

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { backupFieldsOf } from "./Backups";
+import { fieldsOf } from "./ClusterUpgrades";
 import { newForm, siteZoneOf, withSiteZone } from "./create-form";
 import type { ClusterClass } from "./types";
 import { browserZone, defaultZone, setSiteZone } from "./ui";
@@ -43,5 +45,19 @@ describe("the site time zone", () => {
     );
     expect(own.etcdFields.timeZone).toBe("America/Lima");
     expect(own.backupFields.timeZone).toBe("Asia/Tokyo");
+  });
+
+  it("starts the settings of a cluster that has none in the site's zone, and keeps what is in effect", () => {
+    setSiteZone("Europe/Zurich");
+    try {
+      expect(backupFieldsOf({ enabled: false }).timeZone).toBe("Europe/Zurich");
+      expect(backupFieldsOf({ enabled: true }).timeZone).toBe("UTC");
+      expect(backupFieldsOf({ enabled: true, timeZone: "Asia/Tokyo" }).timeZone).toBe("Asia/Tokyo");
+      expect(fieldsOf({ mode: "off", nodeImages: false }).timeZone).toBe("Europe/Zurich");
+      expect(fieldsOf({ mode: "patch" }).timeZone).toBe("UTC");
+      expect(fieldsOf({ mode: "patch", window: { timeZone: "Asia/Tokyo" } }).timeZone).toBe("Asia/Tokyo");
+    } finally {
+      setSiteZone("");
+    }
   });
 });

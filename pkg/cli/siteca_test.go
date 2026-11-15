@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"math/big"
 	"os"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
 func authorityFile(t *testing.T, name string) (string, string) {
@@ -71,6 +74,38 @@ func TestControllerSiteCAReachesTheReleaseMirrorAndTheNodes(t *testing.T) {
 	o.releaseMirror.URL = "http://mirror.example.org"
 	if err := o.parseReleaseMirror(); err != nil || o.releaseMirror.CABundle != "" {
 		t.Errorf("a plain HTTP mirror: %v, %q", err, o.releaseMirror.CABundle)
+	}
+}
+
+func TestControllerTakesTheSiteCAAndTimeZoneAsFlags(t *testing.T) {
+	t.Parallel()
+	cmd := newControllerCommand(&pve.Config{})
+	if f := cmd.Flags().Lookup("site-ca"); f == nil || f.DefValue != "" {
+		t.Errorf("--site-ca = %v, want a flag with no default", f)
+	}
+	if f := cmd.Flags().Lookup("time-zone"); f == nil || f.DefValue != "UTC" {
+		t.Errorf("--time-zone = %v, want a flag defaulting to UTC", f)
+	}
+}
+
+func TestServedReleaseMirrorFollowsTheSavedSiteCA(t *testing.T) {
+	t.Parallel()
+	_, site := authorityFile(t, "site")
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "management"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := json.Marshal(map[string]any{"releaseMirror": map[string]any{"url": "https://mirror.example.org"}, "siteCA": site})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "management", "settings.json"), saved, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	o := &serveOptions{}
+	o.a.Dir = dir
+	if got := o.savedReleaseMirror(); got.URL != "https://mirror.example.org" || got.CABundle != site {
+		t.Errorf("the saved release mirror = %+v, want the site CA as its authority", got)
 	}
 }
 

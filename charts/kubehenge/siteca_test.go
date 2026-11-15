@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/siderolabs/talos/pkg/machinery/config/machine"
 	"sigs.k8s.io/yaml"
 )
 
@@ -83,6 +84,28 @@ func TestNodesTrustTheSiteCAsTheControllerGaveThem(t *testing.T) {
 	}
 }
 
+func TestTalosNodesTrustTheSiteCAAndEveryClassTakesTheVariable(t *testing.T) {
+	t.Parallel()
+	site := siteCA(t, "site")
+	class := renderTalosClass(t)
+	for _, kind := range []string{"TalosControlPlaneTemplate", "TalosConfigTemplate"} {
+		role := machine.TypeControlPlane
+		if kind == "TalosConfigTemplate" {
+			role = machine.TypeWorker
+		}
+		docs := talosConfig(t, role, class.strategicPatches(t, kind, variablesOf(t, `{"siteCAs": [`+jsonString(site)+`]}`)))
+		roots, ok := docs["TrustedRootsConfig/kubehenge"]["certificates"].(string)
+		if !ok || !strings.Contains(roots, certificateBody(site)) {
+			t.Errorf("%s: trusted roots %v lack the site CA", kind, docs["TrustedRootsConfig/kubehenge"])
+		}
+	}
+	for _, file := range []string{"kubeadm.yaml", "rke2.yaml", "k3s.yaml", "talos.yaml"} {
+		if _, ok := renderClass(t, file).variables["siteCAs"]; !ok {
+			t.Errorf("%s declares no siteCAs variable, so a cluster could not carry one", file)
+		}
+	}
+}
+
 func TestControllerGetsTheSiteCAAndTimeZone(t *testing.T) {
 	t.Parallel()
 	site := siteCA(t, "site")
@@ -93,7 +116,11 @@ func TestControllerGetsTheSiteCAAndTimeZone(t *testing.T) {
 			t.Errorf("the controller lacks %s in %v", want, args)
 		}
 	}
-	for _, want := range []string{"name: kubehenge-site-ca", "mountPath: /etc/kubehenge/site-ca", "kubehenge.dev/site-ca:"} {
+	// The ConfigMap and the volume's source, then the volume and the mount that name it.
+	if got, mounted := strings.Count(out, "kubehenge-site-ca"), strings.Count(out, "name: site-ca"); got != 2 || mounted != 2 {
+		t.Errorf("the ConfigMap is named %d times and mounted by %d entries, want 2 and 2", got, mounted)
+	}
+	for _, want := range []string{"mountPath: /etc/kubehenge/site-ca", "kubehenge.dev/site-ca:", "ca.crt:"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the rendered controller lacks %q", want)
 		}
@@ -101,6 +128,18 @@ func TestControllerGetsTheSiteCAAndTimeZone(t *testing.T) {
 	plain := controllerArgs(t)
 	if slices.ContainsFunc(plain, func(a string) bool { return strings.HasPrefix(a, "--site-ca") }) || !slices.Contains(plain, "--time-zone=UTC") {
 		t.Errorf("with nothing set the controller got %v", plain)
+	}
+}
+
+func TestSchedulesInTheClassDefaultToTheSiteTimeZone(t *testing.T) {
+	t.Parallel()
+	out := helmTemplateWith(t, "templates/rke2.yaml", map[string]any{"timeZone": "Pacific/Auckland"})
+	// The backups, etcd snapshots and upgrade window schedules each default to the site's zone.
+	if got := strings.Count(out, `default: "Pacific/Auckland"`); got != 3 {
+		t.Errorf("%d schedule defaults name the site time zone, want 3", got)
+	}
+	if !strings.Contains(out, `kubehenge.dev/time-zone: "Pacific/Auckland"`) {
+		t.Error("the class does not name the site time zone for the interface")
 	}
 }
 

@@ -59,10 +59,13 @@ func (s *Server) siteCARollPreview(w http.ResponseWriter, r *http.Request, u use
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
+	// Before the first setup there is no management cluster, so no cluster rolls.
 	var list clusterv1.ClusterList
-	if err := u.kube.List(r.Context(), &list); err != nil {
-		s.kubeError(w, r, err)
-		return
+	if kube := s.currentKube(); kube != nil {
+		if err := kube.List(r.Context(), &list); err != nil {
+			s.kubeError(w, r, err)
+			return
+		}
 	}
 	roll, err := siteCARollOf(req.SiteCA, list.Items, time.Now())
 	if err != nil {
