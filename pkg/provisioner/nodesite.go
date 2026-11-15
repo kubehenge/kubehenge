@@ -171,34 +171,42 @@ func mirrorAddress(endpoint string) (*url.URL, error) {
 // as Talos and the nodes' trust stores would otherwise refuse it only after a node was built. A zero
 // now leaves the validity unchecked.
 func checkCertificates(bundle string, now time.Time) error {
-	return checkCertificatesWithin(bundle, maxNodePEMBytes, now)
+	_, err := certificatesWithin(bundle, maxNodePEMBytes, now)
+	return err
 }
 
-// CheckAuthorityBundle holds a bundle of at most maxBytes, such as the appliance's proxy authority,
-// to the layout and the certificates a cluster's bundles are held to, their validity aside.
-func CheckAuthorityBundle(bundle string, maxBytes int) error {
-	return checkCertificatesWithin(bundle, maxBytes, time.Time{})
+// PlainAuthorityBundle holds a bundle of at most maxBytes, such as the appliance's proxy authority,
+// to the layout and the certificates a cluster's bundles are held to, their validity aside. It
+// gives the bundle as NormalizeCertificateBundle writes it, so no text between the blocks is kept.
+func PlainAuthorityBundle(bundle string, maxBytes int) (string, error) {
+	blocks, err := certificatesWithin(bundle, maxBytes, time.Time{})
+	if err != nil {
+		return "", err
+	}
+	return encodeCertificates(blocks), nil
 }
 
-func checkCertificatesWithin(bundle string, maxBytes int, now time.Time) error {
+// certificatesWithin is the bundle's certificate blocks, each a valid certificate. A zero now leaves
+// their validity unchecked.
+func certificatesWithin(bundle string, maxBytes int, now time.Time) ([]*pem.Block, error) {
 	blocks, err := certificateBlocksWithin(bundle, maxBytes)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for i, block := range blocks {
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
-			return fmt.Errorf("certificate %d is no valid X.509 certificate", i+1)
+			return nil, fmt.Errorf("certificate %d is no valid X.509 certificate", i+1)
 		}
 		switch {
 		case now.IsZero():
 		case now.After(cert.NotAfter):
-			return fmt.Errorf("certificate %d (%s) expired on %s", i+1, cert.Subject.CommonName, cert.NotAfter.UTC().Format(time.DateOnly))
+			return nil, fmt.Errorf("certificate %d (%s) expired on %s", i+1, cert.Subject.CommonName, cert.NotAfter.UTC().Format(time.DateOnly))
 		case now.Before(cert.NotBefore):
-			return fmt.Errorf("certificate %d (%s) is valid only from %s", i+1, cert.Subject.CommonName, cert.NotBefore.UTC().Format(time.DateOnly))
+			return nil, fmt.Errorf("certificate %d (%s) is valid only from %s", i+1, cert.Subject.CommonName, cert.NotBefore.UTC().Format(time.DateOnly))
 		}
 	}
-	return nil
+	return blocks, nil
 }
 
 // certificateBlocks splits a bundle into its PEM blocks and holds them to one or more certificates.
@@ -234,11 +242,16 @@ func NormalizeCertificateBundle(bundle string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return encodeCertificates(blocks), nil
+}
+
+// encodeCertificates writes certificate blocks with nothing but their data.
+func encodeCertificates(blocks []*pem.Block) string {
 	var out strings.Builder
 	for _, block := range blocks {
 		out.Write(pem.EncodeToMemory(&pem.Block{Type: certificateBlock, Bytes: block.Bytes}))
 	}
-	return out.String(), nil
+	return out.String()
 }
 
 // bundleMembers are the cluster variables that hold PEM bundles, each with the member of the

@@ -184,7 +184,8 @@ func rangeSizeProblems(what string, p netip.Prefix) []string {
 // candidates, and for a cluster that runs Cilium, which may join a Cluster Mesh later, ranges clear
 // of every other cluster's too, since a peer's pod addresses must not be taken for its own pods' or
 // services'. The distributions read the ranges from the Cluster, kubeadm's podSubnet among them,
-// which the Tigera operator does not install Calico without. It also writes the variables' PEM
+// which the Tigera operator does not install Calico without. An update that leaves the ranges out
+// keeps the stored ones (keepRanges). It also writes the variables' PEM
 // bundles as certificates alone (plainBundles) and holds the siteCAs variable to the controller
 // (holdSiteCAs).
 type ClusterDefaulter struct {
@@ -206,7 +207,7 @@ func (d *ClusterDefaulter) Default(ctx context.Context, c *clusterv1.Cluster) er
 	}
 	// The ranges are given on creation alone: changing a running cluster's replaces its nodes.
 	if req, err := admission.RequestFromContext(ctx); err == nil && req.Operation == admissionv1.Update {
-		return nil
+		return keepRanges(req.OldObject.Raw, c)
 	}
 	n := &c.Spec.ClusterNetwork
 	if len(n.Pods.CIDRBlocks) > 0 && len(n.Services.CIDRBlocks) > 0 {
@@ -233,6 +234,25 @@ func (d *ClusterDefaulter) Default(ctx context.Context, c *clusterv1.Cluster) er
 			field.ErrorList{field.Invalid(field.NewPath("spec", "clusterNetwork"), n, err.Error())})
 	}
 	n.Pods.CIDRBlocks, n.Services.CIDRBlocks = pods, services
+	return nil
+}
+
+// keepRanges gives an update that leaves out the pod or service ranges the stored cluster's, as a
+// kubectl replace or a GitOps sync of the manifest the cluster was created from leaves them out.
+// Without them the k3s class takes the ranges off its servers, and new nodes of the other
+// distributions start with their own defaults.
+func keepRanges(stored []byte, c *clusterv1.Cluster) error {
+	var old clusterv1.Cluster
+	if err := json.Unmarshal(stored, &old); err != nil {
+		return fmt.Errorf("reading the stored cluster: %w", err)
+	}
+	n, was := &c.Spec.ClusterNetwork, old.Spec.ClusterNetwork
+	if len(n.Pods.CIDRBlocks) == 0 {
+		n.Pods.CIDRBlocks = was.Pods.CIDRBlocks
+	}
+	if len(n.Services.CIDRBlocks) == 0 {
+		n.Services.CIDRBlocks = was.Services.CIDRBlocks
+	}
 	return nil
 }
 

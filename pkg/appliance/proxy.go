@@ -133,7 +133,8 @@ func (p *Proxy) Secrets() []string {
 }
 
 // check adds what is wrong with the proxy, in the words of the setup page's fields. No message
-// carries the address, which may hold a password.
+// carries the address, which may hold a password. An authority that passes is rewritten as its
+// certificates alone.
 func checkProxySetting(p *Proxy, pr *problems) {
 	if p == nil {
 		return
@@ -158,8 +159,10 @@ func checkProxySetting(p *Proxy, pr *problems) {
 	}
 	checkProxyExceptions(p, pr)
 	if p.CABundle != "" {
-		if err := provisioner.CheckAuthorityBundle(p.CABundle, maxProxyCABundle); err != nil {
+		if plain, err := provisioner.PlainAuthorityBundle(p.CABundle, maxProxyCABundle); err != nil {
 			pr.addf("Proxy certificate authority: %s", err)
+		} else {
+			p.CABundle = plain
 		}
 	}
 }

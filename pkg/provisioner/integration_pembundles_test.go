@@ -80,3 +80,38 @@ func TestIntegrationHandKeptBundlesAreStoredAsCertificatesAlone(t *testing.T) { 
 		t.Errorf("a damaged bundle: %v, want it refused by its line without its text", err)
 	}
 }
+
+// TestIntegrationAReplacedClusterKeepsItsRanges replaces a cluster with the manifest it was created
+// from, as kubectl replace and a GitOps sync that replaces do. The manifest names no ranges, and the
+// cluster keeps the ones Kubehenge gave it, so its spec and generation stay as they were.
+func TestIntegrationAReplacedClusterKeepsItsRanges(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
+	api, _ := startClusterAPI(t, "testdata/clusterapi-values.yaml")
+	c := api.Client
+	ctx := context.Background()
+	integration.ApplyClassTemplates(t, c, classNamespace, "kubehenge-k3s", templatesKey)
+	integration.WaitReconciled(t, c, classNamespace, "kubehenge-k3s")
+	// A copy, since Create fills in what it sends. clusterOf orders the variables anew on each call.
+	manifest := clusterOf("kubehenge-k3s", "replaced", 30, nil)
+	if err := c.Create(ctx, manifest.DeepCopy()); err != nil {
+		t.Fatal(err)
+	}
+	key := client.ObjectKey{Namespace: "team-a", Name: "replaced"}
+	before := &clusterv1.Cluster{}
+	if err := c.Get(ctx, key, before); err != nil {
+		t.Fatal(err)
+	}
+	if len(before.Spec.ClusterNetwork.Pods.CIDRBlocks) == 0 || len(before.Spec.ClusterNetwork.Services.CIDRBlocks) == 0 {
+		t.Fatalf("created with ranges %+v, want the ones Kubehenge gives", before.Spec.ClusterNetwork)
+	}
+	manifest.ResourceVersion = before.ResourceVersion
+	if err := c.Update(ctx, manifest); err != nil {
+		t.Fatalf("replacing the cluster with its manifest: %v", err)
+	}
+	after := &clusterv1.Cluster{}
+	if err := c.Get(ctx, key, after); err != nil {
+		t.Fatal(err)
+	}
+	if rangesString(after) != rangesString(before) || after.Generation != before.Generation {
+		t.Errorf("after the replace: ranges %s, generation %d, want %s and %d", rangesString(after), after.Generation, rangesString(before), before.Generation)
+	}
+}

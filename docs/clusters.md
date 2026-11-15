@@ -904,7 +904,9 @@ A change replaces every node, one at a time, as a change of the node customisati
 ### Authorities
 
 - An authority is PEM and holds certificates only.
-- Kubehenge refuses a private key, text around the certificates, and a certificate that has expired or is not yet valid.
+- Kubehenge refuses a private key, a damaged BEGIN or END line, and a certificate that has expired or is not yet valid. Names and comments between the blocks pass, as in curl's `cacert.pem`.
+- Kubehenge stores the certificates alone, also from kubectl and GitOps. Keep that form in Git, or Argo CD shows the cluster as out of sync.
+- To keep another form in Git, give the Argo CD Application the annotation `argocd.argoproj.io/compare-options: ServerSideDiff=true,IncludeMutationWebhook=true`. Flux needs nothing.
 - One mirror host has one authority, also where two registries share the host.
 
 ### RKE2 and k3s installs
@@ -2069,6 +2071,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
   - The ClusterClasses stay in `kubehenge-system`, which `topology.classRef.namespace` names. Every namespace therefore uses the same ones.
 - **Ranges** come from `spec.clusterNetwork`. Without it, Kubehenge picks them as the interface does ([Network](#network)).
   - Kubehenge refuses to create a cluster whose ranges overlap its nodes' network.
+  - An update that leaves them out, such as a `kubectl replace` of the manifest without them, keeps the cluster's.
 
 ### Pools and timeouts
 

@@ -2,14 +2,17 @@ package provisioner
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
+	admissionv1 "k8s.io/api/admission/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
 func rangesString(c *clusterv1.Cluster) string {
@@ -76,6 +79,45 @@ func TestDefaulterChoosesRangesClearOfTheNodes(t *testing.T) {
 		if got := defaulted(c); got != " " {
 			t.Errorf("a cluster %s got ranges %s", name, got)
 		}
+	}
+}
+
+// TestDefaulterKeepsTheStoredRangesOfAnUpdateThatLeavesThemOut covers a kubectl replace or a GitOps
+// sync of the manifest a cluster was created from, which names no ranges. Without the stored ones
+// the k3s class takes them off its servers, which replaces the nodes.
+func TestDefaulterKeepsTheStoredRangesOfAnUpdateThatLeavesThemOut(t *testing.T) {
+	t.Parallel()
+	hooks, _ := hooksFor(t)
+	d := &ClusterDefaulter{Hooks: hooks}
+	stored := networkCluster("10.0.0.1", 24)
+	stored.Spec.ClusterNetwork.Pods.CIDRBlocks = []string{"172.30.0.0/16"}
+	stored.Spec.ClusterNetwork.Services.CIDRBlocks = []string{"172.31.0.0/16"}
+	raw, err := json.Marshal(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	update := func(c *clusterv1.Cluster) string {
+		t.Helper()
+		var req admission.Request
+		req.Operation, req.OldObject.Raw = admissionv1.Update, raw
+		if err := d.Default(admission.NewContextWithRequest(t.Context(), req), c); err != nil {
+			t.Fatal(err)
+		}
+		return rangesString(c)
+	}
+	if got := update(networkCluster("10.0.0.1", 24)); got != "172.30.0.0/16 172.31.0.0/16" {
+		t.Errorf("an update naming no ranges: %s, want the stored ones", got)
+	}
+	half := networkCluster("10.0.0.1", 24)
+	half.Spec.ClusterNetwork.Services.CIDRBlocks = []string{"172.29.0.0/16"}
+	if got := update(half); got != "172.30.0.0/16 172.29.0.0/16" {
+		t.Errorf("an update naming the service range alone: %s, want the stored pod range beside it", got)
+	}
+	moved := networkCluster("10.0.0.1", 24)
+	moved.Spec.ClusterNetwork.Pods.CIDRBlocks = []string{"172.28.0.0/16"}
+	moved.Spec.ClusterNetwork.Services.CIDRBlocks = []string{"172.27.0.0/16"}
+	if got := update(moved); got != "172.28.0.0/16 172.27.0.0/16" {
+		t.Errorf("an update naming both ranges: %s, want them as named", got)
 	}
 }
 

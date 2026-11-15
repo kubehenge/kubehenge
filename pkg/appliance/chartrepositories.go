@@ -36,6 +36,8 @@ func (c *ChartRepositories) pairs() []string {
 	return pairs
 }
 
+// check adds what is wrong with the mirrors and their authority. An authority that passes is
+// rewritten as its certificates alone.
 func (c *ChartRepositories) check(p *problems) {
 	if c == nil {
 		return
@@ -48,9 +50,14 @@ func (c *ChartRepositories) check(p *problems) {
 	}
 	if len(c.Mirrors) == 0 {
 		p.addf("Chart mirror certificate authority: needs a mirror")
-	} else if err := provisioner.CheckAuthorityBundle(c.CABundle, maxChartCABundle); err != nil {
-		p.addf("Chart mirror certificate authority: %s", err)
+		return
 	}
+	plain, err := provisioner.PlainAuthorityBundle(c.CABundle, maxChartCABundle)
+	if err != nil {
+		p.addf("Chart mirror certificate authority: %s", err)
+		return
+	}
+	c.CABundle = plain
 }
 
 // moduleChartRepositories is the module's chart_repositories variable.

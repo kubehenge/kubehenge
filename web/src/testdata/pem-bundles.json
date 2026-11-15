@@ -345,6 +345,12 @@
       "problem": "at most 64 KiB"
     },
     {
+      "name": "over 64 KiB in UTF-8 bytes, under it in characters",
+      "repeat": 800,
+      "lines": ["# ÄÄÄÄÄÄÄÄÄÄ", "-----BEGIN CERTIFICATE-----", "MIIBAA==", "-----END CERTIFICATE-----"],
+      "problem": "at most 64 KiB"
+    },
+    {
       "name": "over 64 KiB, within an authority's 256",
       "repeat": 1041,
       "maxKiB": 256,
