@@ -344,7 +344,8 @@ case "${test}" in
         docker cp "${repo}/scripts/fetch.sh" "${pve}:/root/kubehenge/scripts/fetch.sh"
         docker cp "${repo}/appliance" "${pve}:/root/kubehenge/appliance"
         # The test reads the backup volume's store over a port-forward, as the appliance reaches it.
-        docker cp "$(command -v kubectl)" "${pve}:/usr/local/bin/kubectl"
+        runner_kubectl=$(command -v kubectl)
+        docker cp "${runner_kubectl}" "${pve}:/usr/local/bin/kubectl"
         for version in 0.0.1 0.0.2 0.0.3; do
             docker cp "${repo}/dist/kubehenge_${version}_linux_amd64.tar.gz" "${pve}:/root/kubehenge/"
         done
