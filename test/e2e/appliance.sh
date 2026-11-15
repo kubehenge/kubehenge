@@ -462,7 +462,10 @@ volume_snapshots() {
         "http://127.0.0.1:${port}/list?prefix=management%2F" || listed=false
     kill "${forward_pid}" 2> /dev/null || true
     wait "${forward_pid}" 2> /dev/null || true
-    [ "${listed}" = true ] || fail "the backup volume's store does not list its objects: $(cat "${work}/store-forward")"
+    if [ "${listed}" != true ]; then
+        forward_log=$(cat "${work}/store-forward")
+        fail "the backup volume's store does not list its objects: ${forward_log}"
+    fi
     mapi PATCH "${store_deployment}" "{\"spec\":{\"replicas\":${idle}}}"
 }
 volume_backed_up() {
