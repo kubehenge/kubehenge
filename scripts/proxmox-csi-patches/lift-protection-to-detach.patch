@@ -362,10 +362,10 @@ index 0000000..9cb137e
 +}
 diff --git a/pkg/csi/protection_test.go b/pkg/csi/protection_test.go
 new file mode 100644
-index 0000000..d95425a
+index 0000000..dd2b5f7
 --- /dev/null
 +++ b/pkg/csi/protection_test.go
-@@ -0,0 +1,369 @@
+@@ -0,0 +1,423 @@
 +/*
 +Copyright 2023 The Kubernetes Authors.
 +
@@ -389,6 +389,7 @@ index 0000000..d95425a
 +	"encoding/json"
 +	"net/http"
 +	"net/http/httptest"
++	"os"
 +	"strconv"
 +	"strings"
 +	"sync"
@@ -723,6 +724,59 @@ index 0000000..d95425a
 +
 +		assert.Equal(t, c.protection, f.protection, "lease held by %s", c.holder)
 +	}
++}
++
++func TestKeepProtectionSweepsAtOnceWhileLeading(t *testing.T) {
++	identity, err := os.Hostname()
++	require.NoError(t, err)
++
++	t.Setenv("POD_NAMESPACE", "csi")
++
++	f := &fakePVE{description: liftedMarker}
++	pool, err := pxpool.NewProxmoxPool([]*pxpool.ProxmoxCluster{{URL: fakePVEURL(t, f), Region: "region"}})
++	require.NoError(t, err)
++
++	lease := &coordinationv1.Lease{
++		ObjectMeta: metav1.ObjectMeta{Namespace: "csi", Name: attacherLease},
++		Spec:       coordinationv1.LeaseSpec{HolderIdentity: &identity},
++	}
++	d := &ControllerService{kclient: fake.NewClientset(lease), pxpool: pool, lifted: &liftedVMs{}}
++
++	ctx, cancel := context.WithCancel(context.Background())
++	done := make(chan struct{})
++
++	go func() {
++		d.KeepProtection(ctx)
++		close(done)
++	}()
++
++	assert.Eventually(t, func() bool {
++		f.mu.Lock()
++		defer f.mu.Unlock()
++
++		return f.protection == 1
++	}, 5*time.Second, 10*time.Millisecond)
++
++	cancel()
++
++	select {
++	case <-done:
++	case <-time.After(5 * time.Second):
++		t.Fatal("KeepProtection did not return once its context ended")
++	}
++}
++
++func TestPodNamespace(t *testing.T) {
++	t.Setenv("POD_NAMESPACE", "csi-proxmox")
++	assert.Equal(t, "csi-proxmox", podNamespace())
++}
++
++func TestControllerStartsKeepProtection(t *testing.T) {
++	main, err := os.ReadFile("../../cmd/controller/main.go")
++	require.NoError(t, err)
++
++	assert.True(t, strings.Contains(string(main), "go controllerService.KeepProtection(context.Background())"),
++		"cmd/controller/main.go does not start KeepProtection")
 +}
 +
 +func TestMarkerRoundTrip(t *testing.T) {
