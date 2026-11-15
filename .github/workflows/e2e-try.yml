@@ -618,9 +618,12 @@ jobs:
                 } > "$dir/kube-proxy.log" 2>&1 || true
                 # The run before a restart says why the container ended; when it cannot be had, the
                 # error says why. It is asked for container by container, since with all of them
-                # kubectl stops at the first one that never restarted.
+                # kubectl stops at the first one that never restarted. The cloud controller manager
+                # and the CSI plugin are read running too: a node they never initialise keeps the
+                # uninitialized taint, and only their logs say what Proxmox VE answered.
                 k get pods -A -o json 2>/dev/null | jq -r '.items[] |
                   select((.metadata.namespace | startswith("cattle-"))
+                    or (.metadata.name | startswith("proxmox-"))
                     or (.status.phase | IN("Running", "Succeeded") | not)
                     or any(.status.containerStatuses[]?; .restartCount > 0)) |
                   "\(.metadata.namespace) \(.metadata.name) "
