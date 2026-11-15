@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/exp/teatest/v2"
 )
 
 func TestDecideCANamesWhatTheCertificateIsValidFor(t *testing.T) {
@@ -35,19 +38,56 @@ func TestDecideCANamesWhatTheCertificateIsValidFor(t *testing.T) {
 	}
 }
 
-func TestTheInteractiveSummaryShowsTheIPv6Caution(t *testing.T) {
+func TestDecideCAOfACertificateThatListsOnlyLoopback(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t, opts{names: []string{"pve1.example.com"}, ips: []string{"2001:db8::10"}})
+	h := newHarness(t, opts{names: []string{"localhost"}, ips: []string{"127.0.0.1", "::1"}})
+	_, err := h.node.DecideCA(context.Background(), &Config{}, "https://192.0.2.10:8006")
+	want := "Proxmox VE's certificate lists no reachable address, only loopback, so it is not valid for 192.0.2.10. Reissue it on the node with pvecm updatecerts --force, then systemctl restart pveproxy"
+	if err == nil || err.Error() != want {
+		t.Errorf("a certificate of loopback alone: %v, want %q", err, want)
+	}
+}
+
+// servedByNode makes the node's own certificate the one the API serves, as Proxmox VE leaves it.
+func servedByNode(t *testing.T, h *harness) {
+	t.Helper()
 	if err := os.Rename(filepath.Join(h.root, pveServedPEM), filepath.Join(h.root, pveNodePEM)); err != nil {
 		t.Fatal(err)
 	}
-	s := h.session(Config{IP: "dhcp", Bridge: "vmbr0", CTID: "105", APIHost: "2001:db8::10", ProxmoxURL: "https://[2001:db8::10]:8006"})
-	s.Facts = &Facts{Prefix: netip.MustParsePrefix("192.0.2.10/24")}
-	m := &Model{S: s}
-	s.noteAPIFamily()
-	out := m.summary()
-	if !strings.Contains(out, "Note") || !strings.Contains(out, "which clusters without IPv6 cannot") {
-		t.Errorf("the summary lacks the caution:\n%s", out)
+}
+
+// drawn is the screen as a terminal of this size shows it: each line clipped at the width, and the
+// top lines gone when there are more than the height.
+func drawn(screen string, width, height int) []string {
+	lines := strings.Split(strings.TrimRight(screen, "\n"), "\n")
+	for i, l := range lines {
+		lines[i] = ansi.Truncate(l, width, "")
+	}
+	if len(lines) > height {
+		lines = lines[len(lines)-height:]
+	}
+	return lines
+}
+
+func TestTheSummaryShowsTheIPv6CautionOnA80By24Screen(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true})
+	s := h.session(Config{PVEEntry: "no", ProxmoxURL: "https://pve1.example.com:8006"})
+	s.Cautions = []string{apiFamilyCaution("192.0.2.10", "2001:db8::10")}
+	model := NewModel(s, func(emit func(Event)) *Runner { return h.runner(s, emit) })
+	rec := &recorder{inner: model, views: make(map[stage]string)}
+	tm := teatest.NewTestModel(t, rec, teatest.WithInitialTermSize(80, 24))
+	u := &ui{t: t, h: h, s: s, rec: rec, tm: tm}
+	u.waitFor("DHCP")
+	u.enter(2)
+	u.waitFor("Change network")
+	u.settle()
+	screen := strings.Join(drawn(rec.viewOf(stSummary), 80, 24), "\n")
+	flat := strings.Join(strings.Fields(screen), " ")
+	for _, want := range []string{"Kubehenge", "Note", "cannot reach the API at 2001:db8::10", "--proxmox-url https://192.0.2.10:8006", "Install"} {
+		if !strings.Contains(flat, want) {
+			t.Errorf("the 80 by 24 screen lacks %q:\n%s", want, screen)
+		}
 	}
 }
 
@@ -68,9 +108,7 @@ func TestAPIFamilyNote(t *testing.T) {
 	} {
 		h := newHarness(t, opts{names: []string{"pve1.example.com"}, ips: c.ips})
 		if c.own {
-			if err := os.Rename(filepath.Join(h.root, pveServedPEM), filepath.Join(h.root, pveNodePEM)); err != nil {
-				t.Fatal(err)
-			}
+			servedByNode(t, h)
 		}
 		s := h.session(Config{APIHost: c.host, Bridge: "vmbr0", CTID: "105"})
 		s.Facts = &Facts{Prefix: netip.MustParsePrefix("192.0.2.10/24")}
@@ -81,9 +119,34 @@ func TestAPIFamilyNote(t *testing.T) {
 			}
 			continue
 		}
-		want := "does not list this node's address 192.0.2.10 on vmbr0, so the appliance and the clusters reach the API at 2001:db8::10, which clusters without IPv6 cannot. To use 192.0.2.10, make this node's name resolve to it first (/etc/hosts), run pvecm updatecerts --force and systemctl restart pveproxy, then: sh install.sh --upgrade --ctid 105 --proxmox-url https://192.0.2.10:8006"
-		if len(s.Cautions) != 1 || !strings.Contains(s.Cautions[0], want) {
-			t.Errorf("%s: noted %q, want it to contain %q", c.name, s.Cautions, want)
+		want := "The certificate lacks 192.0.2.10, so clusters without IPv6 cannot reach the API at 2001:db8::10. Add it to the certificate, then pass --proxmox-url https://192.0.2.10:8006"
+		if len(s.Cautions) != 1 || s.Cautions[0] != want {
+			t.Errorf("%s: noted %q, want %q", c.name, s.Cautions, want)
 		}
+	}
+}
+
+func TestChangingTheAPIAddressRecomputesTheCautions(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newHarness(t, opts{names: []string{"pve1.example.com"}, ips: []string{"2001:db8::10"}, hosts: map[string][]string{"pve1.example.com": {"2001:db8::10"}}})
+	servedByNode(t, h)
+	s := h.session(Config{Bridge: "vmbr0", APIHost: "2001:db8::10"})
+	s.Facts = &Facts{Prefix: netip.MustParsePrefix("192.0.2.10/24")}
+	change := func(host string) {
+		t.Helper()
+		s.Cfg.APIHost, s.Cfg.ProxmoxURL, s.CA = host, "", nil
+		if err := s.ResolveAPI(ctx, AskTies); err != nil {
+			t.Fatal(err)
+		}
+	}
+	change("2001:db8::10")
+	change("2001:db8::10")
+	if len(s.Cautions) != 1 {
+		t.Errorf("the IPv6 address picked twice: %d cautions, want 1", len(s.Cautions))
+	}
+	change("pve1.example.com")
+	if len(s.Cautions) != 0 {
+		t.Errorf("a name picked after it: cautions %q, want none", s.Cautions)
 	}
 }

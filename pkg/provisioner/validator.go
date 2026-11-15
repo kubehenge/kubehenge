@@ -62,7 +62,7 @@ func (v *ClusterValidator) validateOf(ctx context.Context, old, c *clusterv1.Clu
 		return nil, err
 	}
 	if !c.DeletionTimestamp.IsZero() {
-		return nil, validateDeleting(old, c)
+		return nil, validateDeleting(ctx, old, c, classOf)
 	}
 	// The spec checks read the clock, Proxmox VE and the class, so a cluster can fall short of them
 	// without a change. Annotations, labels and finalizers must still go through: deleting a cluster

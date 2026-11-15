@@ -333,11 +333,12 @@ func (n *Node) DecideCA(ctx context.Context, cfg *Config, apiURL string) (*CACho
 	// is asked.
 	fail := func(caFile string) error {
 		if connects && served[0].VerifyHostname(host) != nil {
-			listed := "no name or address but loopback"
-			if names := pve.NewCertificateNameError(host, served[0]).Names; len(names) > 0 {
-				listed = strings.Join(names, ", ")
+			names := pve.NewCertificateNameError(host, served[0]).Names
+			if len(names) == 0 {
+				return userErr("Proxmox VE's certificate lists no reachable address, only loopback, so it is not valid for "+host,
+					"Reissue it on the node with pvecm updatecerts --force, then systemctl restart pveproxy")
 			}
-			return userErr(fmt.Sprintf("Proxmox VE's certificate is valid for %s, not %s", listed, host), "Pass one of those with --proxmox-url")
+			return userErr(fmt.Sprintf("Proxmox VE's certificate is valid for %s, not %s", strings.Join(names, ", "), host), "Pass one of those with --proxmox-url")
 		}
 		return apiFailure(connects, apiURL, port, caFile)
 	}

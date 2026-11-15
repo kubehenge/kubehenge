@@ -1,7 +1,6 @@
 package installer
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"net/netip"
@@ -199,6 +198,7 @@ func hasStorage(list []Storage, name string) bool {
 func (s *Session) ResolveAPI(ctx context.Context, ties Ties) error {
 	c := &s.Cfg
 	if c.ProxmoxURL == "" {
+		s.Cautions = nil
 		asked, err := s.pickAPIHost(ties)
 		if err != nil || asked {
 			return err
@@ -296,9 +296,13 @@ func (s *Session) noteAPIFamily() {
 	if _, ips := certNames(cert); slices.Contains(ips, bridge.String()) {
 		return
 	}
-	ctid := cmp.Or(s.Cfg.CTID, "<id>")
-	s.Cautions = append(s.Cautions, fmt.Sprintf("Proxmox VE's certificate does not list this node's address %[1]s on %[2]s, so the appliance and the clusters reach the API at %[3]s, which clusters without IPv6 cannot. To use %[1]s, make this node's name resolve to it first (/etc/hosts), run pvecm updatecerts --force and systemctl restart pveproxy, then: sh install.sh --upgrade --ctid %[4]s --proxmox-url https://%[1]s:8006",
-		bridge, s.Cfg.Bridge, s.Cfg.APIHost, ctid))
+	s.Cautions = append(s.Cautions, apiFamilyCaution(bridge.String(), s.Cfg.APIHost))
+}
+
+// apiFamilyCaution is the text of that note, short enough for three lines of the summary at 80
+// columns.
+func apiFamilyCaution(ipv4, ipv6 string) string {
+	return fmt.Sprintf("The certificate lacks %[1]s, so clusters without IPv6 cannot reach the API at %[2]s. Add it to the certificate, then pass --proxmox-url https://%[1]s:8006", ipv4, ipv6)
 }
 
 // checkRouteVLAN refuses the VLAN of the node's default route on its bridge, taken from the route

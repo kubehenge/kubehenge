@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // The actions of the summary.
@@ -765,9 +766,16 @@ func (m *Model) header() string {
 	return b.String()
 }
 
+// The columns of the summary: two spaces, a label of this width, then the value.
+const (
+	summaryLabelWidth = 18
+	summaryMargin     = 2
+	minNoteWidth      = 30
+)
+
 // row renders a label and a value in two columns.
 func row(label, value string) string {
-	return "  " + dim.Render(fmt.Sprintf("%-18s", label)) + value + "\n"
+	return strings.Repeat(" ", summaryMargin) + dim.Render(fmt.Sprintf("%-*s", summaryLabelWidth, label)) + value + "\n"
 }
 
 func (m *Model) summary() string {
@@ -813,7 +821,12 @@ func (m *Model) summary() string {
 	}
 	b.WriteString(row("Proxmox VE entry", entry))
 	for _, n := range m.S.Cautions {
-		b.WriteString(row("Note", n))
+		// The renderer clips a line at the terminal's width, so a long note wraps under its label.
+		lines := strings.Split(ansi.Wrap(n, max(m.width-summaryLabelWidth-summaryMargin, minNoteWidth), ""), "\n")
+		b.WriteString(row("Note", lines[0]))
+		for _, l := range lines[1:] {
+			b.WriteString(row("", l))
+		}
 	}
 	b.WriteString("\n")
 	return b.String()
