@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
@@ -132,6 +133,60 @@ func TestApplyLiftsProtectionOnTheVMsThePlanDeletes(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(a.workdir(), planFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the plan is left in the working directory: %v", err)
+	}
+}
+
+// An apply that fails on etcd timing out a request plans and applies again, up to applyAttempts
+// runs in all. Each run lifts and sets again the protection it needs.
+func TestApplyRunsAgainWhileEtcdTimesOut(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		stalls string
+		state  string
+	}{
+		{"x", StateSucceeded},
+		{"xx", StateSucceeded},
+		{"xxx", StateFailed},
+	} {
+		t.Run(fmt.Sprintf("%d stalls", len(tc.stalls)), func(t *testing.T) {
+			t.Parallel()
+			a, _ := newAppliance(t)
+			a.stallPause = time.Millisecond
+			p := recordProtections(a, nil)
+			writePlan(t, a, change{nodeVMAddress + "[0]", []string{"delete", "create"}, 1001})
+			if err := os.WriteFile(filepath.Join(a.Dir, "stalls"), []byte(tc.stalls), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			j := applyWith(t, a, "stall")
+			if j.State != tc.state {
+				t.Fatalf("apply: %+v", j)
+			}
+			if tc.state == StateFailed && !strings.Contains(j.Error, "etcdserver: request timed out") {
+				t.Fatalf("the job's error lacks etcd's: %s", j.Error)
+			}
+			runs := min(len(tc.stalls)+1, applyAttempts)
+			var plans, applies int
+			for _, args := range tofuCalls(t, a) {
+				switch args[0] {
+				case "plan":
+					plans++
+				case "apply":
+					applies++
+				}
+			}
+			if plans != runs || applies != runs {
+				t.Fatalf("%d plans and %d applies, want %d of each", plans, applies, runs)
+			}
+			lifts := 0
+			for _, c := range p.list() {
+				if !c.on {
+					lifts++
+				}
+			}
+			if lifts != runs {
+				t.Fatalf("protection lifted %d times, want once a run: %+v", lifts, p.list())
+			}
+		})
 	}
 }
 
