@@ -9,6 +9,7 @@ export TF_CLI_CONFIG_FILE := $(CURDIR)/$(PROVIDERS)/tofu.tfrc
 IMAGE ?= ghcr.io/kubehenge/kubehenge
 CAPMOX_IMAGE ?= ghcr.io/kubehenge/cluster-api-provider-proxmox
 HELM_ADDON_IMAGE ?= ghcr.io/kubehenge/cluster-api-addon-provider-helm
+PROXMOX_CSI_IMAGE ?= ghcr.io/kubehenge/proxmox-csi-controller
 KO_FLAGS ?=
 # Where scripts/ko.sh builds the ko every image build runs, beside Go's own directory.
 KO_DIR ?= $(subst \,/,$(shell go env GOPATH))/kubehenge-ko
@@ -227,9 +228,9 @@ image: web gateway-api
 	sh scripts/ko.sh $(KO_DIR)
 	KO_DOCKER_REPO=$(IMAGE) KO_CONFIG_PATH=cmd/kubehenge $(KO_DIR)/ko build --bare --sbom=none $(KO_FLAGS) ./cmd/kubehenge
 
-# Build and push the provider images the management cluster runs as Kubehenge builds them
-# (capmox_build and helm_addon_build in management-cluster/versions.tf), check their digests and
-# print their references by digest.
+# Build and push the provider images and the CSI plugin's controller the management cluster runs as
+# Kubehenge builds them (capmox_build, helm_addon_build and proxmox_csi_build in
+# management-cluster/versions.tf), check their digests and print their references by digest.
 .PHONY: capmox-image
 capmox-image:
 	sh scripts/provider-image.sh $(KO_DIR) capmox $(CAPMOX_IMAGE) $(KO_FLAGS)
@@ -237,6 +238,10 @@ capmox-image:
 .PHONY: helm-addon-image
 helm-addon-image:
 	sh scripts/provider-image.sh $(KO_DIR) helm-addon $(HELM_ADDON_IMAGE) $(KO_FLAGS)
+
+.PHONY: proxmox-csi-image
+proxmox-csi-image:
+	sh scripts/provider-image.sh $(KO_DIR) proxmox-csi $(PROXMOX_CSI_IMAGE) $(KO_FLAGS)
 
 # Check the providers the management cluster runs from Kubehenge's forks: their files and images
 # by the digests versions.tf names, and their provenance and signatures from each fork's release.

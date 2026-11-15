@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -148,6 +149,100 @@ func TestInPlaceChangeAppliesWithProtectionOn(t *testing.T) {
 	}
 }
 
+// The module leaves protection to the appliance, so a run first sets it again on a node VM its
+// refresh found without it, except one the CSI plugin lifted for a detach and marked.
+func TestApplyProtectsNodeVMsFoundWithoutIt(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	p := recordProtections(a, nil)
+	before := func(id int, protection bool, description string) map[string]any {
+		return map[string]any{"vm_id": id, "name": fmt.Sprintf("vm-%d", id), "protection": protection, "description": description}
+	}
+	raw, err := json.Marshal(map[string]any{"resource_changes": []map[string]any{
+		{"address": nodeVMAddress + "[0]", "change": map[string]any{"actions": []string{"no-op"}, "before": before(1001, false, "Node")}},
+		{"address": nodeVMAddress + "[1]", "change": map[string]any{"actions": []string{"no-op"}, "before": before(1002, false, "Node\n"+csiLiftedMarker)}},
+		{"address": nodeVMAddress + "[2]", "change": map[string]any{"actions": []string{"no-op"}, "before": before(1003, true, "Node")}},
+		{"address": nodeVMAddress + "[3]", "change": map[string]any{"actions": []string{"delete"}, "before": before(1004, false, "Node")}},
+		{"address": backupVolumeAddress, "change": map[string]any{"actions": []string{"no-op"}, "before": before(1005, false, "")}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(a.Dir, "plan.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if j := applyWith(t, a, "pve1"); j.State != StateSucceeded {
+		t.Fatalf("apply: %+v", j)
+	}
+	want := []protectCall{{1001, true, "show"}, {1004, false, "show"}}
+	if got := p.list(); !slices.Equal(got, want) {
+		t.Fatalf("protection calls %+v, want %+v", got, want)
+	}
+}
+
+// The appliance and the patched CSI plugin name the plugin's marker alike.
+func TestCSIMarkerIsThePluginPatchs(t *testing.T) {
+	t.Parallel()
+	patch, err := os.ReadFile(filepath.Join("..", "..", "scripts", "proxmox-csi-patches", "lift-protection-to-detach.patch"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(patch), "+const liftedMarker = \""+csiLiftedMarker+"\"") {
+		t.Fatal("the plugin patch's liftedMarker is not csiLiftedMarker")
+	}
+}
+
+// A lift takes the CSI plugin's marker off in the same change, against the configuration it read,
+// and reads it again when the plugin changed it meanwhile.
+func TestLiftTakesTheCSIMarkerOff(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var puts []map[string]any
+	digest := 1
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/cluster/resources"):
+			_, _ = w.Write([]byte(`{"data":[{"vmid":1001,"name":"mgmt-cp-0","node":"pve2","type":"qemu"}]}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/qemu/1001/config"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"digest": strconv.Itoa(digest), "description": "Node\n" + csiLiftedMarker}})
+		case r.Method == http.MethodPut:
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			puts = append(puts, body)
+			if len(puts) == 1 {
+				// The plugin changed the configuration since it was read.
+				digest++
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"data":null}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"data":null}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := &Appliance{ProxmoxURL: srv.URL, ProxmoxCAFile: ca}
+	if err := a.setProtection(context.Background(), ticket(), managementVM{1001, "mgmt-cp-0"}, unprotected); err != nil {
+		t.Fatal(err)
+	}
+	if len(puts) != 2 {
+		t.Fatalf("puts %v, want a refused one and one on the configuration read again", puts)
+	}
+	last := puts[1]
+	if last["protection"] != float64(0) || last["description"] != "Node" || last["digest"] != "2" {
+		t.Fatalf("lift %v, want protection 0, the description without the marker, digest 2", last)
+	}
+}
+
 // A failed apply sets protection again on what it lifted, and says how to set it by hand where
 // that fails too.
 func TestFailedApplyProtectsTheLiftedVMsAgain(t *testing.T) {
@@ -258,6 +353,8 @@ func TestSetProtectionFollowsTheVM(t *testing.T) {
 				`{"vmid":1001,"name":"mgmt-cp-0","node":"pve2","type":"qemu"},` +
 				`{"vmid":1002,"name":"someone-else","node":"pve1","type":"qemu"},` +
 				`{"vmid":1003,"name":"mgmt-cp-2","node":"pve3","type":"lxc"}]}`))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/config"):
+			_, _ = w.Write([]byte(`{"data":{"digest":"d"}}`))
 		case r.Method == http.MethodPut:
 			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {

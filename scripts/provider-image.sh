@@ -1,11 +1,12 @@
 #!/bin/sh
-# Builds the image of a Cluster API provider the management cluster runs as Kubehenge builds it
-# (<provider>_build in management-cluster/versions.tf, with the provider's dashes as underscores)
-# from its upstream commit with the fixes in scripts/<provider>-patches, pushes it to <repository>
-# and prints <repository>@<digest>. The build is reproducible: it fails unless the image comes out
-# with the digest versions.tf names, so what a release publishes is what anyone gets from that commit
-# and those patches. It builds with the ko scripts/ko.sh puts in <ko directory>. Further arguments
-# go to ko, such as --insecure-registry.
+# Builds the image of a component the management cluster runs as Kubehenge builds it, a Cluster API
+# provider or the CSI plugin's controller (<provider>_build in management-cluster/versions.tf, with
+# the provider's dashes as underscores) from its upstream commit with the fixes in
+# scripts/<provider>-patches, pushes it to <repository> and prints <repository>@<digest>. A block
+# with `tests` runs those packages' tests on the patched source first. The build is reproducible:
+# it fails unless the image comes out with the digest versions.tf names, so what a release publishes
+# is what anyone gets from that commit and those patches. It builds with the ko scripts/ko.sh puts
+# in <ko directory>. Further arguments go to ko, such as --insecure-registry.
 #
 #   scripts/provider-image.sh <ko directory> <provider> <repository> [ko flags]
 set -eu
@@ -50,6 +51,14 @@ for fix in "${scripts}/${provider}-patches"/*.patch; do
     [ -e "${fix}" ] || continue
     patch -d "${src}" -p1 --batch --forward --quiet < "${fix}"
 done
+tests=$(field tests)
+if [ -n "${tests}" ]; then
+    # shellcheck disable=SC2086 # tests is a list of packages.
+    (cd "${src}" && GOTOOLCHAIN=${go} CGO_ENABLED=0 go test -count=1 ${tests}) >&2 || {
+        echo "provider-image: the tests of ${block}'s patched source failed" >&2
+        exit 1
+    }
+fi
 
 build() {
     (cd "${src}" && GOTOOLCHAIN=${go} GOFLAGS='-trimpath -buildvcs=false' CGO_ENABLED=0 KO_DEFAULTBASEIMAGE=${base} \

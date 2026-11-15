@@ -203,6 +203,20 @@ resource "helm_release" "storage" {
   depends_on = [helm_release.cluster_api_providers, proxmox_acl.management_csi, proxmox_acl.management_csi_backups, proxmox_acl.management_zones]
 }
 
+locals {
+  # The controller lifts a node VM's protection to detach a volume, which only Kubehenge's build of
+  # it does (proxmox_csi_build in versions.tf), at the release the workload clusters pin.
+  csi_controller_upstream = local.csi_plugin.values.controller
+  csi_controller = startswith(local.csi_controller_upstream.plugin.image.tag, "${local.proxmox_csi_build.release}@") ? merge(local.csi_controller_upstream, {
+    plugin = merge(local.csi_controller_upstream.plugin, {
+      image = merge(local.csi_controller_upstream.plugin.image, {
+        repository = split("@", local.proxmox_csi_build.image)[0]
+        tag        = "${local.proxmox_csi_build.release}-${substr(local.proxmox_csi_build.commit, 0, 12)}@${split("@", local.proxmox_csi_build.image)[1]}"
+      })
+    })
+  }) : local.csi_controller_upstream
+}
+
 resource "helm_release" "proxmox_csi" {
   name       = "proxmox-csi"
   namespace  = local.storage_secret.namespace
@@ -213,6 +227,7 @@ resource "helm_release" "proxmox_csi" {
   timeout    = 900
 
   values = [yamlencode(merge(local.csi_plugin.values, {
+    controller              = local.csi_controller
     existingConfigSecret    = local.storage_secret.name
     existingConfigSecretKey = "config.yaml"
     # The chart has no CA setting. The plugin talks to Proxmox VE and the in-cluster API, which

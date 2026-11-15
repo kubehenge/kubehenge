@@ -1,9 +1,9 @@
 #!/bin/sh
 # Builds once, for every end-to-end lane of a run, what run.sh would otherwise build in each: the
-# kubehenge binary, and the images of the controller, capmox and the Add-on Provider for Helm in a
-# registry's storage, which up.sh then serves from the lane's own registry under the same digests.
-# capmox's and the Add-on Provider's are checked against management-cluster/versions.tf as
-# scripts/provider-image.sh always checks them.
+# kubehenge binary, and the images of the controller, capmox, the Add-on Provider for Helm and the
+# CSI plugin's controller in a registry's storage, which up.sh then serves from the lane's own
+# registry under the same digests. The last three are checked against management-cluster/versions.tf
+# as scripts/provider-image.sh always checks them.
 #
 #   test/e2e/ci/build.sh <out directory>
 #
@@ -34,6 +34,9 @@ capmox=$!
 make -s -C "${repo}" helm-addon-image HELM_ADDON_IMAGE="${registry}/kubehenge/cluster-api-addon-provider-helm" \
     KO_FLAGS=--insecure-registry > "${out}/helm-addon.log" 2>&1 &
 helm_addon=$!
+make -s -C "${repo}" proxmox-csi-image PROXMOX_CSI_IMAGE="${registry}/kubehenge/proxmox-csi-controller" \
+    KO_FLAGS=--insecure-registry > "${out}/proxmox-csi.log" 2>&1 &
+proxmox_csi=$!
 make -s -C "${repo}" build
 cp "${repo}/dist/kubehenge" "${out}/kubehenge"
 digest=$(make -s -C "${repo}" image IMAGE="${registry}/kubehenge/kubehenge" KO_FLAGS=--insecure-registry |
@@ -45,8 +48,12 @@ case "${digest}" in
         exit 1
         ;;
 esac
-for provider in capmox helm-addon; do
-    if [ "${provider}" = capmox ]; then pid=${capmox}; else pid=${helm_addon}; fi
+for provider in capmox helm-addon proxmox-csi; do
+    case "${provider}" in
+        capmox) pid=${capmox} ;;
+        helm-addon) pid=${helm_addon} ;;
+        *) pid=${proxmox_csi} ;;
+    esac
     # shellcheck disable=SC2310 # the status is reported here, with the build's log.
     if ! wait "${pid}"; then
         cat "${out}/${provider}.log" >&2

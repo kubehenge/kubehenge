@@ -93,10 +93,19 @@ run "csi_plugin_is_the_workload_clusters_pinned_release" {
       helm_release.proxmox_csi.repository == "oci://ghcr.io/sergelogvinov/charts" &&
       helm_release.proxmox_csi.chart == "proxmox-csi-plugin@sha256:${split("@sha256:", yamldecode(file("${path.module}/../charts/kubehenge/values.yaml")).addons.csiPlugin.version)[1]}" &&
       helm_release.proxmox_csi.version == split("@sha256:", yamldecode(file("${path.module}/../charts/kubehenge/values.yaml")).addons.csiPlugin.version)[0] &&
-      yamldecode(helm_release.proxmox_csi.values[0]).controller.plugin.image.tag == yamldecode(file("${path.module}/../charts/kubehenge/values.yaml")).addons.csiPlugin.values.controller.plugin.image.tag &&
       yamldecode(helm_release.proxmox_csi.values[0]).node.plugin.image.tag == yamldecode(file("${path.module}/../charts/kubehenge/values.yaml")).addons.csiPlugin.values.node.plugin.image.tag
     )
-    error_message = "the management cluster's CSI plugin must be the chart and images the workload clusters' add-on pins, by digest"
+    error_message = "the management cluster's CSI plugin must be the chart and node image the workload clusters' add-on pins, by digest"
+  }
+
+  assert {
+    condition = (
+      startswith(yamldecode(file("${path.module}/../charts/kubehenge/values.yaml")).addons.csiPlugin.values.controller.plugin.image.tag, "${local.proxmox_csi_build.release}@") &&
+      yamldecode(helm_release.proxmox_csi.values[0]).controller.plugin.image.repository == "ghcr.io/kubehenge/proxmox-csi-controller" &&
+      yamldecode(helm_release.proxmox_csi.values[0]).controller.plugin.image.tag == "${local.proxmox_csi_build.release}-${substr(local.proxmox_csi_build.commit, 0, 12)}@${split("@", local.proxmox_csi_build.image)[1]}" &&
+      yamldecode(helm_release.proxmox_csi.values[0]).controller.attacher == yamldecode(file("${path.module}/../charts/kubehenge/values.yaml")).addons.csiPlugin.values.controller.attacher
+    )
+    error_message = "the management cluster's CSI controller must be Kubehenge's build of the release the workload clusters pin, which detaches from protected VMs, with the add-on's sidecars"
   }
 
   assert {
