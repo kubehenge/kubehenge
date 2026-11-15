@@ -221,9 +221,10 @@ func talosConfig(t *testing.T, role machine.Type, patches []string) map[string]m
 		t.Fatal(err)
 	}
 	// Talos checks a PTP device path with filepath.Clean, which turns /dev/ptp0 into \dev\ptp0 on
-	// Windows, so the one finding about it there is no finding about the configuration.
+	// Windows, so there an error that is that one finding alone is no finding about the configuration.
 	if _, err = cfg.ValidateAsClient(metalMode{}); err != nil &&
-		(runtime.GOOS != "windows" || !strings.Contains(err.Error(), "1 error occurred") || strings.Count(err.Error(), "PTP device path") != 1) {
+		(runtime.GOOS != "windows" || !strings.HasPrefix(err.Error(), "1 error occurred:") ||
+			!strings.Contains(err.Error(), "v1alpha1.Config: 1 error occurred:") || strings.Count(err.Error(), "PTP device path") != 1) {
 		t.Fatal(err)
 	}
 	encoded, err := cfg.EncodeString(encoder.WithComments(encoder.CommentsDisabled))
