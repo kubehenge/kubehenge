@@ -1062,6 +1062,7 @@ describe("create", () => {
     loadBalancerPeers: "",
     loadBalancerRouterID: "",
     loadBalancerAuthenticated: false,
+    loadBalancerPicked: false,
     loadBalancerPassword: "",
     pods: "",
     services: "",

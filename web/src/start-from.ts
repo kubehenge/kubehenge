@@ -123,6 +123,7 @@ export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace"
     loadBalancerPeers: lb.peers,
     loadBalancerRouterID: lb.routerID,
     loadBalancerAuthenticated: lb.authenticated,
+    loadBalancerPicked: true,
     storage: text(v["storage"]) ?? "",
     place: placeOf(texts(v["allowedNodes"])),
     hostOutageGrace: graceOf(v[graceVariable]),

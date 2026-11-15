@@ -77,6 +77,7 @@ import {
   loadBalancerProblems,
   loadBalancerText,
   loadBalancerVariable,
+  recommendedImplementation,
   bgpOffered,
   type Implementation,
   type LoadBalancer,
@@ -290,6 +291,8 @@ export interface Form {
   loadBalancerPeers: string;
   loadBalancerRouterID: string;
   loadBalancerAuthenticated: boolean;
+  /** Whether the load balancer was chosen by hand, which the address range then never changes. */
+  loadBalancerPicked: boolean;
   /** Typed here and stored as the cluster's bgp credential once it exists. Never copied from another cluster. */
   loadBalancerPassword: string;
   pods: string;
@@ -1028,6 +1031,7 @@ export const newForm = (): Form => ({
   loadBalancerPeers: "",
   loadBalancerRouterID: "",
   loadBalancerAuthenticated: false,
+  loadBalancerPicked: false,
   loadBalancerPassword: "",
   pods: "",
   services: "",
@@ -2104,16 +2108,24 @@ function balancerProblems(form: Form, c: ClusterClass | undefined): Problems {
   return p;
 }
 
-/** setLoadBalancer sets the form fields behind the load-balancer fields that a patch holds. */
+/**
+ * setLoadBalancer sets the form fields behind the load-balancer fields that a patch holds. A load
+ * balancer nobody chose follows the address range: MetalLB once there is one.
+ */
 export function setLoadBalancer(
   set: <K extends keyof Form>(k: K, v: Form[K]) => void,
   patch: Partial<LoadBalancerValue>,
+  picked: boolean,
 ): void {
   if (patch.implementation !== undefined) {
     set("loadBalancer", patch.implementation);
+    set("loadBalancerPicked", true);
   }
   if (patch.addresses !== undefined) {
     set("loadBalancerAddresses", patch.addresses);
+    if (!picked && patch.implementation === undefined) {
+      set("loadBalancer", recommendedImplementation(patch.addresses));
+    }
   }
   if (patch.mode !== undefined) {
     set("loadBalancerMode", patch.mode);

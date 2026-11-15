@@ -932,7 +932,7 @@ export function NetworkStep({
             routerID: shown("loadBalancerRouterID"),
           }}
           onChange={(patch) => {
-            setLoadBalancer(set, patch);
+            setLoadBalancer(set, patch, form.loadBalancerPicked);
           }}
           password={
             <Field label={passwordLabel} hint={passwordInfo} error={shown("loadBalancerPassword")}>

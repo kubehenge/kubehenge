@@ -27,11 +27,29 @@ export type Implementation = "" | "metallb" | "kube-vip";
 // cluster has a load balancer of its own.
 const noneText = (distribution: string | undefined): string => (distribution === "k3s" ? "k3s's own" : "None");
 
-const implementationOptions = (distribution: string | undefined): { value: Implementation; label: string }[] => [
-  { value: "", label: noneText(distribution) },
-  { value: "metallb", label: "MetalLB (recommended)" },
-  { value: "kube-vip", label: "kube-vip" },
-];
+/**
+ * recommendedImplementation is the load balancer a form with these addresses is best served by:
+ * MetalLB once it has a range to hand out, and the distribution's own (or none) before.
+ */
+export const recommendedImplementation = (addresses: string): Implementation =>
+  addresses.trim() === "" ? "" : "metallb";
+
+const recommendedMark = " (recommended)";
+
+const implementationOptions = (
+  distribution: string | undefined,
+  addresses: string,
+): { value: Implementation; label: string }[] => {
+  const recommended = recommendedImplementation(addresses);
+  // None is no recommendation, but the distribution's own load balancer is one.
+  const mark = (value: Implementation, label: string): string =>
+    value === recommended && (value !== "" || distribution === "k3s") ? label + recommendedMark : label;
+  return [
+    { value: "", label: mark("", noneText(distribution)) },
+    { value: "metallb", label: mark("metallb", "MetalLB") },
+    { value: "kube-vip", label: "kube-vip" },
+  ];
+};
 
 /** How a cluster's load balancer announces addresses: ARP on the nodes' network, or BGP to routers. */
 export type Mode = "l2" | "bgp";
@@ -341,7 +359,7 @@ export function LoadBalancerFields({
   /** Where the routers' password is entered: a field in the wizard, the stored credential on a running cluster. */
   password: ReactNode;
 }): JSX.Element {
-  const options = implementationOptions(distribution);
+  const options = implementationOptions(distribution, value.addresses);
   const bgp = value.mode === "bgp" && bgpOffered(distribution, value.implementation);
   return (
     <>
