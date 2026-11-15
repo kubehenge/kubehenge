@@ -237,11 +237,7 @@ func (a *Appliance) interfaceAPI() (*interfaceAPI, error) {
 	if err != nil {
 		return nil, fmt.Errorf("a client for the management cluster: %w", err)
 	}
-	store, err := backupstore.NewForward(cfg, kube)
-	if err != nil {
-		return nil, err //nolint:wrapcheck // NewForward names what failed
-	}
-	return &interfaceAPI{kube: kube, store: store}, nil
+	return &interfaceAPI{kube: kube, store: backupstore.NewForward(cfg, kube)}, nil
 }
 
 // SnapshotVolume is the backup volume as the interface reaches it for the clusters' etcd

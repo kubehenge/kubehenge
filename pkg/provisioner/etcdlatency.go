@@ -138,7 +138,7 @@ func memberFsync(ctx context.Context, dial func(context.Context) (net.Conn, erro
 	transport := &http.Transport{
 		DialContext:     func(ctx context.Context, _, _ string) (net.Conn, error) { return dial(ctx) },
 		TLSClientConfig: tlsConfig,
-		// One request per connection: a port-forward is one SPDY connection per dial.
+		// One request per connection: a port-forward is one streaming connection per dial.
 		DisableKeepAlives: true,
 	}
 	defer transport.CloseIdleConnections()

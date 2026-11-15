@@ -149,6 +149,20 @@ func TestPortForwardEndsWhenTheKubeletReportsAnError(t *testing.T) {
 	}
 }
 
+// The read's error carries what the kubelet said, so a failed snapshot names the refused port.
+func TestPortForwardSaysWhatTheKubeletReported(t *testing.T) {
+	t.Parallel()
+	const refused = "an error occurred forwarding 2381 -> 2381: connection refused"
+	_, config := startKubelet(t, refused)
+	conn, err := portForward(config, "team-a", "etcd-web-cp-0", 2381)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = conn.Read(make([]byte, 16)); err == nil || !strings.Contains(err.Error(), "etcd-web-cp-0 ended the transfer: "+refused) {
+		t.Errorf("error %v, want the kubelet's message", err)
+	}
+}
+
 func TestPortForwardFailsWhereTheAPIServerRefuses(t *testing.T) {
 	t.Parallel()
 	_, config := startKubelet(t, "")
