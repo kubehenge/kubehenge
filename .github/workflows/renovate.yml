@@ -2,17 +2,14 @@
 name: renovate
 
 # On Renovate's branches: the pins and test fixtures an update leaves stale, refreshed and
-# committed, then the checks started again, since a push with GITHUB_TOKEN starts no workflow.
-# Whoever pushes there already holds write access, so the job runs for every push.
+# committed, then the required checks started again, since a push with GITHUB_TOKEN starts no
+# workflow. The refresh runs the code the update brings in, so it holds a read-only token and hands
+# its result as a patch to a job that runs nothing from the branch.
 on:
   push:
     branches: ['renovate/**']
 
 permissions: {}
-
-env:
-  GOTOOLCHAIN: local
-  GOPROXY: https://proxy.golang.org|direct
 
 concurrency:
   group: renovate-${{ github.ref }}
@@ -24,12 +21,19 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
-      contents: write # to push the refreshed files to the branch
-      actions: write # to start ci.yml and e2e.yml on the branch
+      contents: read # to check out the branch and main, which the e2e scope compares against
+      pull-requests: read # to find whether the branch's pull request is a draft
+    env:
+      GOTOOLCHAIN: local
+      GOPROXY: https://proxy.golang.org|direct
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+      tests: ${{ steps.diff.outputs.tests }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - id: tools
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -48,21 +52,84 @@ jobs:
       - run: scripts/renovate-refresh.sh
         env:
           GITHUB_TOKEN: ${{ github.token }}
-      # renovate.json ignores this author's commits, so Renovate keeps rebasing the branch.
-      - name: Commit and start the checks
+      # The e2e tests are those a ready pull request's run would pick for the refreshed tree
+      # (test/e2e/ci/scope.sh), "none" when it needs none, and nothing for a draft, which runs none.
+      - id: diff
         env:
           GH_TOKEN: ${{ github.token }}
           BRANCH: ${{ github.ref_name }}
         run: |
-          if [ -z "$(git status --porcelain --untracked-files=no)" ]; then
+          git diff --binary > "$RUNNER_TEMP/refresh.patch"
+          if [ ! -s "$RUNNER_TEMP/refresh.patch" ]; then
             echo "nothing stale"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          git diff --stat
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          draft=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open \
+            --json isDraft --jq '.[0].isDraft // true')
+          if [ "$draft" = true ]; then
+            tests=
+          else
+            base=$(git merge-base origin/main HEAD)
+            tests=$(git -c core.quotepath=off diff --name-only --no-renames "$base" |
+              test/e2e/ci/scope.sh --base "$base" | jq -r 'join(" ")')
+            [ -n "$tests" ] || tests=none
+          fi
+          echo "tests=$tests" >> "$GITHUB_OUTPUT"
+      - if: steps.diff.outputs.changed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: refresh-patch
+          path: ${{ runner.temp }}/refresh.patch
+          retention-days: 1
+
+  # Runs nothing from the branch: it applies the patch to the same commit, refuses one that touches
+  # anything but the refreshed files, and pushes only if the branch has not moved since.
+  commit:
+    name: Commit
+    needs: refresh
+    if: needs.refresh.outputs.changed == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # to push the refreshed files to the branch
+      actions: write # to start the workflows of the required checks on the branch
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: refresh-patch
+          path: ${{ runner.temp }}/refresh
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.ref_name }}
+          TESTS: ${{ needs.refresh.outputs.tests }}
+        run: |
+          patch="$RUNNER_TEMP/refresh/refresh.patch"
+          allowed='^(pkg/provisioner/releasepins\.txt|charts/kubehenge/values\.yaml'
+          allowed="$allowed|pkg/templates/testdata/almalinux-10/CHECKSUM(\.asc)?)$"
+          if git apply --numstat "$patch" | cut -f3 | grep -Ev "$allowed"; then
+            echo "the patch changes files the refresh never writes" >&2
+            exit 1
+          fi
+          git apply --index "$patch"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -u
           git commit -m 'Refresh the pins and fixtures the updates leave stale'
           remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          head=$(git ls-remote "$remote" "refs/heads/${BRANCH}" | cut -f1)
+          if [ "$head" != "$GITHUB_SHA" ]; then
+            echo "${BRANCH} moved to ${head} since ${GITHUB_SHA}; its own run refreshes it" >&2
+            exit 1
+          fi
           git push "$remote" "HEAD:refs/heads/${BRANCH}"
+          # The workflows of the ruleset's required checks: Test and Dependencies, CodeQL's, e2e.
           gh workflow run ci.yml --ref "$BRANCH"
-          gh workflow run e2e.yml --ref "$BRANCH"
+          gh workflow run codeql.yml --ref "$BRANCH"
+          if [ -n "$TESTS" ]; then
+            gh workflow run e2e.yml --ref "$BRANCH" -f tests="$TESTS"
+          fi

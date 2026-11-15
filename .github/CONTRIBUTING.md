@@ -91,7 +91,7 @@ Details and reasons: `docs/architecture.md`.
   - Where the publisher's bytes change under a version, its signature is required instead. The few left with neither are named in `docs/architecture.md`.
   - An image that another release names for itself (Rancher's webhook, Fleet, shell and Turtles, the FRR of MetalLB's chart) has no Renovate comment. It moves only with that release, as Renovate's pull request for it says.
   - Calico's images and the Tigera operator move only with the tigera-operator chart. `renovate.json` holds them, and `scripts/renovate-refresh.sh` sets them to the chart's release.
-- **Stale files on Renovate's branch.** The `renovate` workflow runs `make release-pins` and `scripts/renovate-refresh.sh` on each push to `renovate/**`. It commits what changed and starts `ci` and `e2e` again.
+- **Stale files on Renovate's branch.** The `renovate` workflow runs `make release-pins` and `scripts/renovate-refresh.sh` on each push to `renovate/**`. It commits what changed and starts `ci`, `codeql` and the pull request's scope of `e2e` again.
 - **Release pins.** RKE2's, k3s's and Talos's releases are pinned in `pkg/provisioner/releasepins.txt`. Renovate raises the newest release named in its header.
   - A Talos pin holds the digests of the images its templates are baked from. CI checks it by its own content and Sidero's signature (`make verify-talos-pins`), never against a tag.
   - On that pull request, `make release-pins` (with `GH_TOKEN` set) adds every release published since, as a unit test requires. The `renovate` workflow runs it. Until then, the first CI run fails with `Talos <release> is not pinned`.

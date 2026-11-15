@@ -10,6 +10,9 @@ on:
     branches: [main]
   # Every pull request, whatever it targets, so that one stacked on another is checked too.
   pull_request:
+  # renovate.yml starts it on Renovate's branch after it pushes there with GITHUB_TOKEN, whose
+  # pushes start no workflow.
+  workflow_dispatch:
   # A query pack that learns a new pattern finds it in code that has not changed since.
   schedule:
     - cron: '29 3 * * 3'

@@ -16,7 +16,7 @@ on:
       tests:
         description: >-
           The tests to run, separated by spaces, as test/e2e/ci/run.sh names them, options
-          included; none runs tonight's nightly set.
+          included; none runs tonight's nightly set, and "none" runs no test.
         type: string
         default: ''
       fresh:
@@ -70,9 +70,15 @@ jobs:
               fi
               ;;
             # run.sh refuses a name it cannot read before anything is built.
+            # "none" reports the check on a commit whose changes need no test, as a pull request's
+            # empty scope does (renovate.yml).
             workflow_dispatch)
-              tests=$(jq -nc --arg t "$ASKED" '$t | split(" ") | map(select(. != ""))')
-              [ "$tests" != '[]' ] || tests=$(test/e2e/ci/nightly.sh)
+              if [ "$ASKED" = none ]; then
+                tests='[]'
+              else
+                tests=$(jq -nc --arg t "$ASKED" '$t | split(" ") | map(select(. != ""))')
+                [ "$tests" != '[]' ] || tests=$(test/e2e/ci/nightly.sh)
+              fi
               ;;
             *) tests=$(test/e2e/ci/nightly.sh) ;;
           esac
