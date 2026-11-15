@@ -922,6 +922,7 @@ export function NetworkStep({
       {variable(cls, "loadBalancer") && (
         <LoadBalancerFields
           distribution={cls?.distribution}
+          rangeOffered={!form.loadBalancerPicked}
           example={`${sample(primary, exampleRangeFirst)}-${sample(primary, exampleRangeLast)}`}
           families={form.families}
           value={formLoadBalancerValue(form)}

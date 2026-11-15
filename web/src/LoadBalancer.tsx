@@ -348,8 +348,11 @@ export function LoadBalancerFields({
   onChange,
   password,
   example,
+  rangeOffered = false,
 }: {
   distribution: string | undefined;
+  /** Whether the address range shows with no load balancer chosen, where typing one chooses MetalLB. */
+  rangeOffered?: boolean;
   /** A range on the nodes' network to show as the example, where the network is known. */
   example?: string | undefined;
   families: FamilyChoice;
@@ -395,7 +398,7 @@ export function LoadBalancerFields({
           )}
         </Field>
       )}
-      {value.implementation !== "" && (
+      {(value.implementation !== "" || rangeOffered) && (
         <Field
           label="Load-balancer addresses"
           hint={bgp ? routedHint(families) : addressesHint(families, example)}

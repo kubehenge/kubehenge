@@ -1,9 +1,12 @@
 import { render, screen, within } from "@testing-library/react";
-import type { JSX } from "react";
+import userEvent from "@testing-library/user-event";
+import { useState, type JSX } from "react";
 import { describe, expect, it } from "vitest";
 
 import { newForm, setLoadBalancer, type Form } from "./create-form";
+import { NetworkStep } from "./CreateSteps";
 import { LoadBalancerFields, recommendedImplementation, type LoadBalancerValue } from "./LoadBalancer";
+import type { ClusterClass } from "./types";
 
 const fields = (
   distribution: string,
@@ -46,6 +49,58 @@ function typing(form: Form): { form: Form; patch: (p: Partial<LoadBalancerValue>
     },
   };
 }
+
+const k3sClass: ClusterClass = {
+  name: "kubehenge-k3s",
+  distribution: "k3s",
+  versionFormat: { pattern: ".*" },
+  annotations: {},
+  variables: [
+    { name: "controlPlaneEndpoint", required: true, schema: { type: "string" } },
+    { name: "network", required: true, schema: { type: "object", properties: {} } },
+    { name: "loadBalancer", required: false, schema: { type: "object" } },
+  ],
+};
+
+const noProblems = new Map<string, string>();
+
+function Step(): JSX.Element {
+  const [form, setForm] = useState<Form>(newForm());
+  return (
+    <NetworkStep
+      form={form}
+      set={(k, v) => {
+        setForm((f) => ({ ...f, [k]: v }));
+      }}
+      shown={() => noProblems.get("name")}
+      cls={k3sClass}
+      bridgeOptions={[]}
+    />
+  );
+}
+
+describe("the load balancer in the wizard's Network step", () => {
+  it("moves from k3s's own to MetalLB when a range is entered, until the user picks", async () => {
+    const user = userEvent.setup();
+    render(<Step />);
+    expect(choice()).toHaveDisplayValue("k3s's own (recommended)");
+    await user.type(screen.getByLabelText("Load-balancer addresses"), "10.0.0.100-10.0.0.120");
+    expect(choice()).toHaveDisplayValue("MetalLB (recommended)");
+    await user.selectOptions(choice(), "kube-vip");
+    await user.clear(screen.getByLabelText("Load-balancer addresses"));
+    expect(choice()).toHaveDisplayValue("kube-vip");
+  });
+
+  it("keeps a pick of k3s's own, which has no range to enter", async () => {
+    const user = userEvent.setup();
+    render(<Step />);
+    await user.selectOptions(choice(), "MetalLB");
+    await user.type(screen.getByLabelText("Load-balancer addresses"), "10.0.0.100");
+    await user.selectOptions(choice(), "k3s's own");
+    expect(choice()).toHaveDisplayValue("k3s's own");
+    expect(screen.queryByLabelText("Load-balancer addresses")).toBeNull();
+  });
+});
 
 describe("the load balancer default", () => {
   it("recommends the distribution's own with no range, and MetalLB with one", () => {

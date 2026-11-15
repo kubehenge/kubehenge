@@ -211,9 +211,25 @@ func validateFamilies(old, c *clusterv1.Cluster) field.ErrorList {
 		}
 	}
 	if old != nil {
-		if was, _, err := optionalVariable[nodeNetwork](old, networkVariable); err == nil && !slices.Equal(was.families(), network.families()) {
-			errs = append(errs, field.Forbidden(path.Child("ipFamilies"), "the address families are chosen when the cluster is created"))
+		if was, _, err := optionalVariable[nodeNetwork](old, networkVariable); err == nil {
+			errs = append(errs, fixedNetwork(&was, &network, path)...)
 		}
+	}
+	return errs
+}
+
+// fixedNetwork refuses a change of what a cluster's network was created with: its address families,
+// its bridge and its VLAN.
+func fixedNetwork(was, now *nodeNetwork, path *field.Path) field.ErrorList {
+	var errs field.ErrorList
+	if !slices.Equal(was.families(), now.families()) {
+		errs = append(errs, field.Forbidden(path.Child("ipFamilies"), "the address families are chosen when the cluster is created"))
+	}
+	if was.Bridge != now.Bridge {
+		errs = append(errs, field.Forbidden(path.Child("bridge"), "the bridge is chosen when the cluster is created"))
+	}
+	if was.VLAN != now.VLAN {
+		errs = append(errs, field.Forbidden(path.Child("vlan"), "the VLAN is chosen when the cluster is created"))
 	}
 	return errs
 }
