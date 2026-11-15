@@ -4,21 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
-	"strconv"
-	"sync"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/portforward"
-	"k8s.io/client-go/transport/spdy"
 	"k8s.io/streaming/pkg/httpstream"
+
+	"github.com/kubehenge/kubehenge/pkg/podforward"
 )
 
 // ForwardBase is the store's address for a Client whose HTTP goes through a Forward, which ignores
@@ -43,29 +39,11 @@ type Forward struct {
 	Idle time.Duration
 }
 
-// NewForward is a Forward through the API server cfg names, over WebSockets where the API server
-// takes them and SPDY otherwise.
-func NewForward(cfg *rest.Config, kube kubernetes.Interface) (*Forward, error) {
-	rt, upgrader, err := spdy.RoundTripperFor(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("a port-forward to the backup store: %w", err)
-	}
+// NewForward is a Forward through the API server cfg names.
+func NewForward(cfg *rest.Config, kube kubernetes.Interface) *Forward {
 	return &Forward{Kube: kube, Dial: func(_ context.Context, pod string) (httpstream.Connection, error) {
-		u := kube.CoreV1().RESTClient().Post().Namespace(Namespace).Resource("pods").Name(pod).SubResource("portforward").URL()
-		ws, err := portforward.NewSPDYOverWebsocketDialerForStreaming(u, cfg)
-		if err != nil {
-			return nil, fmt.Errorf("a port-forward to the backup store: %w", err)
-		}
-		legacy := spdy.NewDialerForStreaming(upgrader, &http.Client{Transport: rt}, http.MethodPost, u)
-		dialer := portforward.NewFallbackDialerForStreaming(ws, legacy, func(err error) bool {
-			return httpstream.IsUpgradeFailure(err) || httpstream.IsHTTPSProxyError(err)
-		})
-		conn, _, err := dialer.Dial(portforward.PortForwardProtocolV1Name)
-		if err != nil {
-			return nil, fmt.Errorf("a port-forward to the backup store's pod %s: %w", pod, err)
-		}
-		return conn, nil
-	}}, nil
+		return podforward.Dial(cfg, Namespace, pod)
+	}}
 }
 
 // HTTPClient is a client whose every request reaches the store through a forward of its own.
@@ -101,139 +79,9 @@ func (f *Forward) dialStore(ctx context.Context) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	headers := http.Header{}
-	headers.Set(corev1.StreamType, corev1.StreamTypeError)
-	headers.Set(corev1.PortHeader, strconv.Itoa(containerPort))
-	headers.Set(corev1.PortForwardRequestIDHeader, "0")
-	errStream, err := conn.CreateStream(headers)
-	if err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("a port-forward to the backup store's pod %s: %w", pod, err)
-	}
-	// The error stream only reads.
-	_ = errStream.Close()
-	headers.Set(corev1.StreamType, corev1.StreamTypeData)
-	data, err := conn.CreateStream(headers)
-	if err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("a port-forward to the backup store's pod %s: %w", pod, err)
-	}
 	idle := f.Idle
 	if idle == 0 {
 		idle = forwardIdle
 	}
-	c := &forwardConn{conn: conn, data: data, pod: pod, idle: idle, failed: make(chan struct{}), errorsRead: make(chan struct{})}
-	c.watchdog = time.AfterFunc(idle, c.stalled)
-	go c.readErrors(errStream)
-	return c, nil
+	return podforward.Port(conn, pod, containerPort, idle) //nolint:wrapcheck // Port names the pod
 }
-
-// forwardConn is one forward to the store as a net.Conn. What ends it early, a message on the
-// error stream or nothing moving for idle, becomes the error its reads and writes return.
-type forwardConn struct {
-	conn     httpstream.Connection
-	data     httpstream.Stream
-	pod      string
-	idle     time.Duration
-	watchdog *time.Timer
-
-	// errorsRead closes once the error stream has ended.
-	errorsRead chan struct{}
-
-	mu     sync.Mutex
-	err    error
-	failed chan struct{}
-}
-
-// errorStreamLag is how long a forward's end waits for the error stream to say why.
-const errorStreamLag = time.Second
-
-func (c *forwardConn) Read(b []byte) (int, error) {
-	n, err := c.data.Read(b)
-	if n > 0 {
-		c.watchdog.Reset(c.idle)
-	}
-	if err != nil {
-		err = c.errorAfter(err)
-	}
-	return n, err
-}
-
-func (c *forwardConn) Write(b []byte) (int, error) {
-	n, err := c.data.Write(b)
-	if n > 0 {
-		c.watchdog.Reset(c.idle)
-	}
-	if err != nil {
-		err = c.errorAfter(err)
-	}
-	return n, err
-}
-
-func (c *forwardConn) Close() error {
-	c.watchdog.Stop()
-	c.conn.RemoveStreams(c.data)
-	return errors.Join(c.data.Close(), c.conn.Close())
-}
-
-func (*forwardConn) LocalAddr() net.Addr  { return forwardAddr{} }
-func (*forwardConn) RemoteAddr() net.Addr { return forwardAddr{} }
-
-// The deadlines are the watchdog's: a stream has none of its own.
-func (*forwardConn) SetDeadline(time.Time) error      { return nil }
-func (*forwardConn) SetReadDeadline(time.Time) error  { return nil }
-func (*forwardConn) SetWriteDeadline(time.Time) error { return nil }
-
-// readErrors waits for the error stream, which the kubelet writes when the forward fails, such as
-// when the pod goes.
-func (c *forwardConn) readErrors(s httpstream.Stream) {
-	defer close(c.errorsRead)
-	msg, err := io.ReadAll(s)
-	switch {
-	case len(msg) > 0:
-		c.fail(fmt.Errorf("the backup store's pod %s ended the transfer: %s", c.pod, msg))
-	case err != nil:
-		c.fail(fmt.Errorf("the port-forward to the backup store's pod %s broke: %w", c.pod, err))
-	}
-}
-
-func (c *forwardConn) stalled() {
-	c.fail(fmt.Errorf("the backup store's pod %s sent nothing for %s, so the transfer was ended", c.pod, c.idle))
-}
-
-// fail records the first cause and ends the forward, which unblocks a read or write waiting on it.
-func (c *forwardConn) fail(err error) {
-	c.mu.Lock()
-	first := c.err == nil
-	if first {
-		c.err = err
-		close(c.failed)
-	}
-	c.mu.Unlock()
-	if first {
-		_ = c.data.Reset()
-		_ = c.conn.Close()
-	}
-}
-
-// errorAfter is the forward's cause in place of err, the data stream's end, where it has one. The
-// kubelet ends the error stream after the data stream, so this waits a moment for it.
-func (c *forwardConn) errorAfter(err error) error {
-	select {
-	case <-c.errorsRead:
-	case <-c.failed:
-	case <-time.After(errorStreamLag):
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.err != nil {
-		return c.err
-	}
-	return err
-}
-
-// forwardAddr names a forward's two ends, which have no network address.
-type forwardAddr struct{}
-
-func (forwardAddr) Network() string { return "portforward" }
-func (forwardAddr) String() string  { return Namespace + "/" + Service }
