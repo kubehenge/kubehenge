@@ -836,8 +836,7 @@ func (run *restoreRun) removeTranscoded(ctx context.Context) error {
 	if t == nil {
 		var err error
 		if t, err = run.r.Targets.Open(ctx, run.cluster, run.request.Target, false); err != nil {
-			// Without its target, the restore stored nothing there either.
-			return nil
+			return nil //nolint:nilerr // without its target, the restore stored nothing there either
 		}
 		defer func() { _ = t.Release(ctx) }()
 	}

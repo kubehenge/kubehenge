@@ -262,7 +262,7 @@ func TestEtcdRestoreFromTheVolumeNeedsAWayToTheNode(t *testing.T) {
 		"no workload clients": {nil, receiverImage},
 		"no receiver image":   {newFakeWorkloads(t, nil), ""},
 	} {
-		f, _ := volumeRestoreFixture(t, templates.Kubeadm)
+		f, vol := volumeRestoreFixture(t, templates.Kubeadm)
 		f.r.Workloads, f.r.ReceiverImage = nil, tc.image
 		if tc.workloads != nil {
 			f.r.Workloads = tc.workloads
@@ -274,6 +274,9 @@ func TestEtcdRestoreFromTheVolumeNeedsAWayToTheNode(t *testing.T) {
 		}
 		if runs := f.guests.runs(); slices.ContainsFunc(runs, func(r string) bool { return strings.HasSuffix(r, " stop") }) {
 			t.Errorf("%s: etcd was stopped without a way for the snapshot: %v", name, runs)
+		}
+		if vol.openedAwake == 0 || vol.released != vol.openedAwake {
+			t.Errorf("%s: the volume was opened %d times and let go %d", name, vol.openedAwake, vol.released)
 		}
 		checkFailedEvent(t, f, name)
 	}
@@ -427,8 +430,8 @@ func TestEtcdRestoreWaitsForTheVolume(t *testing.T) {
 	run := &restoreRun{r: f.r, key: client.ObjectKey{Namespace: "team-a", Name: "web"}, cluster: f.cluster(), talos: true}
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	if _, err := run.openTarget(ctx); !errors.Is(err, ErrVolumeAsleep) {
-		t.Fatalf("opened a sleeping volume: %v", err)
+	if err := run.readSnapshot(ctx); !errors.Is(err, ErrVolumeAsleep) {
+		t.Fatalf("read a snapshot from a sleeping volume: %v", err)
 	}
 	if run.status.Message != volumeWakingMessage {
 		t.Errorf("status message %q", run.status.Message)
