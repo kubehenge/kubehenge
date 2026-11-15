@@ -416,15 +416,21 @@ func (o *controllerOptions) newHooks(mgr ctrl.Manager, registrar *provisioner.Re
 		DatastoreAllocate: o.r.DatastoreAllocate,
 		SysAuditGroup:     o.r.SysAuditGroup,
 		VolumeSnapshots:   o.r.VolumeSnapshots,
-		Releases: &provisioner.ReleaseChecksums{
-			Pins:   provisioner.DefaultReleasePins(),
-			Store:  &provisioner.PinStore{Reader: mgr.GetAPIReader(), Namespace: o.r.ClassNamespace},
-			Mirror: func() provisioner.ReleaseMirror { return o.releaseMirror },
-			SiteCA: func() string { return o.r.SiteCA },
-		},
-		Client: mgr.GetClient(),
-		Soak:   o.nodeImageSoak,
-		Now:    time.Now,
+		Releases:          o.releaseChecksums(mgr.GetAPIReader()),
+		Client:            mgr.GetClient(),
+		Soak:              o.nodeImageSoak,
+		Now:               time.Now,
+	}
+}
+
+// releaseChecksums reads the release pins and, from the mirror when one is set, the releases. The
+// mirror's authority is its own, else the site CA.
+func (o *controllerOptions) releaseChecksums(reader client.Reader) *provisioner.ReleaseChecksums {
+	return &provisioner.ReleaseChecksums{
+		Pins:   provisioner.DefaultReleasePins(),
+		Store:  &provisioner.PinStore{Reader: reader, Namespace: o.r.ClassNamespace},
+		Mirror: func() provisioner.ReleaseMirror { return o.releaseMirror },
+		SiteCA: func() string { return o.r.SiteCA },
 	}
 }
 

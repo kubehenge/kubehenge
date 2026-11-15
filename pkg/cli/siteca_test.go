@@ -72,6 +72,16 @@ func TestControllerSiteCAReachesTheReleaseMirrorAndTheNodes(t *testing.T) {
 		t.Errorf("no site CA: %v, %q, %q", err, o.releaseMirror.CABundle, o.r.SiteCA)
 	}
 
+	// The controller's own reads of the mirror are verified with the site CA.
+	o = &controllerOptions{siteCAFile: sitePath}
+	o.releaseMirror.URL = "https://mirror.example.org"
+	if err := o.parseReleaseMirror(); err != nil {
+		t.Fatal(err)
+	}
+	if got := o.releaseChecksums(nil).DefaultMirror().CABundle; got != strings.TrimSpace(site) {
+		t.Errorf("the controller reads the mirror with %q, want the site CA", got)
+	}
+
 	o = &controllerOptions{siteCAFile: sitePath}
 	o.releaseMirror.URL = "http://mirror.example.org"
 	if err := o.parseReleaseMirror(); err != nil || o.releaseMirror.CABundle != "" {
