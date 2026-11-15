@@ -45,12 +45,15 @@ const (
 	stepStartAs  = "start as it was"
 	stepRestored = "restored?"
 	stepClean    = "clean"
+	stepHold     = "hold"
 )
 
 func stepOf(script string) string {
 	switch {
 	case script == "true\n":
 		return stepPing
+	case strings.Contains(script, "stays stopped"):
+		return stepHold
 	case strings.Contains(script, "openssl enc -d"):
 		return stepFetch
 	case strings.Contains(script, "systemctl stop"), strings.Contains(script, "the control plane is stopped"):

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"time"
 
@@ -49,14 +50,37 @@ var errVolumeUnreached = errors.New("the controller reaches no workload API serv
 // cluster's API server, the snapshot's way to the node, does not answer.
 var ErrHandOverAPIDown = errors.New("the cluster's API server does not answer, and a snapshot on the backup volume reaches the node only through it. Download the snapshot and restore by hand, or restore from a bucket target")
 
-// handOverAlone gets the snapshot to the first node whether or not the cluster kept its quorum and
-// its API server answers. It stops every control-plane node, resets etcd on the first to a cluster
-// of that node alone, which keeps the node's own data, and starts it, so its API server answers.
-// Then it streams the snapshot in, for the restore to replace that data. Should anything fail from
-// here on, the recovery finds etcd reset on the first node and replaces the others, as after a
-// reset.
-func (run *restoreRun) handOverAlone(ctx context.Context, password string) error {
+// EtcdAloneCondition on a Cluster says that etcd runs on one control-plane node alone and the other
+// control planes are stopped, after a restore from the backup volume failed past resetting etcd to
+// that node. Restoring again from the snapshot finishes the restore.
+const (
+	EtcdAloneCondition = "EtcdOnOneNode"
+	EtcdAloneReason    = "RestoreFailedAfterReset"
+)
+
+// answers tells whether the cluster's API server answers on its address, for at most
+// resetAnswerTimeout.
+func (run *restoreRun) answers(ctx context.Context) bool {
+	if run.r.APIs == nil {
+		return false
+	}
+	actx, cancel := context.WithTimeout(ctx, resetAnswerTimeout)
+	defer cancel()
+	return run.r.APIs.Ready(actx, run.cluster) == nil
+}
+
+// handOverAlone gets the checked snapshot to the first node of a cluster whose API server does not
+// answer, most often one that lost its quorum, through which alone the snapshot reaches the node.
+// It stops every control-plane node, resets etcd on the first to a cluster of that node alone,
+// which keeps the node's own data, and starts it, so its API server answers. Then it streams the
+// snapshot in, for the restore to replace that data. The reset is the point of no return: from then
+// on a failure keeps the other control planes stopped (keepAlone).
+func (run *restoreRun) handOverAlone(ctx context.Context, password string, staged checkedSnapshot) error {
 	if err := run.stop(ctx); err != nil {
+		return err
+	}
+	run.status.Alone = true
+	if err := run.save(ctx); err != nil {
 		return err
 	}
 	if err := run.on(ctx, run.nodes[0], "resetting etcd to this node alone", run.scripts.Reset); err != nil {
@@ -68,13 +92,31 @@ func (run *restoreRun) handOverAlone(ctx context.Context, password string) error
 	if err := run.answer(ctx); err != nil {
 		return err
 	}
-	return run.handOver(ctx, password)
+	return run.handOver(ctx, password, staged)
 }
 
-// handOver streams the snapshot, encrypted with password, to the first node, and has the node check
-// and decrypt it. The pod and the file go afterwards, whatever happened. readSnapshot has made
-// sure of the workload clients and the receiver's image.
-func (run *restoreRun) handOver(ctx context.Context, password string) error {
+// keepAlone leaves etcd on the first node alone after a failure past its reset. The first node's
+// control plane starts again. The others stay stopped, and held so that a reboot does not start
+// them, since their etcd members from before would make a cluster of their own beside it. A
+// condition on the cluster says so.
+func (run *restoreRun) keepAlone(ctx context.Context) []error {
+	errs := []error{run.on(ctx, run.nodes[0], "starting the control plane alone", run.scripts.StartNoWait)}
+	for _, n := range run.nodes[1:] {
+		errs = append(errs, run.on(ctx, n, "keeping the control plane stopped", run.scripts.Hold))
+	}
+	run.status.Replaced = nil
+	state := fmt.Sprintf("etcd runs on %s alone, and the other control planes are stopped. Restore again from the snapshot", run.status.Machine)
+	cond := &metav1.Condition{Type: EtcdAloneCondition, Status: metav1.ConditionTrue, Reason: EtcdAloneReason, Message: state}
+	if _, err := setClusterCondition(ctx, run.r.Client, run.r.Reader, run.key, EtcdAloneCondition, cond); err != nil {
+		errs = append(errs, err)
+	}
+	return append(errs, errors.New(state))
+}
+
+// handOver streams the checked snapshot, encrypted with password, to the first node, and has the
+// node check and decrypt it. The pod and the file go afterwards, whatever happened. readSnapshot
+// has made sure of the workload clients and the receiver's image.
+func (run *restoreRun) handOver(ctx context.Context, password string, staged checkedSnapshot) error {
 	workload, found, err := run.r.Workloads.Client(ctx, run.cluster)
 	if err != nil {
 		return fmt.Errorf("reaching the cluster's API server: %w", err)
@@ -97,32 +139,34 @@ func (run *restoreRun) handOver(ctx context.Context, password string) error {
 		_ = workload.Delete(after, pod)
 		_ = run.on(after, run.nodes[0], "removing the received snapshot", "rm -f -- "+shellQuote(file))
 	}()
-	sum, err := run.receive(ctx, workload, pod, password)
-	if err != nil {
+	if err = run.receive(ctx, workload, pod, password, staged); err != nil {
 		return err
 	}
-	return run.on(ctx, run.nodes[0], "decrypting the snapshot", receivedScriptFor(file, password, sum))
+	return run.on(ctx, run.nodes[0], "decrypting the snapshot", receivedScriptFor(file, password, staged.sum))
 }
 
-// receive starts the stream once the pod runs, and waits for the pod to check it. It returns the
-// SHA-256 the node checks the decrypted snapshot by.
-func (run *restoreRun) receive(ctx context.Context, workload client.Client, pod *corev1.Pod, password string) (string, error) {
+// receive starts the stream once the pod runs, and waits for the pod to check it.
+func (run *restoreRun) receive(ctx context.Context, workload client.Client, pod *corev1.Pod, password string, staged checkedSnapshot) error {
 	started, err := waitForPod(ctx, workload, pod, func(p *corev1.Pod) bool {
 		return p.Status.Phase != corev1.PodPending
 	})
 	if err != nil {
-		return "", err
+		return err
 	}
 	if started.Status.Phase != corev1.PodRunning {
-		return "", receiverRefusal(started)
+		return receiverRefusal(started)
 	}
-	sealed, err := run.sealedForNode(ctx, password)
+	plain, err := os.Open(staged.path)
 	if err != nil {
-		return "", err
+		return fmt.Errorf("reading the snapshot: %w", err)
 	}
-	defer sealed.done()
+	defer func() { _ = plain.Close() }()
+	sealed, err := opensslSeal(plain, password)
+	if err != nil {
+		return err
+	}
 	r, w := io.Pipe()
-	go func() { w.CloseWithError(SendEtcdSnapshot(w, sealed.body)) }()
+	go func() { w.CloseWithError(SendEtcdSnapshot(w, sealed)) }()
 	attachErr := run.r.Workloads.Attach(ctx, run.cluster, pod.Namespace, pod.Name, receiverContainer, r)
 	_ = r.Close()
 	ended, err := waitForPod(ctx, workload, pod, func(p *corev1.Pod) bool {
@@ -130,13 +174,13 @@ func (run *restoreRun) receive(ctx context.Context, workload client.Client, pod 
 	})
 	switch {
 	case err != nil && attachErr != nil:
-		return "", fmt.Errorf("streaming the snapshot to %s: %w", run.nodes[0].Machine, attachErr)
+		return fmt.Errorf("streaming the snapshot to %s: %w", run.nodes[0].Machine, attachErr)
 	case err != nil:
-		return "", err
+		return err
 	case ended.Status.Phase != corev1.PodSucceeded:
-		return "", receiverRefusal(ended)
+		return receiverRefusal(ended)
 	}
-	return sealed.sum, nil
+	return nil
 }
 
 // receiverRefusal is why the receiving pod failed, in its own words where it left them.
@@ -188,6 +232,8 @@ func receiverPod(id, node, image, file string, need int64) *corev1.Pod {
 				SecurityContext: &corev1.SecurityContext{
 					RunAsUser: new(int64(0)), ReadOnlyRootFilesystem: new(true), AllowPrivilegeEscalation: new(false),
 					Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+					// It writes the host's RestoreWorkDir, which SELinux keeps a confined container from.
+					SELinuxOptions: hostSELinux(),
 				},
 				VolumeMounts: []corev1.VolumeMount{{Name: "restore", MountPath: RestoreWorkDir}},
 			}},

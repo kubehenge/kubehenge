@@ -16,6 +16,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
@@ -101,8 +102,13 @@ type EtcdRestoreStatus struct {
 	// Machine and Node are the control-plane machine etcd is restored on, and its node.
 	Machine string `json:"machine,omitempty"`
 	Node    string `json:"node,omitempty"`
-	// Replaced are the other control-plane machines, which Cluster API makes again.
+	// Replaced are the other control-plane machines, which Cluster API makes again. A restore that
+	// failed before it replaced them lists none.
 	Replaced []string `json:"replaced,omitempty"`
+	// Alone is set once etcd on Machine was reset to a cluster of that node alone, which a restore
+	// from the backup volume does where the cluster's API server does not answer. From then on the
+	// other control planes never start again with their etcd members from before.
+	Alone bool `json:"alone,omitempty"`
 	// Missing are those of Replaced whose VM no longer exists in Proxmox VE.
 	Missing []string `json:"missing,omitempty"`
 	// Before is the snapshot of etcd as it was, taken into the restore's target before anything
@@ -370,6 +376,9 @@ func (run *restoreRun) prepare(ctx context.Context) error {
 	for _, n := range run.nodes[1:] {
 		run.status.Replaced = append(run.status.Replaced, n.Machine)
 	}
+	// After a restore that failed past its reset, etcd runs on the first node alone: the others stay
+	// stopped whatever this one does.
+	run.status.Alone = meta.IsStatusConditionTrue(run.cluster.Status.Conditions, EtcdAloneCondition)
 	return nil
 }
 
@@ -603,7 +612,15 @@ func (run *restoreRun) fetch(ctx context.Context) error {
 		return err
 	}
 	if run.target.OnVolume() {
-		return run.handOverAlone(ctx, password)
+		staged, err := run.checkedForNode(ctx, !run.scripts.Bumps)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = os.Remove(staged.path) }()
+		if run.answers(ctx) {
+			return run.handOver(ctx, password, staged)
+		}
+		return run.handOverAlone(ctx, password, staged)
 	}
 	id := make([]byte, restoreObjectID)
 	if _, err = rand.Read(id); err != nil {
@@ -642,17 +659,17 @@ func (run *restoreRun) sealedForNode(ctx context.Context, password string) (seal
 		}
 		plain = r
 	} else {
-		path, bumped, err := run.bumpedForNode(ctx)
+		checked, err := run.checkedForNode(ctx, true)
 		if err != nil {
 			return sealedSnapshot{}, err
 		}
-		remove = func() { _ = os.Remove(path) }
-		f, err := os.Open(path) //nolint:gosec // the controller's own file of the snapshot
+		remove = func() { _ = os.Remove(checked.path) }
+		f, err := os.Open(checked.path) //nolint:gosec // the controller's own file of the snapshot
 		if err != nil {
 			remove()
 			return sealedSnapshot{}, fmt.Errorf("reading the snapshot: %w", err)
 		}
-		plain, sum = f, bumped
+		plain, sum = f, checked.sum
 	}
 	done := func() { _ = plain.Close(); remove() }
 	body, err := opensslSeal(plain, password)
@@ -678,13 +695,18 @@ func (run *restoreRun) transcode(ctx context.Context, key, password string) (str
 	return sealed.sum, nil
 }
 
-// bumpedForNode keeps the snapshot, checked against its checksum, in a file of ScratchDir with its
-// revision moved on and etcd's checksum at its end, and returns the file and its SHA-256.
-func (run *restoreRun) bumpedForNode(ctx context.Context) (string, string, error) {
+// checkedSnapshot is a file of the snapshot as the node gets it, and the SHA-256 the node checks it
+// by.
+type checkedSnapshot struct{ path, sum string }
+
+// checkedForNode keeps the snapshot in a file of ScratchDir, checked against the checksum it was
+// stored with and as etcd's database (checkedEtcdSnapshot), with etcd's checksum at its end. bump
+// moves its revision on, for the restores that keep it.
+func (run *restoreRun) checkedForNode(ctx context.Context, bump bool) (checkedSnapshot, error) {
 	var path string
 	err := run.withSnapshot(ctx, func(r io.Reader) error {
 		var err error
-		path, err = bumpedEtcdSnapshot(run.r.ScratchDir, r)
+		path, err = checkedEtcdSnapshot(run.r.ScratchDir, r, bump)
 		return err
 	})
 	var sum string
@@ -695,9 +717,9 @@ func (run *restoreRun) bumpedForNode(ctx context.Context) (string, string, error
 		if path != "" {
 			_ = os.Remove(path)
 		}
-		return "", "", err
+		return checkedSnapshot{}, err
 	}
-	return path, sum, nil
+	return checkedSnapshot{path: path, sum: sum}, nil
 }
 
 // stop stops etcd and the API server on every control-plane node.
@@ -783,13 +805,15 @@ func (run *restoreRun) replace(ctx context.Context) error {
 
 // recover finishes or undoes what a restore that failed did, by the phase it got to: before etcd
 // was restored, it starts every control-plane node again as it was. After, it finishes the
-// restore, since the other nodes' etcd would take back the cluster from before.
+// restore, since the other nodes' etcd would take back the cluster from before. Past a reset of
+// etcd to the first node alone (Alone), it keeps the others stopped (keepAlone).
 func (run *restoreRun) recover(ctx context.Context, cause error) error {
 	if run.talos {
 		return run.recoverTalos(ctx, cause)
 	}
 	errs := []error{cause, run.removeTranscoded(ctx)}
 	if run.status.Phase == RestorePreparing {
+		run.status.Replaced = nil
 		return errors.Join(append(errs, run.unpause(ctx))...)
 	}
 	if err := run.knowNodes(ctx); err != nil {
@@ -798,6 +822,7 @@ func (run *restoreRun) recover(ctx context.Context, cause error) error {
 	restored := false
 	switch run.status.Phase {
 	case RestoreFetching:
+		run.status.Replaced = nil
 		errs = append(errs, run.on(ctx, run.nodes[0], "removing the fetched snapshot", run.scripts.Clean))
 		return errors.Join(append(errs, run.unpause(ctx))...)
 	case RestoreRestoring:
@@ -807,9 +832,13 @@ func (run *restoreRun) recover(ctx context.Context, cause error) error {
 		restored = true
 	case RestorePreparing, RestoreStopping, RestoreSucceeded, RestoreFailed:
 	}
-	if restored {
+	switch {
+	case restored:
 		errs = append(errs, run.finishRestored(ctx)...)
-	} else {
+	case run.status.Alone:
+		errs = append(errs, run.keepAlone(ctx)...)
+	default:
+		run.status.Replaced = nil
 		for _, n := range run.nodes {
 			errs = append(errs, run.on(ctx, n, "starting the control plane as it was", run.scripts.StartNoWait))
 		}
@@ -921,6 +950,9 @@ func (run *restoreRun) finish(ctx context.Context, err error) error {
 		}
 	} else {
 		run.status.Phase, run.status.Message = RestoreSucceeded, run.succeededMessage()
+		if _, cerr := setClusterCondition(ctx, run.r.Client, run.r.Reader, run.key, EtcdAloneCondition, nil); cerr != nil {
+			ctrl.LoggerFrom(ctx).Error(cerr, "taking the condition of etcd left on one node away")
+		}
 	}
 	ctrl.LoggerFrom(ctx).Info("etcd restore ended", "phase", run.status.Phase, "message", run.status.Message,
 		"before", run.status.Before, "noBefore", run.status.NoBefore)

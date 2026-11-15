@@ -17,6 +17,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -222,6 +223,12 @@ func TestEtcdRestoreFromTheVolumeThroughTheAPIServer(t *testing.T) {
 				t.Fatalf("fetched %v, status %+v", fetched, st)
 			}
 			checkReceiver(t, pod, file[1], st.Node)
+			// The snapshot is on the node, checked, before anything stops, and nothing is reset.
+			if runs := f.guests.runs(); !isSubsequence([]string{"101 fetch", "101 stop", "102 stop", "103 stop"}, runs) ||
+				slices.ContainsFunc(runs, func(r string) bool { return strings.HasSuffix(r, " stop") && slices.Index(runs, r) < slices.Index(runs, "101 fetch") }) ||
+				slices.Contains(runs, "101 reset") {
+				t.Errorf("ran %v", runs)
+			}
 			if left := podsLeft(t, workloads); len(left) != 0 || !removed {
 				t.Errorf("left %d pods in the cluster, file removed %v", len(left), removed)
 			}
@@ -248,6 +255,10 @@ func checkReceiver(t *testing.T, p *corev1.Pod, file, node string) {
 	}
 	if p.Spec.AutomountServiceAccountToken == nil || *p.Spec.AutomountServiceAccountToken {
 		t.Error("the receiver gets a service account token")
+	}
+	// SELinux keeps a confined container from writing the host's directory.
+	if sc := c.SecurityContext; sc == nil || sc.SELinuxOptions == nil || *sc.SELinuxOptions != *hostSELinux() {
+		t.Errorf("the receiver writes the host's directory without the context for it: %+v", sc)
 	}
 }
 
@@ -332,22 +343,121 @@ func checkFailedEvent(t *testing.T, f *restoreFixture, name string) {
 	}
 }
 
-// checkRecovered holds a restore that failed after the first node came up alone to the restore
-// not run, and the other nodes started again.
-func checkRecovered(t *testing.T, f *restoreFixture, name string) {
+// checkUntouched holds a restore that failed before the snapshot was on the first node, in full and
+// checked, to every node left as it was: nothing stopped, reset or restored, and nothing replaced.
+func checkUntouched(t *testing.T, f *restoreFixture, name string) {
 	t.Helper()
 	runs := f.guests.runs()
-	if slices.ContainsFunc(runs, func(r string) bool { return strings.HasSuffix(r, " restore") }) {
-		t.Errorf("%s: etcd was restored without the snapshot: %v", name, runs)
+	for _, step := range []string{stepStop, stepReset, stepRestore, stepStart, stepStartAs, stepHold} {
+		if slices.ContainsFunc(runs, func(r string) bool { return strings.HasSuffix(r, " "+step) }) {
+			t.Errorf("%s: ran %s before the snapshot was on the node: %v", name, step, runs)
+		}
 	}
-	if !slices.ContainsFunc(runs, func(r string) bool { return strings.HasSuffix(r, " start as it was") }) {
-		t.Errorf("%s: the control plane was not started again: %v", name, runs)
+	if st := f.status(); len(st.Replaced) != 0 || st.Alone {
+		t.Errorf("%s: replaced %v, alone %v", name, st.Replaced, st.Alone)
+	}
+	if gone := f.deleting(); len(gone) != 0 {
+		t.Errorf("%s: deleted %v", name, gone)
 	}
 	checkFailedEvent(t, f, name)
 }
 
-// An API server that never answers, or a cluster without a kubeconfig, fails the restore once the
-// first node was to come up alone, and the control plane is started again.
+// checkKeptAlone holds a restore that failed past resetting etcd to the first node to that node
+// started alone, the others never started and held stopped, nothing replaced, and the state on the
+// cluster as a condition and in the status.
+func checkKeptAlone(t *testing.T, f *restoreFixture, name string) {
+	t.Helper()
+	runs := f.guests.runs()
+	reset := slices.Index(runs, "101 reset")
+	if reset < 0 {
+		t.Fatalf("%s: etcd was not reset: %v", name, runs)
+	}
+	for _, r := range runs[reset:] {
+		if (strings.HasPrefix(r, "102 ") || strings.HasPrefix(r, "103 ")) && strings.Contains(r, "start") {
+			t.Errorf("%s: an old member started beside the reset one: %v", name, runs)
+		}
+	}
+	if !isSubsequence([]string{"101 reset", "101 start as it was"}, runs) || !slices.Contains(runs, "102 hold") || !slices.Contains(runs, "103 hold") {
+		t.Errorf("%s: ran %v", name, runs)
+	}
+	st := f.status()
+	if st.Phase != RestoreFailed || !st.Alone || len(st.Replaced) != 0 || !strings.Contains(st.Message, "etcd runs on web-cp-0 alone") {
+		t.Errorf("%s: status %+v", name, st)
+	}
+	if gone := f.deleting(); len(gone) != 0 {
+		t.Errorf("%s: deleted %v", name, gone)
+	}
+	if c := meta.FindStatusCondition(f.cluster().Status.Conditions, EtcdAloneCondition); c == nil || c.Status != metav1.ConditionTrue {
+		t.Errorf("%s: condition %+v", name, c)
+	}
+	checkFailedEvent(t, f, name)
+}
+
+// Past the reset of etcd to the first node of a cluster that lost its quorum, a stream cut short or
+// a second stop that fails keeps the other control planes stopped: their members would make a
+// cluster of their own beside the first node's.
+func TestEtcdRestoreFromTheVolumeKeepsTheOthersStoppedPastTheReset(t *testing.T) {
+	t.Parallel()
+	for _, d := range []templates.Distribution{templates.Kubeadm, templates.RKE2} {
+		for name, tc := range map[string]struct {
+			cut      int64
+			stopFail bool
+		}{
+			"stream cut short":   {cut: 100},
+			"second stop failed": {stopFail: true},
+		} {
+			f, _ := volumeRestoreFixture(t, d)
+			w := newFakeWorkloads(t, nil)
+			w.cut = tc.cut
+			f.r.Workloads = w
+			f.apis.down = 1 << 20
+			stops := 0
+			f.guests.seen = func(_ int64, step, _ string) {
+				if step == stepStart {
+					f.apis.mu.Lock()
+					f.apis.down = 0
+					f.apis.mu.Unlock()
+				}
+			}
+			if tc.stopFail {
+				f.guests.fail = func(vmid int64, step string) error {
+					if step == stepStop && vmid == 103 {
+						if stops++; stops == 2 {
+							return errors.New("the guest agent timed out")
+						}
+					}
+					return nil
+				}
+			}
+			f.reconcile()
+			checkKeptAlone(t, f, string(d)+", "+name)
+		}
+	}
+}
+
+// A damaged snapshot fails its check on the controller, before any node changes, whether the
+// cluster's API server answers or not.
+func TestEtcdRestoreFromTheVolumeRefusesADamagedSnapshot(t *testing.T) {
+	t.Parallel()
+	for _, down := range []bool{false, true} {
+		f, _ := volumeRestoreFixture(t, templates.RKE2)
+		f.r.Workloads = newFakeWorkloads(t, nil)
+		if down {
+			f.apis.down = 1 << 20
+		}
+		o := f.store.objects[volumeFolder+"/"+restoreSnapshot]
+		o.data[len(o.data)/2] ^= 0xff
+		f.reconcile()
+		name := fmt.Sprintf("API server down %v", down)
+		if st := f.status(); st.Phase != RestoreFailed {
+			t.Errorf("%s: status %+v", name, st)
+		}
+		checkUntouched(t, f, name)
+	}
+}
+
+// A cluster without a kubeconfig, or whose API server refuses the receiving pod, fails the restore
+// before anything on the nodes changes.
 func TestEtcdRestoreFromTheVolumeWithoutAnAPIServer(t *testing.T) {
 	t.Parallel()
 	for name, w := range map[string]*handOverAPI{
@@ -362,13 +472,12 @@ func TestEtcdRestoreFromTheVolumeWithoutAnAPIServer(t *testing.T) {
 		if st := f.status(); st.Phase != RestoreFailed || !strings.Contains(st.Message, "restore by hand") {
 			t.Errorf("%s: status %+v", name, st)
 		}
-		checkRecovered(t, f, name)
+		checkUntouched(t, f, name)
 	}
 }
 
 // A node without room for the snapshot refuses it before any of it is sent, and a stream cut short
-// fails its checksum. Either way etcd is not restored, the control plane starts again, and the pod
-// goes.
+// fails its checksum. Either way every node is left as it was, and the pod goes.
 func TestEtcdRestoreFromTheVolumeRefusesWhatTheNodeCannotTake(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -388,7 +497,7 @@ func TestEtcdRestoreFromTheVolumeRefusesWhatTheNodeCannotTake(t *testing.T) {
 		if st.Phase != RestoreFailed || !strings.Contains(st.Message, tc.want) {
 			t.Errorf("%s: status %+v", name, st)
 		}
-		checkRecovered(t, f, name)
+		checkUntouched(t, f, name)
 		if left := podsLeft(t, w); len(left) != 0 {
 			t.Errorf("%s: left %d pods", name, len(left))
 		}

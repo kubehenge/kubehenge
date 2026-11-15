@@ -136,6 +136,28 @@ func TestBumpedEtcdSnapshotMovesTheRevisionOnAndCompacts(t *testing.T) {
 	}
 }
 
+// A snapshot whose checksum matches but whose database is damaged fails the check etcdutl's
+// snapshot status makes, unbumped as bumped.
+func TestCheckedEtcdSnapshotRefusesADamagedDatabase(t *testing.T) {
+	t.Parallel()
+	db := etcdTestDB(t, etcdTestRevisions)
+	const pageSize, flagsAt = 4096, 8
+	for p := 3; p*pageSize < len(db); p++ {
+		binary.BigEndian.PutUint16(db[p*pageSize+flagsAt:], 0xffff)
+	}
+	sum := sha256.Sum256(db)
+	damaged := append(db, sum[:]...)
+	for _, bump := range []bool{false, true} {
+		dir := t.TempDir()
+		if _, err := checkedEtcdSnapshot(dir, bytes.NewReader(damaged), bump); err == nil || !strings.Contains(err.Error(), "damaged") {
+			t.Errorf("bump %v: err = %v, want it damaged", bump, err)
+		}
+		if left, _ := os.ReadDir(dir); len(left) != 0 {
+			t.Errorf("bump %v: left %v behind", bump, left)
+		}
+	}
+}
+
 func TestBumpedEtcdSnapshotRefuses(t *testing.T) {
 	t.Parallel()
 	tampered := etcdTestSnapshot(t)
