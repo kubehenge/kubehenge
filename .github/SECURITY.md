@@ -24,4 +24,4 @@ Vulnerabilities in Proxmox VE, Kubernetes, Cluster API and its providers, Talos 
 
 Releases are built at SLSA Build Level 3 by a reusable workflow on GitHub-hosted runners. Each build starts from a signed tag on a signed commit of main that passed every required check. Every file and image of a release carries Sigstore-signed build provenance and an SPDX SBOM. The images are Sigstore-signed too.
 
-The appliance installs only releases listed in an index signed with the project's release key, whose public half is built into every release. Published releases are immutable and their tags cannot be moved. How to check a release yourself is in [docs/install.md](../docs/install.md#verifying-a-release), and how it is built in [docs/releasing.md](../docs/releasing.md).
+The appliance installs only releases listed in an index signed with the project's release key, whose public half is built into every release. Published releases are immutable and their tags cannot be moved. How to check a release yourself, and how it is built, is in [docs/releasing.md](../docs/releasing.md#verifying-a-release).

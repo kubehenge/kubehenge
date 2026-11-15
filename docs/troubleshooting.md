@@ -183,7 +183,7 @@ The task log shows what each Kubehenge account did. In an appliance's management
 | --- | --- | --- |
 | "run this as root on a Proxmox VE node", "this is not a Proxmox VE node" or "Kubehenge needs Proxmox VE 9" | The script ran as the wrong user or on the wrong node. | Run it as root, in the shell of a Proxmox VE 9 node. |
 | `"no enabled, active storage here takes container disks (content rootdir)"` | No storage allows containers. | Allow the `rootdir` content type on an enabled storage of the node ([install.md](install.md#storage)), or name one with `--storage`. The same goes for `vztmpl` and `--template-storage`, where the container template goes. |
-| "could not download … (curl exit …, HTTP status …)" | The node cannot reach GitHub, which it needs for Kubehenge's release and OpenTofu. The installer has already tried eight more times. Status 404 is a missing file and 407 a proxy that wants credentials. | Let the node reach GitHub ([install.md](install.md#internet-access)). |
+| "could not download … (curl exit …, HTTP status …)" | The node cannot reach GitHub, which it needs for Kubehenge's release and OpenTofu. The installer has already tried eight more times. Status 404 is a missing file and 407 a proxy that wants credentials. | Let the node reach GitHub ([architecture.md](architecture.md#hosts-each-part-reaches)). |
 | "… does not match its checksum" | The file is not the one this `install.sh` names. Nothing of it was installed. | Check that nothing between the node and GitHub changes downloads. Fetch `install.sh` again from the release you mean to install. With `--release <file>`, check the file and the checksum given with `--sha256`. |
 | "Proxmox VE's certificate is valid for …, not …" | The URL's name or address is not in the API's certificate. The installer stops before it creates anything. | Give `--proxmox-url` with a name or address the message lists, or [have the certificate list yours](install.md#an-address-the-certificate-lacks). |
 | The API's CA is not trusted | The installer stops before it creates anything. | Give the CA with `--proxmox-ca` ([install.md](install.md#the-ca)). |
@@ -216,7 +216,7 @@ The task log shows what each Kubehenge account did. In an appliance's management
 | "Wrong recovery key, or the cluster has no quorum" | A recovery key is written to Proxmox VE's cluster files, which a cluster without quorum cannot change. Sign in on a node's console until quorum returns. |
 | `"Session ended. Sign in again."` | Proxmox VE no longer accepts the session. A session lasts eight hours at most. |
 | Sign-in refused after several tries | Five failures within 15 minutes lock a user out from that address until the 15 minutes are up. Twenty failures from one address, whichever users they name, lock the address out. |
-| Everyone is locked out after one person's typos | Behind a reverse proxy, every sign-in counts under the proxy's address. List the proxy with `--trusted-proxy` ([install.md](install.md#behind-a-reverse-proxy)). |
+| Everyone is locked out after one person's typos | Behind a reverse proxy, every sign-in counts under the proxy's address. List the proxy with `--trusted-proxy` ([architecture.md](architecture.md#behind-a-reverse-proxy)). |
 | "Security keys work only in Proxmox VE" | A WebAuthn key answers only on Proxmox VE's own page. Choose **Use API token** and give one of that user's Proxmox VE API tokens. |
 | An OpenID sign-in does not come back | Register `https://<appliance>/api/openid/callback` with the identity provider, and `https://<appliance>:8443/oidc-callback` for the shared Headlamp. A Headlamp sign-in can only be finished in the browser that started it. |
 
@@ -236,7 +236,7 @@ A run needs these:
 
 - **Storage.** The Talos image storage must allow the `import` content type.
 - **Addresses.** The node addresses and the API address must be free, in one subnet, and reachable from the appliance on ports 50000 and 6443.
-- **Internet access** from the appliance, the Proxmox VE node and the new nodes ([install.md](install.md#internet-access)), or registry mirrors for the nodes.
+- **Internet access** from the appliance, the Proxmox VE node and the new nodes ([architecture.md](architecture.md#hosts-each-part-reaches)), or registry mirrors for the nodes.
 - **Pod and service ranges** clear of the nodes' network, set under Advanced. Overlapping ones are refused.
 - **Time.** A run has to finish within two hours, the life of the Proxmox VE ticket it acts on. A run cut off there keeps what it made, so apply again.
 
@@ -249,7 +249,7 @@ A run needs these:
 | "The management cluster is being applied or removed" or "the appliance is being upgraded" | A run is going on. Wait for that to finish. |
 | A wrong passphrase | An apply cannot read the state. Repair access and removal answer "the passphrase does not open the management cluster's state". The passphrase has to be the one given when the management cluster was created. After five wrong ones within 15 minutes, repair access refuses further tries until those 15 minutes are up. A lost passphrase cannot be recovered ([what still works, and how to start over](install.md#the-state-passphrase)). |
 | "The appliance stopped during the run" | The appliance restarted while a run was going on. Apply again. |
-| "this appliance's state is from apply N, and the management cluster is at apply M" | A newer state changed the cluster since this one was saved. A snapshot rollback, an older backup or a second appliance does that. Restore the newest backup instead, or use the appliance that applied last. To go ahead with this state, [take the cluster over](install.md#a-state-older-than-the-management-cluster). The next apply undoes the newer changes. |
+| "this appliance's state is from apply N, and the management cluster is at apply M" | A newer state changed the cluster since this one was saved. A snapshot rollback, an older backup or a second appliance does that. Restore the newest backup instead, or use the appliance that applied last. To go ahead with this state, [take the cluster over](install-settings.md#a-state-older-than-the-management-cluster). The next apply undoes the newer changes. |
 | "another appliance started applying the management cluster at the same time" | Two appliances act on one cluster. Stop one of them, then apply again from the other. |
 | "job wait-for-providers failed" after ten minutes | A provider was not installed or did not roll out. `kubectl -n capi-operator-system logs job/wait-for-providers` names each one with the Cluster API Operator's reason. A lowered version is a case of its own ([below](#a-provider-version-was-lowered)). |
 | "job provider-manifests failed" | A provider's files could not be downloaded within ten minutes, or one did not match its digest. `kubectl -n capi-operator-system logs job/provider-manifests` names the file. A mismatch means the release's file is not the one the tested set names. Nothing of it was installed. |
@@ -343,7 +343,7 @@ A build from the interface or the weekly build is tried three times, 2 and then 
 | "the datacenter option user-tag-access refuses …" or "registered-tags lists …" | The datacenter options keep the builder's token from setting the template's tags. Under Datacenter, Options, add them to **User Tag Access** (list) or remove them from **Registered Tags**. Tags match with their case. With **User Tag Access** set to existing, a tag already on a guest the token can audit also passes. Only `Sys.Modify` on `/` bypasses the options. |
 | "task … failed" for the downloaded image | Proxmox VE downloads the image itself and checks it against its checksum. The message names its reason. The task's log is under the node's **Task History**. The storage under **Downloaded image** (`--import-storage`) must allow the `import` content type ([templates.md](templates.md#requirements)). |
 | "not signed by …'s key", "… serves a key other than …" or "… is not listed in its checksum file" | The publisher's checksum file, or a package repository's key, is not the one Kubehenge knows by its fingerprint. Nothing was imported. Check that nothing between the appliance and the publisher changes downloads, and try again later. A publisher that moved to a new key needs a Kubehenge release that carries it. |
-| A command in the build VM failed, such as the package manager, with the end of the build's log below the error | The VM has to reach its node OS's package mirrors and the other addresses the build needs ([install.md](install.md#internet-access)). It gets its address by DHCP on its bridge, or the static address given for it. A package whose signature does not check out stops the build the same way. |
+| A command in the build VM failed, such as the package manager, with the end of the build's log below the error | The VM has to reach its node OS's package mirrors and the other addresses the build needs ([architecture.md](architecture.md#hosts-each-part-reaches)). It gets its address by DHCP on its bridge, or the static address given for it. A package whose signature does not check out stops the build the same way. |
 
 ### Node addresses run out
 
@@ -831,7 +831,7 @@ A Helm error such as `admission webhook … denied the request` in an add-on's n
 ### Add-ons behind a proxy
 
 - **A dial timeout** keeps Certificates `Pending`, Velero's `BackupStorageLocation` `Unavailable` or Argo CD at `ComparisonError`.
-  - Check **Proxy** under the cluster's Options. With the default, the management side needs a proxy ([install.md](install.md#behind-a-proxy)).
+  - Check **Proxy** under the cluster's Options. With the default, the management side needs a proxy ([clusters.md](clusters.md#behind-a-proxy)).
   - The controller's log says "add-ons go direct" when the management side's proxy holds a user name or password in its address. Set an own proxy address on the cluster, without credentials.
   - `kubectl -n <namespace> get pod <pod> -o yaml` shows `HTTPS_PROXY` and `NO_PROXY` when the setting reached the pod.
 - **A host inside the network times out or answers 503 from the proxy.** The proxy was asked for something it cannot reach. Add the host to the cluster's proxy **Exceptions** (`egressProxy.noProxy`).
@@ -841,7 +841,7 @@ A Helm error such as `admission webhook … denied the request` in an add-on's n
 ### Helm charts that cannot be fetched
 
 - **The cloud controller manager and CSI plugin stay not ready and the nodes keep the `uninitialized` taint.** The Add-on Provider for Helm's log has a dial or `x509` error, as the chart repositories are out of reach. Registry mirrors do not cover charts.
-  - Set [chart mirrors](install.md#mirroring-the-charts) for the hosts in the log, and copy the charts `kubehenge charts` lists.
+  - Set [chart mirrors](clusters.md#mirroring-the-charts) for the hosts in the log, and copy the charts `kubehenge charts` lists.
   - For `x509: certificate signed by unknown authority` from a mirror, add the mirror's authority under **Chart mirror certificate**.
   - `chart … has digest sha256:…, not …` means the mirror holds a re-packed chart. Copy it again with the same digest.
 
@@ -1126,10 +1126,10 @@ The appliance, the management cluster and every cluster check the Proxmox VE API
 ### The interface is unreachable
 
 - Check the container runs (`pct status <ctid>`) and the service is active (`pct exec <ctid> -- systemctl status kubehenge`).
-- The appliance's certificate and its sign-in redirects name the address (or `--name`) it was given. After a DHCP change, give it back that address or make a certificate for the new one ([install.md](install.md#the-appliances-certificate)).
+- The appliance's certificate and its sign-in redirects name the address (or `--name`) it was given. After a DHCP change, give it back that address or make a certificate for the new one ([upgrading.md](upgrading.md#the-appliances-certificate)).
 - **"The appliance stopped during the upgrade"** means a reboot or a migration cut the upgrade off. The old release is back.
   - Ask for the upgrade again, or run `install.sh --upgrade` again.
-- **The browser says the certificate expired.** Renew it with `install.sh --certificate --ctid <ctid>` ([install.md](install.md#the-appliances-certificate)). The interface warns administrators 30 days ahead.
+- **The browser says the certificate expired.** Renew it with `install.sh --certificate --ctid <ctid>` ([upgrading.md](upgrading.md#the-appliances-certificate)). The interface warns administrators 30 days ahead.
 - The interface keeps working while the management cluster is unwell. Pages that need it say the management cluster did not answer.
   - Use **Repair access**, or apply the management cluster again from the Administration page.
 

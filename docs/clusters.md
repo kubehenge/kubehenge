@@ -175,7 +175,7 @@ A cluster has IPv4, IPv6, or both. IPv6 and dual-stack are unsupported on every 
 
 ##### IPv6-only networks
 
-Much of what the nodes and add-ons download has no IPv6 address (GitHub among them). An IPv6-only network needs NAT64 with DNS64, or mirrors. The management cluster can pull through [registry mirrors and chart mirrors](install.md#mirroring-the-charts). RKE2 and k3s nodes fetch their release from GitHub as they boot, unless the management cluster sets a [release mirror](install.md#mirroring-the-releases).
+Much of what the nodes and add-ons download has no IPv6 address (GitHub among them). An IPv6-only network needs NAT64 with DNS64, or mirrors. The management cluster can pull through [registry mirrors and chart mirrors](#mirroring-the-charts). RKE2 and k3s nodes fetch their release from GitHub as they boot, unless the management cluster sets a [release mirror](#mirroring-the-releases).
 
 #### Load balancer
 
@@ -499,7 +499,7 @@ Under a NetworkPolicy that denies by default, allow ztunnel's port 15008/TCP bet
 
 **Proxy** (Management proxy, Own proxy or No proxy) is the proxy for the add-ons that reach beyond the cluster. Those are cert-manager (ACME and DNS providers), Velero (server and node agents), Argo CD, Flux's controllers, Headlamp and Rancher.
 
-- The management side's proxy ([install.md](install.md#behind-a-proxy)) and its exceptions are the default.
+- The management side's proxy ([below](#behind-a-proxy)) and its exceptions are the default.
 - Add-on settings are plain text, so a proxy address holding a user name or password is not passed on. Give the cluster its own address without credentials.
 - The cluster's pod and service ranges, `localhost`, `127.0.0.1`, `.svc` and `.cluster.local` bypass the proxy. Add an internal S3 store, Git server or identity provider under Exceptions.
 - The add-ons' pods do not trust a proxy that re-signs TLS. Kubehenge does not add its authority to them.
@@ -697,7 +697,7 @@ When one Proxmox VE node runs more than one control-plane VM, the page warns and
 - **Options:** every setting that can change once the cluster exists, each listed with what changing it does [below](#change-settings).
   - Each has **Edit** (**Upgrade** for the Talos release, **Uninstall** for Rancher on the cluster that runs it). It is disabled for those who may not change the cluster.
   - The pod network and CIS hardening are fixed, so they have none.
-- **Activity:** who did what to the cluster, newest first ([install.md](install.md#activity)). Below it are the management cluster's events of its objects over the last day.
+- **Activity:** who did what to the cluster, newest first ([architecture.md](architecture.md#activity)). Below it are the management cluster's events of its objects over the last day.
 
 ### Status
 
@@ -911,12 +911,64 @@ A change replaces every node, one at a time, as a change of the node customisati
 
 - RKE2 and k3s nodes download their release's files and install script as they boot, through the proxy.
 - They come from GitHub: `github.com`, `api.github.com`, `raw.githubusercontent.com` and the hosts its downloads redirect to.
-- A release mirror replaces GitHub for every cluster of the management cluster ([install.md](install.md#mirroring-the-releases)). Nodes reach it through the proxy unless its host is in `noProxy`.
+- A release mirror replaces GitHub for every cluster of the management cluster ([below](#mirroring-the-releases)). Nodes reach it through the proxy unless its host is in `noProxy`.
 - A node checks every file against the release's pins, then installs from those files with no further download.
 
 ### A cluster's own release mirror
 
-A cluster at another site can name a mirror near it in `releaseMirror` (Release mirror under Options), which replaces the management cluster's for its nodes. It takes `url` and, for an `https://` mirror the usual authorities do not sign, `caBundle`, which the node uses for that download alone. The pins stay the management cluster's, so every file is checked against them whichever mirror served it ([install.md](install.md#mirroring-the-releases)). A change replaces the nodes one at a time, as the other site settings do. Running nodes keep the release they installed.
+A cluster at another site can name a mirror near it in `releaseMirror` (Release mirror under Options), which replaces the management cluster's for its nodes. It takes `url` and, for an `https://` mirror the usual authorities do not sign, `caBundle`, which the node uses for that download alone. The pins stay the management cluster's, so every file is checked against them whichever mirror served it ([below](#mirroring-the-releases)). A change replaces the nodes one at a time, as the other site settings do. Running nodes keep the release they installed.
+
+### Mirroring the charts
+
+A chart mirror serves the charts of one repository host from an address you choose. Set one per host under Advanced in the setup (Chart mirrors), or `chart_repositories` in the module ([variables](install-settings.md#module-variables)).
+
+- A host that serves OCI charts (`ghcr.io`) needs an `oci://` mirror, such as `ghcr.io=oci://registry.example.org/ghcr`. The charts of `oci://ghcr.io/istio/release/charts` are then fetched from `oci://registry.example.org/ghcr/istio/release/charts`.
+- A host that serves a chart repository (`charts.jetstack.io`) needs an `https://` or `http://` one, such as `charts.jetstack.io=https://charts.example.org/jetstack`.
+- The mirror holds the same charts under the same digests, because a re-packed chart is refused. Copy OCI charts with a tool that keeps the digest (`crane copy`, `oras cp` or `skopeo copy`) and chart archives byte for byte.
+- A mirror whose certificate the usual authorities do not sign needs its authority under Chart mirror certificate. The Add-on Provider for Helm trusts it beside the proxy's.
+- A mirror outside the proxy's exceptions is fetched through the proxy.
+
+#### Listing what to copy
+
+`kubehenge charts` lists what to copy, each chart as `<repository>/<name>:<version>@sha256:<digest>`. Give it the values file of Kubehenge's chart (`charts/kubehenge/values.yaml` of the release), and `--mirror` to see where each chart then comes from:
+
+```sh
+kubehenge charts charts/kubehenge/values.yaml --mirror ghcr.io=oci://registry.example.org/ghcr
+```
+
+A mirror that no chart uses, or of another kind than its host, is refused. Charts without a mirror are fetched from their repository.
+
+### Mirroring the releases
+
+RKE2 and k3s nodes download their release from GitHub as they boot. A release mirror serves those files instead, for every cluster that names no mirror of its own ([above](#a-clusters-own-release-mirror)). Set it under Advanced in the setup (Release mirror), or `release_mirror` in the module ([variables](install-settings.md#module-variables)).
+
+- A node checks every file against the release's pins before installing anything, so a mirror cannot change what it runs. A file the mirror lacks fails the node's boot with the file and the mirror named.
+- The interface and `kubehenge release pin --mirror` read a release's checksums from the same mirror before pinning it.
+- A mirror whose certificate the usual authorities do not sign needs its authority under Release mirror certificate. The nodes trust it for the download alone.
+- Nodes reach the mirror through the cluster's proxy unless its host is in the proxy's exceptions (`egressProxy.noProxy`).
+
+#### What to copy
+
+The mirror answers on GitHub's paths beneath its address: `<mirror>/<repository>/releases/download/<version>/<file>` and `<mirror>/<repository>/raw/<version>/install.sh`, such as `https://mirror.example.org/github/k3s-io/k3s/releases/download/v1.36.5+k3s1/k3s`. A generic proxy repository of `https://github.com` serves this layout.
+
+Each node takes `sha256sum-amd64.txt` and `install.sh` of its release. RKE2 nodes take `rke2.linux-amd64.tar.gz`, `rke2-images-core.linux-amd64.tar.zst` and `rke2-images-<cni>.linux-amd64.tar.zst` for the cluster's CNI. k3s nodes take `k3s` and `k3s-airgap-images-amd64.tar.zst`.
+
+### Behind a proxy
+
+Set the proxy under Advanced in the setup ([setup](install.md#network)), or `proxy` in the module ([variables](install-settings.md#module-variables)). It takes an address, a user and password if the proxy asks, exceptions and the authority of a proxy that re-signs TLS. The module's `proxy.url` is the one place the credentials sit inside the address.
+
+It reaches OpenTofu, the appliance's downloads, the Talos nodes, the Cluster API operator and providers, the controller and the VM template builds. A build's VM uses it for packages, `curl` and image pulls, and trusts the authority while it builds.
+
+Kubehenge adds these exceptions:
+
+- the Proxmox VE API host
+- the management nodes' network and the build VM's network
+- the management cluster's pod and service ranges
+- `localhost`, `127.0.0.1`, `.svc` and `.cluster.local`
+
+Add the workload clusters' node networks and any internal registry.
+
+Proxmox VE downloads disk images through the datacenter's proxy. The Add-on Provider for Helm gets the authority too. Clusters' own nodes are not covered.
 
 ## Node customisation
 

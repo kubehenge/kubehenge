@@ -31,7 +31,7 @@ On the Administration page, **Remove Kubehenge** takes the state passphrase and 
 - deletes the VM templates in the template pool, `kubehenge-templates`.
 - switches automatic upgrades of the management cluster off ([upgrading.md](upgrading.md#automatically-after-kubehenge)). It deletes what the appliance kept for them and the user `kubehenge-upgrader@pve` with its token.
 - destroys the management cluster with OpenTofu, with every Proxmox VE object its module made ([below](#what-the-module-made)). It lifts the protection of the management VMs first.
-- switches the [backups of its etcd](install.md#back-up-the-management-clusters-etcd) off and deletes the access key and talosconfig the appliance kept for them. The snapshots stay in the target.
+- switches the [backups of its etcd](install-settings.md#back-up-the-management-clusters-etcd) off and deletes the access key and talosconfig the appliance kept for them. The snapshots stay in the target.
 - keeps the backup volume: the VM `kubehenge-backups`, tagged `backups`, with its one disk. It is protected and sits in no pool. Ask for everything to go (`removeBackups`) and the removal lifts its protection and deletes it too.
 
 A removal that stopped part way can be run again. When the management cluster no longer answers, the removal goes on if Proxmox VE holds none of its VMs (the pool `kubehenge-management`). Otherwise it names the VMs and refuses. Start them, or remove them in Proxmox VE after `qm set <vmid> --protection 0` on each.
@@ -84,7 +84,7 @@ The names below are the defaults. The users, groups and roles start with the man
 
 ## Remove the appliance
 
-Remove the management cluster first. Without the appliance its state is gone. Everything the setup made then has to be found and deleted by hand ([the list](install.md#starting-over)).
+Remove the management cluster first. Without the appliance its state is gone. Everything the setup made then has to be found and deleted by hand ([the list](#starting-over)).
 
 In the shell of the node the appliance runs on, as root:
 
@@ -95,6 +95,23 @@ pct destroy <ctid> --purge
 ```
 
 The appliance is the container tagged `kubehenge`. The installer protects it, so Proxmox VE refuses to destroy it until `--protection 0`. `--purge` also takes it out of backup jobs, replication jobs and HA.
+
+## Starting over
+
+For a lost state passphrase, or to set up again from nothing:
+
+1. Delete every cluster in the interface and wait until the management cluster has cleaned up their Proxmox VE objects.
+2. In Proxmox VE, delete what the setup made:
+   - the VMs in the pools `kubehenge-management` (the management cluster) and `kubehenge-templates` (the VM templates), then the pools `kubehenge-management`, `kubehenge-templates` and `kubehenge`. The management VMs are protected: run `qm set <vmid> --protection 0` on each first.
+   - the users `kubehenge-cluster-api@pve`, `kubehenge-provisioner@pve` and those of the settings that were on. Their API tokens go with them.
+     - `kubehenge-template-builder@pve` (template refresh)
+     - `kubehenge-ha@pve` (Proxmox VE HA)
+     - `kubehenge-etcd-restore@pve` (etcd restores)
+     - `kubehenge-upgrader@pve` (automatic upgrades of the management cluster)
+   - the groups `kubehenge-clusters` and, where HA rule labels were on, `kubehenge-clusters-audit`.
+   - the roles named `kubehenge-…`.
+   - the Talos disk image, `talos-<version>-<id>-nocloud-amd64.qcow2`, on the Talos image storage of each node that ran the management cluster.
+3. [Remove the appliance](#remove-the-appliance) and install it again.
 
 ## Remove the Proxmox VE interface entry
 
