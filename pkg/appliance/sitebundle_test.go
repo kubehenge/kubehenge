@@ -48,4 +48,12 @@ func TestProxyAndChartMirrorAuthoritiesAreSavedAsCertificatesAlone(t *testing.T)
 			t.Errorf("the module's %s authority holds the text between the blocks: %v", what, v)
 		}
 	}
+	// A refused authority stays as given, for the form to show it again with its problem.
+	damaged := strings.Replace(lf, "-----BEGIN", "----BEGIN", 1)
+	refused := settings("pve1")
+	refused.Proxy = &Proxy{URL: "http://proxy.example.com:3128", CABundle: damaged}
+	refused.ChartRepositories = &ChartRepositories{Mirrors: map[string]string{"ghcr.io": "oci://r.example.org"}, CABundle: damaged}
+	if err := refused.Validate(); err == nil || refused.Proxy.CABundle != damaged || refused.ChartRepositories.CABundle != damaged {
+		t.Errorf("a damaged authority: %v, proxy %q, chart mirror %q, want it refused and left as given", err, refused.Proxy.CABundle, refused.ChartRepositories.CABundle)
+	}
 }
