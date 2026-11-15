@@ -217,4 +217,22 @@ locals {
     base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
     image      = "ghcr.io/kubehenge/cluster-api-addon-provider-helm@sha256:6c78cee77e4be012c3960954fb823688724992858b9d5d876ac3bb374267baef"
   }
+
+  # Proxmox VE refuses to remove a drive from a protected VM, and every management node VM is
+  # protected, so the CSI plugin's controller could detach no volume from one.
+  # scripts/proxmox-csi-patches lifts the protection for each detach and sets it again. The
+  # management cluster's controller is built as capmox's is; it applies only while the workload
+  # clusters' add-on pins the controller at `release`.
+  proxmox_csi_build = {
+    upstream = "sergelogvinov/proxmox-csi-plugin"
+    package  = "./cmd/controller"
+    release  = "v0.20.0"
+    commit   = "a7aacee7a2144a43be08503068fe0b9caf3d0b4e"
+    # The plugin's own image is built with Go 1.26 on distroless static.
+    go         = "go1.26.10"
+    base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
+    image      = "ghcr.io/kubehenge/proxmox-csi-controller@sha256:174ef40d3c90ef425114b76719c5a2cc6c5201bf65162d57828293803485272a"
+    # The patched package's tests, which the build runs first. They build on Linux only.
+    tests = "./pkg/csi/"
+  }
 }

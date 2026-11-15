@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -47,6 +48,8 @@ func (a *Appliance) labelZones(ctx context.Context, admin []byte) ([]string, err
 // management VM runs there, since the store then has nowhere to start. Of the labels, only those
 // of nodes in or claiming that zone must be set for the store to land right.
 //
+// A node's VM is the one with its SMBIOS UUID (vmsByUUID), whatever the VM's name.
+//
 // The label is all that goes stale. The plugin finds a node's VM by its ID or SMBIOS UUID at each
 // attach, and tells the kubelet the zone it reads from this label whenever it registers, so its
 // node pod needs no restart. Only the static backup volume uses the plugin's storage class, so no
@@ -68,7 +71,7 @@ func (a *Appliance) followZones(ctx context.Context, kube kubernetes.Interface, 
 	inZone := false
 	for i := range nodes.Items {
 		n := &nodes.Items[i]
-		host := hosts[n.Name]
+		host := hosts[strings.ToLower(n.Status.NodeInfo.SystemUUID)]
 		if host == "" {
 			unknown = append(unknown, n.Name)
 			continue
@@ -121,16 +124,13 @@ func (a *Appliance) readVMHosts(ctx context.Context, token string) (map[string]s
 	if err != nil {
 		return nil, err //nolint:wrapcheck // followZones says what it was for
 	}
-	var vms []struct {
-		Name string `json:"name"`
-		Node string `json:"node"`
-	}
-	if err := c.Get(ctx, "/cluster/resources?type=vm", &vms); err != nil {
-		return nil, err //nolint:wrapcheck // followZones says what it was for
+	vms, err := vmsByUUID(ctx, c)
+	if err != nil {
+		return nil, err
 	}
 	hosts := make(map[string]string, len(vms))
-	for _, vm := range vms {
-		hosts[vm.Name] = vm.Node
+	for uuid, vm := range vms {
+		hosts[uuid] = vm.Node
 	}
 	return hosts, nil
 }

@@ -81,8 +81,8 @@ type Appliance struct {
 	CopyCap int64
 	// waitVolume bounds a recovery's wait for the backup volume's store, volumeWait when 0.
 	waitVolume time.Duration
-	// vmHosts reads with token which Proxmox VE node each VM it may see runs on, by VM name. Nil
-	// asks the Proxmox VE API.
+	// vmHosts reads with token which Proxmox VE node each VM it may see runs on, by its SMBIOS UUID
+	// in lower case. Nil asks the Proxmox VE API.
 	vmHosts func(ctx context.Context, token string) (map[string]string, error)
 	// protect sets or lifts a management VM's protection with the ticket. Nil asks the Proxmox VE
 	// API.
@@ -271,6 +271,9 @@ func (a *Appliance) Remove(passphrase string, backups BackupsOnRemove, ticket *p
 			return err
 		}
 		if err := a.init(ctx, j, env); err != nil {
+			return err
+		}
+		if err := a.stopBackupStore(ctx, j, env, ticket); err != nil {
 			return err
 		}
 		if err := release(ctx, j, env); err != nil {

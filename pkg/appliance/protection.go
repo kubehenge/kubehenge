@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/luthermonson/go-proxmox"
+
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
@@ -39,6 +41,9 @@ const (
 	protected   protection = 1
 )
 
+// protectionOption is the protection flag's key in a VM's configuration.
+const protectionOption = "protection"
+
 // plannedChange is one resource's change in a plan, as `tofu show -json` prints it.
 type plannedChange struct {
 	Address string       `json:"address"`
@@ -46,14 +51,30 @@ type plannedChange struct {
 }
 
 type changeAction struct {
-	Actions []string      `json:"actions"`
-	Before  *managementVM `json:"before"`
+	Actions []string   `json:"actions"`
+	Before  *plannedVM `json:"before"`
 }
+
+// plannedVM is a node VM as the plan's refresh found it.
+type plannedVM struct {
+	managementVM
+
+	Protection  bool   `json:"protection"`
+	Description string `json:"description"`
+}
+
+// csiLiftedMarker ends the description of a node VM whose protection the management cluster's CSI
+// plugin has lifted to detach a volume (scripts/proxmox-csi-patches). The plugin sets the
+// protection again while the marker is there, so the appliance leaves such a VM to it, and takes
+// the marker off when it lifts the protection itself, so that the plugin no longer sets it.
+const csiLiftedMarker = "proxmox-csi-plugin lifted this VM's protection to detach a volume and sets it again."
 
 // applyPlanned plans with args, lifts the protection of exactly the node VMs that plan replaces or
 // destroys, and applies that same plan. An in-place change lifts nothing. A failed apply sets
 // protection again on each lifted VM that is still there, so that no run leaves one unprotected.
-// A run cut off before that leaves the flag off on a VM the state holds, and the next plan sets it.
+// The module leaves protection to the appliance, so each run first sets it again on every other
+// node VM found without it, as a run cut off after a lift leaves one. A VM whose protection the CSI
+// plugin lifted for a detach is the plugin's to protect again.
 func (a *Appliance) applyPlanned(ctx context.Context, j *Job, env []string, t *pve.Ticket, args ...string) error {
 	defer func() { _ = os.Remove(filepath.Join(a.workdir(), planFile)) }()
 	plan := append([]string{"plan", "-input=false", "-json", "-out=" + planFile}, args...)
@@ -64,9 +85,15 @@ func (a *Appliance) applyPlanned(ctx context.Context, j *Job, env []string, t *p
 	if err != nil {
 		return err
 	}
-	deleted, err := plannedDeletes(shown)
+	deleted, unprotectedVMs, err := plannedNodeVMs(shown)
 	if err != nil {
 		return err
+	}
+	for _, vm := range unprotectedVMs {
+		j.Add(fmt.Sprintf("Setting the protection of VM %d (%s), found without it, again", vm.ID, vm.Name))
+		if err := a.setProtection(ctx, t, vm, protected); err != nil {
+			return fmt.Errorf("VM %d (%s) is without protection, set it with qm set %d --protection 1: %w", vm.ID, vm.Name, vm.ID, err)
+		}
 	}
 	var lifted []managementVM
 	for _, vm := range deleted {
@@ -82,23 +109,28 @@ func (a *Appliance) applyPlanned(ctx context.Context, j *Job, env []string, t *p
 	return nil
 }
 
-// plannedDeletes lists the node VMs a plan, as `tofu show -json` prints it, deletes: those it
-// replaces and those it destroys.
-func plannedDeletes(shown []byte) ([]managementVM, error) {
+// plannedNodeVMs lists, of the node VMs a plan, as `tofu show -json` prints it, holds, those it
+// deletes, by a replace or a destroy, and of the others those its refresh found unprotected
+// without the CSI plugin's marker.
+func plannedNodeVMs(shown []byte) ([]managementVM, []managementVM, error) {
 	var plan struct {
 		ResourceChanges []plannedChange `json:"resource_changes"`
 	}
 	if err := json.Unmarshal(shown, &plan); err != nil {
-		return nil, fmt.Errorf("reading the plan: %w", err)
+		return nil, nil, fmt.Errorf("reading the plan: %w", err)
 	}
-	var out []managementVM
+	var deleted, unprotectedVMs []managementVM
 	for _, rc := range plan.ResourceChanges {
-		if !strings.HasPrefix(rc.Address, nodeVMAddress+"[") || !slices.Contains(rc.Change.Actions, "delete") || rc.Change.Before == nil {
-			continue
+		vm := rc.Change.Before
+		switch {
+		case !strings.HasPrefix(rc.Address, nodeVMAddress+"[") || vm == nil:
+		case slices.Contains(rc.Change.Actions, "delete"):
+			deleted = append(deleted, vm.managementVM)
+		case !vm.Protection && !strings.Contains(vm.Description, csiLiftedMarker):
+			unprotectedVMs = append(unprotectedVMs, vm.managementVM)
 		}
-		out = append(out, *rc.Change.Before)
 	}
-	return out, nil
+	return deleted, unprotectedVMs, nil
 }
 
 // protectAgain sets protection on the lifted VMs after a failed apply. One that the apply removed
@@ -118,7 +150,8 @@ func (a *Appliance) protectAgain(ctx context.Context, j *Job, t *pve.Ticket, lif
 
 // setProtection sets or lifts a management VM's protection with the ticket, on whichever node it
 // runs on now, as HA may have moved it. A VM that is gone, or whose ID another VM has taken since,
-// is passed by.
+// is passed by. A lift also takes the CSI plugin's marker off, in the same change and against the
+// configuration it was read from, so that a detach in flight leaves the protection off.
 func (a *Appliance) setProtection(ctx context.Context, t *pve.Ticket, vm managementVM, value protection) error {
 	if a.protect != nil {
 		return a.protect(ctx, t, vm, value)
@@ -141,10 +174,45 @@ func (a *Appliance) setProtection(ctx context.Context, t *pve.Ticket, vm managem
 			continue
 		}
 		path := fmt.Sprintf("/nodes/%s/qemu/%d/config", url.PathEscape(v.Node), v.VMID)
-		if err := c.Put(ctx, path, map[string]any{"protection": int(value)}, nil); err != nil {
+		if value == unprotected {
+			return liftProtection(ctx, c, path)
+		}
+		if err := c.Put(ctx, path, map[string]any{protectionOption: int(value)}, nil); err != nil {
 			return fmt.Errorf("setting protection=%d: %w", value, err)
 		}
 		return nil
 	}
 	return nil
+}
+
+// liftAttempts bounds lifting a VM's protection while the CSI plugin changes its configuration.
+const liftAttempts = 3
+
+// liftProtection lifts the protection of the VM whose configuration is at path, taking the CSI
+// plugin's marker off with it. The digest makes Proxmox VE refuse the change when the plugin
+// changed the configuration since it was read, and the lift is tried again on the new one.
+func liftProtection(ctx context.Context, c *proxmox.Client, path string) error {
+	var err error
+	for range liftAttempts {
+		var config struct {
+			Digest      string `json:"digest"`
+			Description string `json:"description"`
+		}
+		if err = c.Get(ctx, path, &config); err != nil {
+			return fmt.Errorf("reading the configuration: %w", err)
+		}
+		change := map[string]any{protectionOption: int(unprotected), "digest": config.Digest}
+		if strings.Contains(config.Description, csiLiftedMarker) {
+			description := strings.ReplaceAll(strings.ReplaceAll(config.Description, "\n"+csiLiftedMarker, ""), csiLiftedMarker, "")
+			if description == "" {
+				change["delete"] = "description"
+			} else {
+				change["description"] = description
+			}
+		}
+		if err = c.Put(ctx, path, change, nil); err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("setting protection=0: %w", err)
 }

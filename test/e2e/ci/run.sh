@@ -261,12 +261,14 @@ case "${TF_VAR_controller_image}" in
     # Anything else ends in the pushed image's digest.
     *) ;;
 esac
-# capmox and the Add-on Provider for Helm as a release publishes them, by the digests the module
-# names; the mirror serves them as ghcr.io's.
+# capmox, the Add-on Provider for Helm and the CSI plugin's controller as a release publishes them,
+# by the digests the module names; the mirror serves them as ghcr.io's.
 if [ "${built}" != true ]; then
     make -s -C "${repo}" capmox-image CAPMOX_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-provider-proxmox" \
         KO_FLAGS=--insecure-registry > /dev/null
     make -s -C "${repo}" helm-addon-image HELM_ADDON_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-addon-provider-helm" \
+        KO_FLAGS=--insecure-registry > /dev/null
+    make -s -C "${repo}" proxmox-csi-image PROXMOX_CSI_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/proxmox-csi-controller" \
         KO_FLAGS=--insecure-registry > /dev/null
 fi
 

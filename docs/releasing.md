@@ -15,6 +15,7 @@ A pushed version tag releases Kubehenge with no further step. CI checks the tag,
 | `ghcr.io/kubehenge/kubehenge:v<version>` | The controller image. |
 | `ghcr.io/kubehenge/cluster-api-provider-proxmox:<capmox release>-<commit>` | The build of Cluster API's Proxmox VE provider (capmox), released only while the module uses one. It is built from the upstream release commit `capmox_build` names in `management-cluster/versions.tf`, with the fixes in `scripts/capmox-patches`. `scripts/provider-image.sh` builds it reproducibly and refuses an image whose digest differs from the module's. Anyone can rebuild it and compare. |
 | `ghcr.io/kubehenge/cluster-api-addon-provider-helm:<release>-<commit>` | The build of the Add-on Provider for Helm that `helm_addon_build` names, with the fixes in `scripts/helm-addon-patches`. It is built and released as capmox's is. |
+| `ghcr.io/kubehenge/proxmox-csi-controller:<release>-<commit>` | The build of the Proxmox CSI plugin's controller that `proxmox_csi_build` names, which the management cluster runs. Its fixes in `scripts/proxmox-csi-patches` let it detach a volume from a protected VM. The build runs their tests first. It is built and released as capmox's is. |
 
 The Talos providers are not part of a Kubehenge release. The management cluster installs them from the releases of Kubehenge's forks, [cluster-api-bootstrap-provider-talos](https://github.com/kubehenge/cluster-api-bootstrap-provider-talos) and [cluster-api-control-plane-provider-talos](https://github.com/kubehenge/cluster-api-control-plane-provider-talos). Each fork signs and attests its own image and files.
 
@@ -73,7 +74,7 @@ Its `Release index` job downloads the latest release's index, archive and proven
    - Add a tag ruleset for `v*` that blocks updates and deletions. A released tag can then never be moved.
    - Turn on immutable releases (Settings, General, Releases). A published release's files and tag then never change, and GitHub attests the release itself.
    - Add the key you sign tags with to your GitHub account as a signing key. GitHub then verifies the tag's signature.
-3. After the first release, make the `kubehenge`, `cluster-api-provider-proxmox` and `cluster-api-addon-provider-helm` packages on ghcr.io public.
+3. After the first release, make the `kubehenge`, `cluster-api-provider-proxmox`, `cluster-api-addon-provider-helm` and `proxmox-csi-controller` packages on ghcr.io public.
 
 ## Each release
 
@@ -127,7 +128,8 @@ verify kubehenge_<version>_linux_amd64.tar.gz --bundle kubehenge_<version>.intot
   --predicate-type https://spdx.dev/Document/v2.3
 for image in ghcr.io/kubehenge/kubehenge:v<version> \
   "$(sed -n 's/^ *image *= *"\(ghcr.io\/kubehenge\/cluster-api-provider-proxmox@.*\)"/\1/p' ../management-cluster/versions.tf)" \
-  "$(sed -n 's/^ *image *= *"\(ghcr.io\/kubehenge\/cluster-api-addon-provider-helm@.*\)"/\1/p' ../management-cluster/versions.tf)"; do
+  "$(sed -n 's/^ *image *= *"\(ghcr.io\/kubehenge\/cluster-api-addon-provider-helm@.*\)"/\1/p' ../management-cluster/versions.tf)" \
+  "$(sed -n 's/^ *image *= *"\(ghcr.io\/kubehenge\/proxmox-csi-controller@.*\)"/\1/p' ../management-cluster/versions.tf)"; do
   verify "oci://$image"
   verify "oci://$image" --predicate-type https://spdx.dev/Document/v2.3
   cosign verify "$image" \

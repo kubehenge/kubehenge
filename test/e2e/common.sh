@@ -608,3 +608,30 @@ kubeconfig_field() {
 management_get() {
     curl -sS --cacert "${work}/management-ca.crt" --cert "${work}/management.crt" --key "${work}/management.key" "${management_api}$1"
 }
+
+# stuck_state: to stderr, every pod of the management cluster that is not Running or Succeeded, or
+# is being deleted, with its conditions, container states and events, and every namespace held in
+# Terminating with its conditions, which name what is left in it and the finalizers holding that.
+# A failed test calls it while the cluster still answers; it needs management_credentials first.
+stuck_state() {
+    [ -n "${management_api:-}" ] || return 0
+    echo "-- the management cluster's pods that are not running, or are being deleted" >&2
+    management_get '/api/v1/pods' | jq -r '.items[]
+        | select((.status.phase != "Running" and .status.phase != "Succeeded") or .metadata.deletionTimestamp != null)
+        | "\(.metadata.namespace)/\(.metadata.name) on \(.spec.nodeName // "-"): \(.status.phase)"
+          + (if .metadata.deletionTimestamp then ", deleted at \(.metadata.deletionTimestamp)" else "" end)
+          + "\n  conditions: \([.status.conditions[]? | select(.status != "True") | "\(.type) \(.reason // "") \(.message // "")"] | join("; "))"
+          + "\n  containers: \([.status.containerStatuses[]? | "\(.name) \(.state | keys[0]) \(.state[] | .reason // "")"] | join("; "))"' >&2 || true
+    management_get '/api/v1/events' | jq -r '.items[] | select(.involvedObject.kind == "Pod" and .type != "Normal")
+        | "\(.lastTimestamp // .eventTime) \(.involvedObject.namespace)/\(.involvedObject.name) \(.reason): \(.message)"' >&2 || true
+    echo "-- the pods and endpoints in kubehenge-system, which the interface reaches through the API server" >&2
+    management_get '/api/v1/namespaces/kubehenge-system/pods' | jq -r '.items[]
+        | "\(.metadata.name) \(.status.podIP // "-") on \(.spec.nodeName // "-"): \(.status.phase), started \(.status.startTime // "-"), restarts \([.status.containerStatuses[]?.restartCount] | add // 0)"
+          + (if .metadata.deletionTimestamp then ", deleted at \(.metadata.deletionTimestamp)" else "" end)' >&2 || true
+    management_get '/apis/discovery.k8s.io/v1/namespaces/kubehenge-system/endpointslices' | jq -r '.items[]
+        | "\(.metadata.labels["kubernetes.io/service-name"]): \([.endpoints[]? | "\(.addresses[0]) ready=\(.conditions.ready) \(.targetRef.name // "")"] | join("; "))"' >&2 || true
+    echo "-- the management cluster's namespaces held in Terminating" >&2
+    management_get '/api/v1/namespaces' | jq -r '.items[] | select(.status.phase == "Terminating")
+        | "\(.metadata.name), deleted at \(.metadata.deletionTimestamp)\n"
+          + ([.status.conditions[]? | select(.status == "True") | "  \(.type): \(.message)"] | join("\n"))' >&2 || true
+}
