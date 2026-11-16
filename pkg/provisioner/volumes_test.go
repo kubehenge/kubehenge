@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -114,8 +115,9 @@ type fakePVE struct {
 	// Permissions.Modify on /.
 	password     string
 	tokenCreator string
-	// accounts sign in through the fake, as serve sets them.
+	// accounts sign in through the fake, and srv serves it, as serve sets them.
 	accounts *pve.Accounts
+	srv      *httptest.Server
 	// storageList, when set, replaces the cluster's storages. inactive are "<node>/<storage>" pairs
 	// that a node reports as not active, or disabled.
 	storageList []map[string]any
@@ -560,8 +562,25 @@ func serve(t *testing.T, f *fakePVE) *proxmox.Client {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.accounts = accounts
+	f.accounts, f.srv = accounts, srv
 	return proxmox.NewClient(srv.URL+"/api2/json", proxmox.WithHTTPClient(srv.Client()))
+}
+
+// roundTripper is a transport made of a function.
+type roundTripper func(*http.Request) (*http.Response, error)
+
+func (f roundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// tokenReadsAnswered has answer reply to the cluster client's reads of the token in place of the
+// fake, through the checks pve.Connect's client makes.
+func tokenReadsAnswered(f *fakePVE, p *Proxmox, answer func(*http.Request) (*http.Response, error)) {
+	next := f.srv.Client().Transport
+	p.Client = proxmox.NewClient(f.srv.URL+"/api2/json", proxmox.WithHTTPClient(&http.Client{Transport: pve.CheckStatus(roundTripper(func(r *http.Request) (*http.Response, error) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/token/") {
+			return answer(r)
+		}
+		return next.RoundTrip(r)
+	}))}))
 }
 
 // serveCloud is a Proxmox on the fake, which signs in as the cluster's user through the fake too.
@@ -1002,6 +1021,86 @@ func TestTokenWithoutItsSecretReplacesTheUser(t *testing.T) {
 	}
 	if !slices.Equal(f.groups, []string{"kubehenge-clusters"}) || len(f.acl) != 1 || f.acl[0]["ugid"] != webNames.User {
 		t.Errorf("the new user is in %v and holds %v", f.groups, f.acl)
+	}
+}
+
+// existingCluster is a fake holding the cluster's user, its token and its grant on the pool, and a
+// Proxmox on it that knows the token's secret.
+func existingCluster(t *testing.T) (*fakePVE, *Proxmox, Credentials) {
+	t.Helper()
+	f := newFakePVE("a", nil)
+	f.token, f.groups = true, []string{"kubehenge-clusters"}
+	f.acl = []map[string]any{{"path": "/pool/" + webNames.Pool, "type": "user", "ugid": webNames.User, "roleid": "kubehenge-cluster", "propagate": 1}}
+	p := serveCloud(t, f)
+	p.Settings = cloudSettings
+	return f, p, Credentials{TokenID: webNames.TokenID(), TokenSecret: "s3cret", VolumeOwner: 4242, VolumeOwnerNode: "a"}
+}
+
+// Only Proxmox VE's own answer says the token is gone. A read that got none, as when the name
+// lookup failed, fails the reconcile to retry it and deletes nothing.
+func TestTokenReadWithoutAnAnswerDeletesNothing(t *testing.T) {
+	t.Parallel()
+	f, p, held := existingCluster(t)
+	tokenReadsAnswered(f, p, func(*http.Request) (*http.Response, error) {
+		return nil, &net.DNSError{Err: "no such host", Name: "pve", IsNotFound: true}
+	})
+	if _, err := p.Ensure(t.Context(), webNames, Access{}, held, func(Credentials) error { return nil }); err == nil || !strings.Contains(err.Error(), "reading token") {
+		t.Fatalf("Ensure = %v, want the failed read", err)
+	}
+	if slices.Contains(f.requests, "DELETE /access/users/"+webNames.User) || f.tokens != 0 {
+		t.Errorf("a read without an answer replaced the user:\n%s", strings.Join(f.requests, "\n"))
+	}
+}
+
+// A token Proxmox VE says is gone, by a 404 or by its message, is made again with its user.
+func TestTokenGoneRenewsTheUser(t *testing.T) {
+	t.Parallel()
+	for name, answer := range map[string]func(*http.Request) (*http.Response, error){
+		"404": func(r *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusNotFound, Status: "404 Not Found", Body: http.NoBody, Request: r}, nil
+		},
+		"no such token": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f, p, held := existingCluster(t)
+			if answer != nil {
+				tokenReadsAnswered(f, p, answer)
+			} else {
+				f.token = false
+			}
+			c, err := p.Ensure(t.Context(), webNames, Access{}, held, func(Credentials) error { return nil })
+			if err != nil || c.TokenSecret != "secret-1" || f.tokenCreator != webNames.User {
+				t.Fatalf("Ensure = %+v, %v; token by %q", c, err, f.tokenCreator)
+			}
+		})
+	}
+}
+
+// A user with a group or a permission Kubehenge did not give it is not replaced for a new token,
+// which would drop them, and the error names them.
+func TestRenewalKeepsWhatAnAdministratorAdded(t *testing.T) {
+	t.Parallel()
+	for name, add := range map[string]func(*fakePVE){
+		"group": func(f *fakePVE) { f.groups = append(f.groups, "operators") },
+		"ACL": func(f *fakePVE) {
+			f.acl = append(f.acl, map[string]any{"path": "/vms/9999", "type": "user", "ugid": webNames.User, "roleid": "PVEVMUser", "propagate": 1})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f, p, held := existingCluster(t)
+			add(f)
+			groups, acl := slices.Clone(f.groups), slices.Clone(f.acl)
+			held.TokenSecret = ""
+			_, err := p.Ensure(t.Context(), webNames, Access{}, held, func(Credentials) error { return nil })
+			if err == nil || !strings.Contains(err.Error(), "group operators") && !strings.Contains(err.Error(), "PVEVMUser on /vms/9999") {
+				t.Fatalf("Ensure = %v, want the refusal naming what the user holds", err)
+			}
+			if slices.Contains(f.requests, "DELETE /access/users/"+webNames.User) || !slices.Equal(f.groups, groups) || len(f.acl) != len(acl) {
+				t.Errorf("the user was replaced: groups %v, acl %v", f.groups, f.acl)
+			}
+		})
 	}
 }
 

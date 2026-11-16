@@ -97,5 +97,5 @@ func (a *Accounts) send(ctx context.Context, t *Ticket, method, path string, for
 		var ignored any
 		out = &ignored
 	}
-	return a.do(req, out)
+	return t.refused(a.do(req, out))
 }

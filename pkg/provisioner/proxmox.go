@@ -529,8 +529,17 @@ func (p *Proxmox) ensureUser(ctx context.Context, n Names, access Access, secret
 		if kept {
 			return secret, p.ensureSysAudit(ctx, n, access, user.Groups)
 		}
-		// Deleting the user takes its token and ACLs with it. The grant that follows gives the new
-		// one its ACLs again.
+		// Deleting the user takes its token, groups and ACLs with it. The grant that follows gives
+		// the new one Kubehenge's again. Anything an administrator added the controller could not
+		// give back, so such a user is left as it is.
+		extra, extraErr := p.heldBeyond(ctx, n, access, user.Groups)
+		if extraErr != nil {
+			return "", extraErr
+		}
+		if len(extra) > 0 {
+			return "", fmt.Errorf("token %s needs replacing with its user, which would drop what Kubehenge did not give it: %s. "+
+				"Take that from the user, or delete the user for Kubehenge to make it again", n.TokenID(), strings.Join(extra, ", "))
+		}
 		if deleteErr := p.Client.Delete(ctx, path, nil); deleteErr != nil && !isMissing(deleteErr) {
 			return "", fmt.Errorf("replacing user %s for a new token: %w", n.User, deleteErr)
 		}
@@ -538,6 +547,36 @@ func (p *Proxmox) ensureUser(ctx context.Context, n Names, access Access, secret
 		return "", fmt.Errorf("reading user %s: %w", n.User, err)
 	}
 	return p.createUser(ctx, n, access)
+}
+
+// heldBeyond lists the groups of the user's, and the ACLs of its that the controller can see, that
+// Kubehenge does not give it: what ensureGrant leaves alone.
+func (p *Proxmox) heldBeyond(ctx context.Context, n Names, access Access, groups []string) ([]string, error) {
+	var extra []string
+	for _, g := range groups {
+		if g != p.Settings.Group && g != p.Settings.SysAuditGroup {
+			extra = append(extra, "group "+g)
+		}
+	}
+	wanted, err := p.wantedGrants(n, access)
+	if err != nil {
+		return nil, err
+	}
+	var entries []struct {
+		Path   string `json:"path"`
+		Type   string `json:"type"`
+		UGID   string `json:"ugid"`
+		RoleID string `json:"roleid"`
+	}
+	if err := p.Client.Get(ctx, "/access/acl", &entries); err != nil {
+		return nil, fmt.Errorf("reading the permissions of %s: %w", n.User, err)
+	}
+	for _, e := range entries {
+		if _, ours := wanted[e.Path]; e.Type == "user" && e.UGID == n.User && !ours && !strings.HasPrefix(e.Path, storageACLPath) {
+			extra = append(extra, e.RoleID+" on "+e.Path)
+		}
+	}
+	return extra, nil
 }
 
 // tokenKept tells whether the cluster's token exists with secret known.
@@ -961,11 +1000,20 @@ const (
 	deleteTaskTimeout = 15 * time.Minute
 )
 
-// Proxmox VE reports a missing or existing object as a 500 with the reason in the status line,
-// which go-proxmox returns as the error text.
+// isMissing tells whether Proxmox VE answered that the object does not exist: a 404, or a 500 or
+// 400 whose message says so, as go-proxmox reads them. Only an answer counts. A request that got
+// none, such as one whose name lookup failed with "no such host", is an error to retry.
 func isMissing(err error) bool {
-	return err != nil && (proxmox.IsNotFound(err) || strings.Contains(err.Error(), "does not exist") || strings.Contains(err.Error(), "no such"))
+	if proxmox.IsNotFound(err) {
+		return true
+	}
+	// pve.Connect's client turns a 404 into its own APIError before go-proxmox reads it.
+	var answered *pve.APIError
+	return errors.As(err, &answered) && strings.HasPrefix(answered.Status, "404")
 }
+
+// Proxmox VE reports an existing object as a 500 with the reason in the status line, which
+// go-proxmox returns as the error text.
 
 func isExisting(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "already exists")
