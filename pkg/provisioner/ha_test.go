@@ -83,8 +83,7 @@ func (f *fakeHA) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	reply := map[string]any{"data": data}
 	if err != nil {
-		// A die in Proxmox VE's API handlers is a 500 with the message.
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(http.StatusBadRequest)
 		reply = map[string]any{"message": err.Error()}
 	}
 	if err := json.NewEncoder(w).Encode(reply); err != nil {

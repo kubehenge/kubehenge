@@ -257,6 +257,10 @@ func (f *fakePVE) user(a answer, method string, body map[string]any) {
 		f.acl = slices.DeleteFunc(f.acl, func(e map[string]any) bool { return e["ugid"] == webNames.User })
 		a.reply(nil)
 	case http.MethodPost, http.MethodPut:
+		if method == http.MethodPost && !f.userMissing {
+			a.fail("create user failed: user '" + webNames.User + "' already exists")
+			return
+		}
 		f.userWrites = append(f.userWrites, body)
 		f.userMissing = false
 		if password, ok := body["password"].(string); ok {
