@@ -296,7 +296,7 @@ func TestModuleLeavesNodeVMProtectionToTheAppliance(t *testing.T) {
 }
 
 // The appliance and the patched CSI plugin name the plugin's marker alike.
-func TestCSIMarkerIsThePluginPatchs(t *testing.T) {
+func TestCSIMarkerMatchesThePluginPatch(t *testing.T) {
 	t.Parallel()
 	patch, err := os.ReadFile(filepath.Join("..", "..", "scripts", "proxmox-csi-patches", "lift-protection-to-detach.patch"))
 	if err != nil {
