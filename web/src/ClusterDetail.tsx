@@ -941,7 +941,7 @@ function DeleteDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
       {onVolume && (
         <label className="check">
           <input type="checkbox" checked={dropSnapshots} onChange={(e) => setDropSnapshots(e.target.checked)} /> Delete
-          volume snapshots
+          etcd snapshots
         </label>
       )}
       <Field label="Confirm name" hint={`Type ${c.name}.`}>

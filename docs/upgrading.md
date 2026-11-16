@@ -225,7 +225,8 @@ Kubehenge's controller looks at every cluster every five minutes. It starts an u
 - while the cluster is available, with every node at the same version and no rollout running
 - one step at a time, the next once the cluster is settled again.
   - `patch` mode steps to the newest release of the cluster's minor version.
-  - `minor` mode steps to the newest release of the next minor version once the distribution's stable release has reached it, otherwise as `patch` does. Where Rancher or the Talos release does not run the next minor version, the cluster still takes the patch releases of its own and gets the condition `AutoUpgradeSkipped` ([troubleshooting.md](troubleshooting.md#automatic-upgrade-skipped)).
+  - `minor` mode steps to the newest release of the next minor version once the distribution's stable release has reached it, otherwise as `patch` does.
+    - Where Rancher or the Talos release does not run the next minor version, the cluster keeps taking its own patch releases. It gets the condition `AutoUpgradeSkipped` ([troubleshooting.md](troubleshooting.md#automatic-upgrade-skipped)).
 
 Cluster API then rolls the nodes as for any upgrade. A rollout that has started finishes even if the window closes. The last automatic upgrade shows in the cluster's **Summary** as **Last automatic upgrade**, recorded on the Cluster in the annotation `kubehenge.dev/auto-upgraded`.
 
@@ -341,24 +342,24 @@ A Proxmox VE cluster that runs two major versions at once is only a stopover.
 - **Move VMs from old to new only.** A VM started on a newer node gets a machine version an older node cannot run.
 - **HA rules wait.** Proxmox VE refuses them until every node runs 9. Kubehenge writes none meanwhile and sets the condition `HARulesPending` on the cluster, which the interface and `kubectl describe cluster` show.
 
-### Patching Proxmox VE hosts
+### Patching Proxmox VE nodes
 
-Patch the hosts one at a time. A control plane needs a minute or two after its host is back before its etcd member has rejoined. Two members down at once stop a cluster.
+Patch the nodes one at a time. A control plane needs a minute or two after its node is back before its etcd member has rejoined. Two members down at once stop a cluster.
 
-1. Run `kubehenge appliance ready-for-reboot --node <host>`.
-2. Reboot the host.
+1. Run `kubehenge appliance ready-for-reboot --node <node>`.
+2. Reboot the node.
 3. Run `kubehenge appliance ready-for-reboot` without `--node` until it exits 0.
-4. Do the next host.
+4. Do the next node.
 
 #### Reading the answer
 
-Without `--node`, the command exits 0 only when every etcd member of the management cluster and of every cluster is healthy. With `--node`, it exits 0 when stopping that host's guests leaves every etcd a majority of healthy members. Members already down count as gone. A cluster that is degraded but has no member on the host does not hold it back. Otherwise the command prints the first blocker in one line, with the cluster, the member and the node.
+Without `--node`, the command exits 0 only when every etcd member of the management cluster and of every cluster is healthy. With `--node`, it exits 0 when stopping that node's guests leaves every etcd a majority of healthy members. Members already down count as gone. A cluster that is degraded but has no member on the node does not hold it back. Otherwise the command prints the first blocker in one line, with the cluster, the member and the node.
 
 **Administration, Health** shows the answer for each node under **Ready for reboot**, and names a degraded cluster that holds no node back. **etcd** there counts the management cluster's healthy members. A record the controller has not renewed for three minutes blocks every node.
 
 #### Start order
 
-The management VMs start first after a host boots. They carry `startup: order=1,up=90`, so the next guest waits 90 seconds for their etcd members.
+The management VMs start first after a node boots. They carry `startup: order=1,up=90`, so the next guest waits 90 seconds for their etcd members.
 
 ## The appliance's certificate
 

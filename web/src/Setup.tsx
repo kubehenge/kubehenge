@@ -2364,7 +2364,7 @@ export function AdvancedFields({
         label="Site CA"
         hint={
           <>
-            PEM, the default for every connection
+            PEM
             <SiteCARollNote siteCA={form.siteCA} />
           </>
         }
@@ -2384,7 +2384,7 @@ export function AdvancedFields({
       <Field
         label="VM ID range"
         hint="Like 100000-100999"
-        info="New clusters' VMs and the VM templates take their IDs here, else the next free ID. A cluster's own range wins. Keep it clear of the management VMs' IDs, 10000 to 99998 by default."
+        info="New clusters' VMs and the VM templates take their IDs here. Keep it clear of the management VMs' IDs, 10000 to 99998 by default."
         error={shown("vmIDRange")}
       >
         {(id) => <input id={id} value={form.vmIDRange} onChange={(e) => set("vmIDRange", e.target.value)} />}

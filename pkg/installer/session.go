@@ -341,7 +341,7 @@ func (s *Session) routeVLANError(ctx context.Context, bridge, vlan string) error
 	if aware {
 		return nil
 	}
-	return userErr(fmt.Sprintf("the node's default route leaves by %s.%s, but %s is not VLAN aware, so a tag on it would make Proxmox VE create %sv%s and take over the port's .%s, which cuts the node's own network", b, v, b, b, v, v),
+	return userErr(fmt.Sprintf("the node's default route leaves by %s.%s, but %s is not VLAN aware. A tag on it would cut the node's own network", b, v, b),
 		fmt.Sprintf("Make %s VLAN aware in the node's network settings, or name another bridge or VLAN with --bridge and --vlan", b))
 }
 

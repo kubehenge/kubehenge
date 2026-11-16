@@ -132,9 +132,9 @@ function UnownedVMs({ vms }: { vms: { vmid: number }[] }): JSX.Element | null {
   );
 }
 
-/** SameHostWarning says that one Proxmox VE host's loss can take every backup, and what survives it. */
+/** SameHostWarning says that one Proxmox VE node's loss can take every backup, and what survives it. */
 export function SameHostWarning(): JSX.Element {
-  return <p className="warning">Losing one Proxmox VE host can lose every backup. Add a bucket target.</p>;
+  return <p className="warning">Losing one Proxmox VE node can lose every backup. Add a bucket target.</p>;
 }
 
 // BackupLine says where the management backups are and when the last ran, or why the last failed.

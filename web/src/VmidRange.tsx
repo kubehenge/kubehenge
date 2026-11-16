@@ -151,7 +151,7 @@ export function VMIDRangeDialog({ cluster: c, onClose }: { cluster: Cluster; onC
         value={value}
         onChange={setValue}
         problem={problem}
-        hint="Like 100000-100999. Empty takes the next free ID"
+        hint="Like 100000-100999, empty for the next free ID"
       />
       <p className="muted">Replaces every node, one at a time.</p>
       <ErrorBox message={error} />

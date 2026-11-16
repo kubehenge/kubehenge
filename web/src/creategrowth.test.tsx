@@ -34,10 +34,7 @@ const lvm: Storage = {
 const nodes: PveNode[] = [{ node: "pve1", online: true }];
 
 // The controller's AutoscalerNoRoom event for one control plane and five workers of 30 GiB.
-const growth =
-  "Storage local-lvm (on pve1) reserves each disk's whole size and has 100 GiB free. " +
-  "At the autoscaler's maximum, the machines still to be made need 180 GiB. " +
-  "A worker past that room waits, and the autoscaler gives it up after 30 minutes";
+const growth = "Storage local-lvm (on pve1) has 100 GiB free. The pools at their most workers need 180 GiB";
 
 const scaled = (least: number): ReturnType<typeof newForm> => ({
   ...newForm(),

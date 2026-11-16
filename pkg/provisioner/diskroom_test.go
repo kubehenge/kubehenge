@@ -211,8 +211,7 @@ func TestPlacerWarnsOnceThatTheAutoscaledMaximumLacksRoom(t *testing.T) {
 	p, c, web := autoscaledOnSpace(t, sites, rec)
 	p.placeAll(t.Context())
 	p.placeAll(t.Context())
-	want := "Warning AutoscalerNoRoom Storage local-lvm (on pve1) reserves each disk's whole size and has 100 GiB free. " +
-		"At the autoscaler's maximum, the machines still to be made need 240 GiB. A worker past that room waits, and the autoscaler gives it up after 30 minutes"
+	want := "Warning AutoscalerNoRoom Storage local-lvm (on pve1) has 100 GiB free. The pools at their most workers need 240 GiB"
 	got := recorded(rec)
 	if len(got) != 1 || got[0] != want {
 		t.Errorf("events %q, want once %q", got, want)

@@ -44,7 +44,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - The create wizard offers etcd snapshots on its add-ons step, on by default where the class offers a backup target. A cluster started from another copies its snapshot settings.
 - Certificates take an ACME server's external account binding (`acme.externalAccountBinding.keyID`), its HMAC key stored as a credential. A missing key leaves no issuer, with a `NoACMEEABCredential` event.
 - The `external` issuer (`issuerName`, `issuerKind`, `issuerGroup`) uses one you run, such as Vault, ADCS or a ClusterIssuer, in place of Kubehenge's own.
-- Clusters can take their add-ons' Helm charts from a mirror per repository host, with its own CA. `kubehenge charts` lists what to copy ([install.md](clusters.md#mirroring-the-charts)).
+- Clusters can take their add-ons' Helm charts from a mirror per repository host, with its own CA. `kubehenge charts` lists what to copy ([clusters.md](clusters.md#mirroring-the-charts)).
 - cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher go out through a proxy (`egressProxy`), the management cluster's or the cluster's own. Cluster ranges, `.svc` and `.cluster.local` bypass it.
 - Argo CD and Flux trust a certificate authority for the Git server (`gitops.repository.caBundle`).
 - The monitoring add-on takes alert receivers (email, webhook, Slack, Teams), a remote write target and external Alertmanagers. Their secrets are stored as credentials.
@@ -80,7 +80,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A cluster's `network` variable takes an `mtu` (1280 to 65520) and `queues` (1 to 64) for its nodes' interface. The wizard and the controller refuse an MTU above the bridge's.
 - A failure creating a cluster's Proxmox VE pool, user, token or volume owner records a `ProxmoxObjectsFailed` warning event with the error.
 - `--node` of `kubehenge template create` and `refresh`, and the chart's `templateRefresh.node`, take several nodes. The build runs on the first that is online and whose CPU runs the node OS.
-- The management cluster's setup takes an HTTP(S) proxy for every download it makes ([install.md](clusters.md#behind-a-proxy)). The saved password is never shown again.
+- The management cluster's setup takes an HTTP(S) proxy for every download it makes ([clusters.md](clusters.md#behind-a-proxy)). The saved password is never shown again.
 - Machines on a Proxmox VE node that reboots or is in HA maintenance are not replaced for 30 minutes (`RemediationHeld`), and a host removed from the Proxmox VE cluster ends the wait.
 - `hostOutageGraceMinutes` sets that wait, 30 by default, 0 for no ceiling, otherwise 5 to 10080. The wizard, **Options** and `kubehenge cluster create` and `update` (`--host-outage-grace-minutes`) set it.
 - The management cluster's Health says when the controller's token lacks `Sys.Audit` on `/`, which hides HA maintenance and removed hosts.
@@ -137,7 +137,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A cluster whose API is silent for 10 minutes, with under a majority of control-plane VMs running, gets `ControlPlaneQuorumLost`. An event of that name and a Health item come with it.
 - **Recover…** also works on a cluster that lost quorum, through the interface, the CLI and kubectl. It lists the control planes still running and warns that what only the lost members held is gone.
 - The troubleshooting page covers recovering a cluster that lost two of three control planes, with the kubectl annotation.
-- A release mirror serves the RKE2 and k3s releases in place of GitHub ([install.md](clusters.md#mirroring-the-releases)). Nodes, the interface and `kubehenge release pin --mirror` read from it.
+- A release mirror serves the RKE2 and k3s releases in place of GitHub ([clusters.md](clusters.md#mirroring-the-releases)). Nodes, the interface and `kubehenge release pin --mirror` read from it.
 - An RKE2 or k3s cluster can name its own mirror in `releaseMirror`, in the wizard or Options ([clusters.md](clusters.md#a-clusters-own-release-mirror)). It replaces the management cluster's for its nodes.
 - A node whose release download fails names the file and the mirror or GitHub.
 - While Proxmox VE nodes run different major versions, new VMs go to the oldest version's nodes with room, so a drain or HA move back works. Otherwise they go to newer nodes, with a Warning event.
@@ -260,7 +260,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - The health identity may read `/metrics`, webhook configurations and endpoint slices for the upgrade checks.
 - The installer sets up Debian's daily security updates in the container, through its proxy, and `install.sh --upgrade` adds them to appliances that lack them.
 - Release files that do not match their pins are refused before anything is installed.
-- Cluster API's token holds the module's own roles, with only the privileges the provider's calls need ([install.md](architecture.md#what-cluster-apis-token-may-do)). It loses `VM.Migrate`, `VM.Snapshot` and others that Proxmox VE's roles granted.
+- Cluster API's token holds the module's own roles, with only the privileges the provider's calls need ([architecture.md](architecture.md#what-cluster-apis-token-may-do)). It loses `VM.Migrate`, `VM.Snapshot` and others that Proxmox VE's roles granted.
 - Talos templates are baked on your Proxmox VE host from Sidero's images, each pinned by digest. They are no longer imported from the Image Factory without a checksum.
 - Only pinned Talos releases are offered and admitted for a new cluster or a change of release.
 
@@ -333,7 +333,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - **Copy as YAML** on the create wizard's check step copies the cluster for kubectl or a Git repository.
 - Each identity provider has its own sign-in button.
 - A finished backup's or restore's run page shows the end of its Velero log.
-- **Notifications** go to a webhook, an ntfy topic or email ([install.md](install-settings.md#notifications)). They report a cluster problem lasting 5 minutes and its end, a failed run and management cluster problems.
+- **Notifications** go to a webhook, an ntfy topic or email ([install-settings.md](install-settings.md#notifications)). They report a cluster problem lasting 5 minutes and its end, a failed run and management cluster problems.
 - **Administration, Notifications** sets the targets and sends a test, as `kubehenge appliance notifications` does in the shell.
 - A cluster with the monitoring add-on lists its firing alerts on its Health page.
 - `kubehenge cluster` lists, creates, scales and deletes clusters, prints a kubeconfig and acts on machines through the interface.
@@ -377,7 +377,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A held Kubernetes upgrade sets `UpgradeHeld`, with the reason `RancherKubernetes`, `RancherElsewhere` or `TalosUpgrade`.
 - The fleet and the Health page show **Upgrade held for Rancher** or **Upgrade waits for Talos**. `kubehenge cluster list` shows the reason in STATUS ([troubleshooting.md](troubleshooting.md#upgrades-held-back)).
 - **Administration, Backups** snapshots the management cluster's etcd on a schedule into a backup target, encrypted, and lists the snapshots there.
-- **Restore…** wipes etcd on the control-plane nodes and restores one with the state passphrase, also while the API is down ([install.md](install-settings.md#back-up-the-management-clusters-etcd)).
+- **Restore…** wipes etcd on the control-plane nodes and restores one with the state passphrase, also while the API is down ([install-settings.md](install-settings.md#back-up-the-management-clusters-etcd)).
 - An appliance upgrade is rolled back unless the new interface answers within 2 minutes and stays up for 20 seconds.
 - The Administration page shows such an upgrade as rolled back, with why ([troubleshooting.md](troubleshooting.md#appliance-upgrades)). `install.sh --upgrade` checks and rolls back the same way.
 - `kubehenge appliance` in the appliance's shell shows the upgrades and how the last went, asks for one and checks the interface.

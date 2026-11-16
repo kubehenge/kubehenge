@@ -223,7 +223,7 @@
     {
       "name": "END line lost a dash",
       "lines": ["-----BEGIN CERTIFICATE-----", "MIIBAA==", "-----END CERTIFICATE----"],
-      "problem": "block 1 is no complete PEM block"
+      "problem": "block 1 is not a complete PEM block"
     },
     {
       "name": "BEGIN inside a block",
@@ -234,22 +234,22 @@
         "MIIBAA==",
         "-----END CERTIFICATE-----"
       ],
-      "problem": "block 1 is no complete PEM block"
+      "problem": "block 1 is not a complete PEM block"
     },
     {
       "name": "block without its END line",
       "lines": ["-----BEGIN CERTIFICATE-----", "MIIBAA=="],
-      "problem": "block 1 is no complete PEM block"
+      "problem": "block 1 is not a complete PEM block"
     },
     {
       "name": "END of another kind",
       "lines": ["-----BEGIN CERTIFICATE-----", "MIIBAA==", "-----END PRIVATE KEY-----"],
-      "problem": "block 1 is no complete PEM block"
+      "problem": "block 1 is not a complete PEM block"
     },
     {
       "name": "body that is no base64",
       "lines": ["-----BEGIN CERTIFICATE-----", "MIIB!A==", "-----END CERTIFICATE-----"],
-      "problem": "block 1 is no complete PEM block"
+      "problem": "block 1 is not a complete PEM block"
     },
     {
       "name": "second block cut short",
@@ -261,7 +261,7 @@
         "MII",
         "-----END CERTIFICATE-----"
       ],
-      "problem": "block 2 is no complete PEM block"
+      "problem": "block 2 is not a complete PEM block"
     },
     {
       "name": "a private key",

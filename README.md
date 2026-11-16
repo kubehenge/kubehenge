@@ -25,7 +25,7 @@ Kubernetes for Proxmox VE.
 
 Kubehenge creates and runs Kubernetes clusters on Proxmox VE. You manage them from a web interface that signs in with your Proxmox VE users, LDAP, Active Directory and OpenID Connect realms included.
 
-VMware's vSphere Kubernetes Service is built on Cluster API. Kubehenge does the same job on Proxmox VE, on the same foundation.
+VMware's vSphere Kubernetes Service is built on Cluster API. Kubehenge does the same job on Proxmox VE, also on Cluster API.
 
 ## What it does
 

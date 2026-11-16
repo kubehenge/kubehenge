@@ -43,7 +43,7 @@ workload clusters on Proxmox VE VMs
 
 ## Management cluster
 
-The management cluster is an appliance that runs Cluster API, its providers and Kubehenge, and nobody's workloads. Monitoring, Rancher and everything else users run go into the clusters it creates. It stays small. Its attack surface is only what Kubehenge needs. Losing a workload cluster does not affect the cluster that repairs it.
+The management cluster runs Cluster API, its providers and Kubehenge, and nobody's workloads. Monitoring, Rancher and everything else users run go into the clusters it creates. It stays small. Its attack surface is only what Kubehenge needs. Losing a workload cluster does not affect the cluster that repairs it.
 
 ### Operating system
 
@@ -117,6 +117,10 @@ A restore downloads and decrypts the snapshot on the appliance and checks it aga
 The module installs the Proxmox CSI plugin in the management cluster, from the workload add-on's chart and images. Its token holds `VM.Audit` and `VM.Config.Disk`, so it attaches and grows disks but deletes none. The storage class `kubehenge-management` keeps a released volume.
 
 The backup volume is the disk of a stopped VM, `kubehenge-backups`, outside the management pool. The VM has protection on, and a static volume binds its disk, so deleting the management VMs leaves it. A small store in `kubehenge-system` serves it with a token from a Secret. The appliance reaches it through a port-forward to its pod, and the controller over the network, which a NetworkPolicy opens to the controller's pods alone. The snapshots and exports on it are encrypted to an age key sealed with the state passphrase.
+
+The appliance alone sets each management node's `topology.kubernetes.io/zone` label, to the Proxmox VE node its VM runs on. It reads that with a read-only token on the management pool, after each apply and before each backup. A node whose VM it cannot find keeps its label. A node restart never puts back an old label.
+
+A restore of a kubeadm, RKE2 or k3s cluster from the volume first checks the snapshot whole, as `etcdutl snapshot status` does. The controller then starts a pod of Kubehenge's image on the first control-plane node and streams the snapshot to it through the cluster's API server. Nothing stops until the node holds the snapshot in full and checked. The restore then runs as from a bucket ([clusters.md](clusters.md#on-the-backup-volume)).
 
 ## ClusterClasses
 

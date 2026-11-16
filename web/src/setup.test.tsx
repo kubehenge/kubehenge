@@ -375,7 +375,7 @@ describe("setup", () => {
     expect(problems({ chartMirrors: ok, chartMirrorCA: pem })).toStrictEqual({});
     expect(problems({ chartMirrors: ok, chartMirrorCA: "junk" }).chartMirrorCA).toBe("Holds no PEM certificate.");
     expect(problems({ chartMirrors: ok, chartMirrorCA: "-----BEGIN PRIVATE KEY-----\nx" }).chartMirrorCA).toBe(
-      "Block 1 is no complete PEM block.",
+      "Block 1 is not a complete PEM block.",
     );
     expect(problems({ chartMirrorCA: pem }).chartMirrorCA).toBe("Add a chart mirror first.");
     // The appliance's rule: the layout of a cluster's bundles, up to 256 KiB.
@@ -387,7 +387,7 @@ describe("setup", () => {
     expect(authority(`${pem}\n`.repeat(2000))).toBeUndefined();
     expect(authority(`${pem}\n`.repeat(5000))).toBe("At most 256 KiB.");
     expect(authority(`${pem.slice(1)}\n${pem}`)).toBe("Has a damaged BEGIN or END line on line 1.");
-    expect(authority("# -----BEGIN CERTIFICATE----- follows")).toBe("Block 1 is no complete PEM block.");
+    expect(authority("# -----BEGIN CERTIFICATE----- follows")).toBe("Block 1 is not a complete PEM block.");
   });
 
   it("sends the release mirror and its authority only when set, and reads them back", () => {
@@ -448,7 +448,7 @@ describe("setup", () => {
     // A key block made from the certificate's, so that no key text sits in the source.
     const keyBlock = pem.replaceAll("CERTIFICATE", "PRIVATE KEY");
     const keyHead = keyBlock.slice(0, keyBlock.indexOf("\n"));
-    expect(problems({ siteCA: keyHead }).siteCA).toBe("Block 1 is no complete PEM block.");
+    expect(problems({ siteCA: keyHead }).siteCA).toBe("Block 1 is not a complete PEM block.");
     expect(problems({ siteCA: keyBlock }).siteCA).toBe("Holds a private key. Give certificates only.");
     // What the server accepts and refuses, curl's cacert.pem layout among it.
     const curl = `##\n## Bundle of CA Root Certificates\n##\n\nISRG Root X1\n============\n${pem}\n# ---------- Example Root CA ----------\n${pem}`;
@@ -545,7 +545,7 @@ describe("setup", () => {
     );
     expect(problems({ proxyURL: "http://p.example", proxyCA: "junk" }).proxyCA).toBe("Holds no PEM certificate.");
     expect(problems({ proxyURL: "http://p.example", proxyCA: "-----BEGIN PRIVATE KEY-----\nx" }).proxyCA).toBe(
-      "Block 1 is no complete PEM block.",
+      "Block 1 is not a complete PEM block.",
     );
     const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n";
     const authority = (proxyCA: string): string | undefined =>
@@ -1556,7 +1556,7 @@ describe("setup", () => {
       workloadBridges: ["vmbr0"],
       bootstrapDatastore: "local",
     };
-    const lostWithHost = /Losing one Proxmox VE host can lose every backup/u;
+    const lostWithHost = /Losing one Proxmox VE node can lose every backup/u;
     await editStored(saved);
     await expect(screen.findByText(lostWithHost)).resolves.toBeVisible();
     cleanup();

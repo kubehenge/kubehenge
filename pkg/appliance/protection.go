@@ -101,9 +101,9 @@ func (a *Appliance) applyPlanned(ctx context.Context, j *Job, env []string, t *p
 		case err == nil:
 			return nil
 		case etcdStalled(err):
-			why = "etcd timed out a request, as slow storage makes it do"
+			why = "etcd timed out a request, which slow storage causes"
 		case downloadRaced(err):
-			why = "Proxmox VE did not start a download's task, as it fails to when another task ends at that moment"
+			why = "Proxmox VE did not start a download's task, which another task ending at that moment causes"
 		}
 		if why == "" || attempt == applyAttempts {
 			return err

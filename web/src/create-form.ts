@@ -572,9 +572,8 @@ export function createRoom(form: Form, nodes: PveNode[], storages: Storage[]): R
 function growthWarning(storage: string, disks: Storage[], { free, need }: { free: number; need: number }): string {
   const where = disks.some((s) => s.shared) ? "shared" : `on ${disks.map((s) => s.node).join(", ")}`;
   return (
-    `Storage ${storage} (${where}) reserves each disk's whole size and has ${Math.floor(free / bytesPerGiB)} GiB free. ` +
-    `At the autoscaler's maximum, the machines still to be made need ${need / bytesPerGiB} GiB. ` +
-    "A worker past that room waits, and the autoscaler gives it up after 30 minutes"
+    `Storage ${storage} (${where}) has ${Math.floor(free / bytesPerGiB)} GiB free. ` +
+    `The pools at their most workers need ${need / bytesPerGiB} GiB`
   );
 }
 
