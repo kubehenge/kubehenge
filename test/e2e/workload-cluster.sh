@@ -332,6 +332,28 @@ on_machines() {
         guest "${pm_node}" "${pm_vmid}" "$2"
     done
 }
+# own_image_registry "<Machine names>" [off]: the clusters pull Kubehenge's own image from ghcr.io,
+# where a build under test is not. With KUBEHENGE_E2E_REGISTRY set, containerd on those Machines
+# asks the registry the build was pushed to first and ghcr.io for anything it has not; off takes
+# that away again.
+own_image_registry() {
+    [ -n "${KUBEHENGE_E2E_REGISTRY:-}" ] || return 0
+    case ${distribution} in
+        k3s | rke2) certs=/var/lib/rancher/${distribution}/agent/etc/containerd/certs.d ;;
+        kubeadm) certs=/etc/containerd/certs.d ;;
+        *) fail "the ${distribution} nodes take no registry from the guest agent for Kubehenge's image" ;;
+    esac
+    if [ "${2:-}" = off ]; then
+        # shellcheck disable=SC2310 # a node that does not take it off fails the test with the reason.
+        on_machines "$1" "rm -f ${certs}/ghcr.io/hosts.toml" > /dev/null ||
+            fail "the registry of Kubehenge's image was not taken off the nodes"
+        return 0
+    fi
+    hosts=$(printf 'server = "https://ghcr.io"\n\n[host."http://%s"]\n  capabilities = ["pull", "resolve"]\n' "${KUBEHENGE_E2E_REGISTRY}")
+    # shellcheck disable=SC2310 # a node that does not take it fails the test with the reason.
+    on_machines "$1" "mkdir -p ${certs}/ghcr.io && printf '%s\n' '${hosts}' > ${certs}/ghcr.io/hosts.toml" > /dev/null ||
+        fail "the nodes did not take the registry of Kubehenge's image"
+}
 b64url() { base64 -w0 | tr '+/' '-_' | tr -d '='; }
 
 step "an OpenID issuer for the cluster to trust"
@@ -1718,21 +1740,9 @@ if [ "${KUBEHENGE_E2E_VOLUME_SNAPSHOTS:-}" = 1 ]; then
         volumes=$(held) || return 1
         ! printf '%s\n' "${volumes}" | grep -qxF "$1"
     }
-    # The clusters pull Kubehenge's own image from ghcr.io, where a build under test is not: on the
-    # control-plane nodes, where the proxy runs beside the CSI plugin's controller, containerd asks
-    # the registry the build was pushed to first and ghcr.io for anything that registry has not.
-    if [ -n "${KUBEHENGE_E2E_REGISTRY:-}" ]; then
-        case ${distribution} in
-            k3s | rke2) certs=/var/lib/rancher/${distribution}/agent/etc/containerd/certs.d ;;
-            kubeadm) certs=/etc/containerd/certs.d ;;
-            *) fail "the ${distribution} nodes take no registry from the guest agent for the copy proxy's image" ;;
-        esac
-        hosts=$(printf 'server = "https://ghcr.io"\n\n[host."http://%s"]\n  capabilities = ["pull", "resolve"]\n' "${KUBEHENGE_E2E_REGISTRY}")
-        snapshot_servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
-        # shellcheck disable=SC2310 # a node that does not take it fails the test with the reason.
-        on_machines "${snapshot_servers}" "mkdir -p ${certs}/ghcr.io && printf '%s\n' '${hosts}' > ${certs}/ghcr.io/hosts.toml" > /dev/null ||
-            fail "the control-plane nodes did not take the registry of Kubehenge's image"
-    fi
+    # The copy proxy runs beside the CSI plugin's controller on the control-plane nodes.
+    snapshot_servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+    own_image_registry "${snapshot_servers}"
     # not_found <kubectl get arguments>: the object is not found, rather than out of reach for a
     # moment.
     not_found() {
@@ -1926,11 +1936,7 @@ EOF
     until_true 600 "the VolumeSnapshotClass removed" not_found volumesnapshotclass proxmox
     until_true 600 "the snapshot controller removed" none_of -n kube-system deployments -l app.kubernetes.io/name=snapshot-controller
     persistent_volume
-    if [ -n "${KUBEHENGE_E2E_REGISTRY:-}" ]; then
-        # shellcheck disable=SC2310 # a node that does not take it off fails the test with the reason.
-        on_machines "${snapshot_servers}" "rm -f ${certs}/ghcr.io/hosts.toml" > /dev/null ||
-            fail "the registry of Kubehenge's image was not taken off the control-plane nodes"
-    fi
+    own_image_registry "${snapshot_servers}" off
 fi
 
 if [ "${KUBEHENGE_E2E_HA_GROUPS:-}" = 1 ]; then
@@ -2175,6 +2181,8 @@ if [ "${restores_etcd}" = true ]; then
     wl -n default create configmap e2e-after-volume-snapshot --from-literal=marker="${lost_marker}"
     control_planes=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
     control_plane_count=$(printf '%s' "${control_planes}" | wc -w)
+    # A kubeadm, RKE2 or k3s control plane receives the snapshot in a pod of Kubehenge's own image.
+    [ "${distribution}" = talos ] || own_image_registry "${control_planes}"
     if [ "${distribution}" != talos ] && [ "${control_plane_count}" -ge 3 ]; then
         step "etcd's quorum lost on purpose, then restored from the backup volume"
         # Every member but the first drops etcd's peer traffic, so no member has a majority and the
