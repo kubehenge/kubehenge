@@ -2211,9 +2211,9 @@ if [ "${restores_etcd}" = true ]; then
     absent wl -n default get configmap e2e-after-volume-snapshot ||
         fail "a ConfigMap made after the volume snapshot outlived the restore"
     wl -n default delete configmap e2e-before-volume-snapshot
-    # shellcheck disable=SC2310 # absent's answer is what is checked.
-    absent wl -n kube-system get pods -l app.kubernetes.io/name=kubehenge-restore -o name ||
-        fail "the pod that received the snapshot outlived the restore"
+    # The pod is deleted once the snapshot is handed over, and may take a moment to terminate.
+    until_true 120 "the pod that received the snapshot gone after the restore" \
+        none_of -n kube-system pods -l app.kubernetes.io/name=kubehenge-restore
 fi
 
 case ${part}-${distribution} in
