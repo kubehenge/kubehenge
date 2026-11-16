@@ -202,3 +202,57 @@ func TestIntegrationInterfaceForwardsToTheStoreAlone(t *testing.T) { //nolint:pa
 		t.Errorf("a forward in kube-system: %v, want forbidden", err)
 	}
 }
+
+// TestIntegrationInterfaceWakesTheVolume runs Volume as the interface's account against the storage
+// chart, as the appliance wakes the store for its own backups and a look at the snapshots. It sets
+// the node's zone, starts the store through its scale, and lets it sleep once done.
+func TestIntegrationInterfaceWakesTheVolume(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
+	if err := integration.OwnChildren(); err != nil {
+		t.Fatal(err)
+	}
+	objects := integration.RenderChart(t, "kubehenge-storage", "../../management-cluster/charts/storage", "kube-system", "../appliance/testdata/storage-zones-values.yaml")
+	api := integration.Start(t, &integration.Options{Objects: objects, Namespaces: []string{Namespace, "kube-system"}})
+	admin, err := kubernetes.NewForConfig(api.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err = admin.CoreV1().Secrets(Namespace).Update(ctx, &corev1.Secret{
+		Name: ZonesSecret, Namespace: Namespace, Data: map[string][]byte{"token": []byte("zones")},
+	}, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	node := &corev1.Node{
+		Name: "mgmt-cp-0", Labels: map[string]string{corev1.LabelTopologyZone: "pve2"},
+		Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{SystemUUID: "uuid-0"}},
+	}
+	if _, err = admin.CoreV1().Nodes().Create(ctx, node, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	as := rest.CopyConfig(api.Config)
+	as.Impersonate = rest.ImpersonationConfig{
+		UserName: "system:serviceaccount:" + Namespace + ":kubehenge-interface",
+		Groups:   []string{"system:serviceaccounts", "system:serviceaccounts:" + Namespace, "system:authenticated"},
+	}
+	iface, err := kubernetes.NewForConfig(as)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := &Volume{Kube: iface, Annotation: InterfaceWakeAnnotation, VMs: onPVE1}
+	if err = v.Wake(ctx, "a look"); !errors.Is(err, provisioner.ErrVolumeAsleep) {
+		t.Fatalf("the interface waking the sleeping store: %v, want it waking", err)
+	}
+	d, err := admin.AppsV1().Deployments(Namespace).Get(ctx, Service, metav1.GetOptions{})
+	if err != nil || *d.Spec.Replicas != 1 {
+		t.Fatalf("after the interface's wake the store is %v: %v", d.Spec.Replicas, err)
+	}
+	if n, gerr := admin.CoreV1().Nodes().Get(ctx, "mgmt-cp-0", metav1.GetOptions{}); gerr != nil || n.Labels[corev1.LabelTopologyZone] != "pve1" {
+		t.Fatalf("the store was woken with its node labelled %v: %v", n.Labels, gerr)
+	}
+	if err = v.Done(ctx, "a look"); err != nil {
+		t.Fatal(err)
+	}
+	if d, err = admin.AppsV1().Deployments(Namespace).Get(ctx, Service, metav1.GetOptions{}); err != nil || *d.Spec.Replicas != 0 {
+		t.Fatalf("with no holder left the store is %v: %v", d.Spec.Replicas, err)
+	}
+}
