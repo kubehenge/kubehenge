@@ -15,6 +15,8 @@ type clusterVM struct {
 	Name string `json:"name"`
 	Node string `json:"node"`
 	Type string `json:"type"`
+	// Status is "running", "stopped", or "unknown" for a VM on a node that is down.
+	Status string `json:"status"`
 }
 
 func (v clusterVM) String() string {
@@ -27,7 +29,9 @@ func (v clusterVM) path() string {
 
 // vmIndex holds the qemu VMs a client may see by their SMBIOS UUID, in lower case. A management
 // node is its VM's by that UUID alone, as the CSI plugin finds it in capmox mode: the nodes carry no
-// provider ID, and a VM's name may be a leftover's or changed by hand.
+// provider ID, and a VM's name may be a leftover's or changed by hand. A live node is no stopped
+// VM, so a stopped copy restored with the node's UUID is never taken for it. A VM on a node that is
+// down has status unknown and counts as unreadable.
 type vmIndex struct {
 	byUUID map[string][]clusterVM
 	// unreadable are the VMs whose configuration could not be read. Proxmox VE reads it on the VM's
@@ -42,7 +46,7 @@ func readVMIndex(ctx context.Context, c *proxmox.Client) (*vmIndex, error) {
 	}
 	index := &vmIndex{byUUID: make(map[string][]clusterVM, len(vms))}
 	for _, v := range vms {
-		if v.Type != "qemu" {
+		if v.Type != "qemu" || v.Status == "stopped" {
 			continue
 		}
 		var config struct {
