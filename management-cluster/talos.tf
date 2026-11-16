@@ -215,6 +215,7 @@ module "talos_node_0" {
   source = "./modules/talos-node"
 
   node                  = local.nodes[0].ip
+  vm_id                 = proxmox_virtual_environment_vm.node[0].id
   client_configuration  = talos_machine_secrets.this.client_configuration
   machine_configuration = data.talos_machine_configuration.node[0].machine_configuration
   image                 = local.talos_image
@@ -230,6 +231,7 @@ module "talos_node_1" {
   count  = length(local.nodes) > 1 ? 1 : 0
 
   node                  = local.nodes[1].ip
+  vm_id                 = proxmox_virtual_environment_vm.node[1].id
   client_configuration  = talos_machine_secrets.this.client_configuration
   machine_configuration = data.talos_machine_configuration.node[1].machine_configuration
   image                 = local.talos_image
@@ -244,6 +246,7 @@ module "talos_node_2" {
   count  = length(local.nodes) > 2 ? 1 : 0
 
   node                  = local.nodes[2].ip
+  vm_id                 = proxmox_virtual_environment_vm.node[2].id
   client_configuration  = talos_machine_secrets.this.client_configuration
   machine_configuration = data.talos_machine_configuration.node[2].machine_configuration
   image                 = local.talos_image
@@ -258,6 +261,7 @@ module "talos_node_3" {
   count  = length(local.nodes) > 3 ? 1 : 0
 
   node                  = local.nodes[3].ip
+  vm_id                 = proxmox_virtual_environment_vm.node[3].id
   client_configuration  = talos_machine_secrets.this.client_configuration
   machine_configuration = data.talos_machine_configuration.node[3].machine_configuration
   image                 = local.talos_image
@@ -272,6 +276,7 @@ module "talos_node_4" {
   count  = length(local.nodes) > 4 ? 1 : 0
 
   node                  = local.nodes[4].ip
+  vm_id                 = proxmox_virtual_environment_vm.node[4].id
   client_configuration  = talos_machine_secrets.this.client_configuration
   machine_configuration = data.talos_machine_configuration.node[4].machine_configuration
   image                 = local.talos_image

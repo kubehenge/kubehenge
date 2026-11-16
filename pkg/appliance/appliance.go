@@ -84,9 +84,9 @@ type Appliance struct {
 	// stallPause is the wait before an apply runs again after etcd timed out a request,
 	// etcdStallPause when 0.
 	stallPause time.Duration
-	// vmHosts reads with token which Proxmox VE node each VM it may see runs on, by VM name. Nil
-	// asks the Proxmox VE API.
-	vmHosts func(ctx context.Context, token string) (map[string]string, error)
+	// vmHosts reads with token the VMs it may see, with the Proxmox VE node each runs on, by their
+	// SMBIOS UUID. Nil asks the Proxmox VE API.
+	vmHosts func(ctx context.Context, token string) (*vmIndex, error)
 	// protect sets or lifts a management VM's protection with the ticket. Nil asks the Proxmox VE
 	// API.
 	protect func(ctx context.Context, t *pve.Ticket, vm managementVM, value protection) error
@@ -275,6 +275,9 @@ func (a *Appliance) Remove(passphrase string, backups BackupsOnRemove, ticket *p
 			return err
 		}
 		if err := a.init(ctx, j, env); err != nil {
+			return err
+		}
+		if err := a.stopBackupStore(ctx, j, env, ticket); err != nil {
 			return err
 		}
 		if err := release(ctx, j, env); err != nil {

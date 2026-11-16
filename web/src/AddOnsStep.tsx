@@ -37,7 +37,7 @@ import {
 import type { StepProps } from "./CreateSteps";
 import type { CredentialKey } from "./CredentialField";
 import { EgressFields, egressFields } from "./EgressProxy";
-import { EtcdSnapshotFieldset, etcdSnapshotsInfo } from "./EtcdSnapshots";
+import { EtcdSnapshotFieldset, etcdSnapshotsInfo, toTarget } from "./EtcdSnapshots";
 import { GitOpsFields, gitOpsFields, gitOpsTrustHint } from "./GitOps";
 import { LogsFields, logsHint, logsNeedMonitoring } from "./Logs";
 import { NamespaceLabelsField } from "./NamespaceLabels";
@@ -250,12 +250,6 @@ function AccessKey({
   );
 }
 
-// noTargetSnapshots says what etcd snapshots a cluster has where the class offers no backup target.
-const noTargetSnapshots = (distribution: string): string =>
-  distribution === "rke2" || distribution === "k3s"
-    ? "Snapshots stay on the control-plane nodes without a backup target"
-    : "No etcd snapshots without a backup target";
-
 // EtcdSnapshotsChoice switches a new cluster's etcd snapshots on, as they are its way back from lost
 // state. It takes the access key only when backups, which ask for it in their own block, are off.
 function EtcdSnapshotsChoice({
@@ -286,7 +280,7 @@ function EtcdSnapshotsChoice({
             problems={{ target: shown("etcdTarget"), schedule: shown("etcdSchedule"), keep: shown("etcdKeep") }}
             distribution={cls?.distribution ?? ""}
           />
-          {!backupsChosen(form, cls) && (
+          {!backupsChosen(form, cls) && toTarget(form.etcdFields.target) && (
             <AccessKey
               form={form}
               set={set}
@@ -680,7 +674,6 @@ function AddonCards({
           <BackupsChoice form={form} set={set} shown={shown} cls={cls} canTrust={canTrust} namespace={namespace} />
         </AddonCard>
       )}
-      {cls !== undefined && !etcdOffered(cls) && <p className="hint">{noTargetSnapshots(cls.distribution)}</p>}
       {etcdOffered(cls) && (
         <AddonCard mib={0} on={form.etcdSnapshots}>
           <EtcdSnapshotsChoice

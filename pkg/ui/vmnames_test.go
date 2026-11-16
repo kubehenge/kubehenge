@@ -121,6 +121,50 @@ func TestMachineWithNothingToMatchIsNotReporting(t *testing.T) {
 	}
 }
 
+// A machine's VM is the one with the guest ID capmox recorded, not a VM of its name.
+func TestMachineVMIsFoundByItsGuestID(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, cluster("default", "one"),
+		controlPlaneMachine("one-cp-a", "one-cp-a-x1", "kube-cp-a"),
+		proxmoxMachineWithVM("one-cp-a-x1", 201),
+	)
+	h.accounts.members = []pve.Member{
+		{VMID: 90, Node: "pve3", Type: "qemu", Name: "one-cp-a-x1", Status: "running"},
+		{VMID: 201, Node: "pve2", Type: "qemu", Name: "renamed", Status: "running"},
+	}
+	b := h.browser()
+	b.signIn("admin@pve")
+	rec := b.do("GET", "/api/clusters/default/one", "")
+	expect(t, rec, http.StatusOK)
+	var v clusterView
+	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Machines) != 1 || v.Machines[0].ProxmoxNode != "pve2" {
+		t.Fatalf("machines = %+v, want one-cp-a on pve2, where VM 201 runs", v.Machines)
+	}
+}
+
+// The health page gives a node the VM with its machine's guest ID, not a VM of its name.
+func TestHealthFindsTheVMByItsGuestID(t *testing.T) {
+	t.Parallel()
+	h, _ := healthHarness(t, proxmoxMachineWithVM("one-cp-a-vm", 201), proxmoxMachineWithVM("one-md-0-a-vm", 202))
+	h.accounts.members = []pve.Member{
+		{VMID: 90, Node: "pve3", Type: "qemu", Name: "one-cp-a-vm", Status: "running"},
+		{VMID: 201, Node: "pve1", Type: "qemu", Name: "renamed", Status: "running"},
+		{VMID: 202, Node: "pve2", Type: "qemu", Name: "one-md-0-a-vm", Status: "running"},
+	}
+	b := h.browser()
+	b.signIn("viewer@pve")
+	v, _ := readHealthView(t, b)
+	if len(v.Nodes.Items) != 2 {
+		t.Fatalf("nodes = %+v", v.Nodes.Items)
+	}
+	if cp := v.Nodes.Items[0]; cp.VM == nil || cp.VM.ID != 201 || cp.VM.Node != "pve1" {
+		t.Errorf("control plane's VM = %+v", cp.VM)
+	}
+}
+
 // The health page gives a node the VM found by its guest ID, with its status as Proxmox VE says it:
 // unknown, not stopped.
 func TestHealthFindsNamelessVMs(t *testing.T) {

@@ -12,6 +12,13 @@ terraform {
   }
 }
 
+# A VM made again boots Talos unconfigured at the same address. Its talos_machine keeps the state of
+# the VM before, since the refresh cannot reach the node, so only a replacement sends the
+# configuration again. Destroying a talos_machine leaves the node alone.
+resource "terraform_data" "vm" {
+  triggers_replace = var.vm_id
+}
+
 resource "talos_machine" "this" {
   node                            = var.node
   client_configuration            = var.client_configuration
@@ -20,4 +27,8 @@ resource "talos_machine" "this" {
   ignore_kubernetes_upgrade_drift = true
   drain_on_upgrade                = var.drain_on_upgrade
   kubeconfig_wo                   = var.drain_on_upgrade ? var.kubeconfig : null
+
+  lifecycle {
+    replace_triggered_by = [terraform_data.vm]
+  }
 }

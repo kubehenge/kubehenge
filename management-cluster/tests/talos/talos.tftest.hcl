@@ -1,7 +1,8 @@
 # The Talos provider is the real one here: its data source applies the module's patches to the
 # generated configuration, so the plans of the runs below carry the configuration each node is sent.
 # Everything that would reach a network is overridden. talos_test.go, which make unit-tofu runs on
-# this test's output, validates those configurations with Talos's own library.
+# this test's output, validates those configurations with Talos's own library and reads which plans
+# send a node its configuration again.
 mock_provider "proxmox" {
   mock_resource "proxmox_user_token" {
     defaults = {
@@ -83,6 +84,22 @@ run "ipv4" {
   assert {
     condition     = can(regex("heartbeat-interval: \"?500\"?\\n", data.talos_machine_configuration.node[0].machine_configuration)) && can(regex("election-timeout: \"?5000\"?\\n", data.talos_machine_configuration.node[0].machine_configuration))
     error_message = "etcd waits out storage that holds a sync for seconds"
+  }
+}
+
+# A node VM deleted outside the module and made again by the next apply, under a new ID.
+run "vm_made_again" {
+  command = plan
+
+  plan_options {
+    replace = [proxmox_virtual_environment_vm.node[0]]
+  }
+
+  override_resource {
+    target = proxmox_virtual_environment_vm.node[0]
+    values = {
+      id = "101"
+    }
   }
 }
 

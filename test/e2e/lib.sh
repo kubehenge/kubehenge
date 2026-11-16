@@ -228,8 +228,9 @@ destroy_and_check_nothing_left() {
     # Proxmox VE refuses to destroy a protected VM, and the module protects each of its VMs. The
     # destroy goes as docs/uninstalling.md says: protection lifted on each VM first.
     step "the module's VMs are protected, lifted before the destroy"
+    # Resources only: the node VMs' precondition results under .checks name the same mode and type.
     "${tofu}" -chdir="${dir}" show -json |
-        jq -r '.. | objects | select(.mode? == "managed" and .type? == "proxmox_virtual_environment_vm") | .values.vm_id' > "${work}/module-vms"
+        jq -r '.values.root_module | .. | objects | select(.mode? == "managed" and .type? == "proxmox_virtual_environment_vm") | .values.vm_id' > "${work}/module-vms"
     [ -s "${work}/module-vms" ] || fail "the state holds no VM of the module"
     pve cluster/resources?type=vm > "${work}/resources"
     while read -r vmid; do

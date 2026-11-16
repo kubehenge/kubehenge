@@ -198,6 +198,13 @@ echo "fetched the snapshot: $(stat -c %%s "$work/snapshot.db") bytes"
 `
 	markerCheck = `test -e "$work/restored"
 `
+	// The kubelet starts no static pod whose manifest the stop moved away.
+	kubeadmHold = `echo "the control plane stays stopped, its manifests in $work/manifests"
+`
+	// A disabled service stays stopped across a reboot, and Start's systemctl start still starts it.
+	rancherHold = `systemctl disable %[1]s >/dev/null 2>&1
+echo "%[1]s stays stopped, also after a reboot"
+`
 	cleanScript = `rm -rf "$work"
 `
 )
@@ -218,6 +225,8 @@ type RestoreScripts struct {
 	Restored string
 	// Clean removes what a restore that went no further than fetching left on the node.
 	Clean string
+	// Hold keeps a stopped node's control plane from starting again, a reboot included.
+	Hold string
 	// Bumps tells that Restore moves etcd's revision on itself. Where it does not, as with RKE2's
 	// and k3s's restore, the node gets the snapshot with its revision moved on already.
 	Bumps bool
@@ -225,18 +234,18 @@ type RestoreScripts struct {
 
 // restoreScriptsFor are a distribution's restore scripts.
 func restoreScriptsFor(d templates.Distribution) (RestoreScripts, error) {
-	var stop, restore, reset, start string
+	var stop, restore, reset, start, hold string
 	switch d {
 	case templates.Kubeadm:
-		stop, start = kubeadmStop, kubeadmStart
+		stop, start, hold = kubeadmStop, kubeadmStart, kubeadmHold
 		restore = kubeadmEtcdSettings + kubeadmFromSnapshot + kubeadmRestoreDatabase
 		reset = kubeadmEtcdSettings + kubeadmOwnDatabase + kubeadmRestoreDatabase
 	case templates.RKE2:
-		stop = rke2Stop
+		stop, hold = rke2Stop, fmt.Sprintf(rancherHold, "rke2-server")
 		restore, reset = fmt.Sprintf(rancherRestore, "rke2"), fmt.Sprintf(rancherReset, "rke2")
 		start = fmt.Sprintf(rancherStart, "rke2", "rke2-server", "kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml")
 	case templates.K3s:
-		stop = k3sStop
+		stop, hold = k3sStop, fmt.Sprintf(rancherHold, "k3s")
 		restore, reset = fmt.Sprintf(rancherRestore, "k3s"), fmt.Sprintf(rancherReset, "k3s")
 		start = fmt.Sprintf(rancherStart, "k3s", "k3s", "k3s kubectl")
 	case templates.Talos:
@@ -252,6 +261,7 @@ func restoreScriptsFor(d templates.Distribution) (RestoreScripts, error) {
 		StartNoWait: script(start + startNoWait),
 		Restored:    script(markerCheck),
 		Clean:       script(cleanScript),
+		Hold:        script(hold),
 		Bumps:       d == templates.Kubeadm,
 	}, nil
 }

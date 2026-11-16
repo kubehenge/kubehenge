@@ -77,7 +77,13 @@ func (s *uiStore) Get(_ context.Context, key string) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(b)), nil
 }
 
-func (*uiStore) Remove(context.Context, string) error { return nil }
+func (s *uiStore) Remove(_ context.Context, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.objects, key)
+	delete(s.data, key)
+	return nil
+}
 
 func (*uiStore) PresignGet(context.Context, string, time.Duration) (string, error) {
 	return "", nil

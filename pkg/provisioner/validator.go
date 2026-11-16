@@ -61,6 +61,9 @@ func (v *ClusterValidator) validateOf(ctx context.Context, old, c *clusterv1.Clu
 	if err := validateAbandon(old, c); err != nil {
 		return nil, err
 	}
+	if errs := validateDeleteSnapshots(c); len(errs) > 0 {
+		return nil, invalid(c, errs)
+	}
 	if !c.DeletionTimestamp.IsZero() {
 		return nil, validateDeleting(ctx, old, c, classOf)
 	}

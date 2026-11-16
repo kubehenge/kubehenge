@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
+	"github.com/kubehenge/kubehenge/pkg/backupstore"
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
@@ -16,9 +18,9 @@ const snapshotMode = 0o600
 func newEtcdSnapshotCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "etcd-snapshot",
-		Short: "Decrypt the etcd snapshots Kubehenge stores in clusters' backup targets",
+		Short: "Decrypt the etcd snapshots Kubehenge stores, or receive one on a node",
 	}
-	cmd.AddCommand(newEtcdSnapshotDecryptCommand())
+	cmd.AddCommand(newEtcdSnapshotDecryptCommand(), newEtcdSnapshotReceiveCommand())
 	return cmd
 }
 
@@ -64,4 +66,51 @@ at its end. The identity file holds the etcd-snapshot-identity key of the cluste
 	}
 	cmd.Flags().StringVar(&identityFile, "identity", "", "file with the cluster's etcd snapshot key")
 	return cmd
+}
+
+func newEtcdSnapshotReceiveCommand() *cobra.Command {
+	var out string
+	var need int64
+	cmd := &cobra.Command{
+		Use:   "receive --out <file> --need <bytes>",
+		Short: "Receive a snapshot on a node for a restore, from stdin",
+		Long: `Receive an etcd snapshot the controller streams to stdin, for a restore from the backup volume.
+It runs in a pod on the node restored on. It refuses before reading when the disk holding the file
+has less than --need bytes free, and exits 0 only once the stream's SHA-256 matches.`,
+		Args: noArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return receiveSnapshot(cmd, out, need)
+		},
+	}
+	cmd.Flags().StringVar(&out, "out", "", "file to write the snapshot to")
+	cmd.Flags().Int64Var(&need, "need", 0, "bytes the restore needs free on the file's disk")
+	return cmd
+}
+
+func receiveSnapshot(cmd *cobra.Command, out string, need int64) error {
+	if out == "" {
+		return errors.New("--out is required: the file to write")
+	}
+	dir := filepath.Dir(out)
+	_, free, err := backupstore.DiskUse(dir)
+	if err != nil {
+		return err //nolint:wrapcheck // DiskUse names the path
+	}
+	if err = provisioner.ReceiveRoom(dir, need, free); err != nil {
+		return err //nolint:wrapcheck // the refusal is the whole message
+	}
+	f, err := os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, snapshotMode) //nolint:gosec // the file the controller names
+	if err != nil {
+		return fmt.Errorf("the received snapshot: %w", err)
+	}
+	n, err := provisioner.ReceiveEtcdSnapshot(cmd.InOrStdin(), f)
+	if cerr := f.Close(); err == nil && cerr != nil {
+		err = fmt.Errorf("the received snapshot: %w", cerr)
+	}
+	if err != nil {
+		_ = os.Remove(out)
+		return err
+	}
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "received %d bytes into %s\n", n, out)
+	return nil
 }

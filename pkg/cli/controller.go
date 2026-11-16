@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	addonsv1 "sigs.k8s.io/cluster-api/api/addons/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -37,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	"github.com/kubehenge/kubehenge/pkg/backupstore"
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
 	"github.com/kubehenge/kubehenge/pkg/templates"
@@ -119,7 +121,7 @@ type controllerOptions struct {
 	csiChart          string
 	csiNewestChart    string
 	snapshotChart     string
-	csiProxyImage     string
+	image             string
 	ciliumChart       string
 	calicoChart       string
 	headlampChart     string
@@ -295,7 +297,7 @@ func (o *controllerOptions) addonFlags(f *pflag.FlagSet) {
 // for the CSI plugin's newest release, Sys.Audit on / for the cloud controller manager's HA group
 // labels, and the proxy that copies the volumes of clusters taking volume snapshots.
 func (o *controllerOptions) grantFlags(f *pflag.FlagSet) {
-	f.StringVar(&o.csiProxyImage, "csi-proxy-image", "", "image of the proxy beside the CSI plugin's controller in clusters that take volume snapshots, as <repository>@sha256:<digest>. It runs kubehenge csi-proxy and copies volumes with each cluster's own token. Empty, no cluster takes volume snapshots")
+	f.StringVar(&o.image, "image", "", "Kubehenge's own image, as <repository>@sha256:<digest>. It runs the proxy beside the CSI plugin's controller in clusters that take volume snapshots, and receives an etcd snapshot from the backup volume on a kubeadm, RKE2 or k3s node. Empty, no cluster takes volume snapshots, and those restore from buckets only")
 	f.StringVar(&o.snapshotChart, "snapshot-controller-chart", "", "the volume snapshot controller's chart, with its CRDs and the VolumeSnapshotClass, for clusters that take volume snapshots, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.settings.SysAuditGroup, "sys-audit-group", "", "Proxmox VE group holding Sys.Audit on /, joined by the user of each cluster that asks for the cloud controller manager's HA rule labels. Empty, no cluster joins it")
 	f.StringVar(&o.csiNewestChart, "csi-newest-chart", "", "the CSI plugin's newest release, for clusters whose token holds Datastore.Allocate on their storage, as <repository>/<name>:<version>@sha256:<digest>")
@@ -590,9 +592,9 @@ func (o *controllerOptions) parseCharts() error {
 		}
 	}
 	var err error
-	if o.csiProxyImage != "" {
-		if o.r.VolumeSnapshots.ProxyImage, err = provisioner.ParseCSIProxyImage(o.csiProxyImage); err != nil {
-			return fmt.Errorf("--csi-proxy-image: %w", err)
+	if o.image != "" {
+		if o.r.VolumeSnapshots.ProxyImage, err = provisioner.ParseCSIProxyImage(o.image); err != nil {
+			return fmt.Errorf("--image: %w", err)
 		}
 	}
 	if o.r.Charts.CalicoImages, err = provisioner.ParseCalicoImages(o.calicoImages); err != nil {
@@ -956,11 +958,18 @@ func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, 
 	return nil
 }
 
-// addEtcd adds what snapshots clusters' etcd into their backup targets, and what restores it from
-// a snapshot through the VMs' guest agents, with --etcd-restore, in Jobs that alone hold the restore
-// token. Without it every restore of kubeadm, RKE2 and k3s is done by hand.
+// addEtcd adds what snapshots clusters' etcd into their backup targets or the backup volume, and
+// what restores it from a snapshot through the VMs' guest agents, with --etcd-restore, in Jobs that
+// alone hold the restore token. Without it every restore of kubeadm, RKE2 and k3s is done by hand.
 func (o *controllerOptions) addEtcd(mgr manager.Manager, c *proxmox.Client, remotes *provisioner.Remotes) error {
-	targets := &provisioner.ClusterTargets{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, OpenStore: provisioner.OpenTarget}
+	kube, err := kubernetes.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		return fmt.Errorf("a client for the backup volume: %w", err)
+	}
+	targets := &provisioner.ClusterTargets{
+		Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, OpenStore: provisioner.OpenTarget,
+		Volume: &backupstore.Volume{Kube: kube},
+	}
 	dialer := &provisioner.EtcdDialer{Reader: mgr.GetAPIReader(), Remotes: remotes, Talos: provisioner.DialTalos}
 	snapshotter := &provisioner.EtcdSnapshotter{
 		Client:         mgr.GetClient(),
@@ -991,6 +1000,8 @@ func (o *controllerOptions) addEtcd(mgr manager.Manager, c *proxmox.Client, remo
 		Etcd:           snapshotter.Etcd,
 		Talos:          provisioner.DialTalos,
 		APIs:           remotes,
+		Workloads:      remotes,
+		ReceiverImage:  o.r.VolumeSnapshots.ProxyImage,
 		Events:         mgr.GetEventRecorder("kubehenge"),
 	}
 	if o.etcdRestore {

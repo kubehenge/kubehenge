@@ -1120,8 +1120,8 @@ func TestIntegrationChartVolumeSnapshots(t *testing.T) {
 		!regexp.MustCompile(`"snapshot-controller":\{"controller":\{"image":\{"tag":"v[0-9.]+@sha256:[0-9a-f]{64}"`).MatchString(args) {
 		t.Error("the controller is not given the snapshot controller's chart and image")
 	}
-	if !regexp.MustCompile(`--csi-proxy-image=ghcr\.io/kubehenge/kubehenge@sha256:[0-9a-f]{64}`).MatchString(args) {
-		t.Error("the controller is not given its own image for the proxy beside the CSI plugins")
+	if !regexp.MustCompile(`--image=ghcr\.io/kubehenge/kubehenge@sha256:[0-9a-f]{64}`).MatchString(args) {
+		t.Error("the controller is not given its own image for the proxy beside the CSI plugins and the etcd receiver")
 	}
 	if strings.Contains(args, "root@pam") || strings.Contains(args, "root-secret") {
 		t.Errorf("the controller is given something of root@pam's: %s", args)

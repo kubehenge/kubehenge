@@ -1,0 +1,860 @@
+diff --git a/cmd/controller/main.go b/cmd/controller/main.go
+index e9588ff..a6f5094 100644
+--- a/cmd/controller/main.go
++++ b/cmd/controller/main.go
+@@ -133,6 +133,8 @@ func main() {
+ 		klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+ 	}
+
++	go controllerService.KeepProtection(context.Background())
++
+ 	proto.RegisterControllerServer(srv, controllerService)
+ 	proto.RegisterIdentityServer(srv, identityService)
+
+diff --git a/pkg/csi/controller.go b/pkg/csi/controller.go
+index f56f8eb..38bf359 100644
+--- a/pkg/csi/controller.go
++++ b/pkg/csi/controller.go
+@@ -78,6 +78,7 @@ type ControllerService struct {
+
+ 	storageCapacity *cache.Cache
+ 	vmLocks         *VMLocks
++	lifted          *liftedVMs
+ }
+
+ // NewControllerService returns a new controller service
+@@ -110,6 +111,10 @@ func (d *ControllerService) Init() {
+ 		d.vmLocks = NewVMLocks()
+ 	}
+
++	if d.lifted == nil {
++		d.lifted = &liftedVMs{}
++	}
++
+ 	if d.storageCapacity == nil {
+ 		d.storageCapacity = cache.New(time.Minute, 5*time.Minute)
+ 	}
+@@ -661,7 +666,7 @@ func (d *ControllerService) ControllerUnpublishVolume(ctx context.Context, reque
+ 	defer d.vmLocks.Unlock(n.GetNodeName())
+
+ 	mc := metrics.NewMetricContext("detachVolume")
+-	if err := detachVolume(ctx, cl, id, vol); mc.ObserveRequest(err) != nil {
++	if err := detachVolume(ctx, cl, id, vol, d.lifted); mc.ObserveRequest(err) != nil {
+ 		klog.ErrorS(err, "ControllerUnpublishVolume: failed to detach volume", "cluster", vol.Cluster(), "volumeID", vol.VolumeID(), "vmID", id)
+
+ 		return nil, status.Error(codes.Internal, err.Error())
+diff --git a/pkg/csi/protection.go b/pkg/csi/protection.go
+new file mode 100644
+index 0000000..9cb137e
+--- /dev/null
++++ b/pkg/csi/protection.go
+@@ -0,0 +1,311 @@
++/*
++Copyright 2023 The Kubernetes Authors.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++
++package csi
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"os"
++	"regexp"
++	"strings"
++	"sync"
++	"time"
++
++	proxmox "github.com/luthermonson/go-proxmox"
++
++	goproxmox "github.com/sergelogvinov/go-proxmox"
++
++	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	"k8s.io/klog/v2"
++)
++
++// liftedMarker ends the description of a VM whose protection a detach has lifted. It goes on in
++// the same change that lifts the protection and comes off in the one that sets it again, so a VM
++// that carries it is one this plugin left unprotected, as a controller stopped mid-detach does.
++// KeepProtection protects every such VM again.
++const liftedMarker = "proxmox-csi-plugin lifted this VM's protection to detach a volume and sets it again."
++
++const (
++	// protectAgainAttempts bounds setting protection again after a detach.
++	protectAgainAttempts = 5
++	// protectAgainTimeout bounds those attempts, which run on after the request's context ends.
++	protectAgainTimeout = 2 * time.Minute
++	// keepProtectionEvery is how often KeepProtection looks for marked VMs.
++	keepProtectionEvery = time.Minute
++)
++
++// protectAgainWait is the pause between those attempts, a variable for the tests.
++var protectAgainWait = 3 * time.Second
++
++type liftedVM struct {
++	cl *goproxmox.APIClient
++	id int
++}
++
++// liftedVMs holds the VMs a detach in this process has lifted the protection of and not yet set it
++// again on, which KeepProtection passes by.
++type liftedVMs struct {
++	mu  sync.Mutex
++	vms map[liftedVM]struct{}
++}
++
++func (l *liftedVMs) add(vm liftedVM) {
++	l.mu.Lock()
++	defer l.mu.Unlock()
++
++	if l.vms == nil {
++		l.vms = map[liftedVM]struct{}{}
++	}
++
++	l.vms[vm] = struct{}{}
++}
++
++func (l *liftedVMs) remove(vm liftedVM) {
++	l.mu.Lock()
++	defer l.mu.Unlock()
++
++	delete(l.vms, vm)
++}
++
++// withoutProtection lifts the protection of vm, runs do and sets the protection again on every
++// path, a failed lift included, since the lift may have taken effect without its answer arriving.
++func (l *liftedVMs) withoutProtection(ctx context.Context, cl *goproxmox.APIClient, vm *proxmox.VirtualMachine, do func() error) error {
++	id := liftedVM{cl: cl, id: int(vm.VMID)}
++	l.add(id)
++	defer l.remove(id)
++	defer protectAgain(ctx, cl, id.id)
++
++	klog.InfoS("Lifting the VM's protection to detach a volume", "vmID", id.id)
++
++	task, err := vm.Config(ctx,
++		proxmox.VirtualMachineOption{Name: "protection", Value: 0},
++		proxmox.VirtualMachineOption{Name: "description", Value: withMarker(vm.VirtualMachineConfig.Description)},
++		proxmox.VirtualMachineOption{Name: "digest", Value: vm.VirtualMachineConfig.Digest},
++	)
++	if err == nil {
++		err = waitConfigTask(ctx, task, "unable to lift the VM's protection")
++	}
++
++	if err != nil {
++		return fmt.Errorf("unable to lift the protection of VM %d to detach the disk: %w", id.id, err)
++	}
++
++	return do()
++}
++
++// protectAgain sets the protection of VM id again, retrying, and logs an error when it stays off.
++func protectAgain(ctx context.Context, cl *goproxmox.APIClient, id int) {
++	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), protectAgainTimeout)
++	defer cancel()
++
++	var err error
++
++	for attempt := 1; attempt <= protectAgainAttempts; attempt++ {
++		if _, err = restoreProtection(ctx, cl, id); err == nil {
++			return
++		}
++
++		klog.ErrorS(err, "Failed to set the VM's protection again, retrying", "vmID", id, "attempt", attempt)
++
++		if attempt < protectAgainAttempts {
++			select {
++			case <-ctx.Done():
++				attempt = protectAgainAttempts
++			case <-time.After(protectAgainWait):
++			}
++		}
++	}
++
++	klog.ErrorS(err, "VM IS LEFT WITHOUT PROTECTION: the plugin sets it again within a minute, or run qm set <vmID> --protection 1",
++		"vmID", id)
++}
++
++// restoreProtection sets the protection of VM id again and takes the marker off, if it carries
++// the marker. It reports whether it did. A VM that is gone, or unprotected without the marker, is
++// left as it is.
++func restoreProtection(ctx context.Context, cl *goproxmox.APIClient, id int) (bool, error) {
++	vm, err := cl.GetVMConfig(ctx, id)
++	if err != nil {
++		if errors.Is(err, goproxmox.ErrVirtualMachineNotFound) {
++			return false, nil
++		}
++
++		return false, fmt.Errorf("failed to get vm config: %w", err)
++	}
++
++	description, marked := withoutMarker(vm.VirtualMachineConfig.Description)
++	if !marked {
++		return false, nil
++	}
++
++	options := []proxmox.VirtualMachineOption{
++		{Name: "protection", Value: 1},
++		{Name: "digest", Value: vm.VirtualMachineConfig.Digest},
++	}
++	if description == "" {
++		options = append(options, proxmox.VirtualMachineOption{Name: "delete", Value: "description"})
++	} else {
++		options = append(options, proxmox.VirtualMachineOption{Name: "description", Value: description})
++	}
++
++	task, err := vm.Config(ctx, options...)
++	if err == nil {
++		err = waitConfigTask(ctx, task, "unable to set the VM's protection")
++	}
++
++	if err != nil {
++		return false, fmt.Errorf("unable to set the protection of VM %d again: %w", id, err)
++	}
++
++	return true, nil
++}
++
++func withMarker(description string) string {
++	if description == "" {
++		return liftedMarker
++	}
++
++	return description + "\n" + liftedMarker
++}
++
++func withoutMarker(description string) (string, bool) {
++	if !strings.Contains(description, liftedMarker) {
++		return description, false
++	}
++
++	description = strings.ReplaceAll(description, "\n"+liftedMarker, "")
++
++	return strings.ReplaceAll(description, liftedMarker, ""), true
++}
++
++// protectMarked sets protection again on every VM of cl that carries the marker, except those a
++// detach is working on now.
++func (l *liftedVMs) protectMarked(ctx context.Context, cl *goproxmox.APIClient) error {
++	vms, err := cl.GetVMsByFilter(ctx)
++	if err != nil {
++		if errors.Is(err, goproxmox.ErrVirtualMachineNotFound) {
++			return nil
++		}
++
++		return fmt.Errorf("failed to list VMs: %w", err)
++	}
++
++	var errs []error
++
++	for _, r := range vms {
++		if err := l.protectUnlessLifted(ctx, liftedVM{cl: cl, id: int(r.VMID)}); err != nil {
++			errs = append(errs, err)
++		}
++	}
++
++	return errors.Join(errs...)
++}
++
++// protectUnlessLifted holds the lock throughout, so no detach lifts the VM's protection meanwhile.
++func (l *liftedVMs) protectUnlessLifted(ctx context.Context, vm liftedVM) error {
++	l.mu.Lock()
++	defer l.mu.Unlock()
++
++	if _, ok := l.vms[vm]; ok {
++		return nil
++	}
++
++	restored, err := restoreProtection(ctx, vm.cl, vm.id)
++	if restored {
++		klog.InfoS("Set protection again on a VM a detach had left unprotected", "vmID", vm.id)
++	}
++
++	return err
++}
++
++// KeepProtection sets protection again on every VM a detach left unprotected, as one cut off
++// between lifting and setting it does, at once and then every minute until ctx ends.
++func (d *ControllerService) KeepProtection(ctx context.Context) {
++	identity, err := os.Hostname()
++	if err != nil {
++		klog.ErrorS(err, "Failed to read the pod's name, so VMs a detach left unprotected are not protected again")
++
++		return
++	}
++
++	t := time.NewTicker(keepProtectionEvery)
++	defer t.Stop()
++
++	for {
++		d.sweep(ctx, podNamespace(), identity)
++
++		select {
++		case <-ctx.Done():
++			return
++		case <-t.C:
++		}
++	}
++}
++
++// sweep sets protection again on the marked VMs of every region, in the pod whose attacher leads
++// alone. The in-flight set is this process's, and only the leading attacher detaches, so a second
++// pod, as a rollout starts, would protect a VM again between another pod's lift and unlink.
++func (d *ControllerService) sweep(ctx context.Context, namespace, identity string) {
++	lease, err := d.kclient.CoordinationV1().Leases(namespace).Get(ctx, attacherLease, metav1.GetOptions{})
++	if err != nil {
++		klog.ErrorS(err, "Failed to read the attacher's lease, so VMs a detach left unprotected are not protected again", "lease", attacherLease)
++
++		return
++	}
++
++	if holder := lease.Spec.HolderIdentity; holder == nil || *holder != leaseName(identity) {
++		return
++	}
++
++	for _, region := range d.pxpool.GetRegions() {
++		cl, err := d.pxpool.GetProxmoxCluster(region)
++		if err == nil {
++			err = d.lifted.protectMarked(ctx, cl)
++		}
++
++		if err != nil {
++			klog.ErrorS(err, "Failed to set protection again on VMs a detach left unprotected", "region", region)
++		}
++	}
++}
++
++// attacherLease is the lease the external-attacher's leader holds, under its pod's name, as
++// kubernetes-csi/csi-lib-utils names both.
++var attacherLease = leaseName("external-attacher-leader-" + DriverName)
++
++func leaseName(name string) string {
++	name = regexp.MustCompile("[^a-zA-Z0-9-]").ReplaceAllString(name, "-")
++	if strings.HasSuffix(name, "-") {
++		name += "X"
++	}
++
++	return name
++}
++
++// podNamespace is the namespace this pod runs in, where the attacher keeps its lease.
++func podNamespace() string {
++	if ns := os.Getenv("POD_NAMESPACE"); ns != "" {
++		return ns
++	}
++
++	if ns, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
++		return strings.TrimSpace(string(ns))
++	}
++
++	return "default"
++}
+diff --git a/pkg/csi/protection_test.go b/pkg/csi/protection_test.go
+new file mode 100644
+index 0000000..dd2b5f7
+--- /dev/null
++++ b/pkg/csi/protection_test.go
+@@ -0,0 +1,423 @@
++/*
++Copyright 2023 The Kubernetes Authors.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++
++package csi
++
++import (
++	"context"
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"strconv"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++
++	goproxmox "github.com/sergelogvinov/go-proxmox"
++	pxpool "github.com/sergelogvinov/proxmox-csi-plugin/pkg/proxmoxpool"
++	volume "github.com/sergelogvinov/proxmox-csi-plugin/pkg/utils/volume"
++
++	coordinationv1 "k8s.io/api/coordination/v1"
++	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	"k8s.io/client-go/kubernetes/fake"
++)
++
++const (
++	fakeVMID        = 100
++	fakeDisk        = "vm-9999-disk-0"
++	fakeDescription = "Node VM"
++)
++
++// fakePVE answers as Proxmox VE does for one running VM, refusing to unlink a drive while the VM
++// is protected and to change a configuration whose digest moved on.
++type fakePVE struct {
++	mu          sync.Mutex
++	protection  int
++	description string
++	scsi1       string
++	digest      int
++	calls       []string
++
++	failLift    bool
++	failUnlink  bool
++	failProtect bool
++
++	// beforeUnlink runs as an unlink request arrives, before the fake answers it.
++	beforeUnlink func()
++}
++
++func (f *fakePVE) serveHTTP(w http.ResponseWriter, r *http.Request) {
++	if r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/unlink") && f.beforeUnlink != nil {
++		f.beforeUnlink()
++	}
++
++	f.mu.Lock()
++	defer f.mu.Unlock()
++
++	vm := "/api2/json/nodes/pve/qemu/" + strconv.Itoa(fakeVMID)
++	fail := func(msg string) {
++		w.WriteHeader(http.StatusInternalServerError)
++		_ = json.NewEncoder(w).Encode(map[string]any{"data": nil, "message": msg})
++	}
++	reply := func(data any) { _ = json.NewEncoder(w).Encode(map[string]any{"data": data}) }
++
++	switch {
++	case r.Method == http.MethodGet && r.URL.Path == "/api2/json/cluster/resources":
++		reply([]map[string]any{{"id": "qemu/100", "type": "qemu", "vmid": fakeVMID, "node": "pve", "name": "node-1", "status": "running"}})
++	case r.Method == http.MethodGet && r.URL.Path == vm+"/status/current":
++		reply(map[string]any{"vmid": fakeVMID, "name": "node-1", "status": "running"})
++	case r.Method == http.MethodGet && r.URL.Path == vm+"/config":
++		config := map[string]any{"digest": strconv.Itoa(f.digest), "protection": f.protection, "scsi0": "local-lvm:vm-100-disk-0"}
++		if f.description != "" {
++			config["description"] = f.description
++		}
++
++		if f.scsi1 != "" {
++			config["scsi1"] = f.scsi1
++		}
++
++		reply(config)
++	case r.Method == http.MethodPost && r.URL.Path == vm+"/config":
++		var body map[string]any
++		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
++			fail(err.Error())
++
++			return
++		}
++
++		f.calls = append(f.calls, "config protection="+toString(body["protection"]))
++
++		if body["digest"] != strconv.Itoa(f.digest) {
++			fail("detected modified configuration - file changed by other user? Try again.")
++
++			return
++		}
++
++		if (f.failLift && toString(body["protection"]) == "0") || (f.failProtect && toString(body["protection"]) == "1") {
++			fail("unable to write the configuration")
++
++			return
++		}
++
++		f.protection, _ = strconv.Atoi(toString(body["protection"]))
++		if d, ok := body["description"].(string); ok {
++			f.description = d
++		}
++
++		if body["delete"] == "description" {
++			f.description = ""
++		}
++
++		f.digest++
++
++		reply(nil)
++	case r.Method == http.MethodPut && r.URL.Path == vm+"/unlink":
++		f.calls = append(f.calls, "unlink")
++
++		if f.protection == 1 {
++			fail("can't remove drive 'scsi1' - protection mode enabled")
++
++			return
++		}
++
++		if f.failUnlink {
++			fail("unable to unlink the drive")
++
++			return
++		}
++
++		f.scsi1 = ""
++		f.digest++
++
++		reply(nil)
++	default:
++		w.WriteHeader(http.StatusNotFound)
++	}
++}
++
++func toString(v any) string {
++	switch v := v.(type) {
++	case float64:
++		return strconv.Itoa(int(v))
++	case string:
++		return v
++	default:
++		return ""
++	}
++}
++
++func newFakePVE(t *testing.T, f *fakePVE) *goproxmox.APIClient {
++	t.Helper()
++
++	cl, err := goproxmox.NewAPIClient(fakePVEURL(t, f))
++	require.NoError(t, err)
++
++	return cl
++}
++
++func fakePVEURL(t *testing.T, f *fakePVE) string {
++	t.Helper()
++
++	srv := httptest.NewServer(http.HandlerFunc(f.serveHTTP))
++	t.Cleanup(srv.Close)
++
++	return srv.URL + "/api2/json"
++}
++
++func attachedVM(protection int) *fakePVE {
++	return &fakePVE{
++		protection:  protection,
++		description: fakeDescription,
++		scsi1:       "local-lvm:" + fakeDisk + ",backup=0,wwn=0x5056432d49443031",
++	}
++}
++
++func detach(t *testing.T, cl *goproxmox.APIClient, lifted *liftedVMs) error {
++	t.Helper()
++
++	return detachVolume(context.Background(), cl, fakeVMID, volume.NewVolume("region", "pve", "local-lvm", fakeDisk), lifted)
++}
++
++func shortWait(t *testing.T) {
++	t.Helper()
++
++	wait := protectAgainWait
++	protectAgainWait = time.Millisecond
++
++	t.Cleanup(func() { protectAgainWait = wait })
++}
++
++func TestDetachProtectedVMLiftsAndSetsProtectionAgain(t *testing.T) {
++	f := attachedVM(1)
++	cl := newFakePVE(t, f)
++
++	require.NoError(t, detach(t, cl, &liftedVMs{}))
++
++	assert.Empty(t, f.scsi1)
++	assert.Equal(t, 1, f.protection)
++	assert.Equal(t, fakeDescription, f.description)
++	assert.Equal(t, []string{"config protection=0", "unlink", "config protection=1"}, f.calls)
++}
++
++func TestDetachUnprotectedVMChangesNoProtection(t *testing.T) {
++	f := attachedVM(0)
++	cl := newFakePVE(t, f)
++
++	require.NoError(t, detach(t, cl, &liftedVMs{}))
++
++	assert.Empty(t, f.scsi1)
++	assert.Equal(t, 0, f.protection)
++	assert.Equal(t, []string{"unlink"}, f.calls)
++}
++
++func TestDetachFailedSetsProtectionAgain(t *testing.T) {
++	f := attachedVM(1)
++	f.failUnlink = true
++	cl := newFakePVE(t, f)
++
++	require.ErrorContains(t, detach(t, cl, &liftedVMs{}), "failed to unlink disk")
++
++	assert.NotEmpty(t, f.scsi1)
++	assert.Equal(t, 1, f.protection)
++	assert.Equal(t, fakeDescription, f.description)
++	assert.Equal(t, []string{"config protection=0", "unlink", "config protection=1"}, f.calls)
++}
++
++func TestDetachFailedLiftUnlinksNothing(t *testing.T) {
++	f := attachedVM(1)
++	f.failLift = true
++	cl := newFakePVE(t, f)
++
++	require.ErrorContains(t, detach(t, cl, &liftedVMs{}), "unable to lift the protection of VM 100")
++
++	assert.NotEmpty(t, f.scsi1)
++	assert.Equal(t, 1, f.protection)
++	assert.NotContains(t, f.calls, "unlink")
++}
++
++func TestDetachFailedProtectAgainRetriesAndLeavesMarker(t *testing.T) {
++	shortWait(t)
++
++	f := attachedVM(1)
++	f.failProtect = true
++	cl := newFakePVE(t, f)
++	lifted := &liftedVMs{}
++
++	require.NoError(t, detach(t, cl, lifted))
++
++	assert.Empty(t, f.scsi1)
++	assert.Equal(t, 0, f.protection)
++	assert.Equal(t, fakeDescription+"\n"+liftedMarker, f.description)
++
++	protects := 0
++
++	for _, c := range f.calls {
++		if c == "config protection=1" {
++			protects++
++		}
++	}
++
++	assert.Equal(t, protectAgainAttempts, protects)
++	assert.Empty(t, lifted.vms)
++
++	f.failProtect = false
++
++	require.NoError(t, lifted.protectMarked(context.Background(), cl))
++	assert.Equal(t, 1, f.protection)
++	assert.Equal(t, fakeDescription, f.description)
++}
++
++func TestProtectMarkedProtectsMarkedVM(t *testing.T) {
++	f := &fakePVE{description: liftedMarker}
++	cl := newFakePVE(t, f)
++
++	require.NoError(t, (&liftedVMs{}).protectMarked(context.Background(), cl))
++
++	assert.Equal(t, 1, f.protection)
++	assert.Empty(t, f.description)
++}
++
++func TestProtectMarkedLeavesUnmarkedVM(t *testing.T) {
++	f := &fakePVE{description: fakeDescription}
++	cl := newFakePVE(t, f)
++
++	require.NoError(t, (&liftedVMs{}).protectMarked(context.Background(), cl))
++
++	assert.Equal(t, 0, f.protection)
++	assert.Empty(t, f.calls)
++}
++
++func TestProtectMarkedPassesByVMBeingDetached(t *testing.T) {
++	f := &fakePVE{description: fakeDescription + "\n" + liftedMarker}
++	cl := newFakePVE(t, f)
++	lifted := &liftedVMs{}
++	lifted.add(liftedVM{cl: cl, id: fakeVMID})
++
++	require.NoError(t, lifted.protectMarked(context.Background(), cl))
++
++	assert.Equal(t, 0, f.protection)
++	assert.Empty(t, f.calls)
++}
++
++func TestSweepDuringDetachLeavesTheVMToIt(t *testing.T) {
++	f := attachedVM(1)
++	cl := newFakePVE(t, f)
++	lifted := &liftedVMs{}
++	f.beforeUnlink = func() { assert.NoError(t, lifted.protectMarked(context.Background(), cl)) }
++
++	require.NoError(t, detach(t, cl, lifted))
++
++	assert.Empty(t, f.scsi1)
++	assert.Equal(t, 1, f.protection)
++	assert.Equal(t, []string{"config protection=0", "unlink", "config protection=1"}, f.calls)
++}
++
++func TestSweepRunsInTheLeadingPodAlone(t *testing.T) {
++	assert.Equal(t, "external-attacher-leader-csi-proxmox-sinextra-dev", attacherLease)
++
++	lease := func(holder string) *coordinationv1.Lease {
++		return &coordinationv1.Lease{
++			ObjectMeta: metav1.ObjectMeta{Namespace: "csi", Name: attacherLease},
++			Spec:       coordinationv1.LeaseSpec{HolderIdentity: &holder},
++		}
++	}
++
++	for _, c := range []struct {
++		holder     string
++		protection int
++	}{
++		{"proxmox-csi-plugin-controller-old", 0},
++		{"proxmox-csi-plugin-controller-new", 1},
++	} {
++		f := &fakePVE{description: liftedMarker}
++		pool, err := pxpool.NewProxmoxPool([]*pxpool.ProxmoxCluster{{URL: fakePVEURL(t, f), Region: "region"}})
++		require.NoError(t, err)
++
++		d := &ControllerService{kclient: fake.NewClientset(lease(c.holder)), pxpool: pool, lifted: &liftedVMs{}}
++		d.sweep(context.Background(), "csi", "proxmox-csi-plugin-controller-new")
++
++		assert.Equal(t, c.protection, f.protection, "lease held by %s", c.holder)
++	}
++}
++
++func TestKeepProtectionSweepsAtOnceWhileLeading(t *testing.T) {
++	identity, err := os.Hostname()
++	require.NoError(t, err)
++
++	t.Setenv("POD_NAMESPACE", "csi")
++
++	f := &fakePVE{description: liftedMarker}
++	pool, err := pxpool.NewProxmoxPool([]*pxpool.ProxmoxCluster{{URL: fakePVEURL(t, f), Region: "region"}})
++	require.NoError(t, err)
++
++	lease := &coordinationv1.Lease{
++		ObjectMeta: metav1.ObjectMeta{Namespace: "csi", Name: attacherLease},
++		Spec:       coordinationv1.LeaseSpec{HolderIdentity: &identity},
++	}
++	d := &ControllerService{kclient: fake.NewClientset(lease), pxpool: pool, lifted: &liftedVMs{}}
++
++	ctx, cancel := context.WithCancel(context.Background())
++	done := make(chan struct{})
++
++	go func() {
++		d.KeepProtection(ctx)
++		close(done)
++	}()
++
++	assert.Eventually(t, func() bool {
++		f.mu.Lock()
++		defer f.mu.Unlock()
++
++		return f.protection == 1
++	}, 5*time.Second, 10*time.Millisecond)
++
++	cancel()
++
++	select {
++	case <-done:
++	case <-time.After(5 * time.Second):
++		t.Fatal("KeepProtection did not return once its context ended")
++	}
++}
++
++func TestPodNamespace(t *testing.T) {
++	t.Setenv("POD_NAMESPACE", "csi-proxmox")
++	assert.Equal(t, "csi-proxmox", podNamespace())
++}
++
++func TestControllerStartsKeepProtection(t *testing.T) {
++	main, err := os.ReadFile("../../cmd/controller/main.go")
++	require.NoError(t, err)
++
++	assert.True(t, strings.Contains(string(main), "go controllerService.KeepProtection(context.Background())"),
++		"cmd/controller/main.go does not start KeepProtection")
++}
++
++func TestMarkerRoundTrip(t *testing.T) {
++	for _, description := range []string{"", fakeDescription, "two\nlines"} {
++		got, marked := withoutMarker(withMarker(description))
++		assert.True(t, marked)
++		assert.Equal(t, description, got)
++	}
++
++	_, marked := withoutMarker(fakeDescription)
++	assert.False(t, marked)
++}
+diff --git a/pkg/csi/utils.go b/pkg/csi/utils.go
+index 53f5101..581bd7c 100644
+--- a/pkg/csi/utils.go
++++ b/pkg/csi/utils.go
+@@ -447,7 +447,9 @@ func attachVolume(ctx context.Context, cl *goproxmox.APIClient, id int, vol *vol
+ 	return nil, fmt.Errorf("no free lun found")
+ }
+
+-func detachVolume(ctx context.Context, cl *goproxmox.APIClient, id int, vol *volume.Volume) error {
++// detachVolume unlinks the volume from VM id. Proxmox VE refuses to remove a drive from a protected
++// VM, so on one the protection is lifted for the unlink alone and set again (protection.go).
++func detachVolume(ctx context.Context, cl *goproxmox.APIClient, id int, vol *volume.Volume, lifted *liftedVMs) error {
+ 	vm, err := cl.GetVMConfig(ctx, id)
+ 	if err != nil {
+ 		if errors.Is(err, goproxmox.ErrVirtualMachineNotFound) {
+@@ -457,21 +459,40 @@ func detachVolume(ctx context.Context, cl *goproxmox.APIClient, id int, vol *vol
+ 		return fmt.Errorf("failed to get vm config: %v", err)
+ 	}
+
+-	if lun, ok := isVolumeAttached(vm.VirtualMachineConfig, vol.Disk()); ok {
+-		task, err := vm.UnlinkDisk(ctx, fmt.Sprintf("%s%d", deviceNamePrefix, lun), false)
+-		if err != nil {
+-			return fmt.Errorf("failed to unlink disk: %v", err)
+-		}
++	lun, ok := isVolumeAttached(vm.VirtualMachineConfig, vol.Disk())
++	if !ok {
++		return nil
++	}
+
+-		if task != nil {
+-			if err := task.WaitFor(ctx, 5*60); err != nil {
+-				return fmt.Errorf("unable to detach virtual machine disk: %w", err)
+-			}
++	unlink := func() error { return unlinkDisk(ctx, vm, fmt.Sprintf("%s%d", deviceNamePrefix, lun)) }
++	if vm.VirtualMachineConfig.Protection == 0 {
++		return unlink()
++	}
+
+-			if task.IsFailed {
+-				return fmt.Errorf("unable to detach virtual machine disk: %s", task.ExitStatus)
+-			}
+-		}
++	return lifted.withoutProtection(ctx, cl, vm, unlink)
++}
++
++func unlinkDisk(ctx context.Context, vm *proxmox.VirtualMachine, device string) error {
++	task, err := vm.UnlinkDisk(ctx, device, false)
++	if err != nil {
++		return fmt.Errorf("failed to unlink disk: %v", err)
++	}
++
++	return waitConfigTask(ctx, task, "unable to detach virtual machine disk")
++}
++
++// waitConfigTask waits for a configuration task, which a synchronous change leaves nil.
++func waitConfigTask(ctx context.Context, task *proxmox.Task, what string) error {
++	if task == nil {
++		return nil
++	}
++
++	if err := task.WaitFor(ctx, 5*60); err != nil {
++		return fmt.Errorf("%s: %w", what, err)
++	}
++
++	if task.IsFailed {
++		return fmt.Errorf("%s: %s", what, task.ExitStatus)
+ 	}
+
+ 	return nil

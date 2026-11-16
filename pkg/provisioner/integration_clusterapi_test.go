@@ -348,13 +348,13 @@ var celRules = []celRule{
 		map[string]string{backupsVariable: `{"enabled":true,"target":"store"}`},
 	},
 	{
-		etcdSnapshotsVariable, "etcd snapshots need a target.",
+		etcdSnapshotsVariable, "The distribution's own upload needs a target, as the servers upload to a bucket.",
+		map[string]string{etcdSnapshotsVariable: `{"enabled":true,"distributionUpload":true}`},
 		map[string]string{etcdSnapshotsVariable: `{"enabled":true}`},
-		map[string]string{etcdSnapshotsVariable: `{"enabled":true,"target":"store"}`},
 	},
 	{
 		etcdSnapshotsVariable, "The distribution's own upload takes the target, schedule and keep of etcd snapshots, which are off.",
-		map[string]string{etcdSnapshotsVariable: `{"distributionUpload":true}`},
+		map[string]string{etcdSnapshotsVariable: `{"enabled":false,"distributionUpload":true,"target":"store"}`},
 		map[string]string{etcdSnapshotsVariable: `{"enabled":false,"distributionUpload":false}`},
 	},
 	{

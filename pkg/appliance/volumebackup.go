@@ -20,7 +20,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/kubehenge/kubehenge/pkg/backupstore"
@@ -198,12 +197,34 @@ func (a *Appliance) volumeBackupDue(now time.Time) bool {
 	return st != nil && !now.Before(*st.Next)
 }
 
-// openVolume reaches the store on the backup volume through the management cluster's API, as the
+// openVolume reaches the store on the backup volume through a port-forward to its pod, as the
 // interface.
 func (a *Appliance) openVolume(ctx context.Context) (provisioner.ObjectStore, error) { //nolint:ireturn // tests stand in for the store
 	if a.OpenVolume != nil {
 		return a.OpenVolume(ctx)
 	}
+	api, err := a.interfaceAPI()
+	if err != nil {
+		return nil, err
+	}
+	if err = a.wakeStore(ctx, api.kube); err != nil {
+		return nil, err
+	}
+	secret, err := api.kube.CoreV1().Secrets(backupstore.Namespace).Get(ctx, backupstore.TokenSecret, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("the backup volume's token: %w", err)
+	}
+	return &backupstore.Client{Base: backupstore.ForwardBase, Token: string(secret.Data[backupstore.TokenKey]), HTTP: api.store.HTTPClient()}, nil
+}
+
+// interfaceAPI is the management cluster's API as the interface reaches it, and the store through
+// a port-forward to its pod.
+type interfaceAPI struct {
+	kube  kubernetes.Interface
+	store *backupstore.Forward
+}
+
+func (a *Appliance) interfaceAPI() (*interfaceAPI, error) {
 	raw, err := os.ReadFile(a.KubeconfigPath())
 	if err != nil {
 		return nil, fmt.Errorf("the interface's kubeconfig: %w", err)
@@ -216,18 +237,18 @@ func (a *Appliance) openVolume(ctx context.Context) (provisioner.ObjectStore, er
 	if err != nil {
 		return nil, fmt.Errorf("a client for the management cluster: %w", err)
 	}
-	if err = a.wakeStore(ctx, kube); err != nil {
+	return &interfaceAPI{kube: kube, store: backupstore.NewForward(cfg, kube)}, nil
+}
+
+// SnapshotVolume is the backup volume as the interface reaches it for the clusters' etcd
+// snapshots, through a port-forward to the store's pod. Opening it asks the appliance to wake it,
+// under a request of the interface's own.
+func (a *Appliance) SnapshotVolume() (provisioner.BackupVolume, error) { //nolint:ireturn // the controller's and the interface's volume are one interface
+	api, err := a.interfaceAPI()
+	if err != nil {
 		return nil, err
 	}
-	secret, err := kube.CoreV1().Secrets(backupstore.Namespace).Get(ctx, backupstore.TokenSecret, metav1.GetOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("the backup volume's token: %w", err)
-	}
-	client, err := rest.HTTPClientFor(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("a client for the management cluster: %w", err)
-	}
-	return &backupstore.Client{Base: backupstore.ProxyBase(cfg.Host), Token: string(secret.Data[backupstore.TokenKey]), HTTP: client}, nil
+	return &backupstore.Volume{Kube: api.kube, HTTP: api.store.HTTPClient(), Base: backupstore.ForwardBase, Annotation: backupstore.InterfaceWakeAnnotation}, nil
 }
 
 // idleReplicas annotates the store's Deployment with the replicas it keeps between backups. The
@@ -274,15 +295,15 @@ func (a *Appliance) wakeStore(ctx context.Context, kube kubernetes.Interface) er
 }
 
 // restStore puts the backup volume's store back to the replicas its chart keeps between backups,
-// which detaches a node-local disk again.
-func restStore(ctx context.Context, kube kubernetes.Interface) error {
+// which detaches a node-local disk again. A store the controller asked for stays awake.
+func restStore(ctx context.Context, kube kubernetes.Interface, now time.Time) error {
 	deps := kube.AppsV1().Deployments(backupstore.Namespace)
 	d, err := deps.Get(ctx, backupstore.Service, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("the backup volume's store: %w", err)
 	}
 	idle, ok := d.Annotations[idleReplicas]
-	if !ok || (d.Spec.Replicas != nil && strconv.Itoa(int(*d.Spec.Replicas)) == idle) {
+	if !ok || (d.Spec.Replicas != nil && strconv.Itoa(int(*d.Spec.Replicas)) == idle) || backupstore.WakeRequested(d, now) {
 		return nil
 	}
 	if _, err := strconv.Atoi(idle); err != nil {
@@ -305,7 +326,39 @@ func (a *Appliance) sleepVolume(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return restStore(ctx, kube)
+	return restStore(ctx, kube, time.Now())
+}
+
+// volumeWakeTimeout bounds a wake the controller asked for.
+const volumeWakeTimeout = 5 * time.Minute
+
+// ServeVolumeRequests wakes the backup volume's store while the controller asks for it, to store
+// the etcd snapshots of clusters without a bucket target, and puts it back to sleep once no request
+// is left. A backup or a recovery of the appliance's own keeps the store as it is. kube nil reaches
+// the management cluster as the interface.
+func (a *Appliance) ServeVolumeRequests(ctx context.Context, kube kubernetes.Interface, now time.Time) error {
+	if st := a.EtcdBackups(); st.Taking || a.Idle() != nil || a.VolumeBackups() == nil {
+		return nil
+	}
+	if kube == nil {
+		var err error
+		if kube, err = a.interfaceClient(); err != nil {
+			return err
+		}
+	}
+	d, err := kube.AppsV1().Deployments(backupstore.Namespace).Get(ctx, backupstore.Service, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("the backup volume's store: %w", err)
+	}
+	if !backupstore.WakeRequested(d, now) {
+		return restStore(ctx, kube, now)
+	}
+	if d.Status.ReadyReplicas > 0 {
+		return nil
+	}
+	wctx, cancel := context.WithTimeout(ctx, volumeWakeTimeout)
+	defer cancel()
+	return a.wakeStore(wctx, kube)
 }
 
 // storeOnVolume stores the snapshot in file on the volume, encrypted, with the sealed key beside

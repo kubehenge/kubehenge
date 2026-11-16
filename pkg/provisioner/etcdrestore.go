@@ -16,6 +16,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
@@ -74,7 +75,7 @@ const (
 // etcd to one control-plane machine's own.
 type EtcdRestoreRequest struct {
 	Snapshot string `json:"snapshot,omitempty"`
-	// Target is the backup target the snapshot is in.
+	// Target is the backup target the snapshot is in, empty for the backup volume.
 	Target string `json:"target,omitempty"`
 	// Machine asks, in place of a snapshot, for etcd to be reset to what this control-plane
 	// machine's own member holds, as a cluster of one, and the other control-plane machines to be
@@ -101,8 +102,13 @@ type EtcdRestoreStatus struct {
 	// Machine and Node are the control-plane machine etcd is restored on, and its node.
 	Machine string `json:"machine,omitempty"`
 	Node    string `json:"node,omitempty"`
-	// Replaced are the other control-plane machines, which Cluster API makes again.
+	// Replaced are the other control-plane machines, which Cluster API makes again. A restore that
+	// failed before it replaced them lists none.
 	Replaced []string `json:"replaced,omitempty"`
+	// Alone is set once etcd on Machine was reset to a cluster of that node alone, which a restore
+	// from the backup volume does where the cluster's API server does not answer. From then on the
+	// other control planes never start again with their etcd members from before.
+	Alone bool `json:"alone,omitempty"`
 	// Missing are those of Replaced whose VM no longer exists in Proxmox VE.
 	Missing []string `json:"missing,omitempty"`
 	// Before is the snapshot of etcd as it was, taken into the restore's target before anything
@@ -137,8 +143,8 @@ func EtcdRestoreRequestOf(c *clusterv1.Cluster) (EtcdRestoreRequest, bool, error
 		return r, true, errors.New("the restore request names no time (at)")
 	case r.Machine != "" && (r.Snapshot != "" || r.Target != ""):
 		return r, true, errors.New("the restore request names both a control-plane machine and a snapshot: name one")
-	case r.Machine == "" && (!ValidSnapshotName(r.Snapshot) || r.Target == ""):
-		return r, true, errors.New("the restore request names neither a snapshot with its target nor a control-plane machine")
+	case r.Machine == "" && !ValidSnapshotName(r.Snapshot):
+		return r, true, errors.New("the restore request names neither a snapshot nor a control-plane machine")
 	}
 	return r, true, nil
 }
@@ -190,6 +196,12 @@ type EtcdRestorer struct {
 	ScratchDir string
 	// APIs asks the restored cluster's API server whether it answers on the cluster's address.
 	APIs ClusterAPIs
+	// Workloads reaches the clusters' API servers, through which a snapshot on the backup volume
+	// reaches the node a kubeadm, RKE2 or k3s restore runs on. Nil restores those from buckets only.
+	Workloads WorkloadClients
+	// ReceiverImage is Kubehenge's own image by digest, which receives such a snapshot on the node.
+	// Empty restores those from buckets only.
+	ReceiverImage string
 	// poll is how often a restore looks at what it waits for. It is talosRestorePoll when 0.
 	poll time.Duration
 	// Events reports on a Cluster how its restore went. It may be nil.
@@ -297,6 +309,11 @@ func (run *restoreRun) do(ctx context.Context) error {
 		return err
 	}
 	defer run.dropOwn()
+	defer func() {
+		if run.target != nil {
+			_ = run.target.Release(ctx)
+		}
+	}()
 	ctrl.LoggerFrom(ctx).Info("restoring etcd", "from", run.source(), "by", run.request.By)
 	err := run.prepare(ctx)
 	if err == nil && run.status.Answered {
@@ -359,6 +376,9 @@ func (run *restoreRun) prepare(ctx context.Context) error {
 	for _, n := range run.nodes[1:] {
 		run.status.Replaced = append(run.status.Replaced, n.Machine)
 	}
+	// After a restore that failed past its reset, etcd runs on the first node alone: the others stay
+	// stopped whatever this one does.
+	run.status.Alone = meta.IsStatusConditionTrue(run.cluster.Status.Conditions, EtcdAloneCondition)
 	return nil
 }
 
@@ -460,11 +480,54 @@ func (run *restoreRun) reach(ctx context.Context, n *RestoreNode) error {
 	return nil
 }
 
+// volumeWakePoll is how often a restore looks whether the appliance has woken the backup volume.
+var volumeWakePoll = 5 * time.Second
+
+// restoreHolder is the restorer's hold on the backup volume, apart from the snapshotter's, which
+// runs beside it.
+const restoreHolder = "restore"
+
+// targets are r's targets, holding the volume as the restorer.
+func (r *EtcdRestorer) targets() *ClusterTargets {
+	t := *r.Targets
+	t.Holder = restoreHolder
+	return &t
+}
+
+// openTarget opens the restore's target. The backup volume is waited for while it sleeps, within
+// the restore's time.
+func (run *restoreRun) openTarget(ctx context.Context) (*ClusterTarget, error) {
+	for waited := false; ; waited = true {
+		t, err := run.r.targets().Open(ctx, run.cluster, run.request.Target, false)
+		if !errors.Is(err, ErrVolumeAsleep) {
+			return t, err
+		}
+		if !waited {
+			run.status.Message = volumeWakingMessage
+			if serr := run.save(ctx); serr != nil {
+				return nil, serr
+			}
+			if run.r.Events != nil {
+				run.r.Events.Eventf(run.cluster, nil, corev1.EventTypeNormal, "EtcdRestoreWaitingForVolume", "RestoreEtcd", "restore from %s: %s", run.source(), volumeWakingMessage)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("%w: %w", err, ctx.Err())
+		case <-time.After(volumeWakePoll):
+		}
+	}
+}
+
 // readSnapshot opens the target and checks that the cluster can be restored from the snapshot.
 func (run *restoreRun) readSnapshot(ctx context.Context) error {
-	t, err := run.r.Targets.Open(ctx, run.cluster, run.request.Target, false)
+	t, err := run.openTarget(ctx)
 	if err != nil {
 		return err
+	}
+	if t.OnVolume() && !run.talos && (run.r.Workloads == nil || run.r.ReceiverImage == "") {
+		_ = t.Release(ctx)
+		return errVolumeUnreached
 	}
 	s, err := ReadEtcdSnapshot(ctx, t.Store, t.Folder, run.request.Snapshot)
 	if err != nil {
@@ -559,6 +622,21 @@ func (run *restoreRun) fetch(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if run.target.OnVolume() {
+		var bump uint64
+		if !run.scripts.Bumps {
+			bump = etcdRevisionBump
+		}
+		staged, cerr := run.checkedForNode(ctx, bump)
+		if cerr != nil {
+			return cerr
+		}
+		defer func() { _ = os.Remove(staged.path) }()
+		if run.answers(ctx) {
+			return run.handOver(ctx, password, staged)
+		}
+		return run.handOverAlone(ctx, password, staged)
+	}
 	id := make([]byte, restoreObjectID)
 	if _, err = rand.Read(id); err != nil {
 		return fmt.Errorf("naming the transcoded snapshot: %w", err)
@@ -576,48 +654,74 @@ func (run *restoreRun) fetch(ctx context.Context) error {
 	return run.on(ctx, run.nodes[0], "fetching the snapshot", fetchScriptFor(link, password, sum, run.target.CACertificate))
 }
 
+// sealedSnapshot is the snapshot as the node gets it, and the SHA-256 the node checks it by. done
+// lets go of what it reads from.
+type sealedSnapshot struct {
+	body io.Reader
+	sum  string
+	done func()
+}
+
+// sealedForNode is the snapshot encrypted with password.
+func (run *restoreRun) sealedForNode(ctx context.Context, password string) (sealedSnapshot, error) {
+	var plain io.ReadCloser
+	sum := run.snapshot.SHA256
+	remove := func() {}
+	if run.scripts.Bumps {
+		r, err := run.target.OpenEtcdSnapshot(ctx, run.snapshot.Name)
+		if err != nil {
+			return sealedSnapshot{}, err
+		}
+		plain = r
+	} else {
+		checked, err := run.checkedForNode(ctx, etcdRevisionBump)
+		if err != nil {
+			return sealedSnapshot{}, err
+		}
+		remove = func() { _ = os.Remove(checked.path) }
+		f, err := os.Open(checked.path)
+		if err != nil {
+			remove()
+			return sealedSnapshot{}, fmt.Errorf("reading the snapshot: %w", err)
+		}
+		plain, sum = f, checked.sum
+	}
+	done := func() { _ = plain.Close(); remove() }
+	body, err := opensslSeal(plain, password)
+	if err != nil {
+		done()
+		return sealedSnapshot{}, err
+	}
+	return sealedSnapshot{body: body, sum: sum, done: done}, nil
+}
+
 // transcode stores the snapshot under key encrypted with password, and returns the SHA-256 the
 // node checks it by. Where the node's restore keeps the snapshot's revision, what is stored has its
 // revision moved on (bumpedForNode). Otherwise the snapshot is encrypted as it is read.
 func (run *restoreRun) transcode(ctx context.Context, key, password string) (string, error) {
-	var plain io.ReadCloser
-	sum := run.snapshot.SHA256
-	if run.scripts.Bumps {
-		r, err := run.target.OpenEtcdSnapshot(ctx, run.snapshot.Name)
-		if err != nil {
-			return "", err
-		}
-		plain = r
-	} else {
-		path, bumped, err := run.bumpedForNode(ctx)
-		if err != nil {
-			return "", err
-		}
-		defer func() { _ = os.Remove(path) }()
-		f, err := os.Open(path) //nolint:gosec // the controller's own file of the snapshot
-		if err != nil {
-			return "", fmt.Errorf("reading the snapshot: %w", err)
-		}
-		plain, sum = f, bumped
-	}
-	defer func() { _ = plain.Close() }()
-	body, err := opensslSeal(plain, password)
+	sealed, err := run.sealedForNode(ctx, password)
 	if err != nil {
 		return "", err
 	}
-	if _, err := run.target.Store.Put(ctx, key, body, nil); err != nil {
+	defer sealed.done()
+	if _, err := run.target.Store.Put(ctx, key, sealed.body, nil); err != nil {
 		return "", fmt.Errorf("storing the transcoded snapshot: %w", err)
 	}
-	return sum, nil
+	return sealed.sum, nil
 }
 
-// bumpedForNode keeps the snapshot, checked against its checksum, in a file of ScratchDir with its
-// revision moved on and etcd's checksum at its end, and returns the file and its SHA-256.
-func (run *restoreRun) bumpedForNode(ctx context.Context) (string, string, error) {
+// checkedSnapshot is a file of the snapshot as the node gets it, and the SHA-256 the node checks it
+// by.
+type checkedSnapshot struct{ path, sum string }
+
+// checkedForNode keeps the snapshot in a file of ScratchDir, checked against the checksum it was
+// stored with and as etcd's database (checkedEtcdSnapshot), with etcd's checksum at its end. A bump
+// above 0 moves its revision on, for the restores that keep it.
+func (run *restoreRun) checkedForNode(ctx context.Context, bump uint64) (checkedSnapshot, error) {
 	var path string
 	err := run.withSnapshot(ctx, func(r io.Reader) error {
 		var err error
-		path, err = bumpedEtcdSnapshot(run.r.ScratchDir, r)
+		path, err = checkedEtcdSnapshot(run.r.ScratchDir, r, bump)
 		return err
 	})
 	var sum string
@@ -628,9 +732,9 @@ func (run *restoreRun) bumpedForNode(ctx context.Context) (string, string, error
 		if path != "" {
 			_ = os.Remove(path)
 		}
-		return "", "", err
+		return checkedSnapshot{}, err
 	}
-	return path, sum, nil
+	return checkedSnapshot{path: path, sum: sum}, nil
 }
 
 // stop stops etcd and the API server on every control-plane node.
@@ -716,13 +820,15 @@ func (run *restoreRun) replace(ctx context.Context) error {
 
 // recover finishes or undoes what a restore that failed did, by the phase it got to: before etcd
 // was restored, it starts every control-plane node again as it was. After, it finishes the
-// restore, since the other nodes' etcd would take back the cluster from before.
+// restore, since the other nodes' etcd would take back the cluster from before. Past a reset of
+// etcd to the first node alone (Alone), it keeps the others stopped (keepAlone).
 func (run *restoreRun) recover(ctx context.Context, cause error) error {
 	if run.talos {
 		return run.recoverTalos(ctx, cause)
 	}
 	errs := []error{cause, run.removeTranscoded(ctx)}
 	if run.status.Phase == RestorePreparing {
+		run.status.Replaced = nil
 		return errors.Join(append(errs, run.unpause(ctx))...)
 	}
 	if err := run.knowNodes(ctx); err != nil {
@@ -731,6 +837,7 @@ func (run *restoreRun) recover(ctx context.Context, cause error) error {
 	restored := false
 	switch run.status.Phase {
 	case RestoreFetching:
+		run.status.Replaced = nil
 		errs = append(errs, run.on(ctx, run.nodes[0], "removing the fetched snapshot", run.scripts.Clean))
 		return errors.Join(append(errs, run.unpause(ctx))...)
 	case RestoreRestoring:
@@ -740,9 +847,13 @@ func (run *restoreRun) recover(ctx context.Context, cause error) error {
 		restored = true
 	case RestorePreparing, RestoreStopping, RestoreSucceeded, RestoreFailed:
 	}
-	if restored {
+	switch {
+	case restored:
 		errs = append(errs, run.finishRestored(ctx)...)
-	} else {
+	case run.status.Alone:
+		errs = append(errs, run.keepAlone(ctx)...)
+	default:
+		run.status.Replaced = nil
 		for _, n := range run.nodes {
 			errs = append(errs, run.on(ctx, n, "starting the control plane as it was", run.scripts.StartNoWait))
 		}
@@ -768,9 +879,11 @@ func (run *restoreRun) removeTranscoded(ctx context.Context) error {
 	t := run.target
 	if t == nil {
 		var err error
-		if t, err = run.r.Targets.Open(ctx, run.cluster, run.request.Target, false); err != nil {
-			return nil //nolint:nilerr // without its target, the restore stored nothing there either
+		if t, err = run.r.targets().Open(ctx, run.cluster, run.request.Target, false); err != nil {
+			// Without its target, the restore stored nothing there either.
+			return nil
 		}
+		defer func() { _ = t.Release(ctx) }()
 	}
 	objects, err := t.Store.List(ctx, t.Folder+"/"+restoreObjectFolder+"/")
 	if err != nil {
@@ -852,6 +965,9 @@ func (run *restoreRun) finish(ctx context.Context, err error) error {
 		}
 	} else {
 		run.status.Phase, run.status.Message = RestoreSucceeded, run.succeededMessage()
+		if _, cerr := setClusterCondition(ctx, run.r.Client, run.r.Reader, run.key, EtcdAloneCondition, nil); cerr != nil {
+			ctrl.LoggerFrom(ctx).Error(cerr, "taking the condition of etcd left on one node away")
+		}
 	}
 	ctrl.LoggerFrom(ctx).Info("etcd restore ended", "phase", run.status.Phase, "message", run.status.Message,
 		"before", run.status.Before, "noBefore", run.status.NoBefore)

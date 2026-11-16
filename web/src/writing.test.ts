@@ -97,4 +97,11 @@ describe("the rules", () => {
     expect(rules("Proxmox VE node", "label")).toStrictEqual([]);
     expect(rules("Time zone.", "label")).toStrictEqual(["full-stop"]);
   });
+
+  it("keep the etcd snapshots' state words short", () => {
+    expect(rules("Kept on", "label")).toStrictEqual([]);
+    expect(rules("Last taken", "label")).toStrictEqual([]);
+    expect(rules("Last Taken", "label")).toStrictEqual(["title-case"]);
+    expect(rules("The last etcd snapshot was taken at this time", "label")).toStrictEqual(["too-long"]);
+  });
 });

@@ -62,6 +62,7 @@ finish() {
         audit_report
     fi
     [ "${status}" -eq 0 ] || seaweedfs_errors "${work}"
+    [ "${status}" -eq 0 ] || stuck_state
     if [ -n "${ha_vmid}" ]; then
         pvesh delete "/cluster/ha/rules/${ha_rule}" > /dev/null 2>&1 || true
         pvesh delete "/cluster/ha/resources/vm:${ha_vmid}" > /dev/null 2>&1 || true
@@ -436,20 +437,42 @@ store_idle() {
     jq -e --arg idle "$1" '(.spec.replicas | tostring) == $idle' "${work}/body" > /dev/null
 }
 # volume_snapshots: the etcd snapshots on the backup volume itself, in $work/volume-list, read
-# through its store with the store's token. A store asleep on a node's own storage is woken for it
-# and put back to sleep after, as the appliance does.
+# through its store with the store's token, over a port-forward to its pod as the appliance reaches
+# it. The store's NetworkPolicy admits nothing else from outside the controller. The test asks the
+# appliance to wake the store with a wake request of its own, as the controller does. The appliance
+# puts a store back to sleep within a minute when no request holds it, so scaling it up by hand
+# loses to a slow attach.
+store_wake=kubehenge.dev/wake-requested-e2e
 volume_snapshots() {
     mapi GET "${store_deployment}"
     idle=$(jq -r '.metadata.annotations["kubehenge.dev/idle-replicas"] // "1"' "${work}/body")
-    mapi PATCH "${store_deployment}" '{"spec":{"replicas":1}}'
+    asked=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    mapi PATCH "${store_deployment}" "{\"metadata\":{\"annotations\":{\"${store_wake}\":\"${asked}\"}}}"
     until_true 600 "the backup volume's store, ready" store_ready
     mapi GET /api/v1/namespaces/kubehenge-system/secrets/kubehenge-backup-store
     store_token=$(jq -r .data.token "${work}/body" | base64 -d)
-    curl -sS --fail --cacert "${work}/management-ca.crt" --cert "${work}/management.crt" --key "${work}/management.key" \
-        -H "X-Kubehenge-Store-Token: ${store_token}" -o "${work}/volume-list" \
-        "${management_api}/api/v1/namespaces/kubehenge-system/services/kubehenge-backup-store:http/proxy/list?prefix=management%2F" ||
-        fail "the backup volume's store does not list its objects"
-    mapi PATCH "${store_deployment}" "{\"spec\":{\"replicas\":${idle}}}"
+    kubectl --server "${management_api}" --certificate-authority "${work}/management-ca.crt" \
+        --client-certificate "${work}/management.crt" --client-key "${work}/management.key" \
+        -n kubehenge-system port-forward deployment/kubehenge-backup-store 0:8080 > "${work}/store-forward" 2>&1 &
+    forward_pid=$!
+    forwarded() {
+        seen=$(tr '\n' ' ' < "${work}/store-forward")
+        kill -0 "${forward_pid}" 2> /dev/null || fail "kubectl port-forward to the backup volume's store ended: ${seen}"
+        grep -q '^Forwarding from 127.0.0.1:' "${work}/store-forward"
+    }
+    until_true 60 "a port-forward to the backup volume's store" forwarded
+    port=$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]*\) .*/\1/p' "${work}/store-forward" | head -n 1)
+    listed=true
+    curl -sS --fail -H "X-Kubehenge-Store-Token: ${store_token}" -o "${work}/volume-list" \
+        "http://127.0.0.1:${port}/list?prefix=management%2F" || listed=false
+    kill "${forward_pid}" 2> /dev/null || true
+    wait "${forward_pid}" 2> /dev/null || true
+    if [ "${listed}" != true ]; then
+        forward_log=$(cat "${work}/store-forward")
+        fail "the backup volume's store does not list its objects: ${forward_log}"
+    fi
+    mapi PATCH "${store_deployment}" "{\"metadata\":{\"annotations\":{\"${store_wake}\":null}}}"
+    until_true 180 "the backup volume's store, back to its idle replicas" store_idle "${idle}"
 }
 volume_backed_up() {
     expect 200 "the etcd backups" request "${work}/admin.jar" "${ui}/api/appliance/etcd-backups"

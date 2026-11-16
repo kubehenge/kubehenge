@@ -1703,7 +1703,23 @@ etcd gives file space back only when a member is defragmented, and the member se
 
 ## etcd snapshots
 
-A cluster with etcd snapshots on has Kubehenge's controller copy its etcd database to one of the backup targets an administrator set. The database holds every object the cluster's API holds. The copy happens on the cluster's schedule and whenever asked.
+Every cluster has etcd snapshots on by default. Kubehenge's controller copies the cluster's etcd database to one of the backup targets an administrator set, or without a target to the management cluster's backup volume. The database holds every object the cluster's API holds. The copy happens on the cluster's schedule and whenever asked.
+
+### On the backup volume
+
+Without a target, snapshots go to `clusters/<namespace>.<name>/etcd` on the backup volume (`kubehenge-system/kubehenge-backups`), encrypted with age as in a bucket. A bucket target keeps a cluster's snapshots alone, and the volume holds no copy of them. A bucket is the place for copies off the management cluster's storage.
+
+A snapshot that would leave less than a tenth of the volume free is refused. The condition `EtcdSnapshotSucceeded` then reads `VolumeFull` with the room left. Lower `keep`, move the cluster to a bucket target, or grow the volume.
+
+On a node's own storage the volume sleeps between backups. The controller asks for it, and the appliance wakes it within a minute. Until then the condition reads `WaitingForVolume`.
+
+Every distribution restores from the volume through the interface, kubectl and the CLI. For kubeadm, RKE2 and k3s the controller first checks the snapshot whole, as `etcdutl snapshot status` does. It then starts a pod of Kubehenge's image on the first control-plane node and streams the snapshot to it through the cluster's API server. Only once the node holds it in full and checked does anything stop, and the restore runs as from a bucket. A snapshot that fails a check, or a stream cut short, leaves every node as it was. The node needs three times the snapshot's size free under `/var/lib/kubehenge-restore`.
+
+Where the API server does not answer, most often after etcd lost its quorum, the controller first stops every control plane. It resets etcd on the first node to that node alone on its own data, so its API server answers, and streams the snapshot in. This needs the first node's own etcd data to be readable. Should the restore fail after that reset, etcd runs on the first node alone, the other control planes stay stopped, and the cluster carries the condition `EtcdOnOneNode`. Restore again from the same snapshot: the API server now answers, so the snapshot streams in before anything stops, and the other control planes are made again. `kubehenge cluster etcd-snapshots` lists, takes, downloads and restores snapshots from the CLI. The distributions' own upload needs a bucket target.
+
+Removing a cluster keeps its snapshots on the volume and its backup keys. Tick **Delete volume snapshots** in the remove dialog, or add `--delete-etcd-snapshots` to `kubehenge cluster delete`. With kubectl or GitOps, set the annotation `kubehenge.dev/delete-etcd-snapshots: "true"` before the delete. The Backups view of any cluster in the same namespace lists the removed clusters whose snapshots are kept, under **Removed clusters**. Their **Delete** takes the snapshots and the backup keys once the name is typed. From the CLI, `kubehenge cluster removed-etcd-snapshots list -n NAMESPACE` lists them, and `kubehenge cluster removed-etcd-snapshots delete NAME -n NAMESPACE --yes` deletes them.
+
+Deleting a cluster keeps its snapshots on the volume, as in a bucket.
 
 ### Schedule and layout
 

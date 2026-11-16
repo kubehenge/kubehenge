@@ -20,7 +20,6 @@ import (
 const (
 	Namespace = "kubehenge-system"
 	Service   = "kubehenge-backup-store"
-	Port      = "http"
 	// TokenSecret holds the store's token under TokenKey.
 	TokenSecret = "kubehenge-backup-store"
 	TokenKey    = "token"
@@ -39,11 +38,6 @@ type Client struct {
 }
 
 var _ provisioner.ObjectStore = (*Client)(nil)
-
-// ProxyBase is the store's address through the API server's service proxy at host.
-func ProxyBase(host string) string {
-	return strings.TrimSuffix(host, "/") + "/api/v1/namespaces/" + Namespace + "/services/" + Service + ":" + Port + "/proxy"
-}
 
 func objectPath(key string) string {
 	parts := strings.Split(key, "/")
@@ -167,6 +161,23 @@ func (c *Client) Remove(ctx context.Context, key string) error {
 		return failed(resp, key)
 	}
 	return nil
+}
+
+// Room reads the bytes free on the volume and its size.
+func (c *Client) Room(ctx context.Context) (int64, int64, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/room", nil, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0, failed(resp, "room")
+	}
+	var room Room
+	if err := json.NewDecoder(resp.Body).Decode(&room); err != nil {
+		return 0, 0, fmt.Errorf("the backup volume's free space: %w", err)
+	}
+	return room.Free, room.Size, nil
 }
 
 // PresignGet is refused: the volume is reached only through the store.
