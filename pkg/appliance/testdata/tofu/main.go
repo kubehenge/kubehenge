@@ -23,6 +23,12 @@ func raceFailures(run string) {
 			summary, address = "Error creating VM", `module.management.proxmox_virtual_environment_vm.nodes[0]`
 		case 'n':
 			detail = "Could not download file, unexpected error: 404 Not Found"
+		case 'w':
+			summary, address = "Error upgrading chart", `module.management.helm_release.cluster_api_operator`
+			detail = `Upgrade failed: cannot patch \"capi-operator-serving-cert\" with kind Certificate: Internal error occurred: failed calling webhook \"webhook.cert-manager.io\": failed to call webhook: Post \"https://cert-manager-webhook.cert-manager.svc:443/validate?timeout=30s\": dial tcp 10.99.189.42:443: connect: no route to host`
+		case 'r':
+			summary, address = "Error upgrading chart", `module.management.helm_release.cluster_api_operator`
+			detail = `Upgrade failed: cannot patch \"capi-operator-selfsigned-issuer\" with kind Issuer: admission webhook \"webhook.cert-manager.io\" denied the request: spec: Required value`
 		}
 		fmt.Printf(`{"@level":"error","@message":"Error: %s","type":"diagnostic","diagnostic":{"summary":"%s","detail":"%s","address":"%s"}}`+"\n", summary, summary, detail, address)
 	}

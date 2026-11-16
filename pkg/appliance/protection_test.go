@@ -194,9 +194,11 @@ func TestApplyRunsAgainWhileEtcdTimesOut(t *testing.T) {
 // Proxmox VE fails to start a task's worker when another task ends at that moment. A run whose
 // every error is a download it did not start runs again, as those made nothing. A VM's create,
 // which leaves its configuration locked, fails the job at once, as does any other error beside a
-// raced download. Each line of races is one run: d a raced download, v a raced VM create, n a
-// download that found no file.
-func TestApplyRunsAgainWhenADownloadDidNotStart(t *testing.T) {
+// raced download. A webhook that does not answer yet, as after its node restarted, runs it again
+// too, while one that answers with a refusal fails it. Each line of races is one run: d a raced
+// download, v a raced VM create, n a download that found no file, w a webhook that did not answer,
+// r a webhook that refused.
+func TestApplyRunsAgainWhenARunMadeNothing(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, races string
@@ -209,6 +211,12 @@ func TestApplyRunsAgainWhenADownloadDidNotStart(t *testing.T) {
 		{"a VM create raced and a download found no file", "vn\n", StateFailed, 1},
 		{"a download raced and a VM create raced", "dv\n", StateFailed, 1},
 		{"a download raced, then found no file", "d\nn\n", StateFailed, 2},
+		{"a webhook did not answer", "ww\n", StateSucceeded, 2},
+		{"a webhook did not answer twice", strings.Repeat("w\n", 2), StateSucceeded, 3},
+		{"a webhook never answered", strings.Repeat("w\n", 3), StateFailed, 3},
+		{"a webhook refused", "r\n", StateFailed, 1},
+		{"a webhook did not answer and another refused", "wr\n", StateFailed, 1},
+		{"a webhook did not answer and a download raced", "wd\n", StateFailed, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
