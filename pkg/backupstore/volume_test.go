@@ -1,8 +1,10 @@
 package backupstore
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -280,19 +282,26 @@ func TestTheSleeperReadsNoVMsWhileEveryNodeHasAZone(t *testing.T) {
 	}
 }
 
-// Proxmox VE not answering keeps the node unlabelled, and the store still goes to sleep.
-func TestTheSleeperStillSleepsWhenZonesFail(t *testing.T) {
-	t.Parallel()
-	objects := unzoned(t)
+// awake starts the store in objects, as a holder left it, with no request in force.
+func awake(t *testing.T, objects []runtime.Object) []runtime.Object {
+	t.Helper()
 	d, ok := objects[0].(*appsv1.Deployment)
 	if !ok {
 		t.Fatalf("sleepingStore's first object is %T", objects[0])
 	}
 	one := int32(1)
 	d.Spec.Replicas = &one
-	kube := fake.NewClientset(objects...)
+	return objects
+}
+
+// Proxmox VE not answering keeps the node unlabelled and says so on each tick, and the store still
+// goes to sleep.
+func TestTheSleeperStillSleepsWhenZonesFail(t *testing.T) {
+	t.Parallel()
+	kube := fake.NewClientset(awake(t, unzoned(t))...)
+	var log bytes.Buffer
 	reads := 0
-	sleepFor(t, &Volume{Kube: kube, VMs: func(context.Context, string) (*VMIndex, error) {
+	sleepFor(t, &Volume{Kube: kube, Log: slog.New(slog.NewTextHandler(&log, nil)), VMs: func(context.Context, string) (*VMIndex, error) {
 		reads++
 		return nil, errors.New("no route to host")
 	}})
@@ -301,6 +310,38 @@ func TestTheSleeperStillSleepsWhenZonesFail(t *testing.T) {
 	}
 	if got := replicasOf(t, kube); got != 0 {
 		t.Fatalf("the store kept %d replicas", got)
+	}
+	// The tick the test ends in may read and then stay quiet, since its context is done.
+	warned := strings.Count(log.String(), "no route to host")
+	if warned != reads && warned != reads-1 {
+		t.Fatalf("%d failed reads logged %d warnings:\n%s", reads, warned, log.String())
+	}
+}
+
+// A controller that may not read the zones Secret, or a storage chart that makes none, has no node
+// to label, and the Sleeper says nothing of it.
+func TestTheSleeperSaysNothingWhereItMayNotLabel(t *testing.T) {
+	t.Parallel()
+	for what, forbid := range map[string]bool{"forbidden": true, "not found": false} {
+		objects := awake(t, unzoned(t))
+		if !forbid {
+			objects = append(objects[:2], objects[3:]...)
+		}
+		kube := fake.NewClientset(objects...)
+		kube.PrependReactor("get", "secrets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+			if get, ok := a.(k8stesting.GetAction); ok && forbid && get.GetName() == ZonesSecret {
+				return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, ZonesSecret, errors.New("no rule allows it"))
+			}
+			return false, nil, nil
+		})
+		var log bytes.Buffer
+		sleepFor(t, &Volume{Kube: kube, Log: slog.New(slog.NewTextHandler(&log, nil)), VMs: onPVE1})
+		if log.Len() != 0 {
+			t.Errorf("%s: the Sleeper logged:\n%s", what, log.String())
+		}
+		if got := replicasOf(t, kube); got != 0 {
+			t.Errorf("%s: the store kept %d replicas", what, got)
+		}
 	}
 }
 

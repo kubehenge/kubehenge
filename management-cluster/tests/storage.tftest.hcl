@@ -137,7 +137,7 @@ run "csi_plugin_is_the_workload_clusters_pinned_release" {
       try(yamlencode(yamldecode(d).labels), "") == yamlencode({ "topology.kubernetes.io/region" = "kubehenge" })
       if try(yamldecode(d).kind, "") == "KubeNodeConfig"
     ])])
-    error_message = "every node must carry the region the plugin registers it by, and no zone, which the appliance alone sets from where the VM runs"
+    error_message = "every node must carry the region the plugin registers it by, and no zone, which Kubehenge alone sets from where the VM runs"
   }
 }
 

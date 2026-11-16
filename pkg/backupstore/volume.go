@@ -156,8 +156,11 @@ func (s *Sleeper) Start(ctx context.Context) error {
 			return nil
 		case <-tick.C:
 		}
-		s.warn(ctx, "a management node without a zone label was not labelled", s.Volume.labelMissingZones(ctx))
 		s.warn(ctx, "the backup volume's store could not be put to sleep", s.Volume.sleep(ctx, nil))
+		// A Proxmox VE that answers late holds up no later tick's sleep.
+		label, cancel := context.WithTimeout(ctx, s.Every)
+		s.warn(ctx, "a management node without a zone label was not labelled", s.Volume.labelMissingZones(label))
+		cancel()
 	}
 }
 

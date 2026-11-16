@@ -141,7 +141,7 @@ func TestIntegrationControllerLeavesASharedStoreUp(t *testing.T) { //nolint:para
 		t.Fatal(err)
 	}
 	shared := filepath.Join(t.TempDir(), "shared.yaml")
-	if err := os.WriteFile(shared, []byte("backupVolume:\n  zone: \"\"\n  zonesToken: \"\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(shared, []byte("backupVolume:\n  zone: \"\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	objects := integration.RenderChart(t, "kubehenge-storage", "../../management-cluster/charts/storage", "kube-system", "../appliance/testdata/storage-zones-values.yaml", shared)
@@ -165,6 +165,29 @@ func TestIntegrationControllerLeavesASharedStoreUp(t *testing.T) { //nolint:para
 	}
 	if err = v.scale(ctx, "", 0); !apierrors.IsForbidden(err) {
 		t.Fatalf("scaling the shared store: %v, want forbidden", err)
+	}
+
+	// The CSI node plugin needs a zone on shared storage too, so the controller labels a node that
+	// joined without one.
+	admin, err := kubernetes.NewForConfig(api.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := &corev1.Node{
+		Name:   "mgmt-cp-0",
+		Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{SystemUUID: "uuid-0"}},
+	}
+	if _, err = admin.CoreV1().Nodes().Create(ctx, node, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	v.VMs = func(context.Context, string) (*VMIndex, error) {
+		return &VMIndex{ByUUID: map[string][]VM{"uuid-0": {{VMID: 100, Name: "mgmt-cp-0", Node: "pve1", Type: "qemu"}}}}, nil
+	}
+	if err = v.labelMissingZones(ctx); err != nil {
+		t.Fatalf("labelling a node on shared storage: %v", err)
+	}
+	if node, err = admin.CoreV1().Nodes().Get(ctx, "mgmt-cp-0", metav1.GetOptions{}); err != nil || node.Labels[corev1.LabelTopologyZone] != "pve1" {
+		t.Fatalf("on shared storage the node is labelled %v (%v), want zone pve1", node, err)
 	}
 }
 
