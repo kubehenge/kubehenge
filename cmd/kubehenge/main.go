@@ -16,8 +16,8 @@ import (
 // ignored (nohup) keeps ignoring it, so an install it runs survives a dropped session.
 func shutdownSignals(ignored func(os.Signal) bool) []os.Signal {
 	signals := []os.Signal{os.Interrupt, syscall.SIGTERM}
-	if !ignored(syscall.SIGHUP) {
-		signals = append(signals, syscall.SIGHUP)
+	if hangUp != nil && !ignored(hangUp) {
+		signals = append(signals, hangUp)
 	}
 	return signals
 }

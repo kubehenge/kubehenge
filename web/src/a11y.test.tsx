@@ -292,6 +292,7 @@ const loaded = async (): Promise<void> => {
 const text = (t: string | RegExp) => async () => screen.findAllByText(t);
 
 const detail: Record<string, Route> = {
+  "GET /api/removed-etcd-snapshots/default": { body: [] },
   "GET /api/clusters/default/web": { body: cluster("web") },
   "GET /api/clusters/default/web/health": { body: health },
   "GET /api/clusters/default/web/backups": { body: backups },
