@@ -18,10 +18,10 @@ import (
 	"github.com/kubehenge/kubehenge/test/integration"
 )
 
-// TestIntegrationInterfaceFollowsZones runs followZones as the interface's account against the
-// charts the module installs for a backup volume on one node's own storage. The account corrects the
-// zone labels of the management nodes and changes nothing else of a node.
-func TestIntegrationInterfaceFollowsZones(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
+// TestIntegrationWakersFollowZones runs followZones as the interface's and the controller's
+// accounts against the charts the module installs for a backup volume on one node's own storage.
+// Each corrects the zone labels of the management nodes and changes nothing else of a node.
+func TestIntegrationWakersFollowZones(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
 	if err := integration.OwnChildren(); err != nil {
 		t.Fatal(err)
 	}
@@ -109,5 +109,25 @@ func TestIntegrationInterfaceFollowsZones(t *testing.T) { //nolint:paralleltest 
 	}
 	if err := patch(ui, "worker", `{"metadata":{"labels":{"topology.kubernetes.io/zone":"pve2"}}}`); !apierrors.IsForbidden(err) {
 		t.Errorf("a node outside the management nodes: %v, want forbidden", err)
+	}
+
+	// The controller wakes the store for the clusters' etcd snapshots, with no appliance, and so
+	// follows the zones under the same rule.
+	as.Impersonate.UserName = "system:serviceaccount:" + integration.ClassNamespace + ":kubehenge-controller"
+	controller, err := kubernetes.NewForConfig(as)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = patch(admin, "mgmt-cp-0", `{"metadata":{"labels":{"topology.kubernetes.io/zone":"pve1","failure-domain.beta.kubernetes.io/zone":"pve1"}}}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = a.followZones(ctx, controller, "pve1"); err != nil {
+		t.Fatalf("the controller could not correct the zones: %v", err)
+	}
+	if moved, err = admin.CoreV1().Nodes().Get(ctx, "mgmt-cp-0", metav1.GetOptions{}); err != nil || moved.Labels[corev1.LabelTopologyZone] != "pve2" {
+		t.Errorf("after the controller's wake the moved node's labels are %v: %v", moved.Labels, err)
+	}
+	if err := patch(controller, "mgmt-cp-1", `{"metadata":{"labels":{"kept":"no"}}}`); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), outside) {
+		t.Errorf("the controller changing another label: %v, want refused", err)
 	}
 }

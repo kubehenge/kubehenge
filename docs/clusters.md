@@ -1711,7 +1711,7 @@ Without a target, snapshots go to `clusters/<namespace>.<name>/etcd` on the back
 
 A snapshot that would leave less than a tenth of the volume free is refused. The condition `EtcdSnapshotSucceeded` then reads `VolumeFull` with the room left. Lower `keep`, move the cluster to a bucket target, or grow the volume.
 
-On a node's own storage the volume sleeps between backups. The controller asks for it, and the appliance wakes it within a minute. Until then the condition reads `WaitingForVolume`.
+On a node's own storage the volume sleeps between backups. The controller wakes it for each snapshot, also while the appliance is stopped, and lets it sleep again once done. Until the volume is up the condition reads `WaitingForVolume`. A wake that fails sets the reason `Failed` with the cause.
 
 Every distribution restores from the volume through the interface, kubectl and the CLI. For kubeadm, RKE2 and k3s the controller first checks the snapshot whole, as `etcdutl snapshot status` does. It then starts a pod of Kubehenge's image on the first control-plane node and streams the snapshot to it through the cluster's API server. Only once the node holds it in full and checked does anything stop, and the restore runs as from a bucket. A snapshot that fails a check, or a stream cut short, leaves every node as it was. The node needs three times the snapshot's size free under `/var/lib/kubehenge-restore`.
 

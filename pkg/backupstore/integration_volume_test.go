@@ -20,10 +20,10 @@ import (
 	"github.com/kubehenge/kubehenge/test/integration"
 )
 
-// TestIntegrationControllerAsksForTheVolume runs Volume as the controller's account against the
-// storage chart the module installs for a backup volume. The account asks for the store and takes
-// the request away again, and changes nothing else of the store.
-func TestIntegrationControllerAsksForTheVolume(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
+// TestIntegrationControllerWakesTheVolume runs Volume as the controller's account against the
+// storage chart the module installs for a backup volume. The account wakes the store, takes its
+// request away again and lets the store sleep, and changes nothing else of the store.
+func TestIntegrationControllerWakesTheVolume(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
 	if err := integration.OwnChildren(); err != nil {
 		t.Fatal(err)
 	}
@@ -65,11 +65,41 @@ func TestIntegrationControllerAsksForTheVolume(t *testing.T) { //nolint:parallel
 		}
 	}
 
-	v := &Volume{Kube: controller}
+	node := &corev1.Node{
+		Name: "mgmt-cp-0", Labels: map[string]string{corev1.LabelTopologyZone: "pve2"},
+		Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{SystemUUID: "uuid-0"}},
+	}
+	if _, err = admin.CoreV1().Nodes().Create(ctx, node, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	// The controller wakes the sleeping store itself: it sets the node's zone to where its VM runs,
+	// and starts the store through its scale.
+	onPVE1 := func(context.Context, string) (*VMIndex, error) {
+		return &VMIndex{ByUUID: map[string][]VM{"uuid-0": {{VMID: 100, Name: "mgmt-cp-0", Node: "pve1", Type: "qemu"}}}}, nil
+	}
+	v := &Volume{Kube: controller, VMs: onPVE1}
+	replicas := func() int32 {
+		t.Helper()
+		d, gerr := admin.AppsV1().Deployments(Namespace).Get(ctx, Service, metav1.GetOptions{})
+		if gerr != nil {
+			t.Fatal(gerr)
+		}
+		return *d.Spec.Replicas
+	}
 	for _, holder := range []string{"snapshots of a/web", "restore of b/db"} {
 		if _, err = v.Open(ctx, holder); !errors.Is(err, provisioner.ErrVolumeAsleep) {
-			t.Fatalf("%s asking for the sleeping store: %v, want it asleep", holder, err)
+			t.Fatalf("%s asking for the sleeping store: %v, want it waking", holder, err)
 		}
+		if got := replicas(); got != 1 {
+			t.Fatalf("after %s's wake the store has %d replicas", holder, got)
+		}
+	}
+	if n, gerr := admin.CoreV1().Nodes().Get(ctx, "mgmt-cp-0", metav1.GetOptions{}); gerr != nil || n.Labels[corev1.LabelTopologyZone] != "pve1" {
+		t.Fatalf("the store was woken with its node labelled %v: %v", n.Labels, gerr)
+	}
+	// A Done that read the store before another holder asked for it again leaves it awake.
+	if err = v.scale(ctx, "1", 0); !apierrors.IsConflict(err) {
+		t.Fatalf("a scale from a stale read: %v, want a conflict", err)
 	}
 	for i, holder := range []string{"snapshots of a/web", "restore of b/db"} {
 		if err = v.Done(ctx, holder); err != nil {
@@ -79,8 +109,8 @@ func TestIntegrationControllerAsksForTheVolume(t *testing.T) { //nolint:parallel
 		if gerr != nil {
 			t.Fatal(gerr)
 		}
-		if left := i == 0; WakeRequested(d, time.Now()) != left {
-			t.Fatalf("after %s's Done the store is asked for %v, want %v: %v", holder, !left, left, d.Annotations)
+		if left := i == 0; WakeRequested(d, time.Now()) != left || (*d.Spec.Replicas == 1) != left {
+			t.Fatalf("after %s's Done the store is asked for %v with %d replicas, want %v: %v", holder, !left, *d.Spec.Replicas, left, d.Annotations)
 		}
 	}
 

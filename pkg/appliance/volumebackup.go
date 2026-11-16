@@ -11,14 +11,12 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"filippo.io/age"
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 
@@ -241,83 +239,50 @@ func (a *Appliance) interfaceAPI() (*interfaceAPI, error) {
 }
 
 // SnapshotVolume is the backup volume as the interface reaches it for the clusters' etcd
-// snapshots, through a port-forward to the store's pod. Opening it asks the appliance to wake it,
-// under a request of the interface's own.
+// snapshots, through a port-forward to the store's pod. Opening it wakes it, under a request of the
+// interface's own.
 func (a *Appliance) SnapshotVolume() (provisioner.BackupVolume, error) { //nolint:ireturn // the controller's and the interface's volume are one interface
 	api, err := a.interfaceAPI()
 	if err != nil {
 		return nil, err
 	}
-	return &backupstore.Volume{Kube: api.kube, HTTP: api.store.HTTPClient(), Base: backupstore.ForwardBase, Annotation: backupstore.InterfaceWakeAnnotation}, nil
+	v := a.storeVolume(api.kube)
+	v.HTTP, v.Base = api.store.HTTPClient(), backupstore.ForwardBase
+	return v, nil
 }
 
-// idleReplicas annotates the store's Deployment with the replicas it keeps between backups. The
-// storage chart sets it: 0 on a node's own storage, whose disk then stays detached, so that
-// Proxmox VE can migrate the node VMs and a node can go into maintenance.
-const idleReplicas = "kubehenge.dev/idle-replicas"
+// storeVolume is the backup volume as the appliance wakes it, under requests of its own.
+func (a *Appliance) storeVolume(kube kubernetes.Interface) *backupstore.Volume {
+	return &backupstore.Volume{Kube: kube, Annotation: backupstore.InterfaceWakeAnnotation, VMs: a.readVMHosts, Log: a.Log, Now: a.Now}
+}
+
+// applianceHolder holds the store awake through the appliance's own backups and recoveries.
+const applianceHolder = "the appliance's backups"
 
 // storeReadyPoll is how often a wake looks for the store's pod to be ready.
 var storeReadyPoll = 2 * time.Second
 
-// wakeStore starts the backup volume's store when it sleeps and waits, within ctx, until its pod is
-// ready, which is once the plugin has attached the disk to that pod's node. Only a store on a node's
-// own storage sleeps, and its pod must land on a node VM on that node, so the nodes' zone labels are
-// set first. The store stays asleep only when no management VM runs on the node holding the disk.
+// wakeStore holds the backup volume's store awake for the appliance's own backups, starts it when
+// it sleeps and waits, within ctx, until its pod is ready, which is once the plugin has attached the
+// disk to that pod's node. The store stays asleep only when no management VM runs on the node
+// holding the disk.
 func (a *Appliance) wakeStore(ctx context.Context, kube kubernetes.Interface) error {
-	deps := kube.AppsV1().Deployments(backupstore.Namespace)
-	d, err := deps.Get(ctx, backupstore.Service, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("the backup volume's store: %w", err)
-	}
-	if d.Spec.Replicas == nil || *d.Spec.Replicas == 0 {
-		unknown, zerr := a.followZones(ctx, kube, d.Annotations[volumeZone])
-		if zerr != nil {
-			return zerr
+	v := a.storeVolume(kube)
+	for {
+		err := v.Wake(ctx, applianceHolder)
+		if !errors.Is(err, provisioner.ErrVolumeAsleep) {
+			return err //nolint:wrapcheck // Wake says what failed
 		}
-		if len(unknown) > 0 && a.Log != nil {
-			a.Log.Warn("Proxmox VE lists no VM for these management nodes, whose zone labels stay as they are", "nodes", unknown)
-		}
-		if _, err = deps.Patch(ctx, backupstore.Service, types.MergePatchType, []byte(`{"spec":{"replicas":1}}`), metav1.PatchOptions{}); err != nil {
-			return fmt.Errorf("starting the backup volume's store: %w", err)
-		}
-	}
-	for d.Status.ReadyReplicas < 1 {
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("the backup volume's store did not start: %w", ctx.Err())
 		case <-time.After(storeReadyPoll):
 		}
-		if d, err = deps.Get(ctx, backupstore.Service, metav1.GetOptions{}); err != nil {
-			return fmt.Errorf("the backup volume's store: %w", err)
-		}
 	}
-	return nil
 }
 
-// restStore puts the backup volume's store back to the replicas its chart keeps between backups,
-// which detaches a node-local disk again. A store the controller asked for stays awake.
-func restStore(ctx context.Context, kube kubernetes.Interface, now time.Time) error {
-	deps := kube.AppsV1().Deployments(backupstore.Namespace)
-	d, err := deps.Get(ctx, backupstore.Service, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("the backup volume's store: %w", err)
-	}
-	idle, ok := d.Annotations[idleReplicas]
-	if !ok || (d.Spec.Replicas != nil && strconv.Itoa(int(*d.Spec.Replicas)) == idle) || backupstore.WakeRequested(d, now) {
-		return nil
-	}
-	if _, err := strconv.Atoi(idle); err != nil {
-		return fmt.Errorf("the backup volume's store: %s %q is no number", idleReplicas, idle)
-	}
-	patch := []byte(`{"spec":{"replicas":` + idle + `}}`)
-	if _, err := deps.Patch(ctx, backupstore.Service, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
-		return fmt.Errorf("putting the backup volume's store back to sleep: %w", err)
-	}
-	return nil
-}
-
-// sleepVolume puts the store back once a backup or a recovery is done with it. Tests that stand in
-// for the store have none.
+// sleepVolume lets the store sleep again once a backup or a recovery is done with it. Tests that
+// stand in for the store have none.
 func (a *Appliance) sleepVolume(ctx context.Context) error {
 	if a.OpenVolume != nil {
 		return nil
@@ -326,39 +291,7 @@ func (a *Appliance) sleepVolume(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return restStore(ctx, kube, time.Now())
-}
-
-// volumeWakeTimeout bounds a wake the controller asked for.
-const volumeWakeTimeout = 5 * time.Minute
-
-// ServeVolumeRequests wakes the backup volume's store while the controller asks for it, to store
-// the etcd snapshots of clusters without a bucket target, and puts it back to sleep once no request
-// is left. A backup or a recovery of the appliance's own keeps the store as it is. kube nil reaches
-// the management cluster as the interface.
-func (a *Appliance) ServeVolumeRequests(ctx context.Context, kube kubernetes.Interface, now time.Time) error {
-	if st := a.EtcdBackups(); st.Taking || a.Idle() != nil || a.VolumeBackups() == nil {
-		return nil
-	}
-	if kube == nil {
-		var err error
-		if kube, err = a.interfaceClient(); err != nil {
-			return err
-		}
-	}
-	d, err := kube.AppsV1().Deployments(backupstore.Namespace).Get(ctx, backupstore.Service, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("the backup volume's store: %w", err)
-	}
-	if !backupstore.WakeRequested(d, now) {
-		return restStore(ctx, kube, now)
-	}
-	if d.Status.ReadyReplicas > 0 {
-		return nil
-	}
-	wctx, cancel := context.WithTimeout(ctx, volumeWakeTimeout)
-	defer cancel()
-	return a.wakeStore(wctx, kube)
+	return a.storeVolume(kube).Done(ctx, applianceHolder) //nolint:wrapcheck // Done says what failed
 }
 
 // storeOnVolume stores the snapshot in file on the volume, encrypted, with the sealed key beside

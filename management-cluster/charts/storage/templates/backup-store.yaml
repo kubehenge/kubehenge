@@ -37,8 +37,8 @@ metadata:
     app.kubernetes.io/name: {{ $name }}
     app.kubernetes.io/part-of: kubehenge
   {{- /* A disk on one node's own storage stays attached to a node VM only while the store runs, and an
-  attached disk keeps Proxmox VE from migrating that VM. There the store sleeps, and the appliance
-  wakes it for each backup or recovery, then puts it back to these replicas. */}}
+  attached disk keeps Proxmox VE from migrating that VM. There the store sleeps. Each user wakes it
+  under a wake request of its own, and the last one done puts it back to these replicas. */}}
   annotations:
     kubehenge.dev/idle-replicas: {{ ternary "0" "1" (ne .Values.backupVolume.zone "") | quote }}
     {{- /* Whether one Proxmox VE host's loss takes the volume, for the interface's warning. */}}
@@ -127,7 +127,7 @@ rules:
     verbs: [get]
   # Waking the store for a backup or recovery, and putting it back to its idle replicas.
   - apiGroups: [apps]
-    resources: [deployments]
+    resources: [deployments, deployments/scale]
     resourceNames: [{{ $name }}]
     verbs: [get, patch]
 ---
@@ -175,7 +175,8 @@ spec:
 {{- $controller := "kubehenge-controller" }}
 ---
 # The controller stores the etcd snapshots of clusters without a bucket target. It reaches the store
-# through its Service, reads its token, and asks the appliance to wake it through an annotation.
+# through its Service and reads its token. It holds the store awake through an annotation, and wakes
+# it and lets it sleep through the Deployment's scale, which changes the replicas alone.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -187,7 +188,7 @@ rules:
     resourceNames: [{{ $name }}]
     verbs: [get]
   - apiGroups: [apps]
-    resources: [deployments]
+    resources: [deployments, deployments/scale]
     resourceNames: [{{ $name }}]
     verbs: [get, patch]
 ---
@@ -265,8 +266,8 @@ spec:
           port: 8080
 {{- $zones := printf "%s-zones" $name }}
 {{- with .Values.backupVolume.zonesToken }}
-{{- /* The appliance alone sets the nodes' zone labels. It reads where the node VMs run with this
-token after each apply, through the admin kubeconfig. */}}
+{{- /* Kubehenge alone sets the nodes' zone labels. The appliance reads where the node VMs run with
+this token after each apply, through the admin kubeconfig. */}}
 ---
 apiVersion: v1
 kind: Secret
@@ -278,10 +279,10 @@ data:
   token: {{ . | quote }}
 {{- end }}
 {{- if and .Values.backupVolume.zone .Values.backupVolume.zonesToken }}
-{{- $interface := printf "system:serviceaccount:%s:kubehenge-interface" $ns }}
+{{- $waker := printf "['system:serviceaccount:%s:kubehenge-interface', 'system:serviceaccount:%s:%s']" $ns $ns $controller }}
 {{- /* On a node's own storage the plugin attaches the volume only to a node with the disk's zone.
 A node VM HA or an administrator moved since the last apply carries its old node's zone, so before
-each wake the interface reads the token and sets the labels too. */}}
+each wake the interface or the controller reads the token and sets the labels too. */}}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -307,12 +308,18 @@ subjects:
   - kind: ServiceAccount
     name: kubehenge-interface
     namespace: {{ $ns }}
+  - kind: ServiceAccount
+    name: {{ $controller }}
+    namespace: {{ $ns }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: {{ $zones }}
 rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [list]
   - apiGroups: [""]
     resources: [nodes]
     resourceNames: {{ toJson .Values.backupVolume.nodes }}
@@ -330,8 +337,12 @@ subjects:
   - kind: ServiceAccount
     name: kubehenge-interface
     namespace: {{ $ns }}
-{{- /* RBAC cannot narrow a patch to one label, so this policy holds the interface's changes to a
-node to setting its two zone labels. It may add one a node joined without, never remove one. */}}
+  - kind: ServiceAccount
+    name: {{ $controller }}
+    namespace: {{ $ns }}
+{{- /* RBAC cannot narrow a patch to one label, so this policy holds the interface's and the
+controller's changes to a node to setting its two zone labels. It may add one a node joined
+without, never remove one. */}}
 {{- $labels := "['topology.kubernetes.io/zone', 'failure-domain.beta.kubernetes.io/zone']" }}
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -347,8 +358,8 @@ spec:
         operations: [UPDATE]
         resources: [nodes]
   matchConditions:
-    - name: interface
-      expression: request.userInfo.username == '{{ $interface }}'
+    - name: waker
+      expression: request.userInfo.username in {{ $waker }}
   variables:
     - name: before
       expression: "has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}"
@@ -363,7 +374,7 @@ spec:
         && variables.after.all(k, k in {{ $labels }} || (k in variables.before && variables.before[k] == variables.after[k]))
         && variables.before.all(k, k in {{ $labels }} || k in variables.after)
         && {{ $labels }}.all(k, !(k in variables.before) || k in variables.after)
-      message: the interface changes nothing of a node but the values of its zone labels
+      message: Kubehenge changes nothing of a node but the values of its zone labels
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

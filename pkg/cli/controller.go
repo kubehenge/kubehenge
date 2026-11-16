@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/luthermonson/go-proxmox"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -968,7 +970,10 @@ func (o *controllerOptions) addEtcd(mgr manager.Manager, c *proxmox.Client, remo
 	}
 	targets := &provisioner.ClusterTargets{
 		Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, OpenStore: provisioner.OpenTarget,
-		Volume: &backupstore.Volume{Kube: kube},
+		Volume: &backupstore.Volume{
+			Kube: kube, VMs: backupstore.ProxmoxVMs(o.connect),
+			Log: slog.New(logr.ToSlogHandler(mgr.GetLogger().WithName("backup-volume"))),
+		},
 	}
 	dialer := &provisioner.EtcdDialer{Reader: mgr.GetAPIReader(), Remotes: remotes, Talos: provisioner.DialTalos}
 	snapshotter := &provisioner.EtcdSnapshotter{

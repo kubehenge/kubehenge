@@ -20,6 +20,7 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/kubehenge/kubehenge/pkg/backupstore"
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
@@ -86,7 +87,7 @@ type Appliance struct {
 	stallPause time.Duration
 	// vmHosts reads with token the VMs it may see, with the Proxmox VE node each runs on, by their
 	// SMBIOS UUID. Nil asks the Proxmox VE API.
-	vmHosts func(ctx context.Context, token string) (*vmIndex, error)
+	vmHosts backupstore.VMReader
 	// protect sets or lifts a management VM's protection with the ticket. Nil asks the Proxmox VE
 	// API.
 	protect func(ctx context.Context, t *pve.Ticket, vm managementVM, value protection) error

@@ -438,16 +438,18 @@ store_idle() {
 }
 # volume_snapshots: the etcd snapshots on the backup volume itself, in $work/volume-list, read
 # through its store with the store's token, over a port-forward to its pod as the appliance reaches
-# it. The store's NetworkPolicy admits nothing else from outside the controller. The test asks the
-# appliance to wake the store with a wake request of its own, as the controller does. The appliance
-# puts a store back to sleep within a minute when no request holds it, so scaling it up by hand
-# loses to a slow attach.
+# it. The store's NetworkPolicy admits nothing else from outside the controller. The test holds the
+# store awake as every user does: a wake request of its own, a scale to one replica where it
+# sleeps, and back to its idle replicas once no other request holds it.
 store_wake=kubehenge.dev/wake-requested-e2e
 volume_snapshots() {
     mapi GET "${store_deployment}"
     idle=$(jq -r '.metadata.annotations["kubehenge.dev/idle-replicas"] // "1"' "${work}/body")
     asked=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     mapi PATCH "${store_deployment}" "{\"metadata\":{\"annotations\":{\"${store_wake}\":\"${asked}\"}}}"
+    if jq -e '(.spec.replicas // 0) == 0' "${work}/body" > /dev/null; then
+        mapi PATCH "${store_deployment}/scale" '{"spec":{"replicas":1}}'
+    fi
     until_true 600 "the backup volume's store, ready" store_ready
     mapi GET /api/v1/namespaces/kubehenge-system/secrets/kubehenge-backup-store
     store_token=$(jq -r .data.token "${work}/body" | base64 -d)
@@ -472,6 +474,17 @@ volume_snapshots() {
         fail "the backup volume's store does not list its objects: ${forward_log}"
     fi
     mapi PATCH "${store_deployment}" "{\"metadata\":{\"annotations\":{\"${store_wake}\":null}}}"
+    # Another holder's request keeps the store awake, and its Done lets it sleep. The version
+    # refuses the scale (409) once one asks after this read.
+    if ! jq -e '.metadata.annotations // {} | keys | any(startswith("kubehenge.dev/wake-requested") or startswith("kubehenge.dev/interface-wake-requested"))' \
+        "${work}/body" > /dev/null; then
+        version=$(jq -r .metadata.resourceVersion "${work}/body")
+        code=$(curl -sS --cacert "${work}/management-ca.crt" --cert "${work}/management.crt" --key "${work}/management.key" \
+            -o "${work}/body" -w '%{http_code}' -X PATCH -H 'Content-Type: application/merge-patch+json' \
+            --data "{\"metadata\":{\"resourceVersion\":\"${version}\"},\"spec\":{\"replicas\":${idle}}}" \
+            "${management_api}${store_deployment}/scale")
+        [ "${code}" -lt 300 ] || [ "${code}" = 409 ] || fail_with_body "PATCH ${store_deployment}/scale answered ${code}"
+    fi
     until_true 180 "the backup volume's store, back to its idle replicas" store_idle "${idle}"
 }
 volume_backed_up() {

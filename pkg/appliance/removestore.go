@@ -196,13 +196,13 @@ func (a *Appliance) detachVolume(ctx context.Context, t *pve.Ticket, at storeAtt
 	if err != nil {
 		return fmt.Errorf("detaching %s from node %s's VM: %w", disk, at.Node, err)
 	}
-	vms, err := readVMIndex(ctx, c)
+	vms, err := backupstore.ReadVMIndex(ctx, c)
 	if err != nil {
 		return fmt.Errorf("detaching %s from node %s's VM: %w", disk, at.Node, err)
 	}
-	vm, ok, err := vms.find(at.SystemUUID)
+	vm, ok, err := vms.Find(at.SystemUUID)
 	if err == nil && !ok {
-		err = vms.missing(at.SystemUUID)
+		err = vms.Missing(at.SystemUUID)
 	}
 	if err != nil {
 		return fmt.Errorf("detaching %s from node %s's VM: %w", disk, at.Node, err)
@@ -217,9 +217,9 @@ func (a *Appliance) detachVolume(ctx context.Context, t *pve.Ticket, at storeAtt
 // On every path after the lift is sent, its answer lost included, the configuration is read again
 // and the protection set again where it is off without the CSI plugin's marker. A marked VM is the
 // plugin's, which sets it again itself.
-func unlinkVolume(ctx context.Context, c *proxmox.Client, vm clusterVM, disk string) (err error) {
+func unlinkVolume(ctx context.Context, c *proxmox.Client, vm backupstore.VM, disk string) (err error) {
 	var config map[string]any
-	if err = c.Get(ctx, vm.path()+"/config", &config); err != nil {
+	if err = c.Get(ctx, vm.Path()+"/config", &config); err != nil {
 		return fmt.Errorf("reading the configuration: %w", err)
 	}
 	drive := ""
@@ -240,11 +240,11 @@ func unlinkVolume(ctx context.Context, c *proxmox.Client, vm clusterVM, disk str
 			}
 		}()
 		lift := map[string]any{protectionOption: int(unprotected), "digest": config["digest"]}
-		if err = c.Put(ctx, vm.path()+"/config", lift, nil); err != nil {
+		if err = c.Put(ctx, vm.Path()+"/config", lift, nil); err != nil {
 			return fmt.Errorf("lifting the protection: %w", err)
 		}
 	}
-	if err = c.Put(ctx, vm.path()+"/unlink", map[string]any{"idlist": drive}, nil); err != nil {
+	if err = c.Put(ctx, vm.Path()+"/unlink", map[string]any{"idlist": drive}, nil); err != nil {
 		return fmt.Errorf("unlinking %s: %w", drive, err)
 	}
 	return nil
@@ -252,18 +252,18 @@ func unlinkVolume(ctx context.Context, c *proxmox.Client, vm clusterVM, disk str
 
 // protectUnlessMarked sets vm's protection again where its configuration has it off and carries
 // no CSI marker.
-func protectUnlessMarked(ctx context.Context, c *proxmox.Client, vm clusterVM) error {
+func protectUnlessMarked(ctx context.Context, c *proxmox.Client, vm backupstore.VM) error {
 	var config struct {
 		Protection  int    `json:"protection"`
 		Description string `json:"description"`
 	}
-	if err := c.Get(ctx, vm.path()+"/config", &config); err != nil {
+	if err := c.Get(ctx, vm.Path()+"/config", &config); err != nil {
 		return fmt.Errorf("reading the configuration: %w", err)
 	}
 	if config.Protection == int(protected) || strings.Contains(config.Description, csiLiftedMarker) {
 		return nil
 	}
-	if err := c.Put(ctx, vm.path()+"/config", map[string]any{protectionOption: int(protected)}, nil); err != nil {
+	if err := c.Put(ctx, vm.Path()+"/config", map[string]any{protectionOption: int(protected)}, nil); err != nil {
 		return fmt.Errorf("setting protection=1: %w", err)
 	}
 	return nil
