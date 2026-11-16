@@ -195,13 +195,48 @@ remove_ha_rule() {
     ha_vmid=
 }
 
+# The patched CSI plugin's marker on a VM whose protection it lifted to detach a volume
+# (scripts/proxmox-csi-patches). It sets the protection again once the detach ends.
+csi_marker="proxmox-csi-plugin lifted this VM's protection to detach a volume and sets it again."
+
+# volume_settled: whether the backup volume's attachment is neither coming nor going, so that no
+# CSI detach is due. A detach lifts the protection of the VM the volume leaves and sets it again
+# when it ends.
+volume_settled() {
+    mapi GET /apis/storage.k8s.io/v1/volumeattachments
+    seen=$(jq -c --arg pv "${backup_pv}" '[.items[] | select(.spec.source.persistentVolumeName == $pv) |
+        {node: .spec.nodeName, attached: .status.attached, deleting: (.metadata.deletionTimestamp != null)}]' "${work}/body")
+    jq -e --arg pv "${backup_pv}" '[.items[] | select(.spec.source.persistentVolumeName == $pv)] |
+        all(.metadata.deletionTimestamp == null and .status.attached == true)' "${work}/body" > /dev/null
+}
+
+# unmarked <node> <vmid>: whether the VM carries no marker of a CSI detach in flight. Its
+# configuration is left in $work/vm-config.
+unmarked() {
+    pvesh get "/nodes/$1/qemu/$2/config" --output-format json < /dev/null > "${work}/vm-config"
+    seen="VM $2 carries the CSI plugin's marker"
+    jq -e --arg m "${csi_marker}" '(.description // "") | contains($m) | not' "${work}/vm-config" > /dev/null
+}
+
 # lift_management_protection <node> <vmid>: checks that a management VM carries the protection the
 # setup gives it, then lifts it. A step that loses a VM by accident stands for an administrator who
-# lifted it first, since Proxmox VE refuses to delete a protected VM.
+# lifted it first, since Proxmox VE refuses to delete a protected VM. The lift waits for a detach on
+# the VM to end, as volume_settled waits for one to come, and the digest has Proxmox VE refuse it
+# once the plugin changed the configuration since.
 lift_management_protection() {
-    pvesh get "/nodes/$1/qemu/$2/config" --output-format json < /dev/null | jq -e '.protection == 1' > /dev/null ||
-        fail "management VM $2 is not protected"
-    pvesh set "/nodes/$1/qemu/$2/config" --protection 0 < /dev/null > /dev/null
+    until_true 300 "no CSI detach in flight on management VM $2" unmarked "$1" "$2"
+    jq -e '.protection == 1' "${work}/vm-config" > /dev/null || fail "management VM $2 is not protected"
+    digest=$(jq -r .digest "${work}/vm-config")
+    pvesh set "/nodes/$1/qemu/$2/config" --protection 0 --digest "${digest}" < /dev/null > /dev/null
+}
+
+# delete_management_vm <node> <vmid>: deletes a stopped management VM whose protection was lifted,
+# lifting it again when a detach that began since set it back.
+delete_management_vm() {
+    if pvesh get "/nodes/$1/qemu/$2/config" --output-format json < /dev/null | jq -e '.protection == 1' > /dev/null; then
+        lift_management_protection "$1" "$2"
+    fi
+    pvesh delete "/nodes/$1/qemu/$2" --purge 1 > /dev/null
 }
 
 # rules_offered <node>: whether the user without privileges on / is offered the test's HA rule, by
@@ -485,9 +520,18 @@ volume_backed_up() {
     jq -e '.volume.last.name != null and .volume.export.name != null' "${work}/body" > /dev/null
 }
 
+step "the appliance's addresses, recorded for the clusters' firewalls"
+addresses_recorded() {
+    mapi GET /api/v1/namespaces/kubehenge-system/configmaps/kubehenge-appliance-addresses
+    seen=$(jq -r '.data.addresses // "nothing"' "${work}/body")
+    jq -e --arg ip "${ip}" '.data.addresses // "" | split(",") | index($ip) != null' "${work}/body" > /dev/null
+}
+until_true 120 "the appliance's address ${ip} in kubehenge-system/kubehenge-appliance-addresses" addresses_recorded
+
 step "the backup volume: bound, its first snapshot and export, its store asleep or up as its storage needs"
 mapi GET /api/v1/namespaces/kubehenge-system/persistentvolumeclaims/kubehenge-backups
 body_is '.status.phase == "Bound"' "the claim kubehenge-system/kubehenge-backups is not bound"
+backup_pv=$(jq -r .spec.volumeName "${work}/body")
 # The first snapshot onto the volume is due at once after the setup, and the appliance looks every minute.
 until_true 600 "the first snapshot and export on the backup volume" volume_backed_up
 volume_last=$(jq -r .volume.last.name "${work}/body")
@@ -522,9 +566,11 @@ pvesh get /cluster/resources --type vm --output-format json |
 lost=$(jq -r 'last | "\(.node) \(.vmid)"' "${work}/management-vms")
 [ -n "${lost}" ] && [ "${lost}" != "null null" ] || fail "no management node VM to delete"
 lost_node=${lost% *} lost_vmid=${lost#* }
+# The store the step before sent back to sleep may still be detaching its volume.
+until_true 300 "the backup volume's attachment, settled" volume_settled
 lift_management_protection "${lost_node}" "${lost_vmid}"
 pvesh create "/nodes/${lost_node}/qemu/${lost_vmid}/status/stop" > /dev/null
-pvesh delete "/nodes/${lost_node}/qemu/${lost_vmid}" --purge 1 > /dev/null
+delete_management_vm "${lost_node}" "${lost_vmid}"
 # Two members left keep etcd's quorum, so an apply makes the VM again and it rejoins. A cluster of
 # fewer nodes lost etcd, which only a recovery from a snapshot brings back.
 management_vms=$(jq length "${work}/management-vms")
@@ -748,10 +794,12 @@ lose_management_vms() {
         jq -r '.[] | select((.tags // "" | split(";")) as $t | ($t | index("management")) and ($t | index("backups") | not)) | "\(.node) \(.vmid)"' \
             > "${work}/lost"
     [ -s "${work}/lost" ] || fail "no management node VM to delete"
+    # Before the first VM goes, while the management cluster still answers.
+    until_true 300 "the backup volume's attachment, settled" volume_settled
     while read -r lost_node lost_vmid; do
         lift_management_protection "${lost_node}" "${lost_vmid}"
         pvesh create "/nodes/${lost_node}/qemu/${lost_vmid}/status/stop" > /dev/null
-        pvesh delete "/nodes/${lost_node}/qemu/${lost_vmid}" --purge 1 > /dev/null
+        delete_management_vm "${lost_node}" "${lost_vmid}"
     done < "${work}/lost"
 }
 # management_back: the recreated management cluster answers with its nodes Ready and Kubehenge's

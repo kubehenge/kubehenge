@@ -344,16 +344,15 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	if err != nil {
 		return fmt.Errorf("--proxmox-ca: %w", err)
 	}
-	c, err := pve.Connect(*conn)
+	cloud, err := o.newCloud(conn)
 	if err != nil {
-		return fmt.Errorf("connecting to Proxmox VE: %w", err)
+		return err
 	}
 	rancherMinors, providers, err := o.parseFlags()
 	if err != nil {
 		return err
 	}
 	distributions := &provisioner.Distributions{ClassNamespace: o.r.ClassNamespace, Providers: providers}
-	cloud := &provisioner.Proxmox{Client: c, Settings: o.settings, ProbeTTL: nodeProbeTTL}
 	o.completeReconciler(cloud, provisioner.Endpoint{URL: strings.TrimSuffix(conn.URL, "/"), CA: string(ca), Insecure: conn.Insecure}, rancherMinors)
 
 	logger, err := o.logs.zapLogger()
@@ -384,7 +383,7 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	if err = o.addPlacement(mgr, extensions, scheme, o.newHooks(mgr, registrar, cloud, rancherMinors), cloud); err != nil {
 		return err
 	}
-	if err = o.addUpgrader(mgr, c, rancherMinors, remotes); err != nil {
+	if err = o.addUpgrader(mgr, cloud.Client, rancherMinors, remotes); err != nil {
 		return err
 	}
 	if err = o.addWatches(mgr, remotes, cloud.Client); err != nil {
@@ -397,6 +396,20 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 		return fmt.Errorf("the controller manager: %w", err)
 	}
 	return nil
+}
+
+// newCloud connects to Proxmox VE with the controller's token, and signs clusters' users in there
+// to create their own tokens.
+func (o *controllerOptions) newCloud(conn *pve.Config) (*provisioner.Proxmox, error) {
+	c, err := pve.Connect(*conn)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to Proxmox VE: %w", err)
+	}
+	accounts, err := pve.NewAccounts(*conn)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to Proxmox VE: %w", err)
+	}
+	return &provisioner.Proxmox{Client: c, Accounts: accounts, Settings: o.settings, ProbeTTL: nodeProbeTTL}, nil
 }
 
 // newHooks makes the Runtime SDK hooks, which check a cluster against the same grants and pins as

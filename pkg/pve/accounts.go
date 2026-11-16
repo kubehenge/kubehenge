@@ -292,7 +292,11 @@ func (a *Accounts) get(ctx context.Context, t *Ticket, path string, out any) err
 		return err
 	}
 	t.authorise(req)
-	err = a.do(req, out)
+	return t.refused(a.do(req, out))
+}
+
+// refused is err, or ErrNodesDisagree where Proxmox VE refused a ticket just issued.
+func (t *Ticket) refused(err error) error {
 	if t.Token == "" && errors.Is(err, ErrAuthentication) && time.Since(t.Issued) < freshTicket {
 		return ErrNodesDisagree
 	}

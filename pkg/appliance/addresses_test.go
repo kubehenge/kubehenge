@@ -38,6 +38,25 @@ func TestAddressesFailureLoggedOnceUntilItRecovers(t *testing.T) {
 	}
 }
 
+// Go lists a machine's interfaces and their addresses over a netlink socket, which the interface's
+// unit must allow.
+func TestServiceUnitAllowsNetlink(t *testing.T) {
+	t.Parallel()
+	unit, err := os.ReadFile(filepath.Join("..", "..", "appliance", "kubehenge.service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var families []string
+	for line := range strings.Lines(string(unit)) {
+		if value, ok := strings.CutPrefix(strings.TrimSpace(line), "RestrictAddressFamilies="); ok {
+			families = append(families, strings.Fields(value)...)
+		}
+	}
+	if !slices.Contains(families, "AF_NETLINK") {
+		t.Errorf("kubehenge.service restricts the address families to %q, without AF_NETLINK", families)
+	}
+}
+
 func TestSourceAddressesLeaveOutLoopbackAndLinkLocal(t *testing.T) {
 	t.Parallel()
 	addr := func(cidr string) net.Addr {
