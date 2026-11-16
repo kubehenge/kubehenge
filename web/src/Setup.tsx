@@ -2968,9 +2968,8 @@ function withDefaults(
       imageDatastore: fit(form.imageDatastore, offers.images),
       bootstrapDatastore: fit(form.bootstrapDatastore, offers.isos),
       bridge,
-      // A VLAN's network is not the one a node reports on the bridge.
-      nodeAddresses: withPrefix(form.nodeAddresses, filled(form.vlan) ? undefined : onBridge?.cidr),
-      nodeAddresses6: withPrefix(form.nodeAddresses6, filled(form.vlan) ? undefined : onBridge?.cidr6),
+      nodeAddresses: withPrefix(form.nodeAddresses, untagged(form.vlan, onBridge?.cidr)),
+      nodeAddresses6: withPrefix(form.nodeAddresses6, untagged(form.vlan, onBridge?.cidr6)),
       gateway: detect("gateway", onBridge?.gateway ?? ""),
       gateway6: detect("gateway6", onBridge?.gateway6 ?? ""),
       dnsServers: detect("dnsServers", ownFamilies(found.dnsByNode[first]?.servers ?? [], form.families).join(", ")),
@@ -2987,6 +2986,11 @@ function withDefaults(
     },
     gone: goneChoices({ form, offers, storagesKnown: known, bridgesKnown, kept: fixed !== undefined }),
   };
+}
+
+// untagged is the bridge's network for node addresses, which a VLAN's tagged network is not.
+function untagged(vlan: string, cidr: string | undefined): string | undefined {
+  return filled(vlan) ? undefined : cidr;
 }
 
 // chosenBridge is the bridge the management cluster uses. One that exists keeps its own, offered or
