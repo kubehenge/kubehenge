@@ -29,7 +29,7 @@ func sleepingStore() []runtime.Object {
 			Spec: appsv1.DeploymentSpec{Replicas: &none},
 		},
 		&corev1.Secret{Name: TokenSecret, Namespace: Namespace, Data: map[string][]byte{TokenKey: []byte("secret")}},
-		&corev1.Secret{Name: ZonesSecret, Namespace: Namespace, Data: map[string][]byte{"token": []byte("zones")}},
+		&corev1.Secret{Name: ZonesSecret, Namespace: Namespace, Data: map[string][]byte{"token": []byte("zones"), "nodes": []byte("mgmt-cp-0")}},
 		&corev1.Node{
 			Name: "mgmt-cp-0", Labels: map[string]string{corev1.LabelTopologyZone: "pve2"},
 			Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{SystemUUID: "uuid-0"}},
@@ -190,6 +190,54 @@ func TestALeftRequestRunsOut(t *testing.T) {
 	}
 	if got := replicasOf(t, kube); got != 0 {
 		t.Fatalf("with only a request that ran out the store keeps %d replicas", got)
+	}
+}
+
+// A holder that never lets go, as a look at the snapshots, holds the store while its request is in
+// force. Sleeper puts the store back to sleep once it ran out, with no holder's Done.
+func TestTheSleeperPutsALeftStoreToSleep(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	kube := fake.NewClientset(sleepingStore()...)
+	look := &Volume{Kube: kube, VMs: onPVE1, Now: func() time.Time { return start }}
+	if err := look.Wake(t.Context(), "a look"); !errors.Is(err, provisioner.ErrVolumeAsleep) {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		after time.Duration
+		want  int32
+	}{{35 * time.Minute, 1}, {WakeRequestLife + time.Minute, 0}} {
+		ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+		v := &Volume{Kube: kube, Now: func() time.Time { return start.Add(tc.after) }}
+		if err := (&Sleeper{Volume: v, Every: time.Millisecond}).Start(ctx); err != nil {
+			t.Fatal(err)
+		}
+		cancel()
+		if got := replicasOf(t, kube); got != tc.want {
+			t.Fatalf("%s after the look the store has %d replicas, want %d", tc.after, got, tc.want)
+		}
+	}
+}
+
+// A restore asks for the store once and uses it to its end. Another holder's Done in its last
+// minutes leaves the store awake for it.
+func TestARestoreOutlivesAnotherHoldersDone(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	kube := fake.NewClientset(sleepingStore()...)
+	restore := &Volume{Kube: kube, VMs: onPVE1, Now: func() time.Time { return start }}
+	if err := restore.Wake(t.Context(), "restore of b/db"); !errors.Is(err, provisioner.ErrVolumeAsleep) {
+		t.Fatal(err)
+	}
+	late := &Volume{Kube: kube, VMs: onPVE1, Now: func() time.Time { return start.Add(provisioner.EtcdRestoreTimeout - time.Minute) }}
+	if err := late.Wake(t.Context(), "snapshots of a/web"); err != nil && !errors.Is(err, provisioner.ErrVolumeAsleep) {
+		t.Fatal(err)
+	}
+	if err := late.Done(t.Context(), "snapshots of a/web"); err != nil {
+		t.Fatal(err)
+	}
+	if got := replicasOf(t, kube); got != 1 {
+		t.Fatalf("a snapshot's Done in the restore's last minute left the store at %d replicas", got)
 	}
 }
 

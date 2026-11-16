@@ -175,8 +175,8 @@ spec:
 {{- $controller := "kubehenge-controller" }}
 ---
 # The controller stores the etcd snapshots of clusters without a bucket target. It reaches the store
-# through its Service and reads its token. It holds the store awake through an annotation, and wakes
-# it and lets it sleep through the Deployment's scale, which changes the replicas alone.
+# through its Service and reads its token. It holds the store awake through an annotation. On a
+# node's own storage it wakes the store and lets it sleep too, under the zones Role below.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -188,7 +188,7 @@ rules:
     resourceNames: [{{ $name }}]
     verbs: [get]
   - apiGroups: [apps]
-    resources: [deployments, deployments/scale]
+    resources: [deployments]
     resourceNames: [{{ $name }}]
     verbs: [get, patch]
 ---
@@ -277,6 +277,7 @@ metadata:
 type: Opaque
 data:
   token: {{ . | quote }}
+  nodes: {{ join "," $.Values.backupVolume.nodes | b64enc | quote }}
 {{- end }}
 {{- if and .Values.backupVolume.zone .Values.backupVolume.zonesToken }}
 {{- $waker := printf "['system:serviceaccount:%s:kubehenge-interface', 'system:serviceaccount:%s:%s']" $ns $ns $controller }}
@@ -294,6 +295,11 @@ rules:
     resources: [secrets]
     resourceNames: [{{ $zones }}]
     verbs: [get]
+  # The store's scale, which changes its replicas alone, to wake it and let it sleep.
+  - apiGroups: [apps]
+    resources: [deployments/scale]
+    resourceNames: [{{ $name }}]
+    verbs: [get, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -317,9 +323,6 @@ kind: ClusterRole
 metadata:
   name: {{ $zones }}
 rules:
-  - apiGroups: [""]
-    resources: [nodes]
-    verbs: [list]
   - apiGroups: [""]
     resources: [nodes]
     resourceNames: {{ toJson .Values.backupVolume.nodes }}

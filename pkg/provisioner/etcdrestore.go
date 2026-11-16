@@ -40,8 +40,8 @@ const (
 	// through the guest agent, "true" or "false"; else restores are done by hand.
 	AutomaticRestoreAnnotation = "kubehenge.dev/etcd-restore-automatic"
 
-	// etcdRestoreTimeout bounds a whole restore. Each step on a node has guestStepTimeout.
-	etcdRestoreTimeout = time.Hour
+	// EtcdRestoreTimeout bounds a whole restore. Each step on a node has guestStepTimeout.
+	EtcdRestoreTimeout = time.Hour
 	guestStepTimeout   = 20 * time.Minute
 	guestCheckTimeout  = time.Minute
 	// resetAnswerTimeout bounds asking whether the API answers before a reset.
@@ -218,7 +218,7 @@ func (r *EtcdRestorer) SetupWithManager(mgr ctrl.Manager) error {
 	err := ctrl.NewControllerManagedBy(mgr).
 		For(&clusterv1.Cluster{}, builder.WithPredicates(predicate.AnnotationChangedPredicate{})).
 		Named("etcd-restores").
-		WithOptions(controller.Options{MaxConcurrentReconciles: 1, ReconciliationTimeout: etcdRestoreTimeout + 5*time.Minute}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: 1, ReconciliationTimeout: EtcdRestoreTimeout + 5*time.Minute}).
 		Complete(r)
 	if err != nil {
 		return fmt.Errorf("setting up the etcd restorer: %w", err)
@@ -303,7 +303,7 @@ func (run *restoreRun) source() string {
 }
 
 func (run *restoreRun) do(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, etcdRestoreTimeout)
+	ctx, cancel := context.WithTimeout(ctx, EtcdRestoreTimeout)
 	defer cancel()
 	if err := run.save(ctx); err != nil {
 		return err

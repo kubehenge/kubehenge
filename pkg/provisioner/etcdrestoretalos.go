@@ -334,7 +334,7 @@ func (run *restoreRun) recoverTalos(ctx context.Context, cause error) error {
 	switch run.status.Phase {
 	case RestoreStopping, RestoreRestoring:
 		ctrl.LoggerFrom(ctx).Info("restoring etcd once more", "cause", cause)
-		again, cancel := context.WithTimeout(ctx, etcdRestoreTimeout)
+		again, cancel := context.WithTimeout(ctx, EtcdRestoreTimeout)
 		defer cancel()
 		var err error
 		for _, step := range []func(context.Context) error{run.check, run.stop, run.restore, run.start} {

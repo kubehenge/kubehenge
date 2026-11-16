@@ -137,4 +137,7 @@ func controllerFollowsZones(ctx context.Context, t *testing.T, admin kubernetes.
 	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "changes nothing of a node but the values of its zone labels") {
 		t.Errorf("the controller changing another label: %v, want refused", err)
 	}
+	if _, err = controller.CoreV1().Nodes().List(ctx, metav1.ListOptions{}); !apierrors.IsForbidden(err) {
+		t.Errorf("the controller listing nodes: %v, want forbidden", err)
+	}
 }

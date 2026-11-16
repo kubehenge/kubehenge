@@ -14,6 +14,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -32,9 +33,10 @@ const WakeRequestAnnotation = "kubehenge.dev/wake-requested"
 const InterfaceWakeAnnotation = "kubehenge.dev/interface-wake-requested"
 
 // WakeRequestLife is how long a request holds the store awake unless it is asked again. It outlasts
-// one snapshot, so that a holder gone mid-snapshot lets the next holder's Done put the store back to
-// sleep.
-const WakeRequestLife = provisioner.EtcdSnapshotTimeout + 10*time.Minute
+// the longest holder, a restore, which asks once and uses the store to its end. A request whose
+// holder never lets go, as a look at the snapshots, runs out after it, and Sleeper puts the store
+// back to sleep.
+const WakeRequestLife = provisioner.EtcdRestoreTimeout + 10*time.Minute
 
 // WakeRequestKey is holder's own annotation under base, one of the two above.
 func WakeRequestKey(base, holder string) string {
@@ -119,8 +121,41 @@ func (v *Volume) Done(ctx context.Context, holder string) error {
 	if err != nil {
 		return err
 	}
+	return v.sleep(ctx, d)
+}
+
+// Sleeper puts the backup volume's store back to sleep every Every once no holder's request is in
+// force, as when a holder never let go or its request ran out. Done does it at once for a holder
+// that lets go. It runs on the controller's leader alone.
+type Sleeper struct {
+	Volume *Volume
+	Every  time.Duration
+}
+
+// Start runs until ctx ends. A management cluster without the store, or a controller not allowed
+// to read it, has nothing to put to sleep.
+func (s *Sleeper) Start(ctx context.Context) error {
+	tick := time.NewTicker(s.Every)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-tick.C:
+		}
+		err := s.Volume.sleep(ctx, nil)
+		if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsForbidden(err) && ctx.Err() == nil && s.Volume.Log != nil {
+			s.Volume.Log.Warn("the backup volume's store could not be put to sleep", "error", err)
+		}
+	}
+}
+
+// sleep scales the store to its idle replicas unless a holder's request is in force. d is the
+// Deployment as last read, or nil to read it.
+func (v *Volume) sleep(ctx context.Context, d *appsv1.Deployment) error {
 	// The scale holds only while the Deployment is as read, so that a holder asking in between
 	// keeps the store awake. Any other change, as of its status, is read again.
+	var err error
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error { //nolint:wrapcheck // rest says what failed
 		if d == nil {
 			if d, err = v.Kube.AppsV1().Deployments(Namespace).Get(ctx, Service, metav1.GetOptions{}); err != nil {

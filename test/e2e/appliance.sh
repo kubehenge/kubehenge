@@ -439,8 +439,8 @@ store_idle() {
 # volume_snapshots: the etcd snapshots on the backup volume itself, in $work/volume-list, read
 # through its store with the store's token, over a port-forward to its pod as the appliance reaches
 # it. The store's NetworkPolicy admits nothing else from outside the controller. The test holds the
-# store awake as every user does: a wake request of its own, a scale to one replica where it
-# sleeps, and back to its idle replicas once no other request holds it.
+# store awake as every user does: a wake request of its own, and a scale to one replica where it
+# sleeps. Once the request is taken away, the controller puts the store back to its idle replicas.
 store_wake=kubehenge.dev/wake-requested-e2e
 volume_snapshots() {
     mapi GET "${store_deployment}"
@@ -474,28 +474,8 @@ volume_snapshots() {
         fail "the backup volume's store does not list its objects: ${forward_log}"
     fi
     mapi PATCH "${store_deployment}" "{\"metadata\":{\"annotations\":{\"${store_wake}\":null}}}"
-    until_true 180 "the backup volume's store, back to its idle replicas" store_rest "${idle}"
-}
-# store_rest <idle>: true once the store is at its idle replicas. Another holder's request keeps it
-# awake, and that holder's Done lets it sleep. Otherwise the store is scaled to idle as read: the
-# version refuses the scale (409) after any change since, as of its status, and the next look reads
-# it again.
-store_rest() {
-    mapi GET "${store_deployment}"
-    if jq -e --arg idle "$1" '(.spec.replicas | tostring) == $idle' "${work}/body" > /dev/null; then
-        return 0
-    fi
-    if jq -e '.metadata.annotations // {} | keys | any(startswith("kubehenge.dev/wake-requested") or startswith("kubehenge.dev/interface-wake-requested"))' \
-        "${work}/body" > /dev/null; then
-        return 1
-    fi
-    version=$(jq -r .metadata.resourceVersion "${work}/body")
-    code=$(curl -sS --cacert "${work}/management-ca.crt" --cert "${work}/management.crt" --key "${work}/management.key" \
-        -o "${work}/body" -w '%{http_code}' -X PATCH -H 'Content-Type: application/merge-patch+json' \
-        --data "{\"metadata\":{\"resourceVersion\":\"${version}\"},\"spec\":{\"replicas\":$1}}" \
-        "${management_api}${store_deployment}/scale")
-    [ "${code}" -lt 300 ] || [ "${code}" = 409 ] || fail_with_body "PATCH ${store_deployment}/scale answered ${code}"
-    return 1
+    # The controller looks every minute.
+    until_true 180 "the controller putting the backup volume's store back to its idle replicas" store_idle "${idle}"
 }
 volume_backed_up() {
     expect 200 "the etcd backups" request "${work}/admin.jar" "${ui}/api/appliance/etcd-backups"

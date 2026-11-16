@@ -139,7 +139,9 @@ func (s *Server) etcdTarget(ctx context.Context, u user, c *clusterv1.Cluster, t
 
 // snapshotVolume is the backup volume as the interface reaches it. Asking for it wakes it on a
 // node's own storage, through a request of the interface's own that runs out by itself, so that a
-// look at the snapshots and a restore after it find the volume awake.
+// look at the snapshots and a restore after it find the volume awake. The page asks again with each
+// poll, so a release after each look would stop and start the store every 30 seconds. Once the
+// request ran out, the controller puts the volume back to sleep.
 func (s *Server) snapshotVolume() (provisioner.BackupVolume, error) { //nolint:ireturn // tests stand in for the volume
 	if s.Volume != nil {
 		return s.Volume, nil

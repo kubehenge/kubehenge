@@ -31,7 +31,7 @@ func storeDeployment(replicas int32, idle string) *appsv1.Deployment {
 func zonesToken() *corev1.Secret {
 	return &corev1.Secret{
 		Name: backupstore.ZonesSecret, Namespace: backupstore.Namespace,
-		Data: map[string][]byte{"token": []byte(standInToken)},
+		Data: map[string][]byte{"token": []byte(standInToken), "nodes": []byte("mgmt-cp-0,mgmt-cp-1,mgmt-cp-2")},
 	}
 }
 

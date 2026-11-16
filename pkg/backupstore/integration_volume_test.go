@@ -5,6 +5,8 @@ package backupstore
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -131,6 +133,41 @@ func TestIntegrationControllerWakesTheVolume(t *testing.T) { //nolint:parallelte
 	}
 }
 
+// TestIntegrationControllerLeavesASharedStoreUp runs Volume as the controller's account against the
+// storage chart for shared storage, where the store never sleeps. The controller holds the store
+// and lets it go, and may not scale it.
+func TestIntegrationControllerLeavesASharedStoreUp(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
+	if err := integration.OwnChildren(); err != nil {
+		t.Fatal(err)
+	}
+	shared := filepath.Join(t.TempDir(), "shared.yaml")
+	if err := os.WriteFile(shared, []byte("backupVolume:\n  zone: \"\"\n  zonesToken: \"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	objects := integration.RenderChart(t, "kubehenge-storage", "../../management-cluster/charts/storage", "kube-system", "../appliance/testdata/storage-zones-values.yaml", shared)
+	api := integration.Start(t, &integration.Options{Objects: objects, Namespaces: []string{Namespace, "kube-system"}})
+	as := rest.CopyConfig(api.Config)
+	as.Impersonate = rest.ImpersonationConfig{
+		UserName: "system:serviceaccount:" + Namespace + ":kubehenge-controller",
+		Groups:   []string{"system:serviceaccounts", "system:serviceaccounts:" + Namespace, "system:authenticated"},
+	}
+	controller, err := kubernetes.NewForConfig(as)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	v := &Volume{Kube: controller}
+	if err = v.Wake(ctx, "snapshots of a/web"); err != nil && !errors.Is(err, provisioner.ErrVolumeAsleep) {
+		t.Fatalf("holding the shared store: %v", err)
+	}
+	if err = v.Done(ctx, "snapshots of a/web"); err != nil {
+		t.Fatalf("letting the shared store go: %v", err)
+	}
+	if err = v.scale(ctx, "", 0); !apierrors.IsForbidden(err) {
+		t.Fatalf("scaling the shared store: %v, want forbidden", err)
+	}
+}
+
 // TestIntegrationInterfaceForwardsToTheStoreAlone runs the interface's account against the storage
 // chart. It finds the store's pod in the Service's EndpointSlices and may open a port-forward to it,
 // and to no other pod. The harness runs no kubelet, so a forward the policy lets through ends where
@@ -217,7 +254,7 @@ func TestIntegrationInterfaceWakesTheVolume(t *testing.T) { //nolint:paralleltes
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	zones := &corev1.Secret{Name: ZonesSecret, Namespace: Namespace, Data: map[string][]byte{"token": []byte("zones")}}
+	zones := &corev1.Secret{Name: ZonesSecret, Namespace: Namespace, Data: map[string][]byte{"token": []byte("zones"), "nodes": []byte("mgmt-cp-0")}}
 	if _, err = admin.CoreV1().Secrets(Namespace).Update(ctx, zones, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}

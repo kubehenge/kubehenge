@@ -5,19 +5,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/luthermonson/go-proxmox"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 )
 
-// ZonesSecret holds the Proxmox VE token that reads where the management cluster's VMs run. The
-// storage chart makes it on every storage.
+// ZonesSecret holds the Proxmox VE token that reads where the management cluster's VMs run, and
+// the management nodes' names, comma-separated. The storage chart makes it on every storage.
 const (
 	ZonesSecret = Service + "-zones"
 	zonesKey    = "token"
+	zonesNodes  = "nodes"
 )
 
 // VolumeZone annotates the store's Deployment, from the storage chart, with the Proxmox VE node
@@ -44,8 +47,8 @@ func ProxmoxVMs(connect func(token string) (*proxmox.Client, error)) VMReader {
 // CSI plugin attaches the backup volume to a node with the disk's zone, and a stale label lets the
 // store's pod land on a VM elsewhere, where the attach fails.
 //
-// A node Proxmox VE lists no VM for keeps its labels and is returned: its VM is gone, so its node
-// is not ready and takes no pod. With zone, the disk's node, set, the call fails only where no
+// The management nodes are those ZonesSecret names that joined. A node Proxmox VE lists no VM for
+// keeps its labels and is returned: its VM is gone, so its node is not ready and takes no pod. With zone, the disk's node, set, the call fails only where no
 // management VM runs there, since the store then has nowhere to start. Of the labels, only those
 // of nodes in or claiming that zone must be set for the store to land right.
 //
@@ -66,14 +69,13 @@ func FollowZones(ctx context.Context, kube kubernetes.Interface, read VMReader, 
 	if err != nil {
 		return nil, fmt.Errorf("reading where the management VMs run: %w", err)
 	}
-	nodes, err := kube.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	nodes, err := joined(ctx, kube, string(secret.Data[zonesNodes]))
 	if err != nil {
-		return nil, fmt.Errorf("the management cluster's nodes: %w", err)
+		return nil, err
 	}
 	var unknown []string
 	inZone := false
-	for i := range nodes.Items {
-		n := &nodes.Items[i]
+	for _, n := range nodes {
 		var host string
 		if host, err = hostOf(vms, n, log); err != nil {
 			return unknown, err
@@ -98,6 +100,25 @@ func FollowZones(ctx context.Context, kube kubernetes.Interface, read VMReader, 
 		return unknown, fmt.Errorf("no management VM runs on Proxmox VE node %s, which holds the backup volume", zone)
 	}
 	return unknown, nil
+}
+
+// joined reads the nodes of names, comma-separated, that are in the cluster.
+func joined(ctx context.Context, kube kubernetes.Interface, names string) ([]*corev1.Node, error) {
+	var nodes []*corev1.Node
+	for name := range strings.SplitSeq(names, ",") {
+		if name == "" {
+			continue
+		}
+		n, err := kube.CoreV1().Nodes().Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("management node %s: %w", name, err)
+		}
+		nodes = append(nodes, n)
+	}
+	return nodes, nil
 }
 
 // hostOf is the Proxmox VE node that n's VM runs on, empty when no readable VM has n's UUID.

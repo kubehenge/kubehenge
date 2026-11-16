@@ -473,7 +473,7 @@ func managementNode(name, uuid string) *corev1.Node {
 func zonesTokenSecret() *corev1.Secret {
 	return &corev1.Secret{
 		Name: backupstore.ZonesSecret, Namespace: backupstore.Namespace,
-		Data: map[string][]byte{"token": []byte("mgmt-management-zones@pve!zones=00000000-0000-0000-0000-000000000000")},
+		Data: map[string][]byte{"token": []byte("mgmt-management-zones@pve!zones=00000000-0000-0000-0000-000000000000"), "nodes": []byte("cp-0,cp-1,cp-2")},
 	}
 }
 
