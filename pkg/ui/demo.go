@@ -221,7 +221,7 @@ type demoState struct {
 func (s *Server) demoGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(demoHeader, "1")
-		signingIn := (r.URL.Path == "/api/session" || r.URL.Path == "/api/session/token") && r.Method != http.MethodGet
+		signingIn := r.URL.Path == "/api/session" && r.Method != http.MethodGet
 		if strings.HasPrefix(r.URL.Path, "/api/") && !signingIn && s.sessions.lookup(r) == nil {
 			var err error
 			if r, err = s.demoSignIn(w, r); err != nil {
