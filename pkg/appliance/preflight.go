@@ -134,6 +134,7 @@ func (s *Settings) Preflight(inv *Inventory, owned bool) Findings { //nolint:rev
 		s.checkAddressesFree(inv, &f)
 		s.checkNamesFree(inv, &f)
 		s.checkVMIDs(inv, &f)
+		s.checkWorkloadVMIDs(inv, &f)
 	}
 	s.checkAPIFamily(inv, &f)
 	s.checkAPIReach(inv, &f)
@@ -462,6 +463,19 @@ func (s *Settings) checkVMIDs(inv *Inventory, f *Findings) {
 	r := ChooseVMIDRange(inv.NextID, need)
 	if free := r.Free(inv.UsedVMIDs); free < need {
 		f.Errors = append(f.Errors, fmt.Sprintf("VM IDs %d to %d, the range Proxmox VE offers new VMs from, have %s free, and the management cluster needs %d. Widen next-id under Datacenter, Options.", r.Start, r.End-1, plural(max(free, 0), "ID"), need))
+	}
+}
+
+// checkWorkloadVMIDs refuses a site VM ID range that overlaps the range the management VMs' IDs are
+// drawn from, since a management VM could take an ID the clusters' VMs or the templates are meant for.
+func (s *Settings) checkWorkloadVMIDs(inv *Inventory, f *Findings) {
+	w := s.WorkloadVMIDRange
+	if w == nil {
+		return
+	}
+	r := ChooseVMIDRange(inv.NextID, s.NodeCount())
+	if w.Start < int64(r.End) && w.End >= int64(r.Start) {
+		f.Errors = append(f.Errors, fmt.Sprintf("VM ID range %s overlaps %d to %d, where the management VMs' IDs are drawn from. Choose IDs outside it, such as 100000-100999.", w, r.Start, r.End-1))
 	}
 }
 

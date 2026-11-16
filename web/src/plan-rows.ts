@@ -29,6 +29,7 @@ const settingLabels: Record<string, string[]> = {
   nodeCustomisation: ["Node customisation"],
   autoscaling: ["Autoscaling"],
   allowedNodes: ["Placement"],
+  vmIDRange: ["VM ID range"],
   namespaceLabels: ["Namespace labels"],
   autoscaler: ["Autoscaler"],
   backups: ["Backups"],

@@ -6,7 +6,7 @@ Kubehenge itself, the management cluster and the workload clusters are upgraded 
 2. **The management cluster** is Talos, Kubernetes, Cluster API and its providers, and Kubehenge's ClusterClasses and controller. Applying it again moves them to the versions the new release carries.
 3. **Workload clusters** upgrade Kubernetes by hand or automatically inside an upgrade window. Their nodes' operating system moves to each week's build of the VM templates inside the same window.
 
-Before 1.0.0, a minor release may change behaviour. Read its entry in the [changelog](changelog.md) first.
+Before 1.0.0, any release may change behaviour, a patch release included. Read its entry in the [changelog](changelog.md) first.
 
 ## Kubehenge
 

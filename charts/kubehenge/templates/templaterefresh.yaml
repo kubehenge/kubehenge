@@ -147,6 +147,9 @@ spec:
                 - --pool={{ .pool }}
                 - --bridge={{ .bridge }}
                 - --vlan={{ .vlan }}
+                {{- if $.Values.vmIDRange }}
+                - --vm-id-range={{ include "kubehenge.vmIDRange" $ }}
+                {{- end }}
                 {{- with .address }}
                 - --build-address={{ . }}
                 {{- end }}

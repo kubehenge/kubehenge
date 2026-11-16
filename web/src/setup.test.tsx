@@ -51,6 +51,7 @@ const form: SetupForm = {
   releaseMirrorCA: "",
   siteCA: "",
   timeZone: "",
+  vmIDRange: "",
   proxyURL: "",
   proxyUser: "",
   proxyPassword: "",
