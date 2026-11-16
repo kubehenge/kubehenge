@@ -8,6 +8,35 @@ import (
 	"testing"
 )
 
+// The commands that reach the interface have no sign-in of their own: kubehenge login is the one
+// way, and their help says so.
+func TestNoCommandHasASignInOfItsOwn(t *testing.T) {
+	t.Parallel()
+	for _, args := range [][]string{
+		{"appliance", "upgrades", "--user", "root@pam"},
+		{"appliance", "upgrades", "--password-file", "f"},
+		{"appliance", "upgrades", "--totp", "123456"},
+		{"appliance", "--cert", "c", "upgrades"},
+		{"appliance", "--address", "a", "upgrades"},
+		{"cluster", "list", "--url", "https://example.org"},
+		{"cluster", "list", "--ca", "f"},
+	} {
+		if _, err := run(t, args...); err == nil || !strings.Contains(err.Error(), "unknown flag") {
+			t.Errorf("%v: %v, want an unknown flag", args, err)
+		}
+	}
+	root := NewRoot()
+	for _, path := range [][]string{{"appliance"}, {"cluster"}} {
+		if sub, _, err := root.Find(path); err != nil || !strings.Contains(sub.Long, "kubehenge login") {
+			t.Errorf("%v does not say it acts as the user of kubehenge login: %v", path, err)
+		}
+	}
+	health, _, err := root.Find([]string{"appliance", "health"})
+	if err != nil || health.Flag("cert") == nil || health.Flag("address") == nil {
+		t.Errorf("health lacks the certificate and address it checks: %v", err)
+	}
+}
+
 // One login serves the appliance commands and the cluster commands alike, and is kept readable by
 // its owner alone.
 func TestOneLoginServesEveryCommand(t *testing.T) {
