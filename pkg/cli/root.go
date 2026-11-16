@@ -32,7 +32,7 @@ func NewRoot() *cobra.Command {
 
 	root.AddCommand(newTemplateCommand(&conn), newControllerCommand(&conn), newServeCommand(&conn),
 		newUpdateCommand(), newReleaseCommand(), newWaitCommand(), newManifestsCommand(), newEtcdSnapshotCommand(),
-		newApplianceCommand(), newDiagnoseCommand(), newTokenJobCommand(&conn), newCSIProxyCommand(&conn), newBackupStoreCommand(), newClusterCommand(&conn), newChartsCommand(), newInstallCommand())
+		newApplianceCommand(), newDiagnoseCommand(), newTokenJobCommand(&conn), newCSIProxyCommand(&conn), newBackupStoreCommand(), newClusterCommand(), newLoginCommand(), newLogoutCommand(), newChartsCommand(), newInstallCommand())
 	hideInternalCommands(root)
 	// Cobra adds its completion command only once it executes. Added here, it refuses unknown
 	// commands as the other groups do.

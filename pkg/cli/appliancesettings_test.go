@@ -24,7 +24,6 @@ func savedBody(f *fakeInterface) map[string]any {
 }
 
 func TestApplianceSettingsShowAndChangeTheSiteDefaults(t *testing.T) {
-	t.Parallel()
 	f := newFakeInterface(t)
 	out, err := run(t, f.args("admin@pve", "settings")...)
 	if err != nil || out != "Site CA     None\nTime zone   Europe/Zurich\n" {
@@ -42,7 +41,6 @@ func TestApplianceSettingsShowAndChangeTheSiteDefaults(t *testing.T) {
 }
 
 func TestApplianceSettingsRefuseWhatTheInterfaceRefuses(t *testing.T) {
-	t.Parallel()
 	f := newFakeInterface(t)
 	if _, err := run(t, f.args("admin@pve", "settings", "set")...); err == nil || !strings.Contains(err.Error(), "--site-ca-file or --time-zone") {
 		t.Errorf("nothing to set: %v", err)

@@ -3,8 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,33 +23,23 @@ import (
 
 	"github.com/kubehenge/kubehenge/pkg/appliance"
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
-	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
-// interfaceTimeout bounds each request to the interface.
-const interfaceTimeout = 2 * time.Minute
-
-// clusterOptions reach Kubehenge's interface as the Proxmox VE API token's user.
+// clusterOptions reach Kubehenge's interface as the user of "kubehenge login".
 type clusterOptions struct {
-	url, caFile, namespace, output string
-	token                          string
+	namespace, output string
 }
 
-func newClusterCommand(conn *pve.Config) *cobra.Command {
-	o := &clusterOptions{token: conn.Token}
+func newClusterCommand() *cobra.Command {
+	o := &clusterOptions{}
 	cmd := &cobra.Command{
 		Use:   "cluster",
 		Short: "List, create, scale, upgrade and delete clusters through Kubehenge's interface",
 		Long: `List, create, scale, upgrade and delete clusters through Kubehenge's interface.
 
-Every command calls the interface at --url as the user of the Proxmox VE API token in
-KUBEHENGE_PROXMOX_TOKEN (user@realm!name=secret). The token's privileges on each cluster's pool
-decide what it may do, as they do for a user signed in to the interface.`,
+Every command calls the interface as the user of "kubehenge login". That user's privileges on each
+cluster's pool decide what it may do, as they do for a user signed in to the interface.`,
 	}
-	flags := cmd.PersistentFlags()
-	flags.StringVar(&o.url, "url", os.Getenv("KUBEHENGE_URL"), "Kubehenge's interface, such as https://kubehenge.example.org (env KUBEHENGE_URL)")
-	flags.StringVar(&o.caFile, "ca", os.Getenv("KUBEHENGE_CA"),
-		"PEM file with the CA of the interface's certificate, else the system trust store (env KUBEHENGE_CA)")
 
 	list := &cobra.Command{
 		Use:   "list",
@@ -788,89 +776,24 @@ func (o *clusterOptions) clusterPath(ctx context.Context, name string) (string, 
 	return "/api/clusters/" + url.PathEscape(namespace) + "/" + url.PathEscape(name), nil
 }
 
-// call sends a request to the interface as the token's user and returns the answer's body, or the
+// call sends a request to the interface as the login's user and returns the answer's body, or the
 // interface's error.
 func (o *clusterOptions) call(ctx context.Context, method, path string, body any) ([]byte, error) {
-	res, err := o.open(ctx, method, path, body)
+	c, err := openInterface(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = res.Body.Close() }()
-	answer, err := io.ReadAll(res.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading the interface's answer: %w", err)
-	}
-	return answer, nil
+	return c.call(ctx, method, path, body, nil)
 }
 
 // open sends a request and returns the answer, its body unread, once it says the request went
 // through. The caller closes the body.
 func (o *clusterOptions) open(ctx context.Context, method, path string, body any) (*http.Response, error) {
-	if o.url == "" {
-		return nil, errors.New("give the interface's address with --url or KUBEHENGE_URL")
-	}
-	if o.token == "" {
-		return nil, errors.New("set KUBEHENGE_PROXMOX_TOKEN to a Proxmox VE API token, user@realm!name=secret")
-	}
-	client, err := o.httpClient()
+	c, err := openInterface(ctx)
 	if err != nil {
 		return nil, err
 	}
-	var payload io.Reader = http.NoBody
-	if body != nil {
-		raw, merr := json.Marshal(body)
-		if merr != nil {
-			return nil, fmt.Errorf("encoding the request: %w", merr)
-		}
-		payload = bytes.NewReader(raw)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimSuffix(o.url, "/")+path, payload)
-	if err != nil {
-		return nil, fmt.Errorf("the interface's address: %w", err)
-	}
-	req.Header.Set("Authorization", "PVEAPIToken="+o.token)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	res, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("reaching the interface: %w", err)
-	}
-	if res.StatusCode >= http.StatusBadRequest {
-		defer func() { _ = res.Body.Close() }()
-		answer, err := io.ReadAll(res.Body)
-		if err != nil {
-			return nil, fmt.Errorf("reading the interface's answer: %w", err)
-		}
-		var e struct {
-			Error string `json:"error"`
-		}
-		if json.Unmarshal(answer, &e) == nil && e.Error != "" {
-			return nil, fmt.Errorf("%s (%d)", e.Error, res.StatusCode)
-		}
-		return nil, fmt.Errorf("the interface answered %s", res.Status)
-	}
-	return res, nil
-}
-
-func (o *clusterOptions) httpClient() (*http.Client, error) {
-	defaults, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		return nil, errors.New("http.DefaultTransport has been replaced by one that cannot be cloned")
-	}
-	transport := defaults.Clone()
-	if o.caFile != "" {
-		pem, err := os.ReadFile(o.caFile)
-		if err != nil {
-			return nil, fmt.Errorf("--ca: %w", err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(pem) {
-			return nil, fmt.Errorf("--ca: no certificate in %s", o.caFile)
-		}
-		transport.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
-	}
-	return &http.Client{Transport: transport, Timeout: interfaceTimeout}, nil
+	return c.open(ctx, method, path, body)
 }
 
 func writeIndented(out io.Writer, body []byte) error {

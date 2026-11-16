@@ -8,4 +8,5 @@
 - **Remove Kubehenge** is disabled while clusters exist and says how many to delete.
 - Token, certificate and unreachable-node messages end on what to do.
 - `kubehenge --help` lists only the commands an administrator runs, and `cluster create --help` has examples and names the wizard's **Copy as YAML**.
+- `kubehenge login` signs in once for every command. `appliance` and `cluster` use it, and `kubehenge logout` ends it. The `--user`, `--password-file`, `--totp`, `--url`, `--ca`, `--cert` and `--address` flags and `KUBEHENGE_URL`, `KUBEHENGE_CA` and `KUBEHENGE_USER` are gone, and `cluster` no longer reads `KUBEHENGE_PROXMOX_TOKEN`.
 - The demo signs in again with any token after signing out, and answers the setup's final check.

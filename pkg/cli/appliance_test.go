@@ -33,6 +33,7 @@ type fakeInterface struct {
 
 	mu       sync.Mutex
 	user     string
+	token    string
 	bodies   map[string]map[string]any
 	signOuts int
 	setups   int
@@ -46,6 +47,12 @@ func newFakeInterface(t *testing.T) *fakeInterface {
 	mux.HandleFunc("DELETE /api/session", f.signedIn(func(w http.ResponseWriter, _ *http.Request) {
 		f.signOuts++
 		w.WriteHeader(http.StatusNoContent)
+	}))
+	mux.HandleFunc("GET /api/session", f.signedIn(func(w http.ResponseWriter, _ *http.Request) {
+		answer(w, http.StatusOK, `{}`)
+	}))
+	mux.HandleFunc("GET /api/clusters", f.signedIn(func(w http.ResponseWriter, _ *http.Request) {
+		answer(w, http.StatusOK, `{"clusters":[]}`)
 	}))
 	mux.HandleFunc("GET /api/appliance/upgrades", f.admin(func(w http.ResponseWriter, _ *http.Request) {
 		answer(w, http.StatusOK, `{"version":"0.1.0","available":["0.2.0"],"status":{"state":"failed","from":"0.1.0","to":"0.2.0",
@@ -172,11 +179,12 @@ func (f *fakeInterface) signIn(w http.ResponseWriter, r *http.Request) {
 // its body.
 func (f *fakeInterface) signedIn(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if c, err := r.Cookie("__Host-kubehenge-session"); err != nil || c.Value != "session" {
+		byToken := f.token != "" && r.Header.Get("Authorization") == "PVEAPIToken="+f.token
+		if c, err := r.Cookie("__Host-kubehenge-session"); !byToken && (err != nil || c.Value != "session") {
 			answer(w, http.StatusUnauthorized, `{"error":"not signed in"}`)
 			return
 		}
-		if r.Method != http.MethodGet && r.Header.Get("X-Kubehenge-Csrf") != fakeCSRF {
+		if !byToken && r.Method != http.MethodGet && r.Header.Get("X-Kubehenge-Csrf") != fakeCSRF {
 			answer(w, http.StatusForbidden, `{"error":"missing or wrong CSRF token"}`)
 			return
 		}
@@ -209,23 +217,36 @@ func answer(w http.ResponseWriter, status int, body string) {
 	_, _ = w.Write([]byte(body))
 }
 
-// args are the flags that reach the fake as user, the certificate and password in files.
-func (f *fakeInterface) args(user string, rest ...string) []string {
+// login runs kubehenge login against the fake as user, into a login file of its own that the
+// commands after it read. A test that logs in cannot run in parallel, since the file is named by the
+// environment.
+func (f *fakeInterface) login(user, password string) error {
 	f.t.Helper()
-	dir := f.t.TempDir()
-	cert := filepath.Join(dir, "tls.crt")
+	f.t.Setenv(loginFileEnv, filepath.Join(f.t.TempDir(), "login.json"))
+	_, err := run(f.t, "login", f.srv.URL, "--ca", f.certFile(), "--user", user, "--password-file", writeTemp(f.t, password))
+	return err
+}
+
+// certFile is a file holding the certificate the fake presents.
+func (f *fakeInterface) certFile() string {
+	f.t.Helper()
+	cert := filepath.Join(f.t.TempDir(), "tls.crt")
 	if err := os.WriteFile(cert, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: f.srv.Certificate().Raw}), 0o600); err != nil {
 		f.t.Fatal(err)
 	}
-	password := filepath.Join(dir, "password")
-	if err := os.WriteFile(password, []byte(fakePassword+"\n"), 0o600); err != nil {
+	return cert
+}
+
+// args are an appliance command's arguments, after a login as user.
+func (f *fakeInterface) args(user string, rest ...string) []string {
+	f.t.Helper()
+	if err := f.login(user, fakePassword); err != nil {
 		f.t.Fatal(err)
 	}
-	return append([]string{"appliance", "--cert", cert, "--address", f.srv.Listener.Addr().String(), "--user", user, "--password-file", password}, rest...)
+	return append([]string{"appliance"}, rest...)
 }
 
 func TestApplianceUpgradesSayARollBackAndWhy(t *testing.T) {
-	t.Parallel()
 	f := newFakeInterface(t)
 	out, err := run(t, f.args("admin@pve", "upgrades")...)
 	if err != nil {
@@ -240,8 +261,8 @@ func TestApplianceUpgradesSayARollBackAndWhy(t *testing.T) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
 	}
-	if f.signOuts != 1 {
-		t.Errorf("signed out %d times", f.signOuts)
+	if f.signOuts != 0 {
+		t.Errorf("a command signed out, so the login ended with it: %d", f.signOuts)
 	}
 	out, err = run(t, f.args("admin@pve", "upgrades", "--json")...)
 	if err != nil || !json.Valid([]byte(out)) || !strings.Contains(out, `"rolledBack":true`) {
@@ -257,27 +278,30 @@ func TestApplianceUpgradesSayARollBackAndWhy(t *testing.T) {
 
 // The command is refused with the interface's own words, by the interface's own checks.
 func TestApplianceRefusalsAreTheInterfaces(t *testing.T) {
-	t.Parallel()
 	f := newFakeInterface(t)
 	for _, c := range []struct {
+		user string
 		args []string
 		want string
 	}{
-		{f.args("user@pve", "etcd-backups"), "user@pve needs Sys.Modify on /"},
-		{f.args("user@pve", "upgrades"), "user@pve needs Sys.Modify on /"},
-		{f.args("admin@pve", "etcd-backups", "restore", "20270301T120000Z-v1.37.1.db.age", "--passphrase-file", writeTemp(t, "wrong")), "wrong passphrase"},
-		{f.args("admin@pve", "--password-file", writeTemp(t, "not it"), "etcd-backups"), "sign-in failed: check the user name, password and realm"},
-		{f.args("", "etcd-backups"), "--user is required (env KUBEHENGE_USER)"},
+		{"user@pve", []string{"etcd-backups"}, "user@pve needs Sys.Modify on / (403)"},
+		{"user@pve", []string{"upgrades"}, "user@pve needs Sys.Modify on / (403)"},
+		{"admin@pve", []string{"etcd-backups", "restore", "20270301T120000Z-v1.37.1.db.age", "--passphrase-file", writeTemp(t, "wrong")}, "wrong passphrase (403)"},
 	} {
-		if _, err := run(t, c.args...); err == nil || err.Error() != c.want {
-			t.Errorf("%v: %v, want %q", c.args[len(c.args)-1], err, c.want)
+		if _, err := run(t, f.args(c.user, c.args...)...); err == nil || err.Error() != c.want {
+			t.Errorf("%v: %v, want %q", c.args[0], err, c.want)
 		}
+	}
+	if err := f.login("admin@pve", "not it"); err == nil || err.Error() != "sign-in failed: check the user name, password and realm (401)" {
+		t.Errorf("a wrong password: %v", err)
+	}
+	if _, err := run(t, "appliance", "etcd-backups"); err == nil || err.Error() != notLoggedIn {
+		t.Errorf("without a login: %v", err)
 	}
 }
 
 // ready-for-reboot ends with an error, which is exit status 1. The error names the first blocker.
 func TestApplianceReadyForReboot(t *testing.T) {
-	t.Parallel()
 	f := newFakeInterface(t)
 	out, err := run(t, f.args("admin@pve", "ready-for-reboot", "--node", "pve1")...)
 	if err != nil || out != "Ready to reboot pve1\n" {
@@ -291,13 +315,12 @@ func TestApplianceReadyForReboot(t *testing.T) {
 	if !errors.Is(err, errNotReadyForReboot) || !strings.Contains(err.Error(), "management: etcd member kubehenge-cp-1 on pve2 is not healthy") {
 		t.Errorf("a member down: %v", err)
 	}
-	if _, err = run(t, f.args("user@pve", "ready-for-reboot")...); err == nil || err.Error() != "user@pve needs Sys.Modify on /" {
+	if _, err = run(t, f.args("user@pve", "ready-for-reboot")...); err == nil || err.Error() != "user@pve needs Sys.Modify on / (403)" {
 		t.Errorf("a user without privileges: %v", err)
 	}
 }
 
 func TestApplianceEtcdBackups(t *testing.T) {
-	t.Parallel()
 	f := newFakeInterface(t)
 	out, err := run(t, f.args("admin@pve", "etcd-backups")...)
 	if err != nil || !strings.Contains(out, "Schedule       every 6 h, newest 2 kept") || !strings.Contains(out, "Last snapshot  20270301T120000Z-v1.37.1.db.age") {
@@ -332,7 +355,6 @@ func TestApplianceEtcdBackups(t *testing.T) {
 
 // recover goes through the route the interface's button takes, with no snapshot to name.
 func TestApplianceEtcdBackupsRecover(t *testing.T) {
-	t.Parallel()
 	f := newFakeInterface(t)
 	if _, err := run(t, f.args("admin@pve", "etcd-backups", "recover", "20270301T120000Z-v1.37.1.db.age", "--passphrase-file", writeTemp(t, "right"))...); err == nil {
 		t.Error("recover took a snapshot's name")
@@ -381,12 +403,11 @@ func TestApplianceEtcdBackupsShowTheVolume(t *testing.T) {
 
 // take-over needs --overwrite and the passphrase, and says what the next apply does.
 func TestApplianceTakeOver(t *testing.T) {
-	t.Parallel()
 	f := newFakeInterface(t)
 	if _, err := run(t, f.args("admin@pve", "take-over", "--passphrase-file", writeTemp(t, "right"))...); err == nil || !strings.Contains(err.Error(), "Give --overwrite") {
 		t.Errorf("without --overwrite: %v", err)
 	}
-	if _, err := run(t, f.args("admin@pve", "take-over", "--overwrite", "--passphrase-file", writeTemp(t, "wrong"))...); err == nil || err.Error() != "wrong passphrase" {
+	if _, err := run(t, f.args("admin@pve", "take-over", "--overwrite", "--passphrase-file", writeTemp(t, "wrong"))...); err == nil || err.Error() != "wrong passphrase (403)" {
 		t.Errorf("wrong passphrase: %v", err)
 	}
 	out, err := run(t, f.args("admin@pve", "take-over", "--overwrite", "--passphrase-file", writeTemp(t, "right"))...)
@@ -397,7 +418,6 @@ func TestApplianceTakeOver(t *testing.T) {
 
 // The notification commands show each target's last sending, and a test that a target refused fails.
 func TestApplianceNotifications(t *testing.T) {
-	t.Parallel()
 	f := newFakeInterface(t)
 	out, err := run(t, f.args("admin@pve", "notifications")...)
 	for _, want := range []string{
@@ -413,13 +433,12 @@ func TestApplianceNotifications(t *testing.T) {
 	if err == nil || err.Error() != "Email did not take the test" || !strings.Contains(out, "Webhook  sent 2027-03-01T12:05:00Z: Kubehenge test") {
 		t.Errorf("test: %v\n%s", err, out)
 	}
-	if _, err := run(t, f.args("user@pve", "notifications", "test")...); err == nil || err.Error() != "user@pve needs Sys.Modify on /" {
+	if _, err := run(t, f.args("user@pve", "notifications", "test")...); err == nil || err.Error() != "user@pve needs Sys.Modify on / (403)" {
 		t.Errorf("test as user@pve: %v", err)
 	}
 }
 
 func TestApplianceActivity(t *testing.T) {
-	t.Parallel()
 	f := newFakeInterface(t)
 	out, err := run(t, f.args("admin@pve", "activity")...)
 	want := "2027-03-01T12:00:00Z  admin@pve    changed cluster            default/web  \n" +
