@@ -16,6 +16,11 @@ import (
 // raceFailures prints one error diagnostic for each letter of run, as a "race" apply reads them.
 func raceFailures(run string) {
 	const upid = "received an HTTP 500 response - Reason: got no worker upid - start worker failed"
+	const (
+		chart     = `module.management.helm_release.cluster_api_operator`
+		unreached = `cannot patch \"capi-operator-serving-cert\" with kind Certificate: Internal error occurred: failed calling webhook \"webhook.cert-manager.io\": failed to call webhook: Post \"https://cert-manager-webhook.cert-manager.svc:443/validate?timeout=30s\": dial tcp 10.99.189.42:443: connect: `
+		refused   = `cannot patch \"capi-operator-selfsigned-issuer\" with kind Issuer: admission webhook \"webhook.cert-manager.io\" denied the request: spec: Required value`
+	)
 	for _, c := range run {
 		summary, address, detail := "Error downloading file from url", `module.management.proxmox_download_file.talos[\"pve\"]`, upid
 		switch c {
@@ -24,11 +29,15 @@ func raceFailures(run string) {
 		case 'n':
 			detail = "Could not download file, unexpected error: 404 Not Found"
 		case 'w':
-			summary, address = "Error upgrading chart", `module.management.helm_release.cluster_api_operator`
-			detail = `Upgrade failed: cannot patch \"capi-operator-serving-cert\" with kind Certificate: Internal error occurred: failed calling webhook \"webhook.cert-manager.io\": failed to call webhook: Post \"https://cert-manager-webhook.cert-manager.svc:443/validate?timeout=30s\": dial tcp 10.99.189.42:443: connect: no route to host`
+			summary, address, detail = "Error upgrading chart", chart, "Upgrade failed: "+unreached+"no route to host"
+		case 'c':
+			summary, address, detail = "Error upgrading chart", chart, "Upgrade failed: "+unreached+"connection refused"
 		case 'r':
-			summary, address = "Error upgrading chart", `module.management.helm_release.cluster_api_operator`
-			detail = `Upgrade failed: cannot patch \"capi-operator-selfsigned-issuer\" with kind Issuer: admission webhook \"webhook.cert-manager.io\" denied the request: spec: Required value`
+			summary, address, detail = "Error upgrading chart", chart, "Upgrade failed: "+refused
+		case 'j':
+			summary, address, detail = "Error upgrading chart", chart, "Upgrade failed: "+unreached+"no route to host && "+refused
+		case 'k':
+			summary, address, detail = "Error upgrading chart", chart, `Kubernetes cluster unreachable: Get \"https://172.20.99.10:6443/version\": dial tcp 172.20.99.10:6443: connect: connection refused`
 		}
 		fmt.Printf(`{"@level":"error","@message":"Error: %s","type":"diagnostic","diagnostic":{"summary":"%s","detail":"%s","address":"%s"}}`+"\n", summary, summary, detail, address)
 	}
