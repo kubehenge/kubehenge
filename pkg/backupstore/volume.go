@@ -14,10 +14,10 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/util/retry"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
@@ -119,6 +119,22 @@ func (v *Volume) Done(ctx context.Context, holder string) error {
 	if err != nil {
 		return err
 	}
+	// The scale holds only while the Deployment is as read, so that a holder asking in between
+	// keeps the store awake. Any other change, as of its status, is read again.
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error { //nolint:wrapcheck // rest says what failed
+		if d == nil {
+			if d, err = v.Kube.AppsV1().Deployments(Namespace).Get(ctx, Service, metav1.GetOptions{}); err != nil {
+				return fmt.Errorf("the backup volume's store: %w", err)
+			}
+		}
+		read := d
+		d = nil
+		return v.rest(ctx, read)
+	})
+}
+
+// rest scales the store to its idle replicas as d reads it, unless a holder's request is in force.
+func (v *Volume) rest(ctx context.Context, d *appsv1.Deployment) error {
 	idle, ok := d.Annotations[IdleReplicas]
 	if !ok || WakeRequested(d, v.now()) {
 		return nil
@@ -130,12 +146,7 @@ func (v *Volume) Done(ctx context.Context, holder string) error {
 	if d.Spec.Replicas != nil && int64(*d.Spec.Replicas) == n {
 		return nil
 	}
-	// A holder that asked since this request was taken away changed the Deployment, and its wake
-	// holds: the conflict leaves the store as it is.
-	if serr := v.scale(ctx, d.ResourceVersion, n); serr != nil && !apierrors.IsConflict(serr) {
-		return serr
-	}
-	return nil
+	return v.scale(ctx, d.ResourceVersion, n)
 }
 
 // start starts the sleeping store. Its pod must land on a node VM on the Proxmox VE node that holds

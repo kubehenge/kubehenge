@@ -9,9 +9,12 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
@@ -110,6 +113,56 @@ func TestTheControllerWakesTheVolume(t *testing.T) {
 	}
 	if d, _ = deps.Get(ctx, Service, metav1.GetOptions{}); WakeRequested(d, now) || *d.Spec.Replicas != 0 {
 		t.Fatalf("with no holder left the store keeps %d replicas and the annotations %v", *d.Spec.Replicas, d.Annotations)
+	}
+}
+
+// The store's status changes between a Done's read and its scale, and the scale conflicts. Done
+// reads the store again and lets it sleep. A holder that asked in between keeps it awake.
+func TestDoneReadsTheStoreAgainOnAConflict(t *testing.T) {
+	t.Parallel()
+	for name, asks := range map[string]bool{"a status write": false, "another holder's request": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+			kube := fake.NewClientset(sleepingStore()...)
+			v := &Volume{Kube: kube, VMs: onPVE1, Now: func() time.Time { return now }}
+			ctx := t.Context()
+			if err := v.Wake(ctx, "snapshots of a/web"); !errors.Is(err, provisioner.ErrVolumeAsleep) {
+				t.Fatal(err)
+			}
+			conflicted := false
+			kube.PrependReactor("patch", "deployments", func(action k8stesting.Action) (bool, runtime.Object, error) {
+				if action.GetSubresource() != "scale" || conflicted {
+					return false, nil, nil
+				}
+				conflicted = true
+				if asks {
+					gvr := appsv1.SchemeGroupVersion.WithResource("deployments")
+					obj, err := kube.Tracker().Get(gvr, Namespace, Service)
+					d, ok := obj.(*appsv1.Deployment)
+					if err != nil || !ok {
+						t.Errorf("the tracker holds %T: %v", obj, err)
+						return false, nil, nil
+					}
+					d = d.DeepCopy()
+					d.Annotations[WakeRequestKey(WakeRequestAnnotation, "restore of b/db")] = now.Format(time.RFC3339)
+					if err = kube.Tracker().Update(gvr, d, Namespace); err != nil {
+						t.Error(err)
+					}
+				}
+				return true, nil, apierrors.NewConflict(schema.GroupResource{Group: "apps", Resource: "deployments"}, Service, errors.New("changed"))
+			})
+			if err := v.Done(ctx, "snapshots of a/web"); err != nil {
+				t.Fatal(err)
+			}
+			want := int32(0)
+			if asks {
+				want = 1
+			}
+			if got := replicasOf(t, kube); !conflicted || got != want {
+				t.Fatalf("after a conflict the store has %d replicas, want %d", got, want)
+			}
+		})
 	}
 }
 

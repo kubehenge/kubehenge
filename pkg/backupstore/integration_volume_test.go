@@ -217,9 +217,8 @@ func TestIntegrationInterfaceWakesTheVolume(t *testing.T) { //nolint:paralleltes
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if _, err = admin.CoreV1().Secrets(Namespace).Update(ctx, &corev1.Secret{
-		Name: ZonesSecret, Namespace: Namespace, Data: map[string][]byte{"token": []byte("zones")},
-	}, metav1.UpdateOptions{}); err != nil {
+	zones := &corev1.Secret{Name: ZonesSecret, Namespace: Namespace, Data: map[string][]byte{"token": []byte("zones")}}
+	if _, err = admin.CoreV1().Secrets(Namespace).Update(ctx, zones, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	node := &corev1.Node{
