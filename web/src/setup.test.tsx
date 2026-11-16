@@ -750,20 +750,19 @@ describe("setup", () => {
 
   it("preselects up to three Proxmox VE nodes that answer", async () => {
     const others = ["pve2", "pve3", "pve4"];
-    fakeServer({
+    const routes: Record<string, Route> = {
       ...administrator,
       ...oneNode,
       "GET /api/setup": { body: { appliance: true, ready: false, allowed: true } },
       "GET /api/proxmox/nodes": {
         body: [...["pve1", ...others].map((node) => ({ node, online: true })), { node: "pve5", online: false }],
       },
-      ...Object.fromEntries(
-        others.flatMap((node) => [
-          [`GET /api/proxmox/nodes/${node}/bridges`, { body: [] }],
-          [`GET /api/proxmox/nodes/${node}/dns`, { body: { servers: [] } }],
-        ]),
-      ),
-    });
+    };
+    for (const node of others) {
+      routes[`GET /api/proxmox/nodes/${node}/bridges`] = { body: [] };
+      routes[`GET /api/proxmox/nodes/${node}/dns`] = { body: { servers: [] } };
+    }
+    fakeServer(routes);
     render(<App />);
     const first = await screen.findByRole("checkbox", { name: "pve1" });
     await waitFor(() => expect(first).toBeChecked());
