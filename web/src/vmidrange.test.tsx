@@ -6,7 +6,7 @@ import { App } from "./App";
 import { fieldProblems, newForm, request, summary } from "./create-form";
 import { applyStaged, fakeServer } from "./fake-server";
 import type { ClusterClass } from "./types";
-import { vmIDRangeOf, vmIDRangeProblem, vmIDRangeText } from "./VmidRange";
+import { VMIDRangeStep, vmIDRangeOf, vmIDRangeProblem, vmIDRangeText } from "./VmidRange";
 
 const cluster = {
   namespace: "clusters",
@@ -74,6 +74,27 @@ describe("the create wizard's VM ID range", () => {
     expect(row(cls, "")).toBe("Next free ID");
     expect(row(sited, "")).toBe("20000-20999 (site)");
     expect(row(sited, "10000-10999")).toBe("10000-10999");
+  });
+});
+
+describe("the wizard's VM ID range field", () => {
+  it("shows the field with the site's range as its hint, only for a class that has the variable", async () => {
+    const user = userEvent.setup({ delay: null });
+    const bare = { ...cls, variables: cls.variables.filter((v) => v.name !== "vmIDRange") };
+    const typed: string[] = [];
+    const onChange = (r: string): void => {
+      typed.push(r);
+    };
+    const { rerender } = render(<VMIDRangeStep cls={bare} value="" onChange={onChange} problem={undefined} />);
+    expect(screen.queryByLabelText("VM ID range")).not.toBeInTheDocument();
+    rerender(<VMIDRangeStep cls={sited} value="" onChange={onChange} problem="Holds 3 IDs" />);
+    const field = screen.getByLabelText("VM ID range");
+    expect(field.closest(".field")).toHaveTextContent("Empty takes the site's, 20000-20999");
+    expect(field.closest(".field")).toHaveTextContent("Holds 3 IDs");
+    await user.type(field, "7");
+    expect(typed).toStrictEqual(["7"]);
+    rerender(<VMIDRangeStep cls={cls} value="" onChange={onChange} problem={undefined} />);
+    expect(screen.getByLabelText("VM ID range").closest(".field")).toHaveTextContent("Empty takes the next free ID");
   });
 });
 
