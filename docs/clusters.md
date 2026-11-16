@@ -120,11 +120,13 @@ Kubehenge sets both ranges on every cluster it creates. It takes those you give,
 
 Every node's VM and interface get the Proxmox VE firewall, on by default. It drops inbound traffic that no rule below accepts.
 
-- **Datacenter firewall.** The VMs' rules act only while it is on (Datacenter, Firewall, Options). Kubehenge never turns it on. While it is off, the wizard, the cluster's options, `kubehenge cluster list` and the cluster's `FirewallInactive` condition say so, and a warning event is recorded. Where the state cannot be read, the condition is Unknown, and the wizard shows the state as unknown. Its reason is `SysAuditMissing` when the token lacks Sys.Audit on `/`, and `TokenRefused` when Proxmox VE refuses the token itself. It is `ProxmoxUnreachable` after three reads in a row get no answer. A cluster with its firewall off gets neither. Nothing is held for it.
+- **Datacenter firewall.** The VMs' rules act only while it is on (Datacenter, Firewall, Options). Kubehenge never turns it on. While it is off, the wizard, the cluster's options, `kubehenge cluster list` and the `FirewallInactive` condition say so, and a warning event is recorded. A cluster whose own firewall is off gets no condition.
 - **Off.** Clear **Firewall** in the wizard or the cluster's options, or set `firewall.enabled: false`. The nodes then get no VM firewall.
 - **Serving ports closed.** Clear **Serving ports open**, or set `firewall.servingPorts: false`. The nodes then accept only the cluster's own traffic, the management side, the security groups and the further ports.
 - **When.** Each VM's rules are written before it first starts. Switching the firewall, its serving ports, its further ports or its groups replaces every node, one at a time.
 - **Privileges.** The rules and IPSets live on each VM. They need no right beyond those the controller holds on its VMs.
+
+Where the datacenter firewall's state cannot be read, the `FirewallInactive` condition is Unknown and the wizard shows the state as unknown. The reason is `SysAuditMissing` when the token lacks Sys.Audit on `/`, `TokenRefused` when Proxmox VE refuses the token itself, and `ProxmoxUnreachable` after three reads in a row get no answer.
 
 ##### What the firewall accepts
 
@@ -155,7 +157,7 @@ Without `--enable 1`, Proxmox VE stores the rule switched off. In the web interf
 
 ##### Lockout check
 
-Security groups act only with the datacenter firewall on, which also turns on each Proxmox VE node's own firewall. That one lets the API in only from the node's local network and the `management` IPSet. So the controller refuses security groups that would cut the appliance or the management cluster off the API, and names the addresses to add to the IPSet. It checks them also while the datacenter firewall is off, since they are named to act. A firewall without groups is never refused, since the VMs' rules leave the nodes' own firewall alone. The setup's pre-flight does the same.
+Security groups act only with the datacenter firewall on, which also turns on each Proxmox VE node's own firewall. That one lets the API in only from the node's local network and the `management` IPSet. So the controller refuses security groups that would cut the appliance or the management cluster off the API, and names the addresses to add to the IPSet. It checks them also while the datacenter firewall is off, since they act once it is on. A firewall without groups is never refused, since the VMs' rules leave the nodes' own firewall alone. The setup check does the same.
 
 Both of Proxmox VE's firewalls read what Kubehenge writes: the default one on iptables and the one on nftables (Host, Firewall, Options, nftables). The end-to-end tests run the nftables one.
 
@@ -452,7 +454,7 @@ Kubehenge copies the credential into the Secret `kubehenge-log-outputs` in the n
 
 Velero backs up every namespace but Kubernetes' own and the add-ons', with the data in its pods' volumes. It writes to one of the S3 stores an administrator set ([install-settings.md](install-settings.md#backup-targets)). The cluster writes under a folder of its own, encrypted with keys of its own ([Back up and restore](#back-up-and-restore)). Backups run daily at 02:00 by default, each kept for 7 days.
 
-Choose the target, the schedule, its time zone, how long each backup is kept and the access key Velero signs in with. Storing that key needs `Sys.Modify` on the workload pool. Without it, backups wait until someone holding that stores one. The key an administrator stored for every cluster never goes into a cluster. Without any target, the choice is off and says so. After a create that was cut short, a new create of that name with a key works once 30 seconds have passed.
+Choose the target, the schedule, its time zone, how long each backup is kept and the access key Velero signs in with. Storing that key needs `Sys.Modify` on the workload pool. Without it, backups wait until someone holding that stores one. The key an administrator stored for every cluster never goes into a cluster. Without any target, the choice is off and says so.
 
 #### etcd snapshot settings
 
@@ -879,7 +881,7 @@ A network that reaches few hosts needs four settings. Each works on every distri
 | Time servers | `network.ntp` | NTP servers, with the hypervisor's clock as the fallback. |
 | Proxy | `egressProxy` | The proxy for the container runtime, the installers of RKE2 and k3s, and the distribution's service. The add-ons use it too. |
 | Registry mirrors | `registryMirrors` | Mirrors that images are pulled from before the registry itself. |
-| Trusted CAs | `trustedCAs` | Authorities in the node OS's trust store, which the container runtime and the distribution read. A cluster that sets none gets the management cluster's site CA (`siteCA` in the chart values, **Site CA** in Setup), `kubehenge appliance settings set --site-ca-file` from the command line. |
+| Trusted CAs | `trustedCAs` | Authorities in the node OS's trust store, which the container runtime and the distribution read. A cluster that sets none gets the management cluster's site CA . Set it as `siteCA` in the chart values, **Site CA** in Setup or `kubehenge appliance settings set --site-ca-file`. |
 
 Where each lands on a node:
 
@@ -1450,9 +1452,9 @@ Kubehenge keeps a worker on every node that holds the cluster's bound volumes. I
 
 - **Replacements:** in an upgrade, a node image refresh or a health-check repair, a new worker goes to a node whose volumes would be left without a worker. That is usually its predecessor's node.
 - **More workers:** when a pool grows, new workers go to the nodes with volumes and no worker first.
-- **A node that goes offline** before such a worker's VM is made is let go of within one placement round, and the worker goes to the cluster's other nodes.
+- **A node that goes offline** before such a worker's VM is made loses the worker to another node.
 - **No workers:** a cluster that asks for no workers runs its pods on its control planes, which count instead.
-- **Shared storage** has no such limit, and nothing changes there.
+- **Shared storage** has no such limit.
 
 When a volume's node has no worker, the cluster's `VolumesWithoutWorker` condition names the volumes and the fix. `kubectl describe cluster` shows it.
 
@@ -1708,19 +1710,25 @@ Every cluster has etcd snapshots on by default. Kubehenge's controller copies th
 
 ### On the backup volume
 
-Without a target, snapshots go to `clusters/<namespace>.<name>/etcd` on the backup volume (`kubehenge-system/kubehenge-backups`), encrypted with age as in a bucket. A bucket target keeps a cluster's snapshots alone, and the volume holds no copy of them. A bucket is the place for copies off the management cluster's storage.
+Without a target, snapshots go to `clusters/<namespace>.<name>/etcd` on the backup volume (`kubehenge-system/kubehenge-backups`), encrypted with age as in a bucket. A cluster with a bucket target has its snapshots in the bucket only. Use a bucket to keep copies off the management cluster's storage.
 
-A snapshot that would leave less than a tenth of the volume free is refused. The condition `EtcdSnapshotSucceeded` then reads `VolumeFull` with the room left. Lower `keep`, move the cluster to a bucket target, or grow the volume.
+A snapshot that would leave less than a tenth of the volume free is refused. The condition `EtcdSnapshotSucceeded` then reads `VolumeFull` with the room left. Lower `keep`, move the cluster to a bucket target, or grow the volume (`backup_volume.size_gb`, [install-settings.md](install-settings.md#module-variables)).
 
-On a node's own storage the volume sleeps between backups. The controller asks for it, and the appliance wakes it within a minute. Until then the condition reads `WaitingForVolume`.
+On node-local storage the volume is detached between backups. A snapshot waits up to a minute for it to attach, and the condition reads `WaitingForVolume` meanwhile.
 
-Every distribution restores from the volume through the interface, kubectl and the CLI. For kubeadm, RKE2 and k3s the controller first checks the snapshot whole, as `etcdutl snapshot status` does. It then starts a pod of Kubehenge's image on the first control-plane node and streams the snapshot to it through the cluster's API server. Only once the node holds it in full and checked does anything stop, and the restore runs as from a bucket. A snapshot that fails a check, or a stream cut short, leaves every node as it was. The node needs three times the snapshot's size free under `/var/lib/kubehenge-restore`.
+Every distribution restores from the volume through the interface, kubectl and the CLI. A snapshot that fails its check, or a transfer cut short, leaves every node as it was. On kubeadm, RKE2 and k3s the first control-plane node needs three times the snapshot's size free under `/var/lib/kubehenge-restore`. [architecture.md](architecture.md#backup-volume) says how the snapshot gets there.
 
-Where the API server does not answer, most often after etcd lost its quorum, the controller first stops every control plane. It resets etcd on the first node to that node alone on its own data, so its API server answers, and streams the snapshot in. This needs the first node's own etcd data to be readable. Should the restore fail after that reset, etcd runs on the first node alone, the other control planes stay stopped, and the cluster carries the condition `EtcdOnOneNode`. Restore again from the same snapshot: the API server now answers, so the snapshot streams in before anything stops, and the other control planes are made again. `kubehenge cluster etcd-snapshots` lists, takes, downloads and restores snapshots from the CLI. The distributions' own upload needs a bucket target.
+Where the API server does not answer, most often after etcd lost its quorum, the controller first stops every control plane. It resets etcd on the first node to that node alone on its own data, so its API server answers, and streams the snapshot in. This needs the first node's own etcd data to be readable. Should the restore fail after that reset, etcd runs on the first node alone, the other control planes stay stopped, and the cluster carries the condition `EtcdOnOneNode`. Restore again from the same snapshot. The other control planes are then made again.
 
-Removing a cluster keeps its snapshots on the volume and its backup keys. Tick **Delete volume snapshots** in the remove dialog, or add `--delete-etcd-snapshots` to `kubehenge cluster delete`. With kubectl or GitOps, set the annotation `kubehenge.dev/delete-etcd-snapshots: "true"` before the delete. The Backups view of any cluster in the same namespace lists the removed clusters whose snapshots are kept, under **Removed clusters**. Their **Delete** takes the snapshots and the backup keys once the name is typed. From the CLI, `kubehenge cluster removed-etcd-snapshots list -n NAMESPACE` lists them, and `kubehenge cluster removed-etcd-snapshots delete NAME -n NAMESPACE --yes` deletes them.
+`kubehenge cluster etcd-snapshots` lists, takes, downloads and restores snapshots from the CLI. The distributions' own upload needs a bucket target.
 
-Deleting a cluster keeps its snapshots on the volume, as in a bucket.
+Deleting a cluster keeps its snapshots on the volume and its backup keys, as in a bucket. Three ways delete them too:
+
+- Tick **Delete etcd snapshots** in the Delete cluster dialog.
+- Add `--delete-etcd-snapshots` to `kubehenge cluster delete`.
+- With kubectl or GitOps, set the annotation `kubehenge.dev/delete-etcd-snapshots: "true"` before the delete.
+
+The Backups view of any cluster in the same namespace lists the deleted clusters whose snapshots are kept, under **Deleted clusters**. Their **Delete** takes the snapshots and the backup keys once the name is typed. From the CLI, `kubehenge cluster removed-etcd-snapshots list -n NAMESPACE` lists them, and `kubehenge cluster removed-etcd-snapshots delete NAME -n NAMESPACE --yes` deletes them.
 
 ### Schedule and layout
 
@@ -2164,7 +2172,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `csi` | no | `datastoreAllocate` (default false) runs the CSI plugin's newest release, with `Datastore.Allocate` for the cluster's token on its storage ([above](#persistent-volumes)). It needs a management cluster that lets clusters choose it and a storage of the cluster's own. `volumeSnapshots` (default false) takes volume snapshots, with the cluster's own volumes copied with its own token ([above](#volume-snapshots)), on storage local to each node. |
 | `hostOutageGraceMinutes` | no | Minutes to hold the replacement of machines whose host is offline or in HA maintenance, or whose storage is unavailable ([troubleshooting.md](troubleshooting.md#machines-whose-replacement-waits-for-a-host)). Default 30. 0 waits for the host for ever, otherwise 5 to 10080. A server that needs longer to start than 30 minutes needs more. A host removed from the Proxmox VE cluster ends the wait at once. Set in the wizard's **Machines** step, in **Options**, or with `kubehenge cluster create --host-outage-grace-minutes` and `kubehenge cluster update NAME --host-outage-grace-minutes`. |
 | `ccm` | no | `haGroups` has the cloud controller manager label the nodes with their Proxmox VE HA groups, with `Sys.Audit` on `/` for the cluster's token ([above](#machines)). Default true, unless the management cluster switched the labels off for every cluster. Then it may not be true. |
-| `vmIDRange` | no | The VM IDs the cluster's VMs take: `start` and `end`, both included, within 100 to 999999999. It has to hold the nodes at most and a spare for the control plane and each pool, which roll one machine beyond their size, and the same for every other cluster on that range, after the templates already in it. A range is either the same as the site's range and every other cluster's range it touches, or clear of them: a partial overlap is refused. A scale or a new cluster that the range cannot hold is refused. A new cluster that sets none takes the site's **VM ID range**, else Proxmox VE's next free ID. Empty in **Options**, or removed in kubectl, takes the next free ID. A machine that finds no free ID fails for good and the cluster has a `VMIDRangeFull` condition that names the range. Widen the range, then delete the failed machine so Cluster API makes it again. Changing the range replaces every node. Set in the wizard's **Machines** step or in **Options**. |
+| `vmIDRange` | no | The VM IDs the cluster's VMs take, `start` and `end` both included, within 100 to 999999999. Unset, the cluster takes the site's **VM ID range**, else Proxmox VE's next free ID. Changing it replaces every node ([VM ID range](#vm-id-range)). Set in the wizard's **Machines** step or in **Options**. |
 | `controlPlaneMachine`, `workerMachine` | no | `cores` (default 2), `memoryMiB` (a multiple of 8, default 4096 for the control plane and 6144 for workers, with the minimums [above](#machines)), `diskGiB` (default 30 for the control plane and 40 for workers, at least 20). A disk only grows. |
 | `cni` | kubeadm only | kubeadm: `cilium` or `calico`. RKE2: `canal` (default), `calico` or `cilium`. k3s and Talos: `flannel` (default), `cilium` or `calico`. The class refuses a change once the cluster exists. |
 | `nodeOS` | no | kubeadm, RKE2 and k3s: `family` and `release`, a node OS Kubehenge builds templates of ([templates.md](templates.md#node-oses)). Default AlmaLinux 10. `fips: true` boots the nodes in [FIPS mode](templates.md#fips-mode), on RKE2 with `cni` canal alone. kubeadm and k3s refuse it. Changing it replaces every node ([above](#change-settings)). |
@@ -2176,7 +2184,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `monitoring` | no | `enabled` (default false), which installs cert-manager too ([above](#add-ons)). `hostname`, to serve Grafana through the cluster's ingress controller. `tlsSecret`, a Secret in the `monitoring` namespace with the certificate for `hostname`. When unset, as for `headlamp`. `alertReceivers`, `remoteWrite` and `externalAlertmanagers`, with their secrets as stored credentials ([above](#monitoring-alerts-and-remote-write)). |
 | `logs` | no | Loki and Grafana Alloy, which need `monitoring` ([above](#add-ons)). `enabled` (default false). `collector`, `node` (default) or `api`. `retentionDays` (1 to 366, default 7). `sizeGiB`, Loki's volume (1 to 1024, default 10), which only grows. `outputs`, up to 4 more destinations ([above](#add-ons)). Each has `name`, `kind` (`syslog`, `otlp` or `loki`), `endpoint`, optional `caBundle` (PEM), `streams` (a list of `containers`, `events`, `nodes` and `audit`, default all) and `auth` (`none`, `basic` or `bearer`, default `none`). |
 | `backups` | no | Velero ([above](#back-up-and-restore)). `enabled` (default false). `target`, the name of one of the administrator's targets, needed while `enabled`. `schedule`, a cron expression of five fields or a descriptor such as `@weekly` (default `0 2 * * *`). `timeZone` (default the site time zone, else `UTC`). `retentionDays` (1 to 3650, default 7). `volumes`, `all` (default) or `annotated`, only the volumes a pod names in its `backup.velero.io/backup-volumes` annotation. `existingSecret`, a Secret of your own in the cluster's `velero` namespace. It holds the store's keys as Velero's credentials file under the key `cloud`. It replaces the credential stored through the interface for the cluster, or else for every cluster. Kubehenge creates the namespace, and switching backups off deletes it with the Secret. `readFrom`, up to 10 clusters of the same namespace backing up to the same target whose backups this one lists to restore ([Restore into another cluster](#restore-into-another-cluster)). |
-| `etcdSnapshots` | no | etcd snapshots ([above](#etcd-snapshots)). `enabled` (default false). `target`, the name of one of the administrator's targets, needed while `enabled`. `schedule`, as for `backups` (default `0 */12 * * *`). `timeZone` (default the site time zone, else `UTC`). `keep`, the number of snapshots kept (1 to 1000, default 14). `distributionUpload` (default false), on RKE2 and k3s only and while `enabled`, the distribution's own upload ([above](#the-distributions-own-upload)). They are written with the credential stored through the interface for the cluster, or else for every cluster. While `backups` is enabled too, `target` must be the backups' target. |
+| `etcdSnapshots` | no | etcd snapshots ([above](#etcd-snapshots)). `enabled` (default true). `target`, the name of one of the administrator's targets. Without one the snapshots go to the management cluster's backup volume. `schedule`, as for `backups` (default `0 */12 * * *`). `timeZone` (default the site time zone, else `UTC`). `keep`, the number of snapshots kept (1 to 1000, default 14). `distributionUpload` (default false), on RKE2 and k3s only and while `enabled`, with a `target`, the distribution's own upload ([above](#the-distributions-own-upload)). They are written with the credential stored through the interface for the cluster, or else for every cluster. While `backups` is enabled too, `target` must be the backups' target. |
 | `podSecurity` | no | `admission`, the level Pod Security Admission enforces in every namespace that labels none of its own: `privileged`, `baseline` (default) or `restricted`. Changing it replaces the control-plane machines. `kyverno`, the level Kyverno enforces in every namespace: `off` (default), `baseline` or `restricted` ([above](#add-ons)). |
 | `istio` | no | `enabled` (default false): Istio in ambient mode ([above](#add-ons)). |
 | `namespaceLabels` | no | Up to 20 labels, as key and value, put on the namespaces the add-ons install into ([above](#add-ons-and-your-policies)). Keys and values follow Kubernetes' label syntax. The webhook refuses `kubernetes.io/metadata.name`. |
@@ -2195,6 +2203,12 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `upgrades` | no | Automatic Kubernetes upgrades. `mode` (`off`, `patch` or `minor`, default `off`) and `window` ([upgrading.md](upgrading.md#automatically-inside-a-window)). `nodeImages` (default true) sets whether the nodes move to new builds of their VM template in the window ([above](#node-image-refresh)). On Talos it sets whether they move to new Talos patch releases ([above](#talos-upgrades)). |
 | `talosVersion` | Talos only | The Talos release the nodes run, such as `v1.14.4`. Changing it upgrades them in place ([above](#talos-upgrades)). |
 | `autoscaler` | no | How the cluster autoscaler sizes the autoscaled pools ([above](#autoscaling)). `placement`, `management` (default) or `workload`. `expander`, `least-waste` (default), `most-pods` or `random`. `scaleDownDelayAfterAddMinutes` and `scaleDownUnneededMinutes`, 1 to 1440, default 10. |
+
+#### VM ID range
+
+The range needs one ID per node at the cluster's largest size, and one spare for the control plane and for each pool, which roll one machine beyond their size. Clusters that share a range need that many each, beside the templates already in it. Two ranges are either the same or do not overlap, and a partial overlap is refused. A scale or a new cluster that the range cannot hold is refused.
+
+Empty in **Options**, or removed in kubectl, takes the next free ID. A machine that finds no free ID fails for good, and the cluster has a `VMIDRangeFull` condition that names the range. Widen the range, then delete the failed machine so Cluster API makes it again.
 
 ### Day two
 

@@ -1,6 +1,6 @@
-### Changed
+### Before you upgrade
 
-- A Kubehenge cluster is deleted only once it carries `kubehenge.dev/allow-deletion`, which the interface and the CLI set. kubectl, GitOps prunes and deleted namespaces meet the same guard.
+- `kubectl delete`, a GitOps prune and a namespace delete are refused until the cluster carries the annotation `kubehenge.dev/allow-deletion` ([clusters.md](clusters.md#delete-with-kubectl-or-gitops)). The interface and the CLI set it.
 
 ### Fixed
 

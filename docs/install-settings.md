@@ -1,6 +1,6 @@
 # Setup settings in depth
 
-What each opt-in setting of the management cluster grants and risks, and the fields of a backup target. Every setting has a matching module variable ([module variables](#module-variables)). Backups, notifications and the module's variables are here too.
+What each opt-in setting of the management cluster grants and risks. Backups, notifications and the module's variables are here too.
 
 ## Proxmox VE HA
 
@@ -164,7 +164,7 @@ The setting creates a group, `<name>-clusters-audit`, with `Sys.Audit` on `/` wi
 
 ### Turning the labels off
 
-Unticking **Add HA rule labels** in the setup, or `cluster_sys_audit = false`, removes the group and with it every cluster's `Sys.Audit` on `/`. New clusters go without the labels. The cloud controller manager logs a permission error for each node every few minutes ([troubleshooting.md](troubleshooting.md)).
+Unticking **Add HA rule labels** in the setup, or `cluster_sys_audit = false`, removes the group and with it every cluster's `Sys.Audit` on `/`. New clusters go without the labels. The cloud controller manager logs a permission error for each node every few minutes ([troubleshooting.md](troubleshooting.md#ha-group-errors-in-the-cloud-controller-managers-log)).
 
 ## Nodes' boot logs
 
@@ -278,21 +278,21 @@ The appliance takes each snapshot itself through the nodes' Talos API, with a ta
 
 With no settings at all, every management cluster backs up onto its own backup volume. That is the claim `kubehenge-system/kubehenge-backups`, the disk of the stopped, protected VM `kubehenge-backups`. Proxmox VE deletes a VM's own disks only, so the volume outlives the loss of every management VM.
 
-On shared storage (Ceph RBD, NFS, shared LVM) the volume attaches to whichever node runs its store. On a node's own storage (directory, LVM, LVM-thin, ZFS) it stays on the first node of the setup, and its store runs only during a backup or recovery. The disk is detached the rest of the time, so Proxmox VE can migrate the management VMs and a node can go into maintenance. A backup then needs one management VM on the disk's node.
-
-The appliance alone sets each management node's `topology.kubernetes.io/zone` label, to the Proxmox VE node its VM runs on. It reads that with a read-only token on the management pool, after each apply and before each backup. A node whose VM it cannot find keeps its label. Backups stop only when no management VM runs on the Proxmox VE node that holds the volume.
-
-On a node's own storage, or in a Proxmox VE cluster of one node, losing that host can lose the backup volume. The appliance's copy can go with it when the appliance runs there too. Only a [backup target](#backup-targets) survives that, so set one up as above. Setup, Administration and Health warn until one is set.
-
 Every 6 hours the appliance puts an etcd snapshot there, encrypted with the state passphrase, and keeps the newest 28. Beside each goes an export of Kubehenge's objects: the clusters, their classes, the Secrets Kubehenge owns and the setup settings. A backup target, when set up, gets snapshots on its own schedule.
+
+On shared storage (Ceph RBD, NFS, shared LVM) the volume follows the management VM that serves it. On node-local storage (directory, LVM, LVM-thin, ZFS) it stays on the setup's first Proxmox VE node and attaches only during a backup or a recovery. The disk is detached the rest of the time, so Proxmox VE can migrate the management VMs and a node can go into maintenance. A backup needs one management VM on the disk's node.
+
+On node-local storage, or in a Proxmox VE cluster of one node, losing that node can lose the backup volume. The appliance's copy can go with it when the appliance runs there too. Only a [backup target](#backup-targets) survives that, so set one up as above. Setup, Administration and Health warn until one is set.
 
 The appliance keeps a copy of the latest snapshot, its export and its key, up to 1 GiB in all. A copy over that cap is not made, and the last copy that fit stays. The disk warning names the copy once it reaches 80 % of its cap, or once the disk has no room for the next one.
 
 **Administration, Backups**, the management cluster's Health and `kubehenge appliance etcd-backups` show where the backups are and the last one. A failed backup degrades Health until the next one succeeds.
 
-To recover after the management VMs are lost, use **Recover…** in the backup volume's box, or `kubehenge appliance etcd-backups recover`. Both ask for the state passphrase. The run applies the management cluster and waits up to 10 minutes for the backup volume. It then restores the newest snapshot of the volume and the appliance's copy, and applies again. Its log names the snapshot, where it was read and why.
-
 Removing the management cluster stops these backups. **Delete the backup volume** deletes the appliance's copy too. Kept, the copy is never restored onto a management cluster set up later.
+
+### Recover after losing the management VMs
+
+Use **Recover…** in the backup volume's box, or `kubehenge appliance etcd-backups recover`. Both ask for the state passphrase. The run applies the management cluster and waits up to 10 minutes for the backup volume. It then restores whichever is newer, the volume's newest snapshot or the appliance's copy, and applies again. Its log names the snapshot, where it was read and why.
 
 ### Restoring
 
@@ -378,12 +378,13 @@ The management cluster's module, `management-cluster/`, takes these variables. T
 | `proxmox_nodes` | required | The nodes the management cluster's VMs run on, taken in turn, such as `["pve1", "pve2", "pve3"]`. Each needs the bridge and both storages below. A VM given another node is migrated there. |
 | `image_datastore` | `local` | Storage the Talos image is downloaded to, on each node. It must allow `import`. |
 | `vm_datastore` | `local-lvm` | Storage for the management cluster's disks. |
+| `backup_volume` | `{}` | The [backup volume](#the-backup-volume), with `size_gb` (default 20, a whole number of GB, and raising it grows the volume), `protection` (default `true`) and `shared`. `shared` says whether `vm_datastore` reaches every node and is read from Proxmox VE when unset. The appliance sets `protection` only, so it keeps the default size. |
 | `bridge`, `vlan_id` | `vmbr0`, none | Bridge and VLAN tag of the management cluster's VMs. The bridge takes `zone/vnet` too. |
 | `mtu` | none | MTU of the management VMs' network interface, 1280 to 65520. None keeps the bridge's ([details](#management-network-mtu)). |
 | `search_domains` | `[]` | Domains the nodes append to a name without dots, at most six. Empty derives one from each node's host name. |
 | `time_servers` | `[]` | NTP servers of the management cluster's nodes, as host names or addresses. Empty keeps Talos's default public servers. |
 | `vm_id_range` | `{ start = 10000, end = 99999 }` | The range the management VMs' IDs are drawn from at random, `end` excluded ([details](#management-cluster-vm-ids)). |
-| `workload_vm_id_range` | none | The VM IDs a new cluster's VMs and the VM templates take, `start` and `end` both included, such as `{ start = 100000, end = 100999 }`. Also **VM ID range** in Setup and Administration, and `kubehenge appliance settings set --vm-id-range`. A cluster takes it when it is created and may set its own `vmIDRange`. None takes Proxmox VE's next free ID. It may not overlap `vm_id_range`, which the setup's preflight checks. The clusters on it and the templates share its IDs. |
+| `workload_vm_id_range` | none | The VM IDs of new clusters' VMs and the VM templates, `start` and `end` both included, such as `{ start = 100000, end = 100999 }`. None takes Proxmox VE's next free ID. It may not overlap `vm_id_range`. A cluster may set its own `vmIDRange` ([clusters.md](clusters.md#variables)). Also **VM ID range** in Setup and Administration, and `kubehenge appliance settings set --vm-id-range`. |
 | `cluster_name` | `kubehenge` | The management cluster's name, a DNS label of at most 32 characters, also the prefix of its VMs' names and of the users, roles and group the module creates. |
 | `ip_families` | `["IPv4"]` | `["IPv4"]`, `["IPv6"]`, or both in either order. The first is the primary family. |
 | `node_addresses` | required | One, three or five IPv4 addresses with prefix length, such as `["192.0.2.11/24"]`. `[]` on an IPv6-only cluster. |

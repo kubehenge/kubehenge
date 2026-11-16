@@ -50,7 +50,7 @@ What each release changed is in the [changelog](changelog.md).
 
 ## Later
 
-- An optional services cluster that Kubehenge creates for the others, each service on it optional. The other clusters use it by default once it runs. The management cluster stays small. It could hold:
+- An optional services cluster that Kubehenge creates for the others, which use it by default once it runs. It keeps the management cluster small. Each service on it is optional:
   - a registry and pull-through cache
   - backups, metrics and logs from every cluster
   - Argo CD for every cluster

@@ -23,7 +23,7 @@ export function RemovedSnapshots({ namespace }: { namespace: string }): JSX.Elem
   }
   return (
     <div className="box">
-      <h3>Removed clusters</h3>
+      <h3>Deleted clusters</h3>
       <table>
         <thead>
           <tr>
