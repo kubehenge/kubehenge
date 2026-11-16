@@ -290,6 +290,7 @@ func (h *Hooks) refusal(ctx context.Context, cluster *clusterv1.Cluster, class *
 		func() error { return h.checkPlacement(ctx, reads, cluster) },
 		func() error { return checkStorageListed(cluster, class) },
 		func() error { return checkRanges(cluster, class) },
+		func() error { return checkVMIDRange(cluster) },
 		func() error { return h.checkAddresses(ctx, cluster) },
 		func() error { return h.checkRancher(ctx, cluster, cluster.Spec.Topology.Version) },
 		func() error { return checkRancherNodes(cluster, class) },

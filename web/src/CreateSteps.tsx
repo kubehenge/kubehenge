@@ -81,6 +81,7 @@ import {
   shownNumber,
   typedNumber,
 } from "./ui";
+import { VMIDRangeStep } from "./VmidRange";
 
 const kubeadmVersion = /^v1\.\d+\.\d+$/u;
 
@@ -1102,6 +1103,12 @@ export function MachinesStep({
           problem={shown("hostOutageGrace")}
         />
       )}
+      <VMIDRangeStep
+        cls={cls}
+        value={form.vmIDRange}
+        onChange={(range) => set("vmIDRange", range)}
+        problem={shown("vmIDRange")}
+      />
       {haOffered && <HAField checked={form.proxmoxHA} onChange={(on) => set("proxmoxHA", on)} />}
       {csi.offered && (
         <CSIField

@@ -72,6 +72,7 @@ import {
   weekdays,
   Skeleton,
 } from "./ui";
+import { vmIDRangeOf, vmIDRangeProblem, vmIDRangeVariable } from "./VmidRange";
 
 const unique = (xs: string[]): string[] => [...new Set(xs)].toSorted();
 
@@ -121,6 +122,8 @@ export interface SetupForm {
   siteCA: string;
   // The IANA time zone of schedules that name none.
   timeZone: string;
+  // The VM IDs of new clusters' VMs and the VM templates, as start-end.
+  vmIDRange: string;
   // The address alone, with no user name or password.
   proxyURL: string;
   proxyUser: string;
@@ -350,6 +353,9 @@ function outboundSettings(f: SetupForm): Partial<ManagementSettings> {
   if (filled(f.timeZone)) {
     s.timeZone = f.timeZone.trim();
   }
+  if (filled(f.vmIDRange)) {
+    s.workloadVMIDRange = vmIDRangeVariable(f.vmIDRange);
+  }
   const proxy = proxySettings(f);
   if (proxy) {
     s.proxy = proxy;
@@ -578,6 +584,7 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     ...releaseFields(saved),
     siteCA: saved.siteCA ?? "",
     timeZone: saved.timeZone ?? "",
+    vmIDRange: vmIDRangeOf(saved.workloadVMIDRange),
     ...proxyFields(saved),
     podSubnets: (saved.podSubnets ?? []).join(", "),
     serviceSubnets: (saved.serviceSubnets ?? []).join(", "),
@@ -627,6 +634,7 @@ export type SetupField =
   | "releaseMirrorCA"
   | "siteCA"
   | "timeZone"
+  | "vmIDRange"
   | "proxyURL"
   | "proxyUser"
   | "proxyPassword"
@@ -667,6 +675,7 @@ const stepFields: Record<SetupStep, SetupField[]> = {
     "releaseMirrorCA",
     "siteCA",
     "timeZone",
+    "vmIDRange",
     "proxyURL",
     "proxyUser",
     "proxyPassword",
@@ -690,6 +699,7 @@ const advancedFields: SetupField[] = [
   "releaseMirrorCA",
   "siteCA",
   "timeZone",
+  "vmIDRange",
   "proxyURL",
   "proxyUser",
   "proxyPassword",
@@ -1063,10 +1073,14 @@ function releaseMirrorProblems(f: SetupForm): SetupProblems {
   return p;
 }
 
-// siteDefaultProblems are those of the site CA. The server judges the time zone, with its own
-// time zone database, as useTimeZoneProblem asks it.
+// siteDefaultProblems are those of the site CA and the VM ID range. The server judges the time zone,
+// with its own time zone database, as useTimeZoneProblem asks it.
 function siteDefaultProblems(f: SetupForm): SetupProblems {
   const p: SetupProblems = {};
+  const range = vmIDRangeProblem(f.vmIDRange);
+  if (range !== undefined) {
+    p.vmIDRange = range;
+  }
   const problem = filled(f.siteCA) ? bundleProblem(f.siteCA) : undefined;
   if (problem !== undefined) {
     p.siteCA = problem;
@@ -2366,6 +2380,14 @@ export function AdvancedFields({
         error={shown("timeZone")}
       >
         {(id) => <input id={id} value={form.timeZone} onChange={(e) => set("timeZone", e.target.value)} />}
+      </Field>
+      <Field
+        label="VM ID range"
+        hint="Like 100000-100999"
+        info="New clusters' VMs and the VM templates take their IDs here, else the next free ID. A cluster's own range wins. Keep it clear of the management VMs' IDs, 10000 to 99998 by default."
+        error={shown("vmIDRange")}
+      >
+        {(id) => <input id={id} value={form.vmIDRange} onChange={(e) => set("vmIDRange", e.target.value)} />}
       </Field>
       <Field
         label="Release mirror"

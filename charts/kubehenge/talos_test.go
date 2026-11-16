@@ -41,7 +41,18 @@ type patchDefinition struct {
 }
 
 type patchSelector struct {
-	Kind string `json:"kind"`
+	Kind           string         `json:"kind"`
+	MatchResources patchResources `json:"matchResources"`
+}
+
+// patchResources is the part of a patch's matchResources that says which machines it reaches.
+type patchResources struct {
+	ControlPlane      bool       `json:"controlPlane"`
+	MachineDeployment patchPools `json:"machineDeploymentClass"`
+}
+
+type patchPools struct {
+	Names []string `json:"names"`
 }
 
 type jsonPatch struct {

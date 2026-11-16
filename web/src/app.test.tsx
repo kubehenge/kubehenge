@@ -1093,6 +1093,7 @@ describe("create", () => {
     storage: "local-lvm",
     place: { placement: "any", haRule: "", nodes: [] },
     hostOutageGrace: "30",
+    vmIDRange: "",
     proxmoxHA: true,
     datastoreAllocate: false,
     volumeSnapshots: false,

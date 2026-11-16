@@ -66,6 +66,7 @@ module "management" {
   release_mirror         = var.settings.releaseMirror
   site_ca                = try(var.settings.siteCA, "")
   time_zone              = try(var.settings.timeZone, "")
+  workload_vm_id_range   = try(var.settings.workloadVMIDRange, null)
   controller_image       = var.settings.controllerImage
   vm_id_range            = var.settings.vmIdRange
   pod_subnets            = var.settings.podSubnets
@@ -263,6 +264,9 @@ func (a *Appliance) writeConfig(s *Settings, ids VMIDRange) error {
 	}
 	if s.TimeZone != "" {
 		values["timeZone"] = s.TimeZone
+	}
+	if s.WorkloadVMIDRange != nil {
+		values["workloadVMIDRange"] = s.WorkloadVMIDRange
 	}
 	if s.HasIPv6() {
 		// An IPv4 cluster leaves these out, so its variables stay as they were and the module's

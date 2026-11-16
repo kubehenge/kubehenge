@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"net/netip"
 	"regexp"
 	"slices"
@@ -37,6 +38,9 @@ type Builder struct {
 	// ISOStorage receives the cloud-init ISO of a bake. Empty means the node's first ISO storage.
 	ISOStorage string
 	Pool       string
+	// FirstVMID and LastVMID, when LastVMID is set, are the VM IDs a build takes, both included. Unset,
+	// it takes Proxmox VE's next free ID.
+	FirstVMID, LastVMID int
 	// Bridge, VLAN and Network connect a VM being baked, which needs to reach package mirrors.
 	Bridge  string
 	VLAN    int
@@ -966,13 +970,50 @@ func (b *Builder) newestHardware(ctx context.Context, t *Template) (*Hardware, e
 // create whose task never started burns its VM ID too.
 const createAttempts = 5
 
+// nextID is the lowest VM ID of the builder's range that no listed VM and none of taken holds and
+// that Proxmox VE calls free, as Cluster API Provider Proxmox asks it, since the list leaves out the
+// VMs the token cannot see. Where the builder has no range it is Proxmox VE's next free ID. A full
+// range is an error, never a fallback to IDs outside it. The ID is not reserved, so createFresh
+// still asks for another where the create is refused.
+func (b *Builder) nextID(ctx context.Context, cluster *proxmox.Cluster, taken map[int]bool) (int, error) {
+	if b.LastVMID == 0 {
+		return cluster.NextID(ctx) //nolint:wrapcheck // createFresh names the step
+	}
+	vms, err := cluster.Resources(ctx, "vm")
+	if err != nil {
+		return 0, fmt.Errorf("listing the cluster's VMs: %w", err)
+	}
+	used := make(map[int]bool, len(vms))
+	for _, vm := range vms {
+		if vm.VMID <= math.MaxInt32 {
+			used[int(vm.VMID)] = true
+		}
+	}
+	for id := b.FirstVMID; id <= b.LastVMID; id++ {
+		if used[id] || taken[id] {
+			continue
+		}
+		free, checkErr := cluster.CheckID(ctx, id)
+		if checkErr != nil {
+			return 0, fmt.Errorf("asking Proxmox VE whether VM ID %d is free: %w", id, checkErr)
+		}
+		if free {
+			return id, nil
+		}
+	}
+	return 0, fmt.Errorf("no free VM ID in %d-%d. Widen the site's VM ID range, or free IDs in it", b.FirstVMID, b.LastVMID)
+}
+
 // createFresh creates t's VM under the next free VM ID, asking for another while the one offered
 // turns out taken.
 func (b *Builder) createFresh(
 	ctx context.Context, cluster *proxmox.Cluster, node *proxmox.Node, t *Template, volume string, hw Hardware, source string, recipe *Recipe,
 ) (int, error) {
+	// A VM the token cannot list is found out by Proxmox VE refusing its ID, which a range, unlike
+	// next-id, would offer again.
+	taken := map[int]bool{}
 	for attempt := 1; ; attempt++ {
-		vmid, err := cluster.NextID(ctx)
+		vmid, err := b.nextID(ctx, cluster, taken)
 		if err != nil {
 			return 0, fmt.Errorf("choosing a VM ID: %w", err)
 		}
@@ -985,8 +1026,10 @@ func (b *Builder) createFresh(
 		case attempt == createAttempts:
 			return 0, err
 		case strings.Contains(err.Error(), "already exists"):
+			taken[vmid] = true
 			b.logf("VM %d was taken meanwhile; choosing another VM ID", vmid)
 		case pve.CreateNeverStarted(err):
+			taken[vmid] = true
 			b.logf("%s Choosing another VM ID.", pve.LockedVMHint(vmid))
 		default:
 			return 0, err

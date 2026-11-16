@@ -306,7 +306,8 @@ func TestTheSiteCAsVariableIsHeldToTheControllerWithoutRefusingAnyone(t *testing
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			d := &ClusterDefaulter{Hooks: &Hooks{ClassNamespace: siteClassNamespace, SiteCA: func() string { return ca }, Now: func() time.Time { return tc.now }}}
+			kube := fake.NewClientBuilder().WithScheme(testScheme(t)).Build()
+			d := &ClusterDefaulter{Hooks: &Hooks{Reader: kube, ClassNamespace: siteClassNamespace, SiteCA: func() string { return ca }, Now: func() time.Time { return tc.now }}}
 			c := tc.in.DeepCopy()
 			c.Spec.ClusterNetwork.Pods.CIDRBlocks, c.Spec.ClusterNetwork.Services.CIDRBlocks = []string{"10.42.0.0/16"}, []string{"10.43.0.0/16"}
 			if err := d.Default(tc.ctx, c); err != nil {
@@ -327,7 +328,8 @@ func TestTheSiteCAsVariableIsHeldToTheControllerWithoutRefusingAnyone(t *testing
 	c := given.DeepCopy()
 	c.Spec.ClusterNetwork.Pods.CIDRBlocks, c.Spec.ClusterNetwork.Services.CIDRBlocks = []string{"10.42.0.0/16"}, []string{"10.43.0.0/16"}
 	before := c.DeepCopy()
-	d := &ClusterDefaulter{Hooks: &Hooks{ClassNamespace: siteClassNamespace, SiteCA: func() string { return ca }, Now: func() time.Time { return siteNow }}}
+	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).Build()
+	d := &ClusterDefaulter{Hooks: &Hooks{Reader: kube, ClassNamespace: siteClassNamespace, SiteCA: func() string { return ca }, Now: func() time.Time { return siteNow }}}
 	if err := d.Default(update(topology), c); err != nil {
 		t.Fatal(err)
 	}
@@ -610,7 +612,8 @@ func TestTheRolloutNoteIsHeldToTheControllerAndANoteFromTheFutureHoldsNoPlace(t 
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			d := &ClusterDefaulter{Hooks: &Hooks{ClassNamespace: siteClassNamespace, Now: func() time.Time { return siteNow }}}
+			kube := fake.NewClientBuilder().WithScheme(testScheme(t)).Build()
+			d := &ClusterDefaulter{Hooks: &Hooks{Reader: kube, ClassNamespace: siteClassNamespace, Now: func() time.Time { return siteNow }}}
 			c := tc.in.DeepCopy()
 			c.Spec.ClusterNetwork.Pods.CIDRBlocks, c.Spec.ClusterNetwork.Services.CIDRBlocks = []string{"10.42.0.0/16"}, []string{"10.43.0.0/16"}
 			if err := d.Default(tc.ctx, c); err != nil {

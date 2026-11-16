@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { newForm } from "./create-form";
 import { fakeServer } from "./fake-server";
-import { AdvancedFields, formOf, useTimeZoneProblem, type SetupForm } from "./Setup";
+import { AdvancedFields, formOf, settings, setupFieldProblems, useTimeZoneProblem, type SetupForm } from "./Setup";
 import { fromCluster } from "./start-from";
 import type { Cluster } from "./types";
 
@@ -76,6 +76,21 @@ describe("the site settings in Setup", () => {
     await user.paste("junk");
     expect(calls).toHaveLength(0);
     expect(screen.queryByText(/Replaces nodes/u)).not.toBeInTheDocument();
+  });
+
+  it("take a VM ID range, send it as start and end and hold it to Proxmox VE's limits", async () => {
+    const user = userEvent.setup({ delay: null });
+    render(<Fields />);
+    await user.type(screen.getByLabelText("VM ID range"), "10000-10999");
+    expect(screen.getByLabelText("VM ID range")).toHaveValue("10000-10999");
+    const form = { ...formOf(), vmIDRange: "10000-10999" };
+    expect(settings(form).workloadVMIDRange).toStrictEqual({ start: 10_000, end: 10_999 });
+    expect(settings(formOf()).workloadVMIDRange).toBeUndefined();
+    expect(formOf({ ...settings(form), workloadVMIDRange: { start: 100, end: 200 } }).vmIDRange).toBe("100-200");
+    for (const range of ["2000-1000", "99-1000", "1000-1000000000", "1000"]) {
+      expect(setupFieldProblems({ ...form, vmIDRange: range }).vmIDRange).toBeDefined();
+    }
+    expect(setupFieldProblems(form).vmIDRange).toBeUndefined();
   });
 
   it("take a time zone", async () => {
