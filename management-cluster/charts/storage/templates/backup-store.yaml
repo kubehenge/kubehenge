@@ -279,11 +279,12 @@ data:
   token: {{ . | quote }}
   nodes: {{ join "," $.Values.backupVolume.nodes | b64enc | quote }}
 {{- end }}
-{{- if and .Values.backupVolume.zone .Values.backupVolume.zonesToken }}
+{{- if .Values.backupVolume.zonesToken }}
 {{- $waker := printf "['system:serviceaccount:%s:kubehenge-interface', 'system:serviceaccount:%s:%s']" $ns $ns $controller }}
-{{- /* On a node's own storage the plugin attaches the volume only to a node with the disk's zone.
-A node VM HA or an administrator moved since the last apply carries its old node's zone, so before
-each wake the interface or the controller reads the token and sets the labels too. */}}
+{{- /* The CSI node plugin exits on a node without a zone label, so the controller labels a node
+that joined without one, on any storage. On a node's own storage the plugin attaches the volume only
+to a node with the disk's zone. A node VM HA or an administrator moved since the last apply carries
+its old node's zone, so before each wake the interface or the controller sets the labels too. */}}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -295,11 +296,13 @@ rules:
     resources: [secrets]
     resourceNames: [{{ $zones }}]
     verbs: [get]
+  {{- if .Values.backupVolume.zone }}
   # The store's scale, which changes its replicas alone, to wake it and let it sleep.
   - apiGroups: [apps]
     resources: [deployments/scale]
     resourceNames: [{{ $name }}]
     verbs: [get, patch]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

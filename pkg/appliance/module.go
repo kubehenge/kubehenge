@@ -177,7 +177,8 @@ func (a *Appliance) setUpBackups(ctx context.Context, j *Job, admin, talos []byt
 		j.Add("Setting up the backups on the backup volume failed: " + err.Error())
 		a.volumeBackupFailed(err)
 	}
-	// The next wake of the backup store tries again, so a failure holds no apply up.
+	// The controller tries again within a minute, and before each wake of the backup store, so a
+	// failure holds no apply up.
 	unknown, err := a.labelZones(ctx, admin)
 	if err != nil {
 		j.Add("Setting the management nodes' zones failed: " + err.Error())

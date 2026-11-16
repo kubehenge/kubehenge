@@ -1,8 +1,10 @@
 package backupstore
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -216,6 +218,166 @@ func TestTheSleeperPutsALeftStoreToSleep(t *testing.T) {
 		cancel()
 		if got := replicasOf(t, kube); got != tc.want {
 			t.Fatalf("%s after the look the store has %d replicas, want %d", tc.after, got, tc.want)
+		}
+	}
+}
+
+// unzoned is sleepingStore with its node joined without a zone label, as the machine config makes it.
+func unzoned(t *testing.T) []runtime.Object {
+	t.Helper()
+	objects := sleepingStore()
+	n, ok := objects[3].(*corev1.Node)
+	if !ok {
+		t.Fatalf("sleepingStore's fourth object is %T", objects[3])
+	}
+	n.Labels = nil
+	return objects
+}
+
+// sleepFor runs a Sleeper on v for a moment, ticking every millisecond.
+func sleepFor(t *testing.T, v *Volume) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if err := (&Sleeper{Volume: v, Every: time.Millisecond}).Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func zoneOf(t *testing.T, kube *fake.Clientset, name string) string {
+	t.Helper()
+	n, err := kube.CoreV1().Nodes().Get(t.Context(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n.Labels[corev1.LabelTopologyZone]
+}
+
+// The CSI node plugin exits on a node without a zone label, so the Sleeper sets one with no wake.
+func TestTheSleeperLabelsANodeWithoutAZone(t *testing.T) {
+	t.Parallel()
+	kube := fake.NewClientset(unzoned(t)...)
+	sleepFor(t, &Volume{Kube: kube, VMs: onPVE1})
+	if got := zoneOf(t, kube, "mgmt-cp-0"); got != "pve1" {
+		t.Fatalf("the node's zone is %q, want pve1", got)
+	}
+}
+
+// A labelled node keeps the label a wake set, and costs no call to Proxmox VE.
+func TestTheSleeperReadsNoVMsWhileEveryNodeHasAZone(t *testing.T) {
+	t.Parallel()
+	kube := fake.NewClientset(sleepingStore()...)
+	reads := 0
+	sleepFor(t, &Volume{Kube: kube, VMs: func(ctx context.Context, token string) (*VMIndex, error) {
+		reads++
+		return onPVE1(ctx, token)
+	}})
+	if reads != 0 {
+		t.Fatalf("the Sleeper read the VMs %d times", reads)
+	}
+	for _, a := range kube.Actions() {
+		if a.GetResource().Resource == "nodes" && a.GetVerb() == "patch" {
+			t.Fatalf("the Sleeper changed a labelled node: %v", a)
+		}
+	}
+}
+
+// awake starts the store in objects, as a holder left it, with no request in force.
+func awake(t *testing.T, objects []runtime.Object) []runtime.Object {
+	t.Helper()
+	d, ok := objects[0].(*appsv1.Deployment)
+	if !ok {
+		t.Fatalf("sleepingStore's first object is %T", objects[0])
+	}
+	one := int32(1)
+	d.Spec.Replicas = &one
+	return objects
+}
+
+// Proxmox VE not answering keeps the node unlabelled and says so on each tick. The store goes to
+// sleep before the read, which gets no longer than a tick.
+func TestTheSleeperStillSleepsWhenZonesFail(t *testing.T) {
+	t.Parallel()
+	kube := fake.NewClientset(awake(t, unzoned(t))...)
+	var log bytes.Buffer
+	reads := 0
+	sleepFor(t, &Volume{Kube: kube, Log: slog.New(slog.NewTextHandler(&log, nil)), VMs: func(ctx context.Context, _ string) (*VMIndex, error) {
+		reads++
+		if reads == 1 {
+			if d, err := kube.AppsV1().Deployments(Namespace).Get(ctx, Service, metav1.GetOptions{}); err != nil || *d.Spec.Replicas != 0 {
+				t.Errorf("the store was not asleep when the Sleeper read the VMs: %v %v", d, err)
+			}
+			if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > time.Millisecond {
+				t.Errorf("the read may run until %v, past its tick", deadline)
+			}
+		}
+		return nil, errors.New("no route to host")
+	}})
+	if reads == 0 {
+		t.Fatal("the Sleeper never asked where the VMs run")
+	}
+	if got := replicasOf(t, kube); got != 0 {
+		t.Fatalf("the store kept %d replicas", got)
+	}
+	// The tick the test ends in may read and then stay quiet, since its context is done.
+	warned := strings.Count(log.String(), "no route to host")
+	if warned != reads && warned != reads-1 {
+		t.Fatalf("%d failed reads logged %d warnings:\n%s", reads, warned, log.String())
+	}
+}
+
+// A controller that may not read the zones Secret, or a storage chart that makes none, has no node
+// to label, and the Sleeper says nothing of it.
+func TestTheSleeperSaysNothingWhereItMayNotLabel(t *testing.T) {
+	t.Parallel()
+	for what, forbid := range map[string]bool{"forbidden": true, "not found": false} {
+		objects := awake(t, unzoned(t))
+		if !forbid {
+			objects = append(objects[:2], objects[3:]...)
+		}
+		kube := fake.NewClientset(objects...)
+		kube.PrependReactor("get", "secrets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+			if get, ok := a.(k8stesting.GetAction); ok && forbid && get.GetName() == ZonesSecret {
+				return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, ZonesSecret, errors.New("no rule allows it"))
+			}
+			return false, nil, nil
+		})
+		var log bytes.Buffer
+		sleepFor(t, &Volume{Kube: kube, Log: slog.New(slog.NewTextHandler(&log, nil)), VMs: onPVE1})
+		if log.Len() != 0 {
+			t.Errorf("%s: the Sleeper logged:\n%s", what, log.String())
+		}
+		if got := replicasOf(t, kube); got != 0 {
+			t.Errorf("%s: the store kept %d replicas", what, got)
+		}
+	}
+}
+
+// A node the Secret names that has not joined yet is no node without a zone, and fails nothing.
+func TestTheSleeperPassesOverANodeNotJoined(t *testing.T) {
+	t.Parallel()
+	for what, objects := range map[string][]runtime.Object{"labelled": sleepingStore(), "unlabelled": unzoned(t)} {
+		zones, ok := objects[2].(*corev1.Secret)
+		if !ok {
+			t.Fatalf("sleepingStore's third object is %T", objects[2])
+		}
+		zones.Data["nodes"] = []byte("mgmt-cp-0,mgmt-cp-1")
+		kube := fake.NewClientset(objects...)
+		reads := 0
+		v := &Volume{Kube: kube, VMs: func(ctx context.Context, token string) (*VMIndex, error) {
+			reads++
+			return onPVE1(ctx, token)
+		}}
+		if err := v.labelMissingZones(t.Context()); err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		want := map[string]int{"labelled": 0, "unlabelled": 1}[what]
+		if reads != want {
+			t.Errorf("%s: one tick read the VMs %d times, want %d", what, reads, want)
+		}
+		sleepFor(t, v)
+		if reads != want {
+			t.Errorf("%s: later ticks read the VMs again, %d times in all", what, reads)
 		}
 	}
 }

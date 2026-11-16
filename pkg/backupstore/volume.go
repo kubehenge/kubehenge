@@ -14,6 +14,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -136,6 +137,9 @@ func (v *Volume) Done(ctx context.Context, holder string) error {
 // Sleeper puts the backup volume's store back to sleep every Every once no holder's request is in
 // force, as when a holder never let go or its request ran out. Done does it at once for a holder
 // that lets go. It runs on the controller's leader alone.
+//
+// It also labels a management node that has no zone yet. The CSI node plugin exits without one, so
+// it restarts until then, and the next wake waits out its back-offs.
 type Sleeper struct {
 	Volume *Volume
 	Every  time.Duration
@@ -152,11 +156,41 @@ func (s *Sleeper) Start(ctx context.Context) error {
 			return nil
 		case <-tick.C:
 		}
-		err := s.Volume.sleep(ctx, nil)
-		if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsForbidden(err) && ctx.Err() == nil && s.Volume.Log != nil {
-			s.Volume.Log.Warn("the backup volume's store could not be put to sleep", "error", err)
+		s.warn(ctx, "the backup volume's store could not be put to sleep", s.Volume.sleep(ctx, nil))
+		// A Proxmox VE that answers late holds up no later tick's sleep.
+		label, cancel := context.WithTimeout(ctx, s.Every)
+		s.warn(ctx, "a management node without a zone label was not labelled", s.Volume.labelMissingZones(label))
+		cancel()
+	}
+}
+
+func (s *Sleeper) warn(ctx context.Context, msg string, err error) {
+	if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsForbidden(err) && ctx.Err() == nil && s.Volume.Log != nil {
+		s.Volume.Log.Warn(msg, "error", err)
+	}
+}
+
+// labelMissingZones sets the zones only while a joined node named in ZonesSecret has none, so that
+// a labelled cluster costs no Proxmox VE call.
+func (v *Volume) labelMissingZones(ctx context.Context) error {
+	if v.VMs == nil {
+		return nil
+	}
+	secret, err := v.Kube.CoreV1().Secrets(Namespace).Get(ctx, ZonesSecret, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("the management nodes: %w", err)
+	}
+	nodes, err := joined(ctx, v.Kube, string(secret.Data[zonesNodes]))
+	if err != nil {
+		return err
+	}
+	for _, n := range nodes {
+		if n.Labels[corev1.LabelTopologyZone] == "" {
+			_, err = FollowZones(ctx, v.Kube, v.VMs, "", v.Log)
+			return err
 		}
 	}
+	return nil
 }
 
 // sleep scales the store to its idle replicas unless a holder's request is in force. d is the
