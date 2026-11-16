@@ -220,10 +220,11 @@ On first sign-in, an administrator sees the setup page. It creates the managemen
 
 The page goes through five steps: **Placement**, **Network**, **Clusters**, **Services** and **Passphrase**. It fills in what the first chosen node reports about itself, all of which can be changed:
 
+- Up to three nodes that answer, for failover.
 - A shared storage for the VM disks, or else the one with the most free space.
 - The bridge the node reaches its gateway through, with that gateway.
 - The node's own DNS servers.
-- The network the node addresses go in.
+- The network the node addresses go in, with free addresses in it for the nodes and the API address. Without a VLAN tag, the page asks only for what it cannot find.
 
 For clusters, it offers the same storage and bridge to start with. Administration shows the same settings on one page, with one section per step.
 

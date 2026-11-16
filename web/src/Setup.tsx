@@ -3,6 +3,7 @@ import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type JSX
 import { api, bridgesOf, dnsOf } from "./api";
 import { backupKeys } from "./Backups";
 import { BackupTargets, cleanTargets, targetProblems, targetSummary } from "./BackupTargets";
+import { useFreeAddresses } from "./CreateSteps";
 import { CredentialField } from "./CredentialField";
 import { FamiliesField } from "./Families";
 import { SameHostWarning } from "./ManagementHealth";
@@ -16,6 +17,7 @@ import {
   familyLabels,
   familyNames,
   familyOf,
+  formatAddress,
   gatewayReaches,
   hasFamily,
   isIP,
@@ -41,6 +43,7 @@ import { nodeFault, nodeNote } from "./Placement";
 import type {
   BackupTarget,
   Bridge,
+  FreeAddresses,
   Job,
   ManagementSettings,
   NodeDNS,
@@ -2514,8 +2517,9 @@ function SetupWizard({
       try {
         const n = await api.nodes();
         setNodes(n);
-        const first = (n.find((x) => x.online) ?? n[0])?.node;
-        setForm((f) => (f.nodes.length > 0 || !filled(first) ? f : { ...f, nodes: [first] }));
+        const chosen = n.filter((x) => x.online).map((x) => x.node);
+        const preselected = (chosen.length > 0 ? chosen : n.slice(0, 1).map((x) => x.node)).slice(0, failoverNodes);
+        setForm((f) => (f.nodes.length > 0 ? f : { ...f, nodes: preselected }));
         await Promise.all(
           n
             .filter((x) => x.online)
@@ -2549,7 +2553,23 @@ function SetupWizard({
     fixed,
     unreachable: nodes.filter((n) => !n.online).map((n) => n.node),
   };
-  const { effective, offers, nodeNetworks, gone } = withDefaults(form, touched, found);
+  const { bridge } = withDefaults(form, touched, found).effective;
+  const free = useFreeAddresses(
+    {
+      node: form.nodes[0],
+      bridge,
+      vlan: form.vlan,
+      families: form.families,
+      gateway: "",
+      prefix: 0,
+      gateway6: "",
+      prefix6: 0,
+    },
+    manage ? 0 : addressesFor(form.nodes.length),
+    [],
+  );
+  const completed = withFreeAddresses(form, free, touched);
+  const { effective, offers, nodeNetworks, gone } = withDefaults(completed, touched, found);
   const toggle: Toggle = (k, v, on) => {
     setForm((f) => {
       const now = k === "nodes" ? f.nodes : effective[k];
@@ -2635,7 +2655,7 @@ function SetupWizard({
     reveal(setupSteps);
   };
   const fields = setupFields({
-    form,
+    form: completed,
     effective,
     set,
     shown,
@@ -2947,9 +2967,8 @@ function withDefaults(
       imageDatastore: fit(form.imageDatastore, offers.images),
       bootstrapDatastore: fit(form.bootstrapDatastore, offers.isos),
       bridge,
-      // A VLAN's network is not the one a node reports on the bridge.
-      nodeAddresses: withPrefix(form.nodeAddresses, filled(form.vlan) ? undefined : onBridge?.cidr),
-      nodeAddresses6: withPrefix(form.nodeAddresses6, filled(form.vlan) ? undefined : onBridge?.cidr6),
+      nodeAddresses: withPrefix(form.nodeAddresses, untagged(form.vlan, onBridge?.cidr)),
+      nodeAddresses6: withPrefix(form.nodeAddresses6, untagged(form.vlan, onBridge?.cidr6)),
       gateway: detect("gateway", onBridge?.gateway ?? ""),
       gateway6: detect("gateway6", onBridge?.gateway6 ?? ""),
       dnsServers: detect("dnsServers", ownFamilies(found.dnsByNode[first]?.servers ?? [], form.families).join(", ")),
@@ -2965,6 +2984,51 @@ function withDefaults(
       IPv6: onBridge?.cidr6 === undefined ? undefined : networkOf(onBridge.cidr6),
     },
     gone: goneChoices({ form, offers, storagesKnown: known, bridgesKnown, kept: fixed !== undefined }),
+  };
+}
+
+// untagged is the bridge's network for node addresses, which a VLAN's tagged network is not.
+function untagged(vlan: string, cidr: string | undefined): string | undefined {
+  return filled(vlan) ? undefined : cidr;
+}
+
+// A first run offers the management cluster up to this many Proxmox VE nodes, so that it survives
+// the loss of one.
+const failoverNodes = highAvailability;
+
+// addressesFor is how many node addresses the management cluster takes for the nodes chosen.
+function addressesFor(nodes: number): number {
+  if (nodes <= 1) {
+    return nodes;
+  }
+  return nodes <= highAvailability ? highAvailability : largestCluster;
+}
+
+// expandRange lists the addresses of a range such as 192.0.2.11-192.0.2.13, one per line.
+function expandRange(range: string | undefined): string {
+  const [from, to = from] = (range ?? "").split("-");
+  const first = parseAddress(from ?? "");
+  const last = parseAddress(to ?? "");
+  if (first === undefined || last === undefined || last.value < first.value) {
+    return "";
+  }
+  const count = Number(last.value - first.value) + 1;
+  return Array.from({ length: count }, (_, i) =>
+    formatAddress({ family: first.family, value: first.value + BigInt(i) }),
+  ).join("\n");
+}
+
+// withFreeAddresses fills the node addresses and the API address with those found free on the
+// bridge's network, where none were typed. Only the addresses left over are asked for.
+function withFreeAddresses(f: SetupForm, free: FreeAddresses | undefined, touched: ReadonlySet<string>): SetupForm {
+  const fill = (k: "nodeAddresses" | "nodeAddresses6" | "apiAddress", found: string | undefined): string =>
+    f[k] === "" && !touched.has(k) ? (found ?? "") : f[k];
+  const primary6 = familiesOf(f.families)[0] === "IPv6";
+  return {
+    ...f,
+    nodeAddresses: fill("nodeAddresses", expandRange(free?.addresses)),
+    nodeAddresses6: fill("nodeAddresses6", expandRange(free?.addresses6)),
+    apiAddress: fill("apiAddress", primary6 ? free?.endpoint6 : free?.endpoint),
   };
 }
 

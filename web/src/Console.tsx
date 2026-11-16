@@ -251,7 +251,9 @@ export function Console({
         open={open}
         onSignOut={onSignOut}
       />
-      {!settingUp && !home && <FleetRail current={here} canCreate={canCreate} onCreate={() => navigate("/clusters/new")} />}
+      {!settingUp && !home && (
+        <FleetRail current={here} canCreate={canCreate} onCreate={() => navigate("/clusters/new")} />
+      )}
       <main className="content" ref={main} tabIndex={-1}>
         {children}
       </main>

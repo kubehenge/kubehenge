@@ -263,7 +263,10 @@ describe("the console", () => {
     routes["GET /api/clusters"] = { status: 502, body: { error: "the management cluster did not answer" } };
     render(<App />);
     const rail = within(await screen.findByRole("navigation", { name: "Fleet" }));
-    await expect(rail.findByText("Not read")).resolves.toHaveAttribute("title", "the management cluster did not answer");
+    await expect(rail.findByText("Not read")).resolves.toHaveAttribute(
+      "title",
+      "the management cluster did not answer",
+    );
   });
 
   it("greys the fleet out while reading it again fails, until a read succeeds", async () => {
@@ -1058,7 +1061,9 @@ describe("the console", () => {
     // The list says what the rail says, not that Cluster API finds the cluster available.
     window.history.pushState(null, "", "/");
     window.dispatchEvent(new PopStateEvent("popstate"));
-    expect(await within(screen.getByRole("main")).findByText("Pod shop/api: CrashLoopBackOff")).toBeInTheDocument();
+    await expect(
+      within(screen.getByRole("main")).findByText("Pod shop/api: CrashLoopBackOff"),
+    ).resolves.toBeInTheDocument();
     const row = within(screen.getByRole("main")).getByRole("row", { name: /^web/u });
     expect(within(row).getByText("Degraded")).toBeInTheDocument();
     expect(within(row).queryByText("Available")).not.toBeInTheDocument();
