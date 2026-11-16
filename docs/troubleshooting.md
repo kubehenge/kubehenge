@@ -278,6 +278,7 @@ The management cluster's Health shows the failure, and **Administration, Backups
 | A recovery says "the appliance's copy holds the backups of a management cluster removed since" | The copy is of the cluster removed before this one was set up, and is never restored onto it. Recover from the backup volume, or recreate from a backup target's snapshot. |
 | A recovery says "it did not answer within 10m0s" | The backup volume's store did not start. Check the claim and the pod as above. The recovery used the appliance's copy, when it held one. |
 | "reading where the management VMs run: …" | The appliance or the controller could not ask Proxmox VE where the management VMs run, so it did not attach the backup volume. The reason after the colon says why. The token is in `kubehenge-system/kubehenge-backup-store-zones`. Apply again to make a new one. |
+| "no node named under \"nodes\" in Secret kubehenge-system/kubehenge-backup-store-zones is in the management cluster" | The Secret names no management node that joined, so the backup volume has no node to attach to. Apply again, which sets the names from the management nodes. |
 | "no management VM runs on Proxmox VE node …, which holds the backup volume" | The volume's disk sits on node-local storage of that node and attaches only to a VM there. Migrate a management VM to that node, or apply again to make the lost ones. |
 | The store's pod stays pending on node-local storage | No management VM runs on the node that holds the disk. Migrate one back to that node. |
 

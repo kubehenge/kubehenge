@@ -1,6 +1,8 @@
 package appliance
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -8,6 +10,31 @@ import (
 
 	"github.com/kubehenge/kubehenge/pkg/backupstore"
 )
+
+// A look at the clusters' snapshots holds the store for LookLife alone, so that the disk detaches
+// soon after the Backups page closes. The appliance's own backups keep the long life.
+func TestALookAtTheSnapshotsHoldsTheStoreBriefly(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	kubeconfig := "apiVersion: v1\nkind: Config\nclusters: [{name: m, cluster: {server: 'https://127.0.0.1:1'}}]\n" +
+		"users: [{name: m, user: {token: t}}]\ncontexts: [{name: m, context: {cluster: m, user: m}}]\ncurrent-context: m\n"
+	if err := os.MkdirAll(filepath.Dir(a.KubeconfigPath()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(a.KubeconfigPath(), []byte(kubeconfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	look, err := a.SnapshotVolume()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := look.(*backupstore.Volume); !ok || v.Life != backupstore.LookLife || v.Annotation != backupstore.InterfaceWakeAnnotation {
+		t.Fatalf("a look holds the store as %+v", look)
+	}
+	if v := a.storeVolume(fake.NewClientset()); v.Life != 0 {
+		t.Fatalf("the appliance's backups hold the store for %s, not WakeRequestLife", v.Life)
+	}
+}
 
 // The controller wakes the store for the clusters' etcd snapshots without the appliance, and the
 // appliance wakes it for its own backups. Each holds it awake under its own request, so that a

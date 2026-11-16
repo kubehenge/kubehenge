@@ -240,14 +240,14 @@ func (a *Appliance) interfaceAPI() (*interfaceAPI, error) {
 
 // SnapshotVolume is the backup volume as the interface reaches it for the clusters' etcd
 // snapshots, through a port-forward to the store's pod. Opening it wakes it, under a request of the
-// interface's own.
+// interface's own that lives as long as a look.
 func (a *Appliance) SnapshotVolume() (provisioner.BackupVolume, error) { //nolint:ireturn // the controller's and the interface's volume are one interface
 	api, err := a.interfaceAPI()
 	if err != nil {
 		return nil, err
 	}
 	v := a.storeVolume(api.kube)
-	v.HTTP, v.Base = api.store.HTTPClient(), backupstore.ForwardBase
+	v.HTTP, v.Base, v.Life = api.store.HTTPClient(), backupstore.ForwardBase, backupstore.LookLife
 	return v, nil
 }
 

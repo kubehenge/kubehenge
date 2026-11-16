@@ -445,8 +445,8 @@ store_wake=kubehenge.dev/wake-requested-e2e
 volume_snapshots() {
     mapi GET "${store_deployment}"
     idle=$(jq -r '.metadata.annotations["kubehenge.dev/idle-replicas"] // "1"' "${work}/body")
-    asked=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    mapi PATCH "${store_deployment}" "{\"metadata\":{\"annotations\":{\"${store_wake}\":\"${asked}\"}}}"
+    runs_out=$(date -u -d '+30 min' +%Y-%m-%dT%H:%M:%SZ)
+    mapi PATCH "${store_deployment}" "{\"metadata\":{\"annotations\":{\"${store_wake}\":\"${runs_out}\"}}}"
     if jq -e '(.spec.replicas // 0) == 0' "${work}/body" > /dev/null; then
         mapi PATCH "${store_deployment}/scale" '{"spec":{"replicas":1}}'
     fi

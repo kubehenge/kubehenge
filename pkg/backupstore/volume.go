@@ -24,7 +24,7 @@ import (
 )
 
 // WakeRequestAnnotation begins the annotations on the store's Deployment that hold the store awake,
-// with the time each was asked in RFC 3339. The controller sets one for each holder
+// with the time each runs out in RFC 3339. The controller sets one for each holder
 // (WakeRequestKey) while it uses the store, and takes it away once done.
 const WakeRequestAnnotation = "kubehenge.dev/wake-requested"
 
@@ -34,9 +34,12 @@ const InterfaceWakeAnnotation = "kubehenge.dev/interface-wake-requested"
 
 // WakeRequestLife is how long a request holds the store awake unless it is asked again. It outlasts
 // the longest holder, a restore, which asks once and uses the store to its end. A request whose
-// holder never lets go, as a look at the snapshots, runs out after it, and Sleeper puts the store
-// back to sleep.
+// holder never lets go runs out after it, and Sleeper puts the store back to sleep.
 const WakeRequestLife = provisioner.EtcdRestoreTimeout + 10*time.Minute
+
+// LookLife is the life of a look at the snapshots, which the Backups page asks for again with each
+// poll, every 30 seconds. The disk detaches a few minutes after the page closes.
+const LookLife = 3 * time.Minute
 
 // WakeRequestKey is holder's own annotation under base, one of the two above.
 func WakeRequestKey(base, holder string) string {
@@ -50,7 +53,7 @@ func WakeRequested(d *appsv1.Deployment, now time.Time) bool {
 		if !strings.HasPrefix(key, WakeRequestAnnotation) && !strings.HasPrefix(key, InterfaceWakeAnnotation) {
 			continue
 		}
-		if at, err := time.Parse(time.RFC3339, value); err == nil && now.Before(at.Add(WakeRequestLife)) {
+		if until, err := time.Parse(time.RFC3339, value); err == nil && now.Before(until) {
 			return true
 		}
 	}
@@ -70,8 +73,10 @@ type Volume struct {
 	Annotation string
 	// VMs reads where the management VMs run, to set the nodes' zones before a wake.
 	VMs VMReader
-	Log *slog.Logger
-	Now func() time.Time
+	// Life is how long each request holds the store, WakeRequestLife where 0.
+	Life time.Duration
+	Log  *slog.Logger
+	Now  func() time.Time
 }
 
 var _ provisioner.BackupVolume = (*Volume)(nil)
@@ -96,7 +101,11 @@ func (v *Volume) Open(ctx context.Context, holder string) (provisioner.VolumeSto
 // Wake asks for the store to be awake on behalf of holder, and starts it where it sleeps. It
 // answers provisioner.ErrVolumeAsleep until the store's pod is ready.
 func (v *Volume) Wake(ctx context.Context, holder string) error {
-	d, err := v.request(ctx, holder, v.now().UTC().Format(time.RFC3339))
+	life := v.Life
+	if life == 0 {
+		life = WakeRequestLife
+	}
+	d, err := v.request(ctx, holder, v.now().Add(life).UTC().Format(time.RFC3339))
 	if err != nil {
 		return err
 	}

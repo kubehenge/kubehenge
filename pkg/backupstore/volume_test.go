@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,7 +146,7 @@ func TestDoneReadsTheStoreAgainOnAConflict(t *testing.T) {
 						return false, nil, nil
 					}
 					d = d.DeepCopy()
-					d.Annotations[WakeRequestKey(WakeRequestAnnotation, "restore of b/db")] = now.Format(time.RFC3339)
+					d.Annotations[WakeRequestKey(WakeRequestAnnotation, "restore of b/db")] = now.Add(WakeRequestLife).Format(time.RFC3339)
 					if err = kube.Tracker().Update(gvr, d, Namespace); err != nil {
 						t.Error(err)
 					}
@@ -215,6 +216,54 @@ func TestTheSleeperPutsALeftStoreToSleep(t *testing.T) {
 		cancel()
 		if got := replicasOf(t, kube); got != tc.want {
 			t.Fatalf("%s after the look the store has %d replicas, want %d", tc.after, got, tc.want)
+		}
+	}
+}
+
+// A zones Secret that names no joined node says so, and leaves the store asleep.
+func TestAWakeWithNoNamedNodeSaysSo(t *testing.T) {
+	t.Parallel()
+	for what, nodes := range map[string][]byte{"no nodes key": nil, "an empty list": {}, "a renamed node": []byte("mgmt-old-0")} {
+		objects := sleepingStore()
+		zones, ok := objects[2].(*corev1.Secret)
+		if !ok {
+			t.Fatalf("sleepingStore's third object is %T", objects[2])
+		}
+		zones.Data = map[string][]byte{"token": []byte("zones")}
+		if nodes != nil {
+			zones.Data["nodes"] = nodes
+		}
+		kube := fake.NewClientset(objects...)
+		err := (&Volume{Kube: kube, VMs: onPVE1}).Wake(t.Context(), "snapshots of a/web")
+		if err == nil || !strings.Contains(err.Error(), `no node named under "nodes" in Secret kubehenge-system/kubehenge-backup-store-zones`) || !strings.Contains(err.Error(), "backupVolume.nodes") {
+			t.Errorf("%s: %v", what, err)
+		}
+		if got := replicasOf(t, kube); got != 0 {
+			t.Errorf("%s: the store has %d replicas", what, got)
+		}
+	}
+}
+
+// A look's request runs out LookLife after the page last asked, and a restore's lives on.
+func TestALookRunsOutLongBeforeARestore(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		holder string
+		life   time.Duration
+		want   int32
+	}{{"a look", LookLife, 0}, {"restore of b/db", 0, 1}} {
+		kube := fake.NewClientset(sleepingStore()...)
+		v := &Volume{Kube: kube, VMs: onPVE1, Life: tc.life, Now: func() time.Time { return start }}
+		if err := v.Wake(t.Context(), tc.holder); !errors.Is(err, provisioner.ErrVolumeAsleep) {
+			t.Fatal(err)
+		}
+		later := &Volume{Kube: kube, Now: func() time.Time { return start.Add(LookLife + time.Minute) }}
+		if err := later.sleep(t.Context(), nil); err != nil {
+			t.Fatal(err)
+		}
+		if got := replicasOf(t, kube); got != tc.want {
+			t.Fatalf("%s: %s on the store has %d replicas, want %d", tc.holder, LookLife+time.Minute, got, tc.want)
 		}
 	}
 }

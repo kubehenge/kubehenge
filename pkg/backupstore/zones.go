@@ -73,6 +73,9 @@ func FollowZones(ctx context.Context, kube kubernetes.Interface, read VMReader, 
 	if err != nil {
 		return nil, err
 	}
+	if len(nodes) == 0 && zone != "" {
+		return nil, fmt.Errorf("no node named under %q in Secret %s/%s is in the management cluster. Apply again to set them from backupVolume.nodes", zonesNodes, Namespace, ZonesSecret)
+	}
 	var unknown []string
 	inZone := false
 	for _, n := range nodes {

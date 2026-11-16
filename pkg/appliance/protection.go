@@ -77,14 +77,19 @@ func etcdStalled(err error) bool {
 	return slices.ContainsFunc(etcdStalls, func(s string) bool { return strings.Contains(err.Error(), s) })
 }
 
-// downloadRaced reports whether err is Proxmox VE failing to start a file download's task. Its
-// fork_worker reads the new worker's ID once and gives up when a SIGCHLD of another task ending
-// cuts the read off, which an apply's parallel requests make likely. A download makes nothing
-// before its worker runs, so it is safe to run again. A VM's create leaves its configuration
-// locked and stays failed.
+// downloadRaced reports whether every error of the tofu run in err is Proxmox VE failing to start a
+// file download's task. Its fork_worker reads the new worker's ID once and gives up when a SIGCHLD
+// of another task ending cuts the read off, which an apply's parallel requests make likely. A
+// download makes nothing before its worker runs, so it is safe to run again. A VM's create leaves
+// its configuration locked, so a run with one fails, as does one with any other error.
 func downloadRaced(err error) bool {
-	s := err.Error()
-	return strings.Contains(s, "got no worker upid") && strings.Contains(s, "Error downloading file from url")
+	var f *tofuError
+	if !errors.As(err, &f) {
+		return false
+	}
+	return !slices.ContainsFunc(f.diagnostics, func(d string) bool {
+		return !strings.Contains(d, "got no worker upid") || !strings.Contains(d, "Error downloading file from url")
+	})
 }
 
 // applyPlanned runs applyOnce, and again up to applyAttempts in all while a run fails on etcd timing
