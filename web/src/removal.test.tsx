@@ -23,6 +23,14 @@ const cluster = (name: string): object => ({
 });
 
 describe("removing Kubehenge", () => {
+  it("leaves the clusters rule to the disabled button, not the dialog", async () => {
+    fakeServer({});
+    const user = userEvent.setup({ delay: null });
+    render(<DangerZone running={false} onStarted={vi.fn<() => void>()} />);
+    await user.click(screen.getByRole("button", { name: "Remove…" }));
+    expect(screen.queryByText(/Delete every cluster first/u)).not.toBeInTheDocument();
+  });
+
   it("removes on Enter only once the word is typed", async () => {
     const routes: Record<string, Route> = { "POST /api/setup/remove": { status: 202, body: {} } };
     const calls = fakeServer(routes);

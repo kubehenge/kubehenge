@@ -766,6 +766,8 @@ describe("setup", () => {
     await waitFor(() => expect(wizard.getByLabelText("Bridge")).toHaveValue("vmbr0"));
     // The saved Talos image stays, and Apply says it is no longer offered.
     expect(wizard.getByLabelText("Talos image")).toHaveValue("local-lvm");
+    // The node that does not answer does not take "local" off the list.
+    expect(within(wizard.getByLabelText("Talos image")).getByRole("option", { name: "local" })).toBeInTheDocument();
     await user.click(wizard.getByRole("button", { name: "Apply" }));
     expect(wizard.getByText("local-lvm is not offered here. Choose another.")).toBeInTheDocument();
   });
@@ -802,6 +804,26 @@ describe("setup", () => {
     expect(screen.getByLabelText("Proxy address")).toBeVisible();
     expect(screen.getByLabelText("Registry mirrors")).toBeVisible();
     expect(screen.getByLabelText("Site CA")).toBeVisible();
+  });
+
+  it("says in the Services section that snapshots go to the backup volume", async () => {
+    window.history.replaceState(null, "", "/administration");
+    await editStored({
+      nodes: ["pve1"],
+      imageDatastore: "local",
+      vmDatastore: "local-lvm",
+      bridge: "vmbr0",
+      nodeAddresses: ["192.0.2.11/24"],
+      apiAddress: "192.0.2.10",
+      gateway: "192.0.2.1",
+      dnsServers: ["192.0.2.1"],
+      workloadDatastores: ["local-lvm"],
+      workloadBridges: ["vmbr0"],
+      bootstrapDatastore: "local",
+    });
+    await expect(
+      screen.findByText("etcd snapshots go to the backup volume. A target keeps a copy off the host."),
+    ).resolves.toBeInTheDocument();
   });
 
   it("tells users without the rights that an administrator has to set it up", async () => {
