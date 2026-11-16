@@ -245,22 +245,26 @@ type pinnedImage struct {
 	saveAs string
 }
 
-// signedImage resolves an image to the first of its folders that holds its signed checksum file.
-// The signature is checked against the embedded key, which must be the one with the pinned
-// fingerprint, before the checksum is read. A checksum other than the pinned one is refused.
+// signedImage resolves an image to the first of its folders that holds its signed checksum file
+// and the image. The signature is checked against the embedded key, which must be the one with the
+// pinned fingerprint, before the checksum is read. A checksum other than the pinned one is refused.
 func (s *Sources) signedImage(ctx context.Context, img *pinnedImage) (Resolved, error) {
-	err := fmt.Errorf("%s has no folder to come from", img.file)
+	var err error
 	for _, dir := range img.dirs {
 		var sum string
 		sum, err = s.signedSum(ctx, img, dir)
+		if err == nil && sum != img.sha256 {
+			return Resolved{}, fmt.Errorf("%s/%s lists %s with the SHA-256 %s, not the pinned %q", dir, img.sums, img.file, sum, img.sha256)
+		}
+		if err == nil {
+			// A publisher's cache can still hand out a dropped folder's checksum files.
+			_, err = s.do(ctx, http.MethodHead, s.at(dir+"/"+img.file), nil)
+		}
 		if _, absent := errors.AsType[absentError](err); absent {
 			continue
 		}
 		if err != nil {
 			return Resolved{}, err
-		}
-		if sum != img.sha256 {
-			return Resolved{}, fmt.Errorf("%s/%s lists %s with the SHA-256 %s, not the pinned %q", dir, img.sums, img.file, sum, img.sha256)
 		}
 		return Resolved{
 			URL:               s.at(dir + "/" + img.file),
@@ -269,7 +273,7 @@ func (s *Sources) signedImage(ctx context.Context, img *pinnedImage) (Resolved, 
 			ChecksumAlgorithm: "sha256",
 		}, nil
 	}
-	return Resolved{}, err
+	return Resolved{}, fmt.Errorf("the publisher keeps %s in none of its folders: %w", img.file, err)
 }
 
 // signedSum reads the image's SHA-256 from the signed checksum file of one of its folders.

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -74,6 +75,10 @@ func fakePublishers(t *testing.T) (*Sources, map[string][]byte) {
 		leapFixtureDir + "/" + leapFixture + ".sha256":     readFixture(t, "leap-16.1/"+leapFixture+".sha256"),
 		leapFixtureDir + "/" + leapFixture + ".sha256.asc": readFixture(t, "leap-16.1/"+leapFixture+".sha256.asc"),
 		k8sKeyPath: readFixture(t, "pkgs.k8s.io-Release.key"),
+	}
+	// A build asks only whether an image is there. Proxmox VE downloads it.
+	for _, image := range []string{almaFixtureDir + "/" + almaFixture, rockyFixtureDir + "/" + rockyFixture, leapFixtureDir + "/" + leapFixture} {
+		files[image] = nil
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /schematics", func(w http.ResponseWriter, r *http.Request) {
@@ -206,8 +211,9 @@ func TestResolveTheNodeOSesRelease(t *testing.T) {
 	s := &Sources{HTTP: srv.Client(), Mirrors: map[string]string{"https://dl.rockylinux.org": srv.URL}}
 	_, r, _ := ReleaseOf(rocky10)
 	minor, _, _ := strings.Cut(r.Build, "-")
-	if _, err := s.Resolve(context.Background(), ImageRef{Kind: NodeOSImage, NodeOS: rocky10}); err == nil {
-		t.Fatal("resolved without its checksums")
+	if _, err := s.Resolve(context.Background(), ImageRef{Kind: NodeOSImage, NodeOS: rocky10}); err == nil ||
+		!strings.Contains(err.Error(), "in none of its folders") {
+		t.Fatalf("Resolve = %v, want the image in none of its folders", err)
 	}
 	sums := "/images/x86_64/Rocky-10-GenericCloud-Base-" + r.Build + ".x86_64.qcow2.CHECKSUM"
 	want := []string{"/pub/rocky/" + minor + sums, "/vault/rocky/" + minor + sums}
@@ -238,25 +244,45 @@ func TestARotatedImageComesFromTheVault(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			s, files := fakePublishers(t)
-			for _, name := range []string{tc.sums, tc.sums + ".asc"} {
+			// The mirror drops the image first, while its cache still hands out the checksum files.
+			// Then those go too.
+			for _, name := range []string{"/" + tc.file, tc.sums, tc.sums + ".asc"} {
 				files[tc.vault+name] = files[tc.mirror+name]
-				delete(files, tc.mirror+name)
 			}
-			got, err := tc.resolve(s)
-			if err != nil {
-				t.Fatalf("with the mirror's folder gone: %v", err)
-			}
-			if want := s.TalosFactoryURL + tc.vault + "/" + tc.file; got.URL != want {
-				t.Errorf("the image comes from %s, want %s", got.URL, want)
-			}
-			if got.Checksum != tc.pin {
-				t.Errorf("checksum %s, want the pinned %s", got.Checksum, tc.pin)
+			for _, gone := range [][]string{{"/" + tc.file}, {tc.sums, tc.sums + ".asc"}} {
+				for _, name := range gone {
+					delete(files, tc.mirror+name)
+				}
+				got, err := tc.resolve(s)
+				if err != nil {
+					t.Fatalf("with the mirror's %v gone: %v", gone, err)
+				}
+				if want := s.TalosFactoryURL + tc.vault + "/" + tc.file; got.URL != want {
+					t.Errorf("with the mirror's %v gone the image comes from %s, want %s", gone, got.URL, want)
+				}
+				if got.Checksum != tc.pin {
+					t.Errorf("checksum %s, want the pinned %s", got.Checksum, tc.pin)
+				}
 			}
 			files[tc.vault+tc.sums+".asc"] = readFixture(t, "leap-16.1/"+leapFixture+".sha256.asc")
 			if _, err := tc.resolve(s); err == nil || !strings.Contains(err.Error(), "not signed by") {
 				t.Errorf("the vault's checksum file resolved under another publisher's signature: %v", err)
 			}
 		})
+	}
+}
+
+// Fails a release whose build lost its pin, or whose pin is no SHA-256. Rocky Linux's fixture signs
+// a fixed build, so this is the test that reads its release's own pin.
+func TestEveryNamedBuildIsPinned(t *testing.T) {
+	t.Parallel()
+	sha256Hex := regexp.MustCompile(`^[0-9a-f]{64}$`)
+	for _, f := range Families {
+		for _, r := range f.Releases() {
+			if r.Build != "" && !sha256Hex.MatchString(r.SHA256) {
+				t.Errorf("%s %s: build %s is pinned by %q, which is no SHA-256", f.Title(), r.Name, r.Build, r.SHA256)
+			}
+		}
 	}
 }
 
@@ -354,6 +380,7 @@ func almaPairPublisher(t *testing.T, staleSigs int32) (*Sources, *atomic.Int32, 
 				return
 			}
 			_, _ = w.Write(readFixture(t, "almalinux-10/CHECKSUM.asc"))
+		case almaFixtureDir + "/" + almaFixture:
 		default:
 			http.NotFound(w, r)
 		}
