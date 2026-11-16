@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"net/netip"
 	"regexp"
 	"slices"
@@ -982,7 +983,9 @@ func (b *Builder) nextID(ctx context.Context, cluster *proxmox.Cluster, taken ma
 	}
 	used := make(map[int]bool, len(vms))
 	for _, vm := range vms {
-		used[int(vm.VMID)] = true
+		if vm.VMID <= math.MaxInt32 {
+			used[int(vm.VMID)] = true
+		}
 	}
 	for id := b.FirstVMID; id <= b.LastVMID; id++ {
 		if !used[id] && !taken[id] {

@@ -55,7 +55,7 @@ func (o *applianceOptions) settingsCommand() *cobra.Command {
 
 func vmIDRangeSummary(r *provisioner.VMIDRange) string {
 	if r == nil {
-		return "None"
+		return orNone("")
 	}
 	return r.String()
 }

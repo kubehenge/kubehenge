@@ -123,11 +123,11 @@ func validateVMIDRange(old, c *clusterv1.Cluster) field.ErrorList {
 // giveSiteVMIDRange gives a new cluster that sets no VM ID range the site's, which its class names and
 // has a variable for. Only a new cluster takes it: a range changed under running VMs would replace
 // every node.
-func (d *ClusterDefaulter) giveSiteVMIDRange(ctx context.Context, c *clusterv1.Cluster) error {
+func giveSiteVMIDRange(ctx context.Context, c *clusterv1.Cluster, classOf classReader) error {
 	if _, set, _ := optionalVariable[json.RawMessage](c, VMIDRangeVariable); set {
 		return nil
 	}
-	class, err := d.Hooks.classOf(c)(ctx)
+	class, err := classOf(ctx)
 	if err != nil || class == nil {
 		return err
 	}
@@ -158,8 +158,11 @@ func rangeIsFull(ctx context.Context, c client.Reader, cluster *clusterv1.Cluste
 	for i := range machines.Items {
 		conditions, _, _ := unstructured.NestedSlice(machines.Items[i].Object, "status", "conditions")
 		for _, entry := range conditions {
-			cond, _ := entry.(map[string]any)
-			if message, _ := cond["message"].(string); cond["status"] == string(metav1.ConditionFalse) && strings.Contains(message, capmoxNoFreeID) {
+			cond, ok := entry.(map[string]any)
+			if !ok || cond["status"] != string(metav1.ConditionFalse) {
+				continue
+			}
+			if message, isText := cond["message"].(string); isText && strings.Contains(message, capmoxNoFreeID) {
 				return true, nil
 			}
 		}
