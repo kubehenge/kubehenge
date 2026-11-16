@@ -121,28 +121,28 @@ func vmIDRangeChecked(old, c *clusterv1.Cluster) bool {
 	return old == nil || variableChanged(old, c, VMIDRangeVariable) || machinesChanged(old, c)
 }
 
-// validateVMIDRange holds a cluster's VM ID range to checkVMIDRange.
-func validateVMIDRange(old, c *clusterv1.Cluster) field.ErrorList {
+// validateVMIDRange holds a cluster's VM ID range to what the cluster needs of it alone, then to what
+// the others that share it leave.
+func (v *ClusterValidator) validateVMIDRange(ctx context.Context, reads *pveReads, old, c *clusterv1.Cluster) field.ErrorList {
 	if !vmIDRangeChecked(old, c) {
 		return nil
 	}
-	return vmIDRangeInvalid(checkVMIDRange(c))
-}
-
-func vmIDRangeInvalid(err error) field.ErrorList {
+	err := checkVMIDRange(c)
+	if err == nil {
+		err = v.checkSharedVMIDRange(ctx, reads, c)
+	}
 	if err == nil {
 		return nil
 	}
 	return field.ErrorList{field.Invalid(field.NewPath("spec", "topology", "variables").Key(VMIDRangeVariable), VMIDRangeVariable, err.Error())}
 }
 
-// validateSharedVMIDRange holds a cluster's VM ID range to the IDs the others that share it leave: the
-// demand of every other cluster on the same range, and the templates that already hold an ID in it.
-func (v *ClusterValidator) validateSharedVMIDRange(ctx context.Context, reads *pveReads, old, c *clusterv1.Cluster) field.ErrorList {
+// checkSharedVMIDRange refuses a range that, after the templates already in it, cannot hold the
+// cluster and every other cluster on the same range.
+func (v *ClusterValidator) checkSharedVMIDRange(ctx context.Context, reads *pveReads, c *clusterv1.Cluster) error {
 	r, set, err := optionalVariable[VMIDRange](c, VMIDRangeVariable)
-	// A range that fails alone is refused by validateVMIDRange.
-	if !vmIDRangeChecked(old, c) || err != nil || !set || checkVMIDRange(c) != nil || v.Hooks.Reader == nil {
-		return nil
+	if err != nil || !set || v.Hooks.Reader == nil {
+		return nil //nolint:nilerr // checkVMIDRange has judged the variable
 	}
 	clusters := &clusterv1.ClusterList{}
 	if err = v.Hooks.Reader.List(ctx, clusters); err != nil {
@@ -160,21 +160,30 @@ func (v *ClusterValidator) validateSharedVMIDRange(ctx context.Context, reads *p
 			sharing++
 		}
 	}
-	var templates int64
-	if v.Hooks.Sites != nil {
-		if sites, readErr := reads.lookAtSites(ctx); readErr == nil {
-			for _, t := range sites.Templates {
-				if int64(t.VMID) >= r.Start && int64(t.VMID) <= r.End {
-					templates++
-				}
-			}
-		}
-	}
+	templates := v.templatesIn(ctx, reads, r)
 	if need, free := vmIDDemand(c)+others, r.Size()-templates; free < need {
-		return vmIDRangeInvalid(fmt.Errorf("VM ID range %s has %d IDs free after %d templates. This cluster needs %d and the %d other clusters on it %d. Widen it",
-			r, free, templates, vmIDDemand(c), sharing, others))
+		return fmt.Errorf("VM ID range %s has %d IDs free after %d templates. This cluster needs %d and the %d other clusters on it %d. Widen it",
+			r, free, templates, vmIDDemand(c), sharing, others)
 	}
 	return nil
+}
+
+// templatesIn counts the templates that hold an ID of the range, none where Proxmox VE cannot be read.
+func (v *ClusterValidator) templatesIn(ctx context.Context, reads *pveReads, r VMIDRange) int64 {
+	if v.Hooks.Sites == nil {
+		return 0
+	}
+	sites, err := reads.lookAtSites(ctx)
+	if err != nil {
+		return 0
+	}
+	var n int64
+	for i := range sites.Templates {
+		if id := int64(sites.Templates[i].VMID); id >= r.Start && id <= r.End {
+			n++
+		}
+	}
+	return n
 }
 
 // giveSiteVMIDRange gives a new cluster that sets no VM ID range the site's, which its class names and

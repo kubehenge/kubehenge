@@ -68,8 +68,8 @@ func TestValidatorHoldsTheRangeToTheNodesWhenTheyGrow(t *testing.T) {
 func TestVMIDRangeKeepsASpareForTheControlPlaneAndEachPool(t *testing.T) {
 	t.Parallel()
 	c := withReplicas(cluster(), 3, 2)
-	pools := c.Spec.Topology.Workers.MachineDeployments
-	c.Spec.Topology.Workers.MachineDeployments = append(pools, pools[0], pools[0])
+	pool := c.Spec.Topology.Workers.MachineDeployments[0]
+	c.Spec.Topology.Workers.MachineDeployments = []clusterv1.MachineDeploymentTopology{pool, pool, pool}
 	// Three control planes and three pools of two are nine nodes, with a spare for each of four parts.
 	if got := vmIDDemand(c); got != 13 {
 		t.Errorf("demand %d, want 13", got)
@@ -119,11 +119,8 @@ func TestValidatorCountsEveryClusterAndTemplateThatSharesARange(t *testing.T) {
 func TestValidatorKeepsTheIDsOfTemplatesOutOfARange(t *testing.T) {
 	t.Parallel()
 	h, _ := hooksFor(t)
-	var sites []TemplateSite
-	for _, id := range []int{10000, 10001, 10002, 5} {
-		sites = append(sites, TemplateSite{Name: "t", VMID: id})
-	}
-	h.Sites = fixedSites{&Sites{Templates: sites}}
+	templates := []TemplateSite{{VMID: 10000}, {VMID: 10001}, {VMID: 10002}, {VMID: 5}}
+	h.Sites = fixedSites{&Sites{Templates: templates}}
 	v := &ClusterValidator{Hooks: h}
 	// Seven IDs hold five, after three templates in them.
 	_, err := v.ValidateCreate(t.Context(), siteRangeCluster("web", `{"start":10000,"end":10006}`))

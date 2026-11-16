@@ -116,8 +116,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	errs = append(errs, validateClusterMesh(old, c)...)
 	errs = append(errs, validateFamilies(old, c)...)
 	errs = append(errs, validateRanges(old, c, class)...)
-	errs = append(errs, validateVMIDRange(old, c)...)
-	errs = append(errs, v.validateSharedVMIDRange(pveCtx, reads, old, c)...)
+	errs = append(errs, v.validateVMIDRange(pveCtx, reads, old, c)...)
 	errs = append(errs, validateTimeServers(c)...)
 	if err := checkLogs(c); err != nil {
 		errs = append(errs, field.Forbidden(topology.Child("variables").Key(logsAddon), err.Error()))
