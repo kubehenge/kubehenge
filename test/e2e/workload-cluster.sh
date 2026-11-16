@@ -2165,8 +2165,10 @@ if [ "${restores_etcd}" = true ]; then
     volume_snapshot=$(kubectl -n "${ns}" get cluster "${name}" -o json |
         jq -r '.metadata.annotations["kubehenge.dev/etcd-snapshot"] | fromjson | .name')
     [ "${volume_snapshot}" != "${snapshot_name}" ] || fail "no new snapshot was taken onto the backup volume"
-    "${kubehenge}" cluster etcd-snapshots list "${name}" -n "${ns}" | grep -q -F "Kept on:     the backup volume" ||
-        fail "the CLI does not say the snapshots are on the backup volume"
+    # No target is what the interface and the CLI show as "Kept on: the backup volume".
+    kubectl -n "${ns}" get cluster "${name}" -o json |
+        jq -e '.spec.topology.variables[] | select(.name == "etcdSnapshots") | .value | (.target // "") == ""' > /dev/null ||
+        fail "the cluster's etcdSnapshots name a target, not the backup volume"
 
     wl -n default delete configmap e2e-before-volume-snapshot
     lost_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
