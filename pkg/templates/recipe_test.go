@@ -109,14 +109,14 @@ func TestRecipesOfEveryNodeOS(t *testing.T) {
 				b.NodeOS = NodeOS{Family: f.Name(), Release: r.Name, FIPS: b.NodeOS.FIPS}
 				t.Run(b.NodeOS.String()+"/"+string(b.Distribution), func(t *testing.T) {
 					t.Parallel()
-					checkRecipe(t, f, r, &b)
+					checkRecipe(t, f, &r, &b)
 				})
 			}
 		}
 	}
 }
 
-func checkRecipe(t *testing.T, f Family, r Release, b *Bake) {
+func checkRecipe(t *testing.T, f Family, r *Release, b *Bake) {
 	t.Helper()
 	keys := f.Keys(r, b)
 	names := checkKeys(t, keys)
@@ -328,8 +328,8 @@ func TestFIPSBakes(t *testing.T) {
 			}
 			for _, fips := range []bool{true, false} {
 				b := Bake{Distribution: RKE2, NodeOS: NodeOS{Family: f.Name(), Release: r.Name, FIPS: fips}}
-				keys := f.Keys(r, &b)
-				recipe, err := f.Recipe(r, &b, fakeKeys(keys))
+				keys := f.Keys(&r, &b)
+				recipe, err := f.Recipe(&r, &b, fakeKeys(keys))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -473,23 +473,23 @@ func TestRecipeRefuses(t *testing.T) {
 	kubeadm := Bake{NodeOS: DefaultNodeOS, Distribution: Kubeadm, KubernetesVersion: "v1.37.1"}
 	for name, try := range map[string]func() error{
 		"a missing key": func() error {
-			keys := fakeKeys(alma.Keys(release, &kubeadm))
+			keys := fakeKeys(alma.Keys(&release, &kubeadm))
 			delete(keys, "kubernetes")
-			_, err := alma.Recipe(release, &kubeadm, keys)
+			_, err := alma.Recipe(&release, &kubeadm, keys)
 			return err
 		},
 		"a Kubernetes version that is none": func() error {
 			b := kubeadm
 			b.KubernetesVersion = "1.37"
-			_, err := alma.Recipe(release, &b, fakeKeys(alma.Keys(release, &kubeadm)))
+			_, err := alma.Recipe(&release, &b, fakeKeys(alma.Keys(&release, &kubeadm)))
 			return err
 		},
 		"Talos": func() error {
-			_, err := alma.Recipe(release, &Bake{NodeOS: DefaultNodeOS.Base(), Distribution: Talos, TalosVersion: DefaultTalosVersion}, nil)
+			_, err := alma.Recipe(&release, &Bake{NodeOS: DefaultNodeOS.Base(), Distribution: Talos, TalosVersion: DefaultTalosVersion}, nil)
 			return err
 		},
 		"Talos on Leap": func() error {
-			_, err := leapFamily.Recipe(leapRelease, &Bake{Distribution: Talos}, nil)
+			_, err := leapFamily.Recipe(&leapRelease, &Bake{Distribution: Talos}, nil)
 			return err
 		},
 	} {

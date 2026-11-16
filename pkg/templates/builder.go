@@ -855,7 +855,7 @@ func (b *Builder) recipe(ctx context.Context, bake *Bake) (*Recipe, error) {
 		return nil, err
 	}
 	keys := map[string]string{}
-	for _, k := range f.Keys(r, bake) {
+	for _, k := range f.Keys(&r, bake) {
 		armoured, kerr := b.Sources.RepositoryKey(ctx, k)
 		if kerr != nil {
 			return nil, kerr
@@ -865,7 +865,7 @@ func (b *Builder) recipe(ctx context.Context, bake *Bake) (*Recipe, error) {
 	withProxy := *bake
 	withProxy.Proxy = b.Proxy
 	withProxy.Talos = b.Sources.TalosPins[bake.TalosVersion]
-	recipe, err := f.Recipe(r, &withProxy, keys)
+	recipe, err := f.Recipe(&r, &withProxy, keys)
 	if err != nil {
 		return nil, fmt.Errorf("the bake of %s %s: %w", f.Title(), r.Name, err)
 	}
@@ -909,7 +909,7 @@ func (b *Builder) hardware(ctx context.Context, t *Template) (Hardware, error) {
 	least := DefaultCPUType
 	if t.Bake != nil {
 		if _, r, err := ReleaseOf(t.Bake.NodeOS); err == nil {
-			least = CPUTypeOf(r)
+			least = CPUTypeOf(&r)
 		}
 	}
 	hw := DefaultHardware(least)

@@ -31,12 +31,35 @@ func readFixture(t *testing.T, name string) []byte {
 }
 
 const (
-	almaFixtureDir  = "/almalinux/10/cloud/x86_64_v2/images"
-	rockyFixtureDir = "/pub/rocky/10/images/x86_64"
+	rockyFixtureDir = "/pub/rocky/10.2/images/x86_64"
+	rockyVaultDir   = "/vault/rocky/10.2/images/x86_64"
 	rockyFixture    = "Rocky-10-GenericCloud-Base-10.2-20260525.0.x86_64.qcow2"
+	rockySums       = "/" + rockyFixture + ".CHECKSUM"
 	leapFixtureDir  = "/distribution/leap/16.1/appliances"
 	leapFixture     = "Leap-16.1-Immutable.x86_64-Base-qcow-Build3.10.qcow2"
 	k8sKeyPath      = "/core:/stable:/v1.37/rpm/repodata/repomd.xml.key"
+)
+
+// AlmaLinux's fixture is the checksum file of the pinned build's minor release, which
+// scripts/renovate-refresh.sh fetches again when Renovate moves the build. Its tests therefore
+// resolve the pinned build, at that minor release's folders.
+var (
+	almaBuild       = almaLinux{}.Releases()[0]
+	almaMinor, _, _ = strings.Cut(almaBuild.Build, "-")
+	almaFixtureDir  = "/almalinux/" + almaMinor + "/cloud/x86_64_v2/images"
+	almaVaultDir    = "/" + almaMinor + "/cloud/x86_64_v2/images"
+	almaFixture     = "AlmaLinux-10-GenericCloud-" + almaBuild.Build + ".x86_64_v2.qcow2"
+)
+
+// The builds Rocky Linux's and openSUSE's fixtures sign, which Renovate's moves of the releases
+// leave as they are.
+var (
+	rockyBuild = Release{
+		Name: "10", Build: "10.2-20260525.0", SHA256: "9fc9e9ff16888bb68ac39b0392e25c9c92684d50c85f1cce6ab549363bbc4b48", Mode: ImageMode,
+	}
+	leapBuild = Release{
+		Name: "16.1", Build: "Build3.10", SHA256: "93c54ee4b49dd7fcd7213ebbd59c824077a4ffde5e6be9a8357f79fcd3655b7b", Mode: Transactional,
+	}
 )
 
 // fakePublishers serves the fixtures in place of every publisher, at the paths they publish them.
@@ -44,12 +67,12 @@ const (
 func fakePublishers(t *testing.T) (*Sources, map[string][]byte) {
 	t.Helper()
 	files := map[string][]byte{
-		almaFixtureDir + "/CHECKSUM":                           readFixture(t, "almalinux-10/CHECKSUM"),
-		almaFixtureDir + "/CHECKSUM.asc":                       readFixture(t, "almalinux-10/CHECKSUM.asc"),
-		rockyFixtureDir + "/" + rockyFixture + ".CHECKSUM":     readFixture(t, "rocky-10/"+rockyFixture+".CHECKSUM"),
-		rockyFixtureDir + "/" + rockyFixture + ".CHECKSUM.asc": readFixture(t, "rocky-10/"+rockyFixture+".CHECKSUM.asc"),
-		leapFixtureDir + "/" + leapFixture + ".sha256":         readFixture(t, "leap-16.1/"+leapFixture+".sha256"),
-		leapFixtureDir + "/" + leapFixture + ".sha256.asc":     readFixture(t, "leap-16.1/"+leapFixture+".sha256.asc"),
+		almaFixtureDir + "/CHECKSUM":                       readFixture(t, "almalinux-10/CHECKSUM"),
+		almaFixtureDir + "/CHECKSUM.asc":                   readFixture(t, "almalinux-10/CHECKSUM.asc"),
+		rockyFixtureDir + rockySums:                        readFixture(t, "rocky-10"+rockySums),
+		rockyFixtureDir + rockySums + ".asc":               readFixture(t, "rocky-10"+rockySums+".asc"),
+		leapFixtureDir + "/" + leapFixture + ".sha256":     readFixture(t, "leap-16.1/"+leapFixture+".sha256"),
+		leapFixtureDir + "/" + leapFixture + ".sha256.asc": readFixture(t, "leap-16.1/"+leapFixture+".sha256.asc"),
 		k8sKeyPath: readFixture(t, "pkgs.k8s.io-Release.key"),
 	}
 	mux := http.NewServeMux()
@@ -72,7 +95,9 @@ func fakePublishers(t *testing.T) (*Sources, map[string][]byte) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	mirrors := map[string]string{}
-	for _, publisher := range []string{"https://repo.almalinux.org", "https://dl.rockylinux.org", "https://download.opensuse.org", "https://pkgs.k8s.io"} {
+	for _, publisher := range []string{
+		"https://repo.almalinux.org", "https://vault.almalinux.org", "https://dl.rockylinux.org", "https://download.opensuse.org", "https://pkgs.k8s.io",
+	} {
 		mirrors[publisher] = srv.URL
 	}
 	return &Sources{HTTP: srv.Client(), TalosFactoryURL: srv.URL, Mirrors: mirrors, clock: &pairClock{at: pairStart}}, files
@@ -103,10 +128,6 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 // Each family's image is resolved only through its publisher's signature over the checksum file.
 func TestResolveEachFamilyVerifiesItsSignedChecksums(t *testing.T) {
 	t.Parallel()
-	// The builds the fixtures sign, which Renovate's moves of the releases leave as they are.
-	leapBuild := Release{Name: "16.1", Build: "Build3.10", Mode: Transactional}
-	almaBuild := Release{Name: "10", Build: "10.2-20261012.0", Mode: ImageMode}
-	rockyBuild := Release{Name: "10", Build: "10.2-20260525.0", Mode: ImageMode}
 	for _, tc := range []struct {
 		name    string
 		resolve func(*Sources) (Resolved, error)
@@ -114,17 +135,17 @@ func TestResolveEachFamilyVerifiesItsSignedChecksums(t *testing.T) {
 		want    Resolved
 	}{
 		{
-			"AlmaLinux 10", func(s *Sources) (Resolved, error) { return almaLinux{}.Image(context.Background(), s, almaBuild) },
+			"AlmaLinux 10", func(s *Sources) (Resolved, error) { return almaLinux{}.Image(context.Background(), s, &almaBuild) },
 			almaFixtureDir + "/CHECKSUM",
 			Resolved{
-				URL:      almaFixtureDir + "/AlmaLinux-10-GenericCloud-10.2-20261012.0.x86_64_v2.qcow2",
-				FileName: "template-almalinux-10.2-20261012.0-bf441cb90a56.qcow2",
-				Checksum: "bf441cb90a56ee08ec8a3c38d920996e217e79cfdf6e33561afd3408bed5a337", ChecksumAlgorithm: "sha256",
+				URL:      almaFixtureDir + "/" + almaFixture,
+				FileName: "template-almalinux-" + almaBuild.Build + "-" + almaBuild.SHA256[:12] + ".qcow2",
+				Checksum: almaBuild.SHA256, ChecksumAlgorithm: "sha256",
 			},
 		},
 		{
-			"Rocky Linux 10", func(s *Sources) (Resolved, error) { return rocky{}.Image(context.Background(), s, rockyBuild) },
-			rockyFixtureDir + "/" + rockyFixture + ".CHECKSUM",
+			"Rocky Linux 10", func(s *Sources) (Resolved, error) { return rocky{}.Image(context.Background(), s, &rockyBuild) },
+			rockyFixtureDir + rockySums,
 			Resolved{
 				URL:      rockyFixtureDir + "/" + rockyFixture,
 				FileName: "template-rocky-10.2-20260525.0-9fc9e9ff1688.qcow2",
@@ -133,7 +154,7 @@ func TestResolveEachFamilyVerifiesItsSignedChecksums(t *testing.T) {
 		},
 		{
 			// Its release candidate's files: Kubehenge offers none, but the checks are the same.
-			"openSUSE Leap 16.1", func(s *Sources) (Resolved, error) { return leap{}.Image(context.Background(), s, leapBuild) },
+			"openSUSE Leap 16.1", func(s *Sources) (Resolved, error) { return leap{}.Image(context.Background(), s, &leapBuild) },
 			leapFixtureDir + "/" + leapFixture + ".sha256",
 			Resolved{
 				URL:      leapFixtureDir + "/" + leapFixture,
@@ -162,7 +183,7 @@ func TestResolveEachFamilyVerifiesItsSignedChecksums(t *testing.T) {
 			// Another publisher's genuine signature is no signature of this one's.
 			other := "almalinux-10/CHECKSUM.asc"
 			if tc.name == "AlmaLinux 10" {
-				other = "rocky-10/" + rockyFixture + ".CHECKSUM.asc"
+				other = "rocky-10" + rockySums + ".asc"
 			}
 			files[tc.sums+".asc"] = readFixture(t, other)
 			if _, err := tc.resolve(s); err == nil {
@@ -172,7 +193,8 @@ func TestResolveEachFamilyVerifiesItsSignedChecksums(t *testing.T) {
 	}
 }
 
-// Resolve goes to the release a node OS names, on its family's publisher.
+// Resolve goes to the release a node OS names, on its family's publisher: to the folder of the
+// build's minor release on the mirror, then to the vault's. An image neither holds fails.
 func TestResolveTheNodeOSesRelease(t *testing.T) {
 	t.Parallel()
 	var asked []string
@@ -183,12 +205,101 @@ func TestResolveTheNodeOSesRelease(t *testing.T) {
 	t.Cleanup(srv.Close)
 	s := &Sources{HTTP: srv.Client(), Mirrors: map[string]string{"https://dl.rockylinux.org": srv.URL}}
 	_, r, _ := ReleaseOf(rocky10)
+	minor, _, _ := strings.Cut(r.Build, "-")
 	if _, err := s.Resolve(context.Background(), ImageRef{Kind: NodeOSImage, NodeOS: rocky10}); err == nil {
 		t.Fatal("resolved without its checksums")
 	}
-	want := rockyFixtureDir + "/Rocky-10-GenericCloud-Base-" + r.Build + ".x86_64.qcow2.CHECKSUM"
-	if len(asked) != 1 || asked[0] != want {
-		t.Errorf("asked for %v, want %s", asked, want)
+	sums := "/images/x86_64/Rocky-10-GenericCloud-Base-" + r.Build + ".x86_64.qcow2.CHECKSUM"
+	want := []string{"/pub/rocky/" + minor + sums, "/vault/rocky/" + minor + sums}
+	if !slices.Equal(asked, want) {
+		t.Errorf("asked for %v, want %v", asked, want)
+	}
+}
+
+// A publisher moves a minor release's images to its vault once a newer minor release is out. Fails a
+// build that reads only the mirror, or that takes the vault's files unchecked.
+func TestARotatedImageComesFromTheVault(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name            string
+		resolve         func(*Sources) (Resolved, error)
+		mirror, vault   string
+		sums, file, pin string
+	}{
+		{
+			"AlmaLinux 10", func(s *Sources) (Resolved, error) { return almaLinux{}.Image(context.Background(), s, &almaBuild) },
+			almaFixtureDir, almaVaultDir, "/CHECKSUM", almaFixture, almaBuild.SHA256,
+		},
+		{
+			"Rocky Linux 10", func(s *Sources) (Resolved, error) { return rocky{}.Image(context.Background(), s, &rockyBuild) },
+			rockyFixtureDir, rockyVaultDir, rockySums, rockyFixture, rockyBuild.SHA256,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s, files := fakePublishers(t)
+			for _, name := range []string{tc.sums, tc.sums + ".asc"} {
+				files[tc.vault+name] = files[tc.mirror+name]
+				delete(files, tc.mirror+name)
+			}
+			got, err := tc.resolve(s)
+			if err != nil {
+				t.Fatalf("with the mirror's folder gone: %v", err)
+			}
+			if want := s.TalosFactoryURL + tc.vault + "/" + tc.file; got.URL != want {
+				t.Errorf("the image comes from %s, want %s", got.URL, want)
+			}
+			if got.Checksum != tc.pin {
+				t.Errorf("checksum %s, want the pinned %s", got.Checksum, tc.pin)
+			}
+			files[tc.vault+tc.sums+".asc"] = readFixture(t, "leap-16.1/"+leapFixture+".sha256.asc")
+			if _, err := tc.resolve(s); err == nil || !strings.Contains(err.Error(), "not signed by") {
+				t.Errorf("the vault's checksum file resolved under another publisher's signature: %v", err)
+			}
+		})
+	}
+}
+
+// Only a folder that is gone sends a build on to the vault. Fails a build that takes any failure of
+// the mirror for a moved image.
+func TestAMirrorThatFailsIsNotPassedOver(t *testing.T) {
+	t.Parallel()
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.Path)
+		http.Error(w, "no", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	s := &Sources{HTTP: srv.Client(), Mirrors: map[string]string{"https://dl.rockylinux.org": srv.URL}}
+	if _, err := (rocky{}).Image(context.Background(), s, &rockyBuild); err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("Image = %v, want the mirror's 403", err)
+	}
+	if want := []string{rockyFixtureDir + rockySums}; !slices.Equal(asked, want) {
+		t.Errorf("asked for %v, want %v", asked, want)
+	}
+}
+
+// The pin holds the image's bytes for a release of Kubehenge: a signed checksum file that lists the
+// build with another SHA-256 is refused, as is a release with no pin.
+func TestAnImageWhoseSignedChecksumIsNotThePinIsRefused(t *testing.T) {
+	t.Parallel()
+	for name, pin := range map[string]string{
+		"another SHA-256": "0" + almaBuild.SHA256[1:],
+		"no pin":          "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s, _ := fakePublishers(t)
+			r := almaBuild
+			r.SHA256 = pin
+			got, err := almaLinux{}.Image(context.Background(), s, &r)
+			if err == nil || !strings.Contains(err.Error(), "not the pinned") {
+				t.Fatalf("Image = %+v, %v; want the pin's mismatch refused", got, err)
+			}
+			if !strings.Contains(err.Error(), almaBuild.SHA256) || !strings.Contains(err.Error(), almaFixture) {
+				t.Errorf("error %q names neither the listed SHA-256 nor the image", err)
+			}
+		})
 	}
 }
 
@@ -199,7 +310,7 @@ func TestLeapIsNotOfferedBeforeItsRelease(t *testing.T) {
 		!strings.Contains(err.Error(), "has not released") {
 		t.Errorf("Resolve = %v", err)
 	}
-	if _, err := (leap{}).Image(context.Background(), s, leap{}.Releases()[0]); err == nil {
+	if _, err := (leap{}).Image(context.Background(), s, &leap{}.Releases()[0]); err == nil {
 		t.Error("an image of no named build resolved")
 	}
 }
@@ -239,7 +350,7 @@ func almaPairPublisher(t *testing.T, staleSigs int32) (*Sources, *atomic.Int32, 
 			_, _ = w.Write(readFixture(t, "almalinux-10/CHECKSUM"))
 		case almaFixtureDir + "/CHECKSUM.asc":
 			if sigFetches.Add(1) <= staleSigs {
-				_, _ = w.Write(readFixture(t, "rocky-10/"+rockyFixture+".CHECKSUM.asc"))
+				_, _ = w.Write(readFixture(t, "rocky-10"+rockySums+".asc"))
 				return
 			}
 			_, _ = w.Write(readFixture(t, "almalinux-10/CHECKSUM.asc"))
@@ -257,7 +368,7 @@ func resolveAlmaForPair(s *Sources) (Resolved, error) {
 }
 
 func resolveAlmaForPairWith(ctx context.Context, s *Sources) (Resolved, error) {
-	return almaLinux{}.Image(ctx, s, Release{Name: "10", Build: "10.2-20261012.0", Mode: ImageMode})
+	return almaLinux{}.Image(ctx, s, &almaBuild)
 }
 
 var pairStart = time.Date(2026, 11, 9, 11, 50, 56, 0, time.UTC)
@@ -315,7 +426,7 @@ func TestAMismatchedPairIsFetchedAgainTogether(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a pair that agrees on the third fetch: %v", err)
 	}
-	if got.Checksum != "bf441cb90a56ee08ec8a3c38d920996e217e79cfdf6e33561afd3408bed5a337" {
+	if got.Checksum != almaBuild.SHA256 {
 		t.Errorf("checksum %q", got.Checksum)
 	}
 	if sums.Load() != 3 || sigs.Load() != 3 {

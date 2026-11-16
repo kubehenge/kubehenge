@@ -76,7 +76,9 @@ The node's SELinux policy lets the agent read those files and no others of `/var
 
 ### Image checks
 
-Each Kubehenge release makes templates from one build of each node OS's cloud image. Before Proxmox VE downloads it, the image is checked against its publisher's signature over its checksum. The publisher's key is embedded in Kubehenge and known by its fingerprint.
+Each Kubehenge release makes templates from one build of each node OS's cloud image, pinned by its SHA-256. Before Proxmox VE downloads it, the pin is checked against its publisher's signature over its checksum. The publisher's key is embedded in Kubehenge and known by its fingerprint.
+
+The image comes from the publisher's mirror (`repo.almalinux.org`, `dl.rockylinux.org`). Once a newer minor release of the node OS replaces it there, it comes from the publisher's vault (`vault.almalinux.org`, `dl.rockylinux.org`).
 
 ### Package checks
 

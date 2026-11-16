@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"strings"
 )
 
 const rockyName = "rocky"
@@ -28,9 +29,10 @@ func (rocky) Releases() []Release {
 	return []Release{{
 		Name: "10",
 		// The build of Rocky Linux 10's GenericCloud image, which the bake boots to build the node
-		// image in, named by its file on dl.rockylinux.org.
+		// image in, named by its file on dl.rockylinux.org, and that file's SHA-256.
 		// renovate: datasource=custom.rocky-cloud-images depName=rocky-10
-		Build: "10.2-20260525.0",
+		Build:  "10.2-20260525.0",
+		SHA256: "9fc9e9ff16888bb68ac39b0392e25c9c92684d50c85f1cce6ab549363bbc4b48",
 		// Rocky Linux 10 is built for x86-64-v3 and stops at boot on anything less.
 		CPUType: "x86-64-v3",
 		Mode:    ImageMode,
@@ -39,11 +41,24 @@ func (rocky) Releases() []Release {
 }
 
 // Image is the GenericCloud image, with its own signed checksum file beside it.
-func (rocky) Image(ctx context.Context, s *Sources, r Release) (Resolved, error) {
-	dir := "https://dl.rockylinux.org/pub/rocky/10/images/x86_64"
+//
+// Rocky Linux keeps a minor release's build in that minor's folder on its mirror, and in its vault
+// once a newer minor release has replaced it. The folder named 10 holds the newest minor release's
+// build alone.
+func (rocky) Image(ctx context.Context, s *Sources, r *Release) (Resolved, error) {
+	minor, _, _ := strings.Cut(r.Build, "-")
 	file := fmt.Sprintf("Rocky-10-GenericCloud-Base-%s.x86_64.qcow2", r.Build)
-	key := signingKey{name: "Rocky Linux 10", armoured: rocky10Key, fingerprint: Rocky10KeyFingerprint}
-	return s.signedImage(ctx, key, dir+"/"+file, dir+"/"+file+".CHECKSUM", dir+"/"+file+".CHECKSUM.asc", "rocky-"+r.Build)
+	return s.signedImage(ctx, &pinnedImage{
+		signer: signingKey{name: "Rocky Linux 10", armoured: rocky10Key, fingerprint: Rocky10KeyFingerprint},
+		dirs: []string{
+			"https://dl.rockylinux.org/pub/rocky/" + minor + "/images/x86_64",
+			"https://dl.rockylinux.org/vault/rocky/" + minor + "/images/x86_64",
+		},
+		file:   file,
+		sums:   file + ".CHECKSUM",
+		sha256: r.SHA256,
+		saveAs: "rocky-" + r.Build,
+	})
 }
 
 // EPEL10KeyFingerprint signs EPEL 10.
@@ -56,8 +71,8 @@ var rocky10EL = &elFamily{
 		&RepositoryKey{Name: "epel", URL: "https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-10", Fingerprints: []string{EPEL10KeyFingerprint}}),
 }
 
-func (rocky) Keys(_ Release, b *Bake) []RepositoryKey { return keysOf(rocky10EL.repositories(b)) }
+func (rocky) Keys(_ *Release, b *Bake) []RepositoryKey { return keysOf(rocky10EL.repositories(b)) }
 
-func (rocky) Recipe(_ Release, b *Bake, keys map[string]string) (Recipe, error) {
+func (rocky) Recipe(_ *Release, b *Bake, keys map[string]string) (Recipe, error) {
 	return rocky10EL.recipe(b, keys)
 }
