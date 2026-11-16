@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
@@ -136,5 +137,32 @@ func TestPreflightRefusesAFullVMIDBand(t *testing.T) {
 	inv.UsedVMIDs = nil
 	if f = s.Preflight(inv, false); len(f.Errors) != 0 {
 		t.Errorf("unreadable IDs were refused: %v", f.Errors)
+	}
+}
+
+func TestPreflightRefusesASiteVMIDRangeInsideTheManagementBand(t *testing.T) {
+	t.Parallel()
+	s := settings("pve1")
+	inv := healthy()
+	// With no next-id the management VMs draw from 10000 to 99998.
+	for _, r := range []provisioner.VMIDRange{{Start: 10000, End: 10999}, {Start: 5000, End: 10000}, {Start: 99998, End: 100500}} {
+		s.WorkloadVMIDRange = &r
+		mentions(t, s.Preflight(inv, false).Errors, "VM ID range "+r.String()+" overlaps 10000 to 99998", "such as 100000-100999")
+	}
+	for _, r := range []provisioner.VMIDRange{{Start: 99999, End: 100999}, {Start: 100, End: 9999}} {
+		s.WorkloadVMIDRange = &r
+		if f := s.Preflight(inv, false); len(f.Errors) != 0 {
+			t.Errorf("%s was refused: %v", r, f.Errors)
+		}
+	}
+	// The band follows the datacenter's next-id, and an existing management cluster keeps its IDs.
+	s.WorkloadVMIDRange = &provisioner.VMIDRange{Start: 10000, End: 10999}
+	inv.NextID = pve.NextID{Lower: 200000, Upper: 300000}
+	if f := s.Preflight(inv, false); len(f.Errors) != 0 {
+		t.Errorf("a range outside next-id's was refused: %v", f.Errors)
+	}
+	inv.NextID = pve.NextID{}
+	if f := s.Preflight(inv, true); len(f.Errors) != 0 {
+		t.Errorf("an owned cluster was refused: %v", f.Errors)
 	}
 }

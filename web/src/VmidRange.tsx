@@ -32,16 +32,15 @@ export function vmIDRangeVariable(text: string): { start: number; end: number } 
 
 /**
  * vmIDRangeProblem names what is wrong with a range, as the webhook and the settings check do, or
- * undefined. Empty text is no range. Given the nodes a cluster runs at most, one more for an upgrade
- * has to fit too.
+ * undefined. Empty text is no range. Given the IDs a cluster needs at most, the range has to hold them.
  */
-export function vmIDRangeProblem(text: string, nodes?: number): string | undefined {
+export function vmIDRangeProblem(text: string, needed?: number): string | undefined {
   if (text.trim() === "") {
     return undefined;
   }
   const found = rangeFormat.exec(text.trim())?.groups;
   if (found === undefined) {
-    return "Write it like 10000-10999";
+    return "Write it like 100000-100999";
   }
   const start = Number(found["start"]);
   const end = Number(found["end"]);
@@ -51,9 +50,8 @@ export function vmIDRangeProblem(text: string, nodes?: number): string | undefin
   if (start < leastID || end > mostID) {
     return `IDs run from ${leastID} to ${mostID}`;
   }
-  const need = nodes === undefined ? 0 : nodes + 1;
-  if (end - start + 1 < need) {
-    return `Holds ${end - start + 1} IDs. Nodes and an upgrade need ${need}`;
+  if (needed !== undefined && end - start + 1 < needed) {
+    return `Holds ${end - start + 1} IDs. Nodes and their upgrades need ${needed}`;
   }
   return undefined;
 }
@@ -70,9 +68,15 @@ export const vmIDRangeText = (text: string, site: string): string => {
 export const vmIDRangeHint = (site: string | undefined): string =>
   site === undefined ? "Empty takes the next free ID" : `Empty takes the site's, ${site}`;
 
-/** nodesAtMost is how many nodes a cluster runs at most, an autoscaled pool at its largest. */
-export const nodesAtMost = (c: Cluster): number =>
-  c.controlPlane.desired + c.workerPools.reduce((n, p) => n + (p.autoscaling?.max ?? p.replicas), 0);
+/**
+ * vmIDDemand is the IDs a cluster can hold at once: its nodes at most, an autoscaled pool at its
+ * largest, and a spare for the control plane and each pool, which roll one machine beyond their size.
+ */
+export const vmIDDemand = (c: Cluster): number =>
+  c.controlPlane.desired +
+  c.workerPools.reduce((n, p) => n + (p.autoscaling?.max ?? p.replicas), 0) +
+  1 +
+  c.workerPools.length;
 
 /** VMIDRangeField chooses the VM IDs a cluster's VMs take. */
 export function VMIDRangeField({
@@ -122,14 +126,15 @@ export function VMIDRangeDialog({ cluster: c, onClose }: { cluster: Cluster; onC
   const initial = vmIDRangeOf(c.variables[vmIDVariable]);
   const [value, setValue] = useState(initial);
   const { busy, error, send } = useChange(c, onClose);
-  const problem = vmIDRangeProblem(value, nodesAtMost(c));
-  const unusable = value.trim() === "" || problem !== undefined;
+  const problem = vmIDRangeProblem(value, vmIDDemand(c));
+  const unusable = problem !== undefined;
   return (
     <Dialog
       title="Edit VM ID range"
       onClose={onClose}
       onSubmit={() => {
-        void send({ variables: { [vmIDVariable]: vmIDRangeVariable(value) } });
+        // An empty field drops the variable, as kubectl can, and the cluster takes the next free ID.
+        void send({ variables: { [vmIDVariable]: value.trim() === "" ? null : vmIDRangeVariable(value) } });
       }}
       actions={
         <>
@@ -142,7 +147,12 @@ export function VMIDRangeDialog({ cluster: c, onClose }: { cluster: Cluster; onC
         </>
       }
     >
-      <VMIDRangeField value={value} onChange={setValue} problem={problem} hint="Like 10000-10999" />
+      <VMIDRangeField
+        value={value}
+        onChange={setValue}
+        problem={problem}
+        hint="Like 100000-100999. Empty takes the next free ID"
+      />
       <p className="muted">Replaces every node, one at a time.</p>
       <ErrorBox message={error} />
     </Dialog>

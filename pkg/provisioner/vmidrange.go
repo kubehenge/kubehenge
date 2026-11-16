@@ -53,7 +53,7 @@ func ParseVMIDRange(text string) (VMIDRange, error) {
 	start, err1 := strconv.ParseInt(strings.TrimSpace(from), 10, 64)
 	end, err2 := strconv.ParseInt(strings.TrimSpace(to), 10, 64)
 	if !found || err1 != nil || err2 != nil {
-		return VMIDRange{}, fmt.Errorf("VM ID range %q is not start-end. Write it like 10000-10999", text)
+		return VMIDRange{}, fmt.Errorf("VM ID range %q is not start-end. Write it like 100000-100999", text)
 	}
 	r := VMIDRange{Start: start, End: end}
 	return r, r.Check()
@@ -88,8 +88,15 @@ func nodesAtMost(c *clusterv1.Cluster) int64 {
 	return n
 }
 
+// vmIDDemand is the IDs a cluster can hold at once: its nodes at most, and a spare for the control
+// plane and for each pool, since each rolls one machine beyond its size at the same time as the
+// others.
+func vmIDDemand(c *clusterv1.Cluster) int64 {
+	return nodesAtMost(c) + 1 + int64(len(c.Spec.Topology.Workers.MachineDeployments))
+}
+
 // checkVMIDRange refuses a cluster's VM ID range that Check refuses, or that holds fewer IDs than the
-// cluster's nodes and the one more a rolling upgrade has beside them.
+// cluster's demand.
 func checkVMIDRange(c *clusterv1.Cluster) error {
 	r, set, err := optionalVariable[VMIDRange](c, VMIDRangeVariable)
 	if err != nil {
@@ -101,21 +108,71 @@ func checkVMIDRange(c *clusterv1.Cluster) error {
 	if err = r.Check(); err != nil {
 		return err
 	}
-	if need := nodesAtMost(c) + 1; r.Size() < need {
-		return fmt.Errorf("VM ID range %s holds %d IDs. The nodes need %d, one of them for an upgrade. Widen it", r, r.Size(), need)
+	if need := vmIDDemand(c); r.Size() < need {
+		return fmt.Errorf("VM ID range %s holds %d IDs. The nodes need %d, with a spare for the control plane and each pool to roll. Widen it", r, r.Size(), need)
 	}
 	return nil
 }
 
-// validateVMIDRange holds a cluster's VM ID range to checkVMIDRange when it is created or the range
-// or the machines change, so that a cluster that already fell short is not held to it for unrelated
-// edits.
+// vmIDRangeChecked tells whether a change brings a cluster's VM ID range up for judging: its creation,
+// or a change of the range or the machines, so that a cluster that already fell short is not held to
+// it for unrelated edits.
+func vmIDRangeChecked(old, c *clusterv1.Cluster) bool {
+	return old == nil || variableChanged(old, c, VMIDRangeVariable) || machinesChanged(old, c)
+}
+
+// validateVMIDRange holds a cluster's VM ID range to checkVMIDRange.
 func validateVMIDRange(old, c *clusterv1.Cluster) field.ErrorList {
-	if old != nil && !variableChanged(old, c, VMIDRangeVariable) && !machinesChanged(old, c) {
+	if !vmIDRangeChecked(old, c) {
 		return nil
 	}
-	if err := checkVMIDRange(c); err != nil {
-		return field.ErrorList{field.Invalid(field.NewPath("spec", "topology", "variables").Key(VMIDRangeVariable), VMIDRangeVariable, err.Error())}
+	return vmIDRangeInvalid(checkVMIDRange(c))
+}
+
+func vmIDRangeInvalid(err error) field.ErrorList {
+	if err == nil {
+		return nil
+	}
+	return field.ErrorList{field.Invalid(field.NewPath("spec", "topology", "variables").Key(VMIDRangeVariable), VMIDRangeVariable, err.Error())}
+}
+
+// validateSharedVMIDRange holds a cluster's VM ID range to the IDs the others that share it leave: the
+// demand of every other cluster on the same range, and the templates that already hold an ID in it.
+func (v *ClusterValidator) validateSharedVMIDRange(ctx context.Context, reads *pveReads, old, c *clusterv1.Cluster) field.ErrorList {
+	r, set, err := optionalVariable[VMIDRange](c, VMIDRangeVariable)
+	// A range that fails alone is refused by validateVMIDRange.
+	if !vmIDRangeChecked(old, c) || err != nil || !set || checkVMIDRange(c) != nil || v.Hooks.Reader == nil {
+		return nil
+	}
+	clusters := &clusterv1.ClusterList{}
+	if err = v.Hooks.Reader.List(ctx, clusters); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "reading the clusters that share a VM ID range; admitting without that check")
+		return nil
+	}
+	var others, sharing int64
+	for i := range clusters.Items {
+		o := &clusters.Items[i]
+		if o.Namespace == c.Namespace && o.Name == c.Name || !Owns(o, v.Hooks.ClassNamespace) || !o.DeletionTimestamp.IsZero() {
+			continue
+		}
+		if theirs, ok, _ := optionalVariable[VMIDRange](o, VMIDRangeVariable); ok && theirs == r {
+			others += vmIDDemand(o)
+			sharing++
+		}
+	}
+	var templates int64
+	if v.Hooks.Sites != nil {
+		if sites, readErr := reads.lookAtSites(ctx); readErr == nil {
+			for _, t := range sites.Templates {
+				if int64(t.VMID) >= r.Start && int64(t.VMID) <= r.End {
+					templates++
+				}
+			}
+		}
+	}
+	if need, free := vmIDDemand(c)+others, r.Size()-templates; free < need {
+		return vmIDRangeInvalid(fmt.Errorf("VM ID range %s has %d IDs free after %d templates. This cluster needs %d and the %d other clusters on it %d. Widen it",
+			r, free, templates, vmIDDemand(c), sharing, others))
 	}
 	return nil
 }
@@ -191,7 +248,7 @@ func (p *Placer) markVMIDRange(ctx context.Context, c *clusterv1.Cluster) {
 		if full {
 			cond = &metav1.Condition{
 				Status: metav1.ConditionTrue, Reason: "NoFreeVMID",
-				Message: fmt.Sprintf("No free VM ID in %s. Widen the cluster's VM ID range, or free IDs in it", r),
+				Message: fmt.Sprintf("No free VM ID in %s, and the machine that asked stays failed. Widen the range, then delete the failed machine so Cluster API makes it again", r),
 			}
 		}
 	}

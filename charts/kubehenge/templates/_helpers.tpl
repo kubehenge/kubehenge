@@ -489,9 +489,21 @@ kubehenge.dev/time-zone: {{ .Values.timeZone | quote }}
 {{- if .Values.siteCA }}
 kubehenge.dev/site-ca: "set"
 {{- end }}
-{{- with .Values.vmIDRange }}
-kubehenge.dev/vm-id-range: {{ printf "%d-%d" (int .start) (int .end) | quote }}
+{{- if .Values.vmIDRange }}
+kubehenge.dev/vm-id-range: {{ include "kubehenge.vmIDRange" . | quote }}
 {{- end }}
+{{- end -}}
+
+{{/*
+The site's VM ID range as start-end. Helm reads the numbers of a values file as floats, so they go
+through int, or 1000000 prints as 1e+06.
+*/}}
+{{- define "kubehenge.vmIDRange" -}}
+{{- $r := .Values.vmIDRange -}}
+{{- if gt (int64 $r.start) (int64 $r.end) -}}
+{{- fail (printf "vmIDRange starts at %d, above its end %d" (int64 $r.start) (int64 $r.end)) -}}
+{{- end -}}
+{{- printf "%d-%d" (int64 $r.start) (int64 $r.end) -}}
 {{- end -}}
 
 {{/*

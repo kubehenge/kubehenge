@@ -41,7 +41,13 @@ type patchDefinition struct {
 }
 
 type patchSelector struct {
-	Kind string `json:"kind"`
+	Kind           string `json:"kind"`
+	MatchResources struct {
+		ControlPlane      bool `json:"controlPlane"`
+		MachineDeployment struct {
+			Names []string `json:"names"`
+		} `json:"machineDeploymentClass"`
+	} `json:"matchResources"`
 }
 
 type jsonPatch struct {

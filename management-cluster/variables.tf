@@ -715,7 +715,7 @@ variable "time_zone" {
 }
 
 variable "workload_vm_id_range" {
-  description = "The VM IDs a new cluster's VMs and the VM templates take, both ends included, such as { start = 10000, end = 10999 }. A cluster may set its own. Null, Proxmox VE's next free ID. It is apart from vm_id_range, which draws the management VMs' IDs."
+  description = "The VM IDs a new cluster's VMs and the VM templates take, both ends included, such as { start = 100000, end = 100999 }. A cluster may set its own. Null, Proxmox VE's next free ID. It is apart from vm_id_range, which draws the management VMs' IDs."
   type = object({
     start = number
     end   = number

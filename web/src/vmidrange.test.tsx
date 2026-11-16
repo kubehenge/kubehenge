@@ -53,18 +53,18 @@ describe("the create wizard's VM ID range", () => {
   });
 
   it("holds the step back for a range the server refuses, the site's included", () => {
-    // Three control planes and one worker are four nodes, and an upgrade has a fifth beside them.
+    // Three control planes and one worker are four nodes, with a spare for the control plane and the pool.
     const form = { ...newForm(), storage: "tank", controlPlaneReplicas: 3, workerReplicas: 1 };
     const problem = (range: string, c: ClusterClass = cls): string | undefined =>
       fieldProblems("Machines", { ...form, vmIDRange: range }, c).vmIDRange;
     expect(problem("")).toBeUndefined();
-    expect(problem("10000-10004")).toBeUndefined();
-    expect(problem("10000-10003")).toBe("Holds 4 IDs. Nodes and an upgrade need 5");
+    expect(problem("10000-10005")).toBeUndefined();
+    expect(problem("10000-10004")).toBe("Holds 5 IDs. Nodes and their upgrades need 6");
     expect(problem("2000-1000")).toBe("The start is above the end");
     expect(problem("99-1000")).toBe("IDs run from 100 to 999999999");
-    expect(problem("ten")).toBe("Write it like 10000-10999");
+    expect(problem("ten")).toBe("Write it like 100000-100999");
     const narrow: ClusterClass = { ...cls, annotations: { "kubehenge.dev/vm-id-range": "20000-20002" } };
-    expect(problem("", narrow)).toBe("Holds 3 IDs. Nodes and an upgrade need 5");
+    expect(problem("", narrow)).toBe("Holds 3 IDs. Nodes and their upgrades need 6");
   });
 
   it("says the range, the site's or the next free ID in the summary", () => {
@@ -112,8 +112,8 @@ describe("the VM ID range", () => {
     for (const bad of ["1000", "a-b", "200-100", "99-200", "100-1000000000", "-5-10"]) {
       expect(vmIDRangeProblem(bad)).toBeDefined();
     }
-    expect(vmIDRangeProblem("100-104", 4)).toBeUndefined();
-    expect(vmIDRangeProblem("100-104", 5)).toBe("Holds 5 IDs. Nodes and an upgrade need 6");
+    expect(vmIDRangeProblem("100-105", 6)).toBeUndefined();
+    expect(vmIDRangeProblem("100-105", 7)).toBe("Holds 6 IDs. Nodes and their upgrades need 7");
   });
 
   it("is changed from the options with the range the cluster sends", async () => {
@@ -132,11 +132,11 @@ describe("the VM ID range", () => {
     const field = within(dialog).getByLabelText("VM ID range");
     const save = within(dialog).getByRole("button", { name: "Add to plan" });
     expect(save).toBeDisabled();
-    // Three control planes and one worker are four nodes, and an upgrade has a fifth beside them.
+    // Three control planes and one worker are four nodes, with a spare for the control plane and the pool.
     await user.clear(field);
     await user.type(field, "20000-20003");
     expect(save).toBeDisabled();
-    expect(within(dialog).getByText("Holds 4 IDs. Nodes and an upgrade need 5")).toBeInTheDocument();
+    expect(within(dialog).getByText("Holds 4 IDs. Nodes and their upgrades need 6")).toBeInTheDocument();
     await user.clear(field);
     await user.type(field, "20000-20999");
     await user.click(save);
@@ -144,6 +144,27 @@ describe("the VM ID range", () => {
     await waitFor(() =>
       expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
         variables: { vmIDRange: { start: 20_000, end: 20_999 } },
+      }),
+    );
+  });
+
+  it("clears the range from the options, as kubectl can", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web/options");
+    const calls = fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/clusters/clusters/web": { body: cluster },
+      "PATCH /api/clusters/clusters/web": { body: cluster },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Edit the VM ID range" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit VM ID range" });
+    await user.clear(within(dialog).getByLabelText("VM ID range"));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
+    await applyStaged(user);
+    await waitFor(() =>
+      expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
+        variables: { vmIDRange: null },
       }),
     );
   });

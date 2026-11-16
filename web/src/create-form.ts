@@ -1629,7 +1629,7 @@ function vmIDRows(form: Form, c: ClusterClass, defined: ReadonlySet<string>): [s
 // holds it to.
 function vmIDProblems(form: Form, c: ClusterClass | undefined): Problems {
   const range = form.vmIDRange || (c?.annotations?.[siteVMIDAnnotation] ?? "");
-  const problem = variable(c, vmIDVariable) ? vmIDRangeProblem(range, nodesNeeded(form) - 1) : undefined;
+  const problem = variable(c, vmIDVariable) ? vmIDRangeProblem(range, nodesNeeded(form) + 1) : undefined;
   return problem === undefined ? {} : { vmIDRange: problem };
 }
 

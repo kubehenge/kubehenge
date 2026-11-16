@@ -970,9 +970,11 @@ func (b *Builder) newestHardware(ctx context.Context, t *Template) (*Hardware, e
 // create whose task never started burns its VM ID too.
 const createAttempts = 5
 
-// nextID is the lowest VM ID of the builder's range that no listed VM and none of taken holds, or
-// Proxmox VE's next free ID where the builder has no range. A full range is an error, never a
-// fallback to IDs outside it.
+// nextID is the lowest VM ID of the builder's range that no listed VM and none of taken holds and
+// that Proxmox VE calls free, as Cluster API Provider Proxmox asks it, since the list leaves out the
+// VMs the token cannot see. Where the builder has no range it is Proxmox VE's next free ID. A full
+// range is an error, never a fallback to IDs outside it. The ID is not reserved, so createFresh
+// still asks for another where the create is refused.
 func (b *Builder) nextID(ctx context.Context, cluster *proxmox.Cluster, taken map[int]bool) (int, error) {
 	if b.LastVMID == 0 {
 		return cluster.NextID(ctx) //nolint:wrapcheck // createFresh names the step
@@ -988,7 +990,14 @@ func (b *Builder) nextID(ctx context.Context, cluster *proxmox.Cluster, taken ma
 		}
 	}
 	for id := b.FirstVMID; id <= b.LastVMID; id++ {
-		if !used[id] && !taken[id] {
+		if used[id] || taken[id] {
+			continue
+		}
+		free, checkErr := cluster.CheckID(ctx, id)
+		if checkErr != nil {
+			return 0, fmt.Errorf("asking Proxmox VE whether VM ID %d is free: %w", id, checkErr)
+		}
+		if free {
 			return id, nil
 		}
 	}

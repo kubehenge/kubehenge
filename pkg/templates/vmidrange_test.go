@@ -38,12 +38,33 @@ func TestCreateFreshTakesTheLowestFreeVMIDOfItsRange(t *testing.T) {
 	}
 }
 
-// A VM the token cannot list is found out when Proxmox VE refuses its ID.
-func TestCreateFreshSkipsAnIDInItsRangeProxmoxVERefuses(t *testing.T) {
+// A VM the token cannot list is found by asking Proxmox VE whether its ID is free, however many
+// there are at the start of the range.
+func TestCreateFreshSkipsEveryHiddenVMOfItsRange(t *testing.T) {
 	t.Parallel()
 	_, tags := rke2(t)
-	hidden := template(10000, "hidden", tags, "")
-	f := &fakeCluster{t: t, views: [][]map[string]any{{}}, configs: configsOf(hidden)}
+	var hidden []map[string]any
+	for id := 10000; id < 10006; id++ {
+		hidden = append(hidden, template(id, "hidden", tags, ""))
+	}
+	f := &fakeCluster{t: t, views: [][]map[string]any{{}}, configs: configsOf(hidden...)}
+	if vmid, err := createIn(t, 10000, 10099, f); err != nil || vmid != 10006 {
+		t.Fatalf("createFresh gave %d, %v; want VM 10006", vmid, err)
+	}
+	if len(f.created) != 1 {
+		t.Errorf("%d creates for one template", len(f.created))
+	}
+}
+
+// Proxmox VE does not reserve a VM ID it calls free, so a client that takes it between the check and
+// the create makes the create fail, and the build asks for another ID.
+func TestCreateFreshAsksAgainWhenAnotherClientTakesTheIDItWasOffered(t *testing.T) {
+	t.Parallel()
+	_, tags := rke2(t)
+	f := &fakeCluster{
+		t: t, views: [][]map[string]any{{}}, configs: configsOf(template(10000, "other", tags, "")),
+		late: map[int]bool{10000: true},
+	}
 	if vmid, err := createIn(t, 10000, 10005, f); err != nil || vmid != 10001 {
 		t.Fatalf("createFresh gave %d, %v; want VM 10001", vmid, err)
 	}
