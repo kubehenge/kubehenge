@@ -103,16 +103,21 @@ func TestIntegrationWakersFollowZones(t *testing.T) { //nolint:paralleltest // s
 		"cordoning":                     `{"spec":{"unschedulable":true}}`,
 		"the zone and the spec at once": `{"metadata":{"labels":{"topology.kubernetes.io/zone":"pve3"}},"spec":{"unschedulable":true}}`,
 	} {
-		if err := patch(ui, "mgmt-cp-1", body); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), outside) {
+		if err = patch(ui, "mgmt-cp-1", body); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), outside) {
 			t.Errorf("%s: %v, want refused", what, err)
 		}
 	}
-	if err := patch(ui, "worker", `{"metadata":{"labels":{"topology.kubernetes.io/zone":"pve2"}}}`); !apierrors.IsForbidden(err) {
+	if err = patch(ui, "worker",`{"metadata":{"labels":{"topology.kubernetes.io/zone":"pve2"}}}`); !apierrors.IsForbidden(err) {
 		t.Errorf("a node outside the management nodes: %v, want forbidden", err)
 	}
 
-	// The controller wakes the store for the clusters' etcd snapshots, with no appliance, and so
-	// follows the zones under the same rule.
+	controllerFollowsZones(ctx, t, admin, as, a, patch)
+}
+
+// controllerFollowsZones moves mgmt-cp-0's zone back to pve1 and follows the zones as the
+// controller, which wakes the store for the clusters' etcd snapshots with no appliance.
+func controllerFollowsZones(ctx context.Context, t *testing.T, admin kubernetes.Interface, as *rest.Config, a *Appliance, patch func(kubernetes.Interface, string, string) error) {
+	t.Helper()
 	as.Impersonate.UserName = "system:serviceaccount:" + integration.ClassNamespace + ":kubehenge-controller"
 	controller, err := kubernetes.NewForConfig(as)
 	if err != nil {
@@ -124,10 +129,12 @@ func TestIntegrationWakersFollowZones(t *testing.T) { //nolint:paralleltest // s
 	if _, err = a.followZones(ctx, controller, "pve1"); err != nil {
 		t.Fatalf("the controller could not correct the zones: %v", err)
 	}
-	if moved, err = admin.CoreV1().Nodes().Get(ctx, "mgmt-cp-0", metav1.GetOptions{}); err != nil || moved.Labels[corev1.LabelTopologyZone] != "pve2" {
-		t.Errorf("after the controller's wake the moved node's labels are %v: %v", moved.Labels, err)
+	moved, err := admin.CoreV1().Nodes().Get(ctx, "mgmt-cp-0", metav1.GetOptions{})
+	if err != nil || moved.Labels[corev1.LabelTopologyZone] != "pve2" {
+		t.Fatalf("after the controller's wake the moved node is %v: %v", moved, err)
 	}
-	if err := patch(controller, "mgmt-cp-1", `{"metadata":{"labels":{"kept":"no"}}}`); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), outside) {
+	err = patch(controller, "mgmt-cp-1", `{"metadata":{"labels":{"kept":"no"}}}`)
+	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "changes nothing of a node but the values of its zone labels") {
 		t.Errorf("the controller changing another label: %v, want refused", err)
 	}
 }

@@ -100,7 +100,7 @@ func (v *Volume) Wake(ctx context.Context, holder string) error {
 	}
 	// A store put to sleep may still count its stopping pod as ready.
 	if d.Spec.Replicas == nil || *d.Spec.Replicas == 0 {
-		if err = v.wake(ctx, d); err != nil {
+		if err = v.start(ctx, d); err != nil {
 			return err
 		}
 		return provisioner.ErrVolumeAsleep
@@ -111,9 +111,9 @@ func (v *Volume) Wake(ctx context.Context, holder string) error {
 	return nil
 }
 
-// wake starts the sleeping store. Its pod must land on a node VM on the Proxmox VE node that holds
+// start starts the sleeping store. Its pod must land on a node VM on the Proxmox VE node that holds
 // the disk, so the nodes' zone labels are set first.
-func (v *Volume) wake(ctx context.Context, d *appsv1.Deployment) error {
+func (v *Volume) start(ctx context.Context, d *appsv1.Deployment) error {
 	if v.VMs == nil {
 		return errors.New("the backup volume's store sleeps, and this client cannot read where the management VMs run to wake it")
 	}
@@ -124,10 +124,7 @@ func (v *Volume) wake(ctx context.Context, d *appsv1.Deployment) error {
 	if len(unknown) > 0 && v.Log != nil {
 		v.Log.Warn("Proxmox VE lists no VM for these management nodes, whose zone labels stay as they are", "nodes", unknown)
 	}
-	if err = v.scale(ctx, "", 1); err != nil {
-		return fmt.Errorf("starting the backup volume's store: %w", err)
-	}
-	return nil
+	return v.scale(ctx, "", 1)
 }
 
 // Done takes holder's wake request away, and puts the store back to the replicas its chart keeps
@@ -151,8 +148,8 @@ func (v *Volume) Done(ctx context.Context, holder string) error {
 	}
 	// A holder that asked since this request was taken away changed the Deployment, and its wake
 	// holds: the conflict leaves the store as it is.
-	if err = v.scale(ctx, d.ResourceVersion, n); err != nil && !apierrors.IsConflict(err) {
-		return fmt.Errorf("putting the backup volume's store back to sleep: %w", err)
+	if serr := v.scale(ctx, d.ResourceVersion, n); serr != nil && !apierrors.IsConflict(serr) {
+		return serr
 	}
 	return nil
 }
@@ -170,10 +167,11 @@ func (v *Volume) scale(ctx context.Context, version string, replicas int64) erro
 	}
 	patch, err := json.Marshal(s)
 	if err != nil {
-		return err //nolint:wrapcheck // the callers say what for
+		return fmt.Errorf("scaling the backup volume's store to %d: %w", replicas, err)
 	}
-	if _, err = v.Kube.AppsV1().Deployments(Namespace).Patch(ctx, Service, types.MergePatchType, patch, metav1.PatchOptions{}, "scale"); err != nil {
-		return err //nolint:wrapcheck // the callers say what for
+	_, err = v.Kube.AppsV1().Deployments(Namespace).Patch(ctx, Service, types.MergePatchType, patch, metav1.PatchOptions{}, "scale")
+	if err != nil {
+		return fmt.Errorf("scaling the backup volume's store to %d: %w", replicas, err)
 	}
 	return nil
 }
