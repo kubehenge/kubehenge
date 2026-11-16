@@ -69,7 +69,11 @@ describe("a cluster's placement", () => {
     expect(within(dialog).getByLabelText(/^pve9 \(not shown to you\)$/u)).toBeChecked();
     expect(within(dialog).getByLabelText(/^pve2 \(offline\)$/u)).not.toBeChecked();
     expect(within(dialog).getByLabelText(/^pve3 \(not reachable\)$/u)).not.toBeChecked();
-    expect(within(dialog).getByTitle("HTTP 596: certificate verify failed")).toBeInTheDocument();
+    expect(
+      within(dialog).getByTitle(
+        "HTTP 596: certificate verify failed. Run pvecm updatecerts --force on pve3, then restart pveproxy.",
+      ),
+    ).toBeInTheDocument();
     expect(save).toBeDisabled();
     await user.click(within(dialog).getByLabelText(/^pve9/u));
     expect(save).toBeDisabled();

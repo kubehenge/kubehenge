@@ -74,13 +74,13 @@ func (s *TokenState) Message() string {
 		if strings.Contains(s.Error, certificateNames) {
 			return fmt.Sprintf("%s token cannot verify the Proxmox VE API's certificate: %s", s.Name, s.Error)
 		}
-		return fmt.Sprintf("%s token cannot verify the Proxmox VE API's certificate (%s). The API may use a new CA.", s.Name, s.Error)
+		return fmt.Sprintf("%s token cannot verify the Proxmox VE API's certificate (%s). The API may use a new CA. Give it to the appliance with install.sh --upgrade --proxmox-ca.", s.Name, s.Error)
 	case TokenPrivileges:
 		needs := make([]string, len(s.Missing))
 		for i, n := range s.Missing {
 			needs[i] = n.String()
 		}
-		return fmt.Sprintf("%s token lacks %s.", s.Name, strings.Join(needs, ", "))
+		return fmt.Sprintf("%s token lacks %s. Grant the missing privileges to the token's user.", s.Name, strings.Join(needs, ", "))
 	default:
 		return fmt.Sprintf("%s token could not be tested: %s.", s.Name, s.Error)
 	}

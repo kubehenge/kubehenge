@@ -306,6 +306,28 @@ func TestACertificateLackingTheAddressIsNotBlamedOnTheCA(t *testing.T) {
 	}
 }
 
+// A token problem ends on what to do, so that health, the notification and the Cluster say the same.
+func TestATokenProblemSaysWhatToDo(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		state TokenState
+		want  string
+	}{
+		{
+			TokenState{Name: "Controller", Problem: TokenCertificate, Error: "x509: certificate signed by unknown authority"},
+			"Give it to the appliance with install.sh --upgrade --proxmox-ca.",
+		},
+		{
+			TokenState{Name: "Controller", Problem: TokenPrivileges, Missing: []Need{{Privilege: "Realm.AllocateUser", Path: "/access/realm/pve"}}},
+			"Grant the missing privileges to the token's user.",
+		},
+	} {
+		if msg := c.state.Message(); !strings.HasSuffix(msg, c.want) {
+			t.Errorf("%s: message %q does not end on %q", c.state.Problem, msg, c.want)
+		}
+	}
+}
+
 func TestTheTokensOutcomeIsRecordedAndClearsOnRecovery(t *testing.T) {
 	t.Parallel()
 	f := newTokenFixture(t)

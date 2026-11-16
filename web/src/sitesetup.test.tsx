@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { newForm } from "./create-form";
 import { fakeServer } from "./fake-server";
-import { AdvancedFields, formOf, settings, setupFieldProblems, useTimeZoneProblem, type SetupForm } from "./Setup";
+import { SiteFields, formOf, settings, setupFieldProblems, useTimeZoneProblem, type SetupForm } from "./Setup";
 import { fromCluster } from "./start-from";
 import type { Cluster } from "./types";
 
@@ -14,17 +14,7 @@ const noProblem = vi.fn<() => string | undefined>();
 
 function Fields(): JSX.Element {
   const [form, setForm] = useState<SetupForm>(formOf());
-  return (
-    <AdvancedFields
-      form={form}
-      set={(k, v) => setForm((f) => ({ ...f, [k]: v }))}
-      shown={noProblem}
-      fixed={false}
-      open
-      warnings={[]}
-      onOpen={vi.fn<() => void>()}
-    />
-  );
+  return <SiteFields form={form} set={(k, v) => setForm((f) => ({ ...f, [k]: v }))} shown={noProblem} />;
 }
 
 describe("the site settings in Setup", () => {

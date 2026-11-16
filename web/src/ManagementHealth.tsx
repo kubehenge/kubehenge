@@ -1,6 +1,7 @@
 import type { JSX } from "react";
 
 import { api } from "./api";
+import { nodeAdvice } from "./Placement";
 import type { BackupSummary, ManagementHealth, RebootReadiness } from "./types";
 import { Detail, ErrorBox, Said, Skeleton, Status, filled, pollCache, pollIdle, usePoll } from "./ui";
 
@@ -68,7 +69,7 @@ function UnreachableNodes({ nodes }: { nodes: NodeFault[] }): JSX.Element | null
         <li key={`node/${n.node}`} className="token-problem">
           <Status state="error" text="Not reachable" />
           <span>
-            {n.node}: {n.reason}
+            {n.node}: {n.reason}. {nodeAdvice(n.node, n.reason)}
           </span>
         </li>
       ))}

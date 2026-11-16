@@ -103,10 +103,22 @@ export const nodeNote = (n: PveNode): string => {
   return filled(n.fault) ? " (not reachable)" : " (offline)";
 };
 
+/**
+ * nodeFault is why a member node does not answer, with what to do about it. Proxmox VE words the
+ * reason, and its own certificate error is cured on the node.
+ */
+export const nodeAdvice = (node: string, reason: string): string =>
+  reason.includes("certificate verify failed")
+    ? `Run pvecm updatecerts --force on ${node}, then restart pveproxy.`
+    : `Check that ${node} answers the other nodes.`;
+
+export const nodeFault = (node: string, reason: string | undefined): string | undefined =>
+  filled(reason) ? `${reason}. ${nodeAdvice(node, reason)}` : undefined;
+
 // choices are the nodes to tick: those the user sees, and those the cluster has that they do not,
 // which a change may keep.
 function choices(nodes: PveNode[], kept: string[]): { node: string; note: string; why?: string }[] {
-  const seen = nodes.map((n) => ({ node: n.node, note: nodeNote(n), why: n.fault }));
+  const seen = nodes.map((n) => ({ node: n.node, note: nodeNote(n), why: nodeFault(n.node, n.fault) }));
   const unseen = kept
     .filter((x) => !nodes.some((n) => n.node === x))
     .map((node) => ({ node, note: " (not shown to you)" }));

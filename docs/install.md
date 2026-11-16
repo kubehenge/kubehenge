@@ -57,7 +57,7 @@ Kubehenge gives every node of every cluster a static address, with no DHCP serve
 
 Every part reaches hosts on the internet. [Hosts each part reaches](architecture.md#hosts-each-part-reaches) lists them for the firewall.
 
-A site that blocks them sets up a [proxy](clusters.md#behind-a-proxy), registry mirrors ([setup](#network), Advanced), [chart mirrors](clusters.md#mirroring-the-charts) and, for RKE2 and k3s, a [release mirror](clusters.md#mirroring-the-releases).
+A site that blocks them sets up a [proxy](clusters.md#behind-a-proxy), registry mirrors ([setup](#network), Site), [chart mirrors](clusters.md#mirroring-the-charts) and, for RKE2 and k3s, a [release mirror](clusters.md#mirroring-the-releases).
 
 ### Sizes
 
@@ -278,10 +278,10 @@ They also bring the warnings about the [backup](install-settings.md#back-up-the-
 | DNS servers | Addresses of the cluster's families, one per line or separated by commas. A dual-stack cluster needs one of each. |
 | Search domains | Domains the nodes append to a name without dots, at most six, separated by commas. Empty derives one from each node's host name. |
 | Time servers | NTP servers the nodes keep their clocks with, as host names or addresses separated by commas. Empty keeps Talos's default public servers. |
-| Advanced: Registry mirrors | `registry=endpoint`, one per line, such as `ghcr.io=https://mirror.example.org:5000`. The management cluster's nodes try them before the registry itself. They cover images, not charts. |
-| Advanced: Chart mirrors, Chart mirror certificate | `host=address`, one per line, such as `ghcr.io=oci://registry.example.org/ghcr`. Clusters fetch that host's charts from the address, and trust the certificate authority (PEM) for it. See [Mirroring the charts](clusters.md#mirroring-the-charts). |
-| Advanced: Release mirror, Release mirror certificate | An `https://` or `http://` address, such as `https://mirror.example.org/github`. RKE2 and k3s nodes download their release from it in place of GitHub, and trust the certificate authority (PEM) for it. See [Mirroring the releases](clusters.md#mirroring-the-releases). |
-| Advanced: Proxy address, Proxy user, Proxy password, Proxy exceptions, Proxy certificate | The proxy every download goes through. The address has no credentials, so write `http://proxy.example:3128` and put the user and password in their fields. A saved password shows as set, and the page can replace or remove it but never shows it. See [Behind a proxy](clusters.md#behind-a-proxy). |
+| Site: Registry mirrors | `registry=endpoint`, one per line, such as `ghcr.io=https://mirror.example.org:5000`. The management cluster's nodes try them before the registry itself. They cover images, not charts. |
+| Site: Chart mirrors, Chart mirror certificate | `host=address`, one per line, such as `ghcr.io=oci://registry.example.org/ghcr`. Clusters fetch that host's charts from the address, and trust the certificate authority (PEM) for it. See [Mirroring the charts](clusters.md#mirroring-the-charts). |
+| Site: Release mirror, Release mirror certificate | An `https://` or `http://` address, such as `https://mirror.example.org/github`. RKE2 and k3s nodes download their release from it in place of GitHub, and trust the certificate authority (PEM) for it. See [Mirroring the releases](clusters.md#mirroring-the-releases). |
+| Site: Proxy address, Proxy user, Proxy password, Proxy exceptions, Proxy certificate | The proxy every download goes through. The address has no credentials, so write `http://proxy.example:3128` and put the user and password in their fields. A saved password shows as set, and the page can replace or remove it but never shows it. See [Behind a proxy](clusters.md#behind-a-proxy). |
 | Advanced: Pod ranges, Service ranges | The management cluster's own, one per family. When empty, `10.244.0.0/16` and `10.96.0.0/12`, and `fd5e:4b1c:9a20::/56` and `fd5e:4b1c:9a21::/112` for IPv6. Where those overlap the nodes' network, the API address or the gateway, the first clear one of a few other private ranges. |
 
 #### Clusters

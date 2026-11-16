@@ -241,11 +241,12 @@ func (s *Server) demoGuard(next http.Handler) http.Handler {
 func demoRead(r *http.Request) bool {
 	p := r.URL.Path
 	switch {
-	case p == "/api/session", p == "/api/session/second-factor":
+	case p == "/api/session", p == "/api/session/token", p == "/api/session/second-factor":
 		return true
 	case r.Method != http.MethodPost:
 		return false
-	case p == "/api/release-pins/check", p == "/api/setup/time-zone", p == "/api/setup/site-ca-roll":
+	case p == "/api/release-pins/check", p == "/api/setup/time-zone", p == "/api/setup/site-ca-roll",
+		p == "/api/setup/check":
 		return true
 	case p == "/api/clusters":
 		return r.URL.Query().Get("dryRun") == "All"

@@ -688,6 +688,167 @@ describe("setup", () => {
     expect(setupProblems({ ...form, nodes: ["pve1", "pve2"] })).toStrictEqual(["Choose no more nodes than addresses."]);
   });
 
+  it("asks for the existing passphrase, not a new one, when none is typed", () => {
+    expect(setupFieldProblems(form, false)).not.toHaveProperty("passphrase");
+    expect(setupFieldProblems({ ...form, passphrase: "", confirm: "" }, false).passphrase).toBe(
+      "Enter the state passphrase.",
+    );
+    expect(setupFieldProblems({ ...form, passphrase: "", confirm: "" }, true).passphrase).toBe(
+      "Use at least 16 characters.",
+    );
+  });
+
+  it("takes node addresses without a prefix length and sends the bridge network's", async () => {
+    const routes: Record<string, Route> = {
+      ...administrator,
+      ...oneNode,
+      "GET /api/setup": { body: { appliance: true, ready: false, allowed: true } },
+      "POST /api/setup": { status: 202, body: { user: "root@pam", started: "2026-01-01T00:00:00Z", state: "running" } },
+    };
+    const calls = fakeServer(routes);
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const disks = await screen.findByLabelText("VM disks");
+    await waitFor(() => expect(disks).toHaveValue("local-lvm"));
+    await next(user);
+    await waitFor(() => expect(screen.getByLabelText("DNS servers")).toHaveValue("192.0.2.53, 198.51.100.53"));
+    await user.type(screen.getByLabelText("Node addresses"), "192.0.2.11");
+    await user.type(screen.getByLabelText("API address"), "192.0.2.10");
+    await next(user);
+    expect(screen.getByRole("button", { name: "Clusters" })).toHaveAttribute("aria-current", "step");
+    await next(user);
+    await next(user);
+    await user.type(screen.getByLabelText("State passphrase"), "correct horse battery staple");
+    await user.type(screen.getByLabelText("Repeat passphrase"), "correct horse battery staple");
+    await user.click(screen.getByRole("button", { name: "Create management cluster" }));
+    await waitFor(() => expect(calls.find((c) => c.key === "POST /api/setup")).toBeDefined());
+    expect(calls.find((c) => c.key === "POST /api/setup")?.body).toMatchObject({
+      settings: { nodeAddresses: ["192.0.2.11/24"] },
+    });
+  });
+
+  it("gives a bare node address on a VLAN no prefix from the untagged bridge", async () => {
+    fakeServer({
+      ...administrator,
+      ...oneNode,
+      "GET /api/setup": { body: { appliance: true, ready: false, allowed: true } },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await waitFor(() => expect(screen.getByLabelText("VM disks")).toHaveValue("local-lvm"));
+    await next(user);
+    await waitFor(() => expect(screen.getByLabelText("Gateway")).toHaveValue("192.0.2.1"));
+    await user.type(screen.getByLabelText("VLAN tag"), "20");
+    await user.clear(screen.getByLabelText("Gateway"));
+    await user.type(screen.getByLabelText("Gateway"), "10.20.0.1");
+    await user.type(screen.getByLabelText("Node addresses"), "10.20.0.11");
+    await next(user);
+    expect(screen.getByLabelText("Node addresses")).toHaveAccessibleDescription(
+      /is not in the form 192\.0\.2\.11\/24/u,
+    );
+    expect(screen.getByRole("button", { name: "Network" })).toHaveAttribute("aria-current", "step");
+  });
+
+  it("shows a stored management cluster as it is saved, past a node that does not answer", async () => {
+    window.history.replaceState(null, "", "/administration");
+    fakeServer({
+      ...administrator,
+      ...administration,
+      ...oneNode,
+      "GET /api/proxmox/nodes": {
+        body: [
+          { node: "pve1", online: true },
+          { node: "pve3", online: false, fault: "HTTP 596: certificate verify failed" },
+        ],
+      },
+      "GET /api/setup": {
+        body: {
+          appliance: true,
+          ready: true,
+          allowed: true,
+          settings: {
+            nodes: ["pve1", "pve3"],
+            imageDatastore: "local-lvm",
+            vmDatastore: "local-lvm",
+            bridge: "vmbr0",
+            nodeAddresses: ["192.0.2.11/24", "192.0.2.12/24", "192.0.2.13/24"],
+            apiAddress: "192.0.2.10",
+            gateway: "192.0.2.1",
+            dnsServers: ["192.0.2.1"],
+            workloadDatastores: ["local-lvm"],
+            workloadBridges: ["vmbr0"],
+            bootstrapDatastore: "local",
+          },
+        },
+      },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Edit settings" }));
+    const wizard = within(screen.getByRole("region", { name: "Management cluster" }));
+    await waitFor(() => expect(wizard.getByLabelText("Bridge")).toHaveValue("vmbr0"));
+    // The saved Talos image stays, and Apply says it is no longer offered.
+    expect(wizard.getByLabelText("Talos image")).toHaveValue("local-lvm");
+    // The node that does not answer does not take "local" off the list.
+    expect(within(wizard.getByLabelText("Talos image")).getByRole("option", { name: "local" })).toBeInTheDocument();
+    await user.click(wizard.getByRole("button", { name: "Apply" }));
+    expect(wizard.getByText("local-lvm is not offered here. Choose another.")).toBeInTheDocument();
+  });
+
+  it("reaches Apply and every section from anywhere on the Administration page", async () => {
+    window.history.replaceState(null, "", "/administration");
+    await editStored({
+      nodes: ["pve1"],
+      imageDatastore: "local",
+      vmDatastore: "local-lvm",
+      bridge: "vmbr0",
+      nodeAddresses: ["192.0.2.11/24"],
+      apiAddress: "192.0.2.10",
+      gateway: "192.0.2.1",
+      dnsServers: ["192.0.2.1"],
+      workloadDatastores: ["local-lvm"],
+      workloadBridges: ["vmbr0"],
+      bootstrapDatastore: "local",
+    });
+    const sections = within(await screen.findByRole("navigation", { name: "Sections" }));
+    expect(sections.getAllByRole("link").map((l) => l.textContent)).toStrictEqual([
+      "Placement",
+      "Network",
+      "Clusters",
+      "Services",
+      "Passphrase",
+    ]);
+    expect(sections.getByRole("link", { name: "Services" })).toHaveAttribute(
+      "href",
+      expect.stringMatching(/-Services$/u),
+    );
+    expect(screen.getByRole("button", { name: "Apply" }).parentElement).toHaveClass("actions-sticky");
+    // What a proxied or offline site fills first is not folded away.
+    expect(screen.getByLabelText("Proxy address")).toBeVisible();
+    expect(screen.getByLabelText("Registry mirrors")).toBeVisible();
+    expect(screen.getByLabelText("Site CA")).toBeVisible();
+  });
+
+  it("says in the Services section that snapshots go to the backup volume", async () => {
+    window.history.replaceState(null, "", "/administration");
+    await editStored({
+      nodes: ["pve1"],
+      imageDatastore: "local",
+      vmDatastore: "local-lvm",
+      bridge: "vmbr0",
+      nodeAddresses: ["192.0.2.11/24"],
+      apiAddress: "192.0.2.10",
+      gateway: "192.0.2.1",
+      dnsServers: ["192.0.2.1"],
+      workloadDatastores: ["local-lvm"],
+      workloadBridges: ["vmbr0"],
+      bootstrapDatastore: "local",
+    });
+    await expect(
+      screen.findByText("etcd snapshots go to the backup volume. A target keeps a copy off the host."),
+    ).resolves.toBeInTheDocument();
+  });
+
   it("tells users without the rights that an administrator has to set it up", async () => {
     fakeServer({
       "GET /api/session": { body: { user: "dev@pve", csrf: "c1" } },
@@ -1602,7 +1763,7 @@ describe("setup", () => {
 
     await user.click(screen.getByRole("button", { name: "Edit settings" }));
     const wizard = within(screen.getByRole("region", { name: "Management cluster" }));
-    await user.click(wizard.getByText("Advanced"));
+    expect(wizard.getByLabelText("Proxy user")).toBeVisible();
     expect(wizard.getByLabelText("Proxy user")).toHaveValue("alice");
     expect(wizard.getByLabelText("Proxy password")).not.toHaveAttribute("type", "password");
     expect(wizard.getByRole("button", { name: "Replace proxy password" })).toBeInTheDocument();
@@ -1654,7 +1815,6 @@ describe("setup", () => {
 
     await user.click(screen.getByRole("button", { name: "Edit settings" }));
     const wizard = within(screen.getByRole("region", { name: "Management cluster" }));
-    await user.click(wizard.getByText("Advanced"));
     const mirrors = wizard.getByLabelText("Chart mirrors");
     expect(mirrors).toHaveValue("ghcr.io=oci://registry.example.org/ghcr");
     expect(wizard.getByLabelText("Chart mirror certificate")).toHaveValue(pem);
