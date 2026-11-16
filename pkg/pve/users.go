@@ -43,6 +43,31 @@ func (a *Accounts) CreateAdministratorToken(ctx context.Context, t *Ticket, user
 	return token.ID + "=" + token.Value, nil
 }
 
+// CreateOwnToken signs in as userid with its password and creates, as that user, its API token
+// named name that shares its privileges, and returns the token's secret. Proxmox VE lets another
+// user create such a token only with Permissions.Modify on /. A user with a second factor is
+// refused, since no one is there to answer it.
+func (a *Accounts) CreateOwnToken(ctx context.Context, userid, password, name, comment string) (string, error) {
+	t, challenge, err := a.SignIn(ctx, userid, password)
+	if err != nil {
+		return "", fmt.Errorf("signing in as %s: %w", userid, err)
+	}
+	if challenge != nil {
+		return "", fmt.Errorf("signing in as %s: Proxmox VE asks for a second factor. Take the realm's or the user's TFA off", userid)
+	}
+	var token struct {
+		Value string `json:"value"`
+	}
+	path := "/access/users/" + url.PathEscape(userid) + "/token/" + url.PathEscape(name)
+	if err := a.send(ctx, t, http.MethodPost, path, url.Values{"privsep": {"0"}, "comment": {comment}}, &token); err != nil {
+		return "", err
+	}
+	if token.Value == "" {
+		return "", errors.New("proxmox VE returned no token secret")
+	}
+	return token.Value, nil
+}
+
 // DeleteUser deletes a Proxmox VE user, which takes its API tokens and ACL entries with it. A user
 // that does not exist is no error.
 func (a *Accounts) DeleteUser(ctx context.Context, t *Ticket, userid string) error {

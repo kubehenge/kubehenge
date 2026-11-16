@@ -200,6 +200,8 @@ A workload cluster's cloud controller manager and CSI plugin controller reach Pr
   - The token reads the VMs and configures their disks.
   - A group of all clusters' users adds space on the workload storages and reading the nodes.
   - No token may delete arbitrary volumes, change a storage's definition or read beyond its pool and nodes. The CSI plugin's newest release and the HA rule labels are the exceptions (below).
+  - The user creates its own token, which holds what the user holds. Proxmox VE lets another user create such a token only with `Permissions.Modify` on `/`. The controller creates the user with a random password, signs in as it once and keeps the password nowhere.
+  - A token whose secret is lost is replaced with its user, which the controller creates again with its groups and rights. A realm that asks for a second factor stops this.
 - **A volume owner VM**, in the pool, never started. The CSI plugin creates volumes under its VMID, so only this cluster's token may attach them.
   - Deleting the cluster deletes its volumes.
 
