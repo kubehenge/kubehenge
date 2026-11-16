@@ -1168,8 +1168,9 @@ func (*demoAccounts) SignIn(_ context.Context, username, _ string) (*pve.Ticket,
 	return demoTicket(username), nil, nil
 }
 
+// TokenUser signs in the demo's administrator for any token, as SignIn does for any password.
 func (*demoAccounts) TokenUser(context.Context, string) (*pve.Ticket, error) {
-	return nil, pve.ErrAuthentication
+	return demoTicket(demoUser), nil
 }
 
 func (*demoAccounts) Answer(context.Context, *pve.Challenge, string, string) (*pve.Ticket, error) {

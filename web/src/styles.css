@@ -2107,6 +2107,17 @@ fieldset.choices .check {
   margin-block-start: 14px;
 }
 
+/* Apply stays in reach of a form that scrolls through every section. */
+.actions-sticky {
+  position: sticky;
+  inset-block-end: 0;
+
+  padding-block: 10px;
+  border-block-start: 1px solid var(--line);
+
+  background: var(--surface);
+}
+
 /* A saved secret's state beside the buttons that change it, in the field's own column. */
 .secret-state {
   display: flex;
@@ -3086,6 +3097,7 @@ form.box > *,
 
   font-weight: 600;
   color: var(--dim);
+  text-decoration: none;
 
   background: none;
 }

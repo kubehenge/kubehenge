@@ -37,7 +37,7 @@ import {
 } from "./network";
 import { OIDCProviders, cleanProviders, oidcProblems } from "./OIDCProviders";
 import { certificateBundleProblem, sentence } from "./pem";
-import { nodeNote } from "./Placement";
+import { nodeFault, nodeNote } from "./Placement";
 import type {
   BackupTarget,
   Bridge,
@@ -660,6 +660,8 @@ const stepFields: Record<SetupStep, SetupField[]> = {
     "dnsServers",
     "searchDomains",
     "timeServers",
+    "podSubnets",
+    "serviceSubnets",
     "mirrors",
     "chartMirrors",
     "chartMirrorCA",
@@ -672,8 +674,6 @@ const stepFields: Record<SetupStep, SetupField[]> = {
     "proxyPassword",
     "proxyExceptions",
     "proxyCA",
-    "podSubnets",
-    "serviceSubnets",
   ],
   Clusters: ["workload", "refreshVLAN", "refreshAddress", "refreshGateway", "refreshDNS", "extraNamespaces"],
   Services: ["clusterOIDC", "backupTargets"],
@@ -682,22 +682,7 @@ const stepFields: Record<SetupStep, SetupField[]> = {
 
 const stepOf = (k: SetupField): SetupStep => setupSteps.find((s) => stepFields[s].includes(k)) ?? "Placement";
 
-const advancedFields: SetupField[] = [
-  "mirrors",
-  "chartMirrors",
-  "chartMirrorCA",
-  "releaseMirror",
-  "releaseMirrorCA",
-  "siteCA",
-  "timeZone",
-  "proxyURL",
-  "proxyUser",
-  "proxyPassword",
-  "proxyExceptions",
-  "proxyCA",
-  "podSubnets",
-  "serviceSubnets",
-];
+const advancedFields: SetupField[] = ["podSubnets", "serviceSubnets"];
 
 // preferredDisk is the storage for the management cluster's disks a first run starts from: a shared
 // one, which lets its VMs move between nodes, else the one with the most room.
@@ -806,7 +791,9 @@ export function setupFieldProblems(
     ...offerProblems(f),
     ...refreshProblems(f),
   };
-  if (passphraseShort(f.passphrase)) {
+  if (!firstRun && f.passphrase === "") {
+    p.passphrase = "Enter the state passphrase.";
+  } else if (passphraseShort(f.passphrase)) {
     p.passphrase = `Use at least ${minPassphrase} characters.`;
   } else if (firstRun && f.passphrase !== f.confirm) {
     p.confirm = "Passphrases do not match.";
@@ -2289,32 +2276,11 @@ function ProxyPassword({ form, set }: FieldsProps): JSX.Element {
   );
 }
 
-export function AdvancedFields({
-  form,
-  set,
-  shown,
-  fixed,
-  open,
-  warnings,
-  onOpen,
-}: FieldsProps & {
-  fixed: boolean;
-  open: boolean;
-  warnings: string[];
-  onOpen: (open: boolean) => void;
-}): JSX.Element {
-  const rangeHint = fixed ? fixedHint : "Empty picks a free range";
-  const about = (label: string): JSX.Element[] =>
-    warnings
-      .filter((w) => w.startsWith(`The ${label} range`))
-      .map((w) => (
-        <output key={w} className="field-warning">
-          {w}
-        </output>
-      ));
+// SiteFields are what a proxied or offline site fills first: the site's CA and time zone, the mirrors
+// and the proxy.
+export function SiteFields({ form, set, shown }: FieldsProps): JSX.Element {
   return (
-    <details className="advanced" open={open} onToggle={(e) => onOpen(e.currentTarget.open)}>
-      <summary>Advanced</summary>
+    <>
       <Field
         label="Registry mirrors"
         hint="One per line, like ghcr.io=https://mirror.example:5000"
@@ -2410,6 +2376,37 @@ export function AdvancedFields({
       <Field label="Proxy certificate" hint="PEM, for a proxy that re-signs TLS" error={shown("proxyCA")}>
         {(id) => <textarea id={id} rows={3} value={form.proxyCA} onChange={(e) => set("proxyCA", e.target.value)} />}
       </Field>
+    </>
+  );
+}
+
+// AdvancedFields are what hardly anyone changes: the ranges of pods and Services.
+export function AdvancedFields({
+  form,
+  set,
+  shown,
+  fixed,
+  open,
+  warnings,
+  onOpen,
+}: FieldsProps & {
+  fixed: boolean;
+  open: boolean;
+  warnings: string[];
+  onOpen: (open: boolean) => void;
+}): JSX.Element {
+  const rangeHint = fixed ? fixedHint : "Empty picks a free range";
+  const about = (label: string): JSX.Element[] =>
+    warnings
+      .filter((w) => w.startsWith(`The ${label} range`))
+      .map((w) => (
+        <output key={w} className="field-warning">
+          {w}
+        </output>
+      ));
+  return (
+    <details className="advanced" open={open} onToggle={(e) => onOpen(e.currentTarget.open)}>
+      <summary>Advanced</summary>
       <Field label="Pod ranges" hint={rangeHint} error={shown("podSubnets")}>
         {(id) => (
           <input id={id} readOnly={fixed} value={form.podSubnets} onChange={(e) => set("podSubnets", e.target.value)} />
@@ -2545,8 +2542,14 @@ function SetupWizard({
   }, []);
 
   const fixed = manage && status.ready ? status.settings : undefined;
-  const found: Found = { storages, bridgesByNode, dnsByNode, fixed };
-  const { effective, offers, nodeNetworks } = withDefaults(form, touched, found);
+  const found: Found = {
+    storages,
+    bridgesByNode,
+    dnsByNode,
+    fixed,
+    unreachable: nodes.filter((n) => !n.online).map((n) => n.node),
+  };
+  const { effective, offers, nodeNetworks, gone } = withDefaults(form, touched, found);
   const toggle: Toggle = (k, v, on) => {
     setForm((f) => {
       const now = k === "nodes" ? f.nodes : effective[k];
@@ -2562,6 +2565,7 @@ function SetupWizard({
   const zoneProblem = useTimeZoneProblem(effective.timeZone);
   const byField = {
     ...setupFieldProblems(effective, firstRun, fixed),
+    ...gone,
     ...(zoneProblem === undefined ? {} : { timeZone: zoneProblem }),
   };
   const problemsIn = (s: SetupStep): boolean => stepFields[s].some((k) => byField[k] !== undefined);
@@ -2692,12 +2696,21 @@ function SetupWizard({
             {fields[step]}
           </>
         ) : (
-          setupSteps.map((s) => (
-            <section key={s} className="setup-section" aria-label={s}>
-              <h4>{s}</h4>
-              {fields[s]}
-            </section>
-          ))
+          <>
+            <nav className="wizard-steps" aria-label="Sections">
+              {setupSteps.map((s) => (
+                <a key={s} className="tab" href={`#${sectionId(headingId, s)}`}>
+                  {s}
+                </a>
+              ))}
+            </nav>
+            {setupSteps.map((s) => (
+              <section key={s} id={sectionId(headingId, s)} className="setup-section" aria-label={s}>
+                <h4>{s}</h4>
+                {fields[s]}
+              </section>
+            ))}
+          </>
         )}
         <PreflightFindings findings={reviewing ? findings : undefined} />
         <ErrorBox message={error} />
@@ -2706,7 +2719,7 @@ function SetupWizard({
             Fix the errors above to apply.
           </p>
         )}
-        <div className="actions">
+        <div className={stepped ? "actions" : "actions actions-sticky"}>
           {onCancel && (
             <button type="button" onClick={onCancel}>
               Cancel
@@ -2741,6 +2754,9 @@ function SetupWizard({
     </section>
   );
 }
+
+// sectionId is the address of a section on the Administration page, unique among its forms.
+const sectionId = (formId: string, step: SetupStep): string => `${formId.replaceAll(":", "")}-${step}`;
 
 const searchDomainsOf = (s: ManagementSettings): string => s.searchDomains?.join(", ") ?? "None";
 const timeServersOf = (s: ManagementSettings): string => s.timeServers?.join(", ") ?? "Talos defaults";
@@ -2863,6 +2879,8 @@ interface Found {
   bridgesByNode: Record<string, Bridge[]>;
   dnsByNode: Record<string, NodeDNS>;
   fixed: ManagementSettings | undefined;
+  // The chosen nodes that do not answer. What they have cannot be read, so it cannot narrow the choices.
+  unreachable: string[];
 }
 
 // Where the management cluster may go: the storages and bridges every chosen node has.
@@ -2886,20 +2904,28 @@ function withDefaults(
   form: SetupForm,
   touched: ReadonlySet<string>,
   found: Found,
-): { effective: SetupForm; offers: Offers; nodeNetworks: Record<Family, string | undefined> } {
+): {
+  effective: SetupForm;
+  offers: Offers;
+  nodeNetworks: Record<Family, string | undefined>;
+  gone: Partial<Record<SetupField, string>>;
+} {
   const { fixed } = found;
   const all = found.storages ?? [];
   const known = found.storages !== undefined;
+  const reached = form.nodes.filter((n) => !found.unreachable.includes(n));
   const onEveryNode = (c: string): string[] =>
     unique(all.filter((s) => s.content.includes(c)).map((s) => s.storage)).filter((name) =>
-      form.nodes.every((n) => all.some((s) => s.node === n && s.storage === name && s.content.includes(c))),
+      reached.every((n) => all.some((s) => s.node === n && s.storage === name && s.content.includes(c))),
     );
   const bridges = unique(Object.values(found.bridgesByNode).flatMap((b) => b.map((x) => bridgeRef(x)))).filter((ref) =>
-    form.nodes.every((n) => (found.bridgesByNode[n] ?? []).some((b) => bridgeRef(b) === ref)),
+    reached.every((n) => (found.bridgesByNode[n] ?? []).some((b) => bridgeRef(b) === ref)),
   );
-  const bridgesKnown = form.nodes.every((n) => found.bridgesByNode[n] !== undefined);
+  const bridgesKnown = reached.every((n) => found.bridgesByNode[n] !== undefined);
+  // A management cluster that exists keeps what it was set up with. A choice that no longer fits is
+  // marked, never swapped for another.
   const fit = (value: string, choices: string[]): string =>
-    !known || choices.includes(value) ? value : (choices[0] ?? "");
+    !known || choices.includes(value) || (fixed !== undefined && value !== "") ? value : (choices[0] ?? "");
   const offers = { vmDisks: onEveryNode("images"), images: onEveryNode("import"), isos: onEveryNode("iso"), bridges };
 
   const [first = ""] = form.nodes;
@@ -2908,7 +2934,7 @@ function withDefaults(
     ? fixed.vmDatastore
     : keepOffered(orElse(form.vmDatastore, preferredDisk(all, offers.vmDisks)), offers.vmDisks, known);
   const uplinkBridge = uplink(home);
-  const bridge = keepOffered(orElse(form.bridge, uplinkBridge ? bridgeRef(uplinkBridge) : ""), bridges, bridgesKnown);
+  const bridge = chosenBridge(form.bridge, uplinkBridge, { bridges, known: bridgesKnown, kept: fixed !== undefined });
   const onBridge = home.find((b) => bridgeRef(b) === bridge);
   const detect = (k: "gateway" | "gateway6" | "dnsServers" | "searchDomains", value: string): string =>
     form[k] === "" && !touched.has(k) ? value : form[k];
@@ -2921,6 +2947,8 @@ function withDefaults(
       imageDatastore: fit(form.imageDatastore, offers.images),
       bootstrapDatastore: fit(form.bootstrapDatastore, offers.isos),
       bridge,
+      nodeAddresses: withPrefix(form.nodeAddresses, onBridge?.cidr),
+      nodeAddresses6: withPrefix(form.nodeAddresses6, onBridge?.cidr6),
       gateway: detect("gateway", onBridge?.gateway ?? ""),
       gateway6: detect("gateway6", onBridge?.gateway6 ?? ""),
       dnsServers: detect("dnsServers", ownFamilies(found.dnsByNode[first]?.servers ?? [], form.families).join(", ")),
@@ -2935,7 +2963,58 @@ function withDefaults(
       IPv4: onBridge?.cidr === undefined ? undefined : networkOf(onBridge.cidr),
       IPv6: onBridge?.cidr6 === undefined ? undefined : networkOf(onBridge.cidr6),
     },
+    gone: goneChoices({ form, offers, storagesKnown: known, bridgesKnown, kept: fixed !== undefined }),
   };
+}
+
+// chosenBridge is the bridge the management cluster uses. One that exists keeps its own, offered or
+// not. A first run keeps the one chosen while it is offered, else the node's uplink.
+function chosenBridge(
+  chosen: string,
+  uplinkBridge: Bridge | undefined,
+  found: { bridges: string[]; known: boolean; kept: boolean },
+): string {
+  if (found.kept) {
+    return chosen;
+  }
+  return keepOffered(orElse(chosen, uplinkBridge ? bridgeRef(uplinkBridge) : ""), found.bridges, found.known);
+}
+
+// goneChoices marks what a management cluster that exists was set up with and the nodes no longer
+// offer, by field.
+function goneChoices(o: {
+  form: SetupForm;
+  offers: Offers;
+  storagesKnown: boolean;
+  bridgesKnown: boolean;
+  kept: boolean;
+}): Partial<Record<SetupField, string>> {
+  const gone: Partial<Record<SetupField, string>> = {};
+  const check = (
+    field: "imageDatastore" | "bootstrapDatastore" | "bridge",
+    choices: string[],
+    known: boolean,
+  ): void => {
+    if (o.kept && known && o.form[field] !== "" && !choices.includes(o.form[field])) {
+      gone[field] = `${o.form[field]} is not offered here. Choose another.`;
+    }
+  };
+  check("imageDatastore", o.offers.images, o.storagesKnown);
+  check("bootstrapDatastore", o.offers.isos, o.storagesKnown);
+  check("bridge", o.offers.bridges, o.bridgesKnown);
+  return gone;
+}
+
+// withPrefix gives each node address typed without a prefix length the one of the network the bridge
+// has, as the create wizard does. Anything else stays as typed, for its own error.
+function withPrefix(addresses: string, cidr: string | undefined): string {
+  const bits = cidr?.split("/")[1];
+  if (bits === undefined) {
+    return addresses;
+  }
+  return list(addresses)
+    .map((a) => (parseAddress(a) === undefined ? a : `${a}/${bits}`))
+    .join("\n");
 }
 
 // ownFamilies are the servers of the families chosen, those a node lists of another left out.
@@ -3018,7 +3097,7 @@ function setupFields({
         <fieldset className="group">
           <legend>Proxmox VE nodes</legend>
           {nodes.map((n) => (
-            <label key={n.node} className="check" title={n.fault}>
+            <label key={n.node} className="check" title={nodeFault(n.node, n.fault)}>
               <input
                 type="checkbox"
                 disabled={!n.online && !form.nodes.includes(n.node)}
@@ -3083,6 +3162,9 @@ function setupFields({
               <option value="" disabled>
                 Choose…
               </option>
+              {effective.bridge !== "" && !more.offers.bridges.includes(effective.bridge) && (
+                <option value={effective.bridge}>{effective.bridge}</option>
+              )}
               {more.offers.bridges.map((b) => (
                 <option key={b} value={b}>
                   {more.clusterBridges.find((c) => c.name === b)?.label ?? b}
@@ -3162,6 +3244,10 @@ function setupFields({
         >
           {(id) => <input id={id} value={effective.timeServers} onChange={(e) => set("timeServers", e.target.value)} />}
         </Field>
+        <fieldset className="group">
+          <legend>Site</legend>
+          <SiteFields form={form} set={set} shown={shown} />
+        </fieldset>
         <AdvancedFields
           form={form}
           set={set}

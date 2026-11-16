@@ -217,7 +217,8 @@ func (o *clusterOptions) createCommand() *cobra.Command {
 
 The request is what the interface's wizard sends: name, class, version, controlPlaneReplicas,
 workerReplicas, variables, and namespace where the interface has more than one. It is checked as
-the wizard's request is.
+the wizard's request is. The variables are the class's own, the ones its ClusterClass lists. The
+wizard's "Copy as YAML" button on the last step writes a complete file to start from.
 
 With -f, --` + graceFlag + ` sets hostOutageGraceMinutes over the file's value. The --node-*,
 --kubelet-arg, --apiserver-arg, --controller-manager-arg, --scheduler-arg and --audit-* flags set the
@@ -231,6 +232,9 @@ opened the command stops and names it. --without-secrets creates the cluster wit
 
 --identity takes an age identity file that opens the Secrets sealed to one of the extra recipients
 set in the backup settings. It opens them on this machine, so a new appliance needs no recovery key.`,
+		Example: `  kubehenge cluster create -f web.yaml
+  kubehenge cluster create -f - --host-outage-grace-minutes 60 < web.yaml
+  kubehenge cluster create --from web-export.yaml`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if (file == "") == (from == "") {

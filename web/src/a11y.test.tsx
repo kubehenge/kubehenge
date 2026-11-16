@@ -1070,6 +1070,13 @@ const cases: Case[] = [
     routes: { ...admin, "GET /api/templates": { body: { templates: [{ ...template, inUse: undefined }] } } },
     ready: loaded,
   },
+  // Removing Kubehenge is offered only once no cluster is left, so its dialog opens here.
+  {
+    name: "management cluster without clusters",
+    path: "/administration",
+    routes: { ...admin, "GET /api/clusters": { body: [] } },
+    ready: loaded,
+  },
   { name: "error: clusters", path: "/", routes: failing("GET /api/clusters"), ready: loaded },
   {
     name: "error: cluster",

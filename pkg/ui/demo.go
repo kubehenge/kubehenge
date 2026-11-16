@@ -221,7 +221,7 @@ type demoState struct {
 func (s *Server) demoGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(demoHeader, "1")
-		signingIn := r.URL.Path == "/api/session" && r.Method != http.MethodGet
+		signingIn := (r.URL.Path == "/api/session" || r.URL.Path == "/api/session/token") && r.Method != http.MethodGet
 		if strings.HasPrefix(r.URL.Path, "/api/") && !signingIn && s.sessions.lookup(r) == nil {
 			var err error
 			if r, err = s.demoSignIn(w, r); err != nil {
@@ -241,11 +241,12 @@ func (s *Server) demoGuard(next http.Handler) http.Handler {
 func demoRead(r *http.Request) bool {
 	p := r.URL.Path
 	switch {
-	case p == "/api/session", p == "/api/session/second-factor":
+	case p == "/api/session", p == "/api/session/token", p == "/api/session/second-factor":
 		return true
 	case r.Method != http.MethodPost:
 		return false
-	case p == "/api/release-pins/check", p == "/api/setup/time-zone", p == "/api/setup/site-ca-roll":
+	case p == "/api/release-pins/check", p == "/api/setup/time-zone", p == "/api/setup/site-ca-roll",
+		p == "/api/setup/check":
 		return true
 	case p == "/api/clusters":
 		return r.URL.Query().Get("dryRun") == "All"

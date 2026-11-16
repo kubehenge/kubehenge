@@ -878,6 +878,8 @@ export function Choice({
       <option value="" disabled={optional === undefined}>
         {optional ?? "Choose…"}
       </option>
+      {/* A value kept from before that is no longer offered shows as it is, for its own error. */}
+      {value !== "" && !options.includes(value) && <option value={value}>{labels?.[value] ?? value}</option>}
       {options.map((o) => (
         <option key={o} value={o}>
           {labels?.[o] ?? o}
