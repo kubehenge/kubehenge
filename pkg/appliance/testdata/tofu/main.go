@@ -102,6 +102,20 @@ func run(dir string, args []string) int {
 				return 1
 			}
 		}
+		// A "race" apply fails on Proxmox VE not starting a task's worker while <dir>/../races holds
+		// races left, one fewer each time: d for a file download, v for a VM's create.
+		if strings.Contains(string(vars), `"race"`) {
+			left, _ := os.ReadFile(filepath.Join(dir, "..", "races"))
+			if len(left) > 0 {
+				_ = os.WriteFile(filepath.Join(dir, "..", "races"), left[1:], 0o600)
+				summary, address := "Error downloading file from url", `module.management.proxmox_download_file.talos[\"pve\"]`
+				if left[0] == 'v' {
+					summary, address = "Error creating VM", `module.management.proxmox_virtual_environment_vm.nodes[0]`
+				}
+				fmt.Printf(`{"@level":"error","@message":"Error: %s","type":"diagnostic","diagnostic":{"summary":"%s","detail":"received an HTTP 500 response - Reason: got no worker upid - start worker failed","address":"%s"}}`+"\n", summary, summary, address)
+				return 1
+			}
+		}
 		if strings.Contains(string(vars), `"fail"`) {
 			fmt.Println(`{"@level":"error","@message":"Error: no such node","type":"diagnostic","diagnostic":{"summary":"Error","detail":"node fail does not exist"}}`)
 			return 1

@@ -191,6 +191,40 @@ func TestApplyRunsAgainWhileEtcdTimesOut(t *testing.T) {
 	}
 }
 
+// Proxmox VE fails to start a task's worker when another task ends at that moment. A download it
+// did not start runs again, as it made nothing. A VM's create, which leaves its configuration
+// locked, fails the job at once.
+func TestApplyRunsAgainWhenADownloadDidNotStart(t *testing.T) {
+	t.Parallel()
+	for races, state := range map[string]string{"d": StateSucceeded, "v": StateFailed} {
+		t.Run(races, func(t *testing.T) {
+			t.Parallel()
+			a, _ := newAppliance(t)
+			a.stallPause = time.Millisecond
+			writePlan(t, a, change{nodeVMAddress + "[0]", []string{"update"}, 1001})
+			if err := os.WriteFile(filepath.Join(a.Dir, "races"), []byte(races), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			j := applyWith(t, a, "race")
+			if j.State != state {
+				t.Fatalf("apply: %+v", j)
+			}
+			if state == StateFailed && !strings.Contains(j.Error, "got no worker upid") {
+				t.Fatalf("the job's error lacks Proxmox VE's: %s", j.Error)
+			}
+			applies := 0
+			for _, args := range tofuCalls(t, a) {
+				if args[0] == "apply" {
+					applies++
+				}
+			}
+			if want := map[string]int{"d": 2, "v": 1}[races]; applies != want {
+				t.Fatalf("%d applies, want %d", applies, want)
+			}
+		})
+	}
+}
+
 // A service stop in the pause before the next run ends the job as a stop mid-run does.
 func TestStopDuringTheEtcdPauseSaysRunItAgain(t *testing.T) {
 	t.Parallel()
