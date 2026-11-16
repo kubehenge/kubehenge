@@ -2110,7 +2110,9 @@ fieldset.choices .check {
 /* Apply stays in reach of a form that scrolls through every section. */
 .actions-sticky {
   position: sticky;
-  inset-block-end: 0;
+
+  /* The page's own bottom padding is 40px, which the bar covers. */
+  inset-block-end: -40px;
 
   padding-block: 10px;
   border-block-start: 1px solid var(--line);
