@@ -209,7 +209,7 @@ func (f *fakeHA) answerRules(method, path string, body map[string]any) (any, err
 func (f *fakeHA) removeResource(sid string) error {
 	delete(f.ghosts, sid)
 	if _, ok := f.resources[sid]; !ok {
-		return fmt.Errorf("service '%s' does not exist", sid)
+		return fmt.Errorf("cannot delete service '%s', not HA managed!", sid) //nolint:revive // Proxmox VE's own message
 	}
 	delete(f.resources, sid)
 	for id, rule := range f.rules {

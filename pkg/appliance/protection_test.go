@@ -295,15 +295,26 @@ func TestModuleLeavesNodeVMProtectionToTheAppliance(t *testing.T) {
 	}
 }
 
-// The appliance and the patched CSI plugin name the plugin's marker alike.
+// The appliance, the patched CSI plugin and the appliance's end-to-end test name the plugin's marker
+// alike.
 func TestCSIMarkerMatchesThePluginPatch(t *testing.T) {
 	t.Parallel()
-	patch, err := os.ReadFile(filepath.Join("..", "..", "scripts", "proxmox-csi-patches", "lift-protection-to-detach.patch"))
+	repo, err := os.OpenRoot(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(patch), "+const liftedMarker = \""+csiLiftedMarker+"\"") {
-		t.Fatal("the plugin patch's liftedMarker is not csiLiftedMarker")
+	t.Cleanup(func() { _ = repo.Close() })
+	for file, want := range map[string]string{
+		filepath.Join("scripts", "proxmox-csi-patches", "lift-protection-to-detach.patch"): "+const liftedMarker = \"" + csiLiftedMarker + "\"",
+		filepath.Join("test", "e2e", "appliance.sh"):                                       "csi_marker=\"" + csiLiftedMarker + "\"",
+	} {
+		content, err := repo.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(content), want) {
+			t.Errorf("%s does not name csiLiftedMarker as %s", file, want)
+		}
 	}
 }
 

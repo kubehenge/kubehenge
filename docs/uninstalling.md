@@ -32,7 +32,7 @@ On the Administration page, **Remove Kubehenge** takes the state passphrase and 
 - switches automatic upgrades of the management cluster off ([upgrading.md](upgrading.md#automatically-after-kubehenge)). It deletes what the appliance kept for them and the user `kubehenge-upgrader@pve` with its token.
 - destroys the management cluster with OpenTofu, with every Proxmox VE object its module made ([below](#what-the-module-made)). It lifts the protection of the management VMs first.
 - switches the [backups of its etcd](install-settings.md#back-up-the-management-clusters-etcd) off and deletes the access key and talosconfig the appliance kept for them. The snapshots stay in the target.
-- keeps the backup volume: the VM `kubehenge-backups`, tagged `backups`, with its one disk. It is protected and sits in no pool. Ask for everything to go (`removeBackups`) and the removal lifts its protection and deletes it too.
+- keeps the backup volume: the VM `kubehenge-backups`, tagged `backups`, with its one disk. It is protected and sits in no pool. Tick **Delete the backup volume** in the **Remove Kubehenge** dialog, and the removal lifts its protection and deletes it too, with the appliance's copy.
 
 A removal that stopped part way can be run again. When the management cluster no longer answers, the removal goes on if Proxmox VE holds none of its VMs (the pool `kubehenge-management`). Otherwise it names the VMs and refuses. Start them, or remove them in Proxmox VE after `qm set <vmid> --protection 0` on each.
 
@@ -44,7 +44,7 @@ The page follows the log. The appliance stays and returns to its first run with 
 
 Delete the clusters first. Then delete the templates in the template pool (`kubehenge template delete`, or delete the VMs), because Proxmox VE refuses to delete a pool that still holds VMs.
 
-The management VMs are protected, so Proxmox VE refuses to destroy them. Lift it on each VM in the pool `kubehenge-management`, in the shell of its node as root, then destroy:
+Lift the protection on each VM in the pool `kubehenge-management`, in the shell of its node as root, then destroy:
 
 ```sh
 qm set <vmid> --protection 0
@@ -73,9 +73,12 @@ The names below are the defaults. The users, groups and roles start with the man
 
 - the management cluster's VMs, and the Talos disk image on each node.
 - the pools: `kubehenge-management` for the management cluster, `kubehenge` for the workload clusters and `kubehenge-templates` for the VM templates.
+- the VM `kubehenge-backups`, the backup volume. It is protected and sits in no pool ([above](#with-terraformopentofu)).
 - the users, each with its API token:
   - `kubehenge-cluster-api@pve` for Cluster API
   - `kubehenge-provisioner@pve` for Kubehenge's controller
+  - `kubehenge-management-csi@pve` for the management cluster's CSI plugin
+  - `kubehenge-management-zones@pve` for reading where the management VMs run
   - `kubehenge-ha@pve` where Proxmox VE HA is on
   - `kubehenge-etcd-restore@pve` where etcd restores are on
   - `kubehenge-template-builder@pve` where the weekly template build is on
@@ -103,7 +106,8 @@ For a lost state passphrase, or to set up again from nothing:
 1. Delete every cluster in the interface and wait until the management cluster has cleaned up their Proxmox VE objects.
 2. In Proxmox VE, delete what the setup made:
    - the VMs in the pools `kubehenge-management` (the management cluster) and `kubehenge-templates` (the VM templates), then the pools `kubehenge-management`, `kubehenge-templates` and `kubehenge`. The management VMs are protected: run `qm set <vmid> --protection 0` on each first.
-   - the users `kubehenge-cluster-api@pve`, `kubehenge-provisioner@pve` and those of the settings that were on. Their API tokens go with them.
+   - the VM `kubehenge-backups`, which sits in no pool, unless you keep the backups. It is protected: run `qm set <vmid> --protection 0` first.
+   - the users `kubehenge-cluster-api@pve`, `kubehenge-provisioner@pve`, `kubehenge-management-csi@pve`, `kubehenge-management-zones@pve` and those of the settings that were on. Their API tokens go with them.
      - `kubehenge-template-builder@pve` (template refresh)
      - `kubehenge-ha@pve` (Proxmox VE HA)
      - `kubehenge-etcd-restore@pve` (etcd restores)

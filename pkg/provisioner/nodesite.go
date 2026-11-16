@@ -396,7 +396,7 @@ func pemBlocks(bundle string) ([]*pem.Block, error) {
 		line := l.text
 		switch {
 		case inBlock && strings.HasPrefix(line, "-----BEGIN "):
-			return nil, fmt.Errorf("block %d is no complete PEM block", len(blocks)+1)
+			return nil, fmt.Errorf("block %d is not a complete PEM block", len(blocks)+1)
 		case inBlock:
 			open = append(open, line)
 			if !strings.HasPrefix(line, "-----END ") {
@@ -404,7 +404,7 @@ func pemBlocks(bundle string) ([]*pem.Block, error) {
 			}
 			block, rest := pem.Decode([]byte(strings.Join(open, "\n") + "\n"))
 			if block == nil || len(bytes.TrimSpace(rest)) > 0 {
-				return nil, fmt.Errorf("block %d is no complete PEM block", len(blocks)+1)
+				return nil, fmt.Errorf("block %d is not a complete PEM block", len(blocks)+1)
 			}
 			blocks, open, inBlock, after = append(blocks, block), nil, false, i+1
 		case strings.HasPrefix(line, "-----BEGIN "):
@@ -416,7 +416,7 @@ func pemBlocks(bundle string) ([]*pem.Block, error) {
 		}
 	}
 	if inBlock {
-		return nil, fmt.Errorf("block %d is no complete PEM block", len(blocks)+1)
+		return nil, fmt.Errorf("block %d is not a complete PEM block", len(blocks)+1)
 	}
 	for _, l := range lines[after:] {
 		// openssl writes its text before each block, so text after the last one is no part of it.

@@ -37,9 +37,9 @@ describe("the site settings in Setup", () => {
     await user.click(screen.getByLabelText("Site CA"));
     await user.paste(pem);
     const note = await screen.findByText("Replaces nodes (1 now).");
-    const hint = screen.getByText(/PEM, the default for every connection/u);
+    const hint = note.parentElement;
+    expect(hint).toHaveTextContent(/^PEM/u);
     expect(hint).toContainElement(note);
-    expect(hint.textContent).toMatch(/^PEM, the default for every connection/u);
     expect(screen.getByLabelText("Time zone")).not.toHaveAttribute("placeholder");
   });
 

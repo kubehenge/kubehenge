@@ -127,10 +127,10 @@ func (o *applianceOptions) settingsSetCommand() *cobra.Command {
 		Short: "Change the site CA, time zone or VM ID range and apply it to the management cluster",
 		Long: `Change the site CA, the site time zone or the site VM ID range and apply the settings to the
 management cluster, as Setup does. A setting left out keeps its value. --site-ca-file names a PEM file of
-certificates, and an empty file, --time-zone "" or --vm-id-range "" clears it. --vm-id-range is start-end,
-both included, for the VMs of new clusters and the VM templates. The interface refuses what it refuses on
-its pages, and a new site CA replaces the nodes of the clusters that inherit it, a few at a time and inside
-their upgrade windows. The state passphrase comes from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
+certificates. An empty file, --time-zone "" or --vm-id-range "" clears that setting. --vm-id-range is
+start-end, both included, for the VMs of new clusters and the VM templates. The checks are Setup's. A new
+site CA replaces the nodes of the clusters that inherit it, a few at a time and inside their upgrade
+windows. The state passphrase comes from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			f := cmd.Flags()

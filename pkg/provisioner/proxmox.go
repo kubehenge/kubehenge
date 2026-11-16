@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"maps"
@@ -59,7 +60,9 @@ type Credentials struct {
 
 // Proxmox creates and removes a cluster's Proxmox VE objects through the API.
 type Proxmox struct {
-	Client   *proxmox.Client
+	Client *proxmox.Client
+	// Accounts signs in as a cluster's user, which creates its own token.
+	Accounts *pve.Accounts
 	Settings Settings
 	// ProbeTTL is how long a node's answer to the status call is trusted, so that the many reads of
 	// the online nodes in one reconcile cost one call per node. Zero asks at every read.
@@ -104,15 +107,18 @@ func (p *Proxmox) Ensure(ctx context.Context, n Names, access Access, held Crede
 			return held, fmt.Errorf("creating the volume owner VM: %w", err)
 		}
 	}
-	members, err := p.ensureAccess(ctx, n, access)
+	members, err := p.ensurePool(ctx, n.Pool)
 	if err != nil {
 		return held, err
 	}
-	c, err := p.ensureVolumeOwner(ctx, n, held, members, record)
+	c, err := p.keepUser(ctx, n, access, held, record)
 	if err != nil {
 		return c, err
 	}
-	if c, err = p.keepToken(ctx, n, c, record); err != nil {
+	if err = p.ensureGrant(ctx, n, access); err != nil {
+		return c, err
+	}
+	if c, err = p.ensureVolumeOwner(ctx, n, c, members, record); err != nil {
 		return c, err
 	}
 	if c.Region, err = p.clusterRegion(ctx); err != nil {
@@ -182,22 +188,6 @@ func (p *Proxmox) Protect(ctx context.Context, node string, vmid int) error {
 // Unprotect turns the protection flag of a VM off.
 func (p *Proxmox) Unprotect(ctx context.Context, node string, vmid int) error {
 	return p.setProtection(ctx, node, vmid, 0)
-}
-
-// ensureAccess creates the cluster's pool, with the members it has, and its user with rights on it
-// and access.
-func (p *Proxmox) ensureAccess(ctx context.Context, n Names, access Access) ([]poolMember, error) {
-	members, err := p.ensurePool(ctx, n.Pool)
-	if err != nil {
-		return nil, err
-	}
-	if err := p.ensureUser(ctx, n, access); err != nil {
-		return nil, err
-	}
-	if err := p.ensureGrant(ctx, n, access); err != nil {
-		return nil, err
-	}
-	return members, nil
 }
 
 // volumeOwners finds the cluster's volume owner VMs, by VMID with the node each was created on.
@@ -499,37 +489,135 @@ func (p *Proxmox) ensurePool(ctx context.Context, pool string) ([]poolMember, er
 	return nil, nil
 }
 
-// ensureUser creates the cluster's user in the clusters' group, and keeps it in the group holding
-// Sys.Audit on / exactly while access asks for that. Proxmox VE shows the token a user of the
-// clusters' group. Of one that does not exist it says "no such user", and one of the same name
-// outside the group it refuses to show, whose creation then fails rather than take it over.
-func (p *Proxmox) ensureUser(ctx context.Context, n Names, access Access) error {
+// keepUser ensures the cluster's user and its token, and keeps the token at once: Proxmox VE shows
+// a token's secret only when creating it, and a failure later in the reconcile then costs no new
+// token each retry.
+func (p *Proxmox) keepUser(ctx context.Context, n Names, access Access, c Credentials, record func(Credentials) error) (Credentials, error) {
+	secret, err := p.ensureUser(ctx, n, access, c.TokenSecret)
+	if err != nil {
+		return c, err
+	}
+	c.TokenID = n.TokenID()
+	if secret == c.TokenSecret {
+		return c, nil
+	}
+	c.TokenSecret = secret
+	return c, record(c)
+}
+
+// ensureUser keeps the cluster's user with its token, in the clusters' group and in the group
+// holding Sys.Audit on / exactly while access asks for that, and returns the token's secret. A user
+// whose token is gone, or whose secret is not known, is made again with a new token, as only the
+// user itself may make one (createUser). Proxmox VE shows the token a user of the clusters' group.
+// Of one that does not exist it says "no such user", and one of the same name outside the group it
+// refuses to show, whose creation then fails rather than take it over.
+func (p *Proxmox) ensureUser(ctx context.Context, n Names, access Access, secret string) (string, error) {
 	if access.SysAudit && p.Settings.SysAuditGroup == "" {
-		return fmt.Errorf("giving %s Sys.Audit on /: the controller has no group for it", n.User)
+		return "", fmt.Errorf("giving %s Sys.Audit on /: the controller has no group for it", n.User)
 	}
 	var user struct {
 		Groups []string `json:"groups"`
 	}
-	err := p.Client.Get(ctx, "/access/users/"+url.PathEscape(n.User), &user)
+	path := "/access/users/" + url.PathEscape(n.User)
+	err := p.Client.Get(ctx, path, &user)
 	switch {
 	case err == nil:
-		return p.ensureSysAudit(ctx, n, access, user.Groups)
+		kept, tokenErr := p.tokenKept(ctx, n, secret)
+		if tokenErr != nil {
+			return "", tokenErr
+		}
+		if kept {
+			return secret, p.ensureSysAudit(ctx, n, access, user.Groups)
+		}
+		// Deleting the user takes its token, groups and ACLs with it. The grant that follows gives
+		// the new one Kubehenge's again. Anything an administrator added the controller could not
+		// give back, so such a user is left as it is.
+		extra, extraErr := p.heldBeyond(ctx, n, access, user.Groups)
+		if extraErr != nil {
+			return "", extraErr
+		}
+		if len(extra) > 0 {
+			return "", fmt.Errorf("token %s needs replacing with its user, which would drop what Kubehenge did not give it: %s. "+
+				"Take that from the user, or delete the user for Kubehenge to make it again", n.TokenID(), strings.Join(extra, ", "))
+		}
+		if deleteErr := p.Client.Delete(ctx, path, nil); deleteErr != nil && !isMissing(deleteErr) {
+			return "", fmt.Errorf("replacing user %s for a new token: %w", n.User, deleteErr)
+		}
 	case !isMissing(err) && !proxmox.IsNotAuthorized(err):
-		return fmt.Errorf("reading user %s: %w", n.User, err)
+		return "", fmt.Errorf("reading user %s: %w", n.User, err)
 	}
+	return p.createUser(ctx, n, access)
+}
+
+// heldBeyond lists the groups of the user's, and the ACLs of its that the controller can see, that
+// Kubehenge does not give it: what ensureGrant leaves alone.
+func (p *Proxmox) heldBeyond(ctx context.Context, n Names, access Access, groups []string) ([]string, error) {
+	var extra []string
+	for _, g := range groups {
+		if g != p.Settings.Group && g != p.Settings.SysAuditGroup {
+			extra = append(extra, "group "+g)
+		}
+	}
+	wanted, err := p.wantedGrants(n, access)
+	if err != nil {
+		return nil, err
+	}
+	var entries []struct {
+		Path   string `json:"path"`
+		Type   string `json:"type"`
+		UGID   string `json:"ugid"`
+		RoleID string `json:"roleid"`
+	}
+	if err := p.Client.Get(ctx, "/access/acl", &entries); err != nil {
+		return nil, fmt.Errorf("reading the permissions of %s: %w", n.User, err)
+	}
+	for _, e := range entries {
+		if _, ours := wanted[e.Path]; e.Type == "user" && e.UGID == n.User && !ours && !strings.HasPrefix(e.Path, storageACLPath) {
+			extra = append(extra, e.RoleID+" on "+e.Path)
+		}
+	}
+	return extra, nil
+}
+
+// tokenKept tells whether the cluster's token exists with secret known.
+func (p *Proxmox) tokenKept(ctx context.Context, n Names, secret string) (bool, error) {
+	if secret == "" {
+		return false, nil
+	}
+	err := p.Client.Get(ctx, fmt.Sprintf("/access/users/%s/token/%s", url.PathEscape(n.User), n.Token), &map[string]any{})
+	switch {
+	case isMissing(err):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("reading token %s: %w", n.TokenID(), err)
+	}
+	return true, nil
+}
+
+// createUser creates the cluster's user with a random password, signs in as it and has it create
+// its own token, which holds what the user holds. Proxmox VE lets another user create such a token
+// only with Permissions.Modify on /, which would let the controller grant itself every privilege.
+// The password is kept nowhere, so the user signs in with its token only.
+func (p *Proxmox) createUser(ctx context.Context, n Names, access Access) (string, error) {
 	groups := p.Settings.Group
 	if access.SysAudit {
 		groups += "," + p.Settings.SysAuditGroup
 	}
-	err = p.Client.Post(ctx, "/access/users", map[string]any{
+	password := rand.Text()
+	err := p.Client.Post(ctx, "/access/users", map[string]any{
 		"userid":    n.User,
 		groupsParam: groups,
+		passwordKey: password,
 		"comment":   "Kubernetes cluster " + n.Pool + "; signs in with its API token only",
 	}, nil)
 	if err != nil {
-		return fmt.Errorf("creating user %s: %w", n.User, err)
+		return "", fmt.Errorf("creating user %s: %w", n.User, err)
 	}
-	return nil
+	secret, err := p.Accounts.CreateOwnToken(ctx, n.User, password, n.Token, "cloud controller manager and CSI plugin")
+	if err != nil {
+		return "", fmt.Errorf("creating token %s: %w", n.TokenID(), err)
+	}
+	return secret, nil
 }
 
 // groupsParam is Proxmox VE's parameter for a user's groups, a comma-separated list.
@@ -629,49 +717,6 @@ func (p *Proxmox) ensureGrant(ctx context.Context, n Names, access Access) error
 		}
 	}
 	return nil
-}
-
-func (p *Proxmox) ensureToken(ctx context.Context, n Names, secret string) (string, error) {
-	path := fmt.Sprintf("/access/users/%s/token/%s", url.PathEscape(n.User), n.Token)
-	err := p.Client.Get(ctx, path, &map[string]any{})
-	switch {
-	case err == nil && secret != "":
-		return secret, nil
-	case err == nil:
-		if err = p.Client.Delete(ctx, path, nil); err != nil && !isMissing(err) {
-			return "", fmt.Errorf("replacing token %s: %w", n.TokenID(), err)
-		}
-	case !isMissing(err):
-		return "", fmt.Errorf("reading token %s: %w", n.TokenID(), err)
-	}
-	var created struct {
-		Value string `json:"value"`
-	}
-	// Not privilege-separated: the user exists only for this token, and a separated token would
-	// need every ACL twice.
-	if err := p.Client.Post(ctx, path, map[string]any{"privsep": 0, "comment": "cloud controller manager and CSI plugin"}, &created); err != nil {
-		return "", fmt.Errorf("creating token %s: %w", n.TokenID(), err)
-	}
-	if created.Value == "" {
-		return "", fmt.Errorf("creating token %s: no secret in the response", n.TokenID())
-	}
-	return created.Value, nil
-}
-
-// keepToken ensures the cluster's token. Proxmox VE shows a token's secret only when creating it,
-// and a token without its secret is replaced. Kept at once, a failure later in the reconcile does
-// not cost a new token each retry.
-func (p *Proxmox) keepToken(ctx context.Context, n Names, c Credentials, record func(Credentials) error) (Credentials, error) {
-	secret, err := p.ensureToken(ctx, n, c.TokenSecret)
-	if err != nil {
-		return c, err
-	}
-	c.TokenID = n.TokenID()
-	if secret == c.TokenSecret {
-		return c, nil
-	}
-	c.TokenSecret = secret
-	return c, record(c)
 }
 
 func (p *Proxmox) ensureVolumeOwner(ctx context.Context, n Names, c Credentials, members []poolMember, record func(Credentials) error) (Credentials, error) {
@@ -955,11 +1000,20 @@ const (
 	deleteTaskTimeout = 15 * time.Minute
 )
 
-// Proxmox VE reports a missing or existing object as a 500 with the reason in the status line,
-// which go-proxmox returns as the error text.
+// isMissing tells whether Proxmox VE answered that the object does not exist: a 404, or a 500 or
+// 400 whose message says so, as go-proxmox reads them. Only an answer counts. A request that got
+// none, such as one whose name lookup failed with "no such host", is an error to retry.
 func isMissing(err error) bool {
-	return err != nil && (proxmox.IsNotFound(err) || strings.Contains(err.Error(), "does not exist") || strings.Contains(err.Error(), "no such"))
+	if proxmox.IsNotFound(err) {
+		return true
+	}
+	// pve.Connect's client turns a 404 into its own APIError before go-proxmox reads it.
+	var answered *pve.APIError
+	return errors.As(err, &answered) && strings.HasPrefix(answered.Status, "404")
 }
+
+// Proxmox VE reports an existing object as a 500 with the reason in the status line, which
+// go-proxmox returns as the error text.
 
 func isExisting(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "already exists")

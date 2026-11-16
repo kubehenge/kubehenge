@@ -296,8 +296,8 @@ export function RecoverDialog({ onClose }: { onClose: () => void }): JSX.Element
       }
     >
       <p className="warning">
-        Applies the management cluster and restores etcd from the newest snapshot. Clusters changed since go back to
-        then.
+        Applies the management cluster and restores etcd from the newest snapshot. Changes to clusters since then are
+        lost.
       </p>
       <Field label="State passphrase">{password(passphrase, setPassphrase)}</Field>
       <ErrorBox message={error} />

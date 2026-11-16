@@ -1,3 +1,3 @@
 ### Fixed
 
-- **Patch releases when Rancher or Talos holds the next minor.** A cluster in `minor` mode keeps taking the patch releases of its own minor version, and `AutoUpgradeSkipped` says what holds the next one.
+- A cluster in `minor` mode still takes its own minor version's patch releases while Rancher or Talos holds the next minor. `AutoUpgradeSkipped` says which.

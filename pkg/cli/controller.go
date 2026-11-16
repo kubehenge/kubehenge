@@ -257,7 +257,7 @@ func (o *controllerOptions) addonFlags(f *pflag.FlagSet) {
 	f.StringArrayVar(&o.chartMirrors, "chart-mirror", nil, "a mirror of a chart repository, as <host>=<address>, such as ghcr.io=oci://registry.example.org/ghcr or charts.jetstack.io=https://charts.example.org/jetstack. It serves the same charts under the same digests (repeatable)")
 	f.StringVar(&o.releaseMirror.URL, "release-mirror", "", "a mirror of the RKE2 and k3s releases, such as https://mirror.example.org/github, which serves them on GitHub's paths beneath it: <mirror>/<repository>/releases/download/<version>/<file> and <mirror>/<repository>/raw/<version>/install.sh. Nodes download from it in place of GitHub, and still install only the pinned files")
 	f.StringVar(&o.releaseMirrorCA, "release-mirror-ca", "", "a PEM file with the authority of a --release-mirror the usual authorities do not sign, which the nodes trust for their download")
-	f.StringVar(&o.siteCAFile, "site-ca", "", "a PEM file with the site's authority, which the nodes of clusters without trustedCAs of their own trust and an https release mirror without an authority of its own is verified with")
+	f.StringVar(&o.siteCAFile, "site-ca", "", "a PEM file with the site CA. Nodes of clusters without their own trustedCAs trust it, and so does an https release mirror without its own authority")
 	f.StringVar(&o.timeZone, "time-zone", provisioner.DefaultTimeZone, "the IANA time zone that schedules without one of their own run in, such as a cluster's etcd snapshots")
 	f.StringVar(&o.egressProxy, "egress-proxy", os.Getenv("HTTPS_PROXY"), "the proxy the add-ons of clusters that set none of their own go through (env HTTPS_PROXY). An address with credentials is not passed on")
 	f.StringVar(&o.egressNoProxy, "egress-no-proxy", os.Getenv("NO_PROXY"), "the exceptions to --egress-proxy, comma-separated (env NO_PROXY)")
@@ -297,7 +297,7 @@ func (o *controllerOptions) addonFlags(f *pflag.FlagSet) {
 // for the CSI plugin's newest release, Sys.Audit on / for the cloud controller manager's HA group
 // labels, and the proxy that copies the volumes of clusters taking volume snapshots.
 func (o *controllerOptions) grantFlags(f *pflag.FlagSet) {
-	f.StringVar(&o.image, "image", "", "Kubehenge's own image, as <repository>@sha256:<digest>. It runs the proxy beside the CSI plugin's controller in clusters that take volume snapshots, and receives an etcd snapshot from the backup volume on a kubeadm, RKE2 or k3s node. Empty, no cluster takes volume snapshots, and those restore from buckets only")
+	f.StringVar(&o.image, "image", "", "Kubehenge's own image, as <repository>@sha256:<digest>. Volume snapshots need it, and so do etcd restores from the backup volume on kubeadm, RKE2 and k3s")
 	f.StringVar(&o.snapshotChart, "snapshot-controller-chart", "", "the volume snapshot controller's chart, with its CRDs and the VolumeSnapshotClass, for clusters that take volume snapshots, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.settings.SysAuditGroup, "sys-audit-group", "", "Proxmox VE group holding Sys.Audit on /, joined by the user of each cluster that asks for the cloud controller manager's HA rule labels. Empty, no cluster joins it")
 	f.StringVar(&o.csiNewestChart, "csi-newest-chart", "", "the CSI plugin's newest release, for clusters whose token holds Datastore.Allocate on their storage, as <repository>/<name>:<version>@sha256:<digest>")
@@ -342,16 +342,15 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	if err != nil {
 		return fmt.Errorf("--proxmox-ca: %w", err)
 	}
-	c, err := pve.Connect(*conn)
+	cloud, err := o.newCloud(conn)
 	if err != nil {
-		return fmt.Errorf("connecting to Proxmox VE: %w", err)
+		return err
 	}
 	rancherMinors, providers, err := o.parseFlags()
 	if err != nil {
 		return err
 	}
 	distributions := &provisioner.Distributions{ClassNamespace: o.r.ClassNamespace, Providers: providers}
-	cloud := &provisioner.Proxmox{Client: c, Settings: o.settings, ProbeTTL: nodeProbeTTL}
 	o.completeReconciler(cloud, provisioner.Endpoint{URL: strings.TrimSuffix(conn.URL, "/"), CA: string(ca), Insecure: conn.Insecure}, rancherMinors)
 
 	logger, err := o.logs.zapLogger()
@@ -382,7 +381,7 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	if err = o.addPlacement(mgr, extensions, scheme, o.newHooks(mgr, registrar, cloud, rancherMinors), cloud); err != nil {
 		return err
 	}
-	if err = o.addUpgrader(mgr, c, rancherMinors, remotes); err != nil {
+	if err = o.addUpgrader(mgr, cloud.Client, rancherMinors, remotes); err != nil {
 		return err
 	}
 	if err = o.addWatches(mgr, remotes, cloud.Client); err != nil {
@@ -395,6 +394,20 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 		return fmt.Errorf("the controller manager: %w", err)
 	}
 	return nil
+}
+
+// newCloud connects to Proxmox VE with the controller's token, and signs clusters' users in there
+// to create their own tokens.
+func (o *controllerOptions) newCloud(conn *pve.Config) (*provisioner.Proxmox, error) {
+	c, err := pve.Connect(*conn)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to Proxmox VE: %w", err)
+	}
+	accounts, err := pve.NewAccounts(*conn)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to Proxmox VE: %w", err)
+	}
+	return &provisioner.Proxmox{Client: c, Accounts: accounts, Settings: o.settings, ProbeTTL: nodeProbeTTL}, nil
 }
 
 // newHooks makes the Runtime SDK hooks, which check a cluster against the same grants and pins as

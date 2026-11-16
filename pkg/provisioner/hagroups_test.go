@@ -137,12 +137,21 @@ func TestUserJoinsTheSysAuditGroupWhileAccessAsks(t *testing.T) {
 	ctx := context.Background()
 	f := newFakePVE("a", nil)
 	f.userMissing = true
-	p := &Proxmox{Client: serve(t, f), Settings: Settings{Group: "kubehenge-clusters", Role: "kubehenge-cluster", SysAuditGroup: testSysAuditGroup}}
-	n := Names{Pool: "kubehenge/team-a.web", User: "kubehenge.team-a.web@pve"}
+	p := serveCloud(t, f)
+	p.Settings = Settings{Group: "kubehenge-clusters", Role: "kubehenge-cluster", SysAuditGroup: testSysAuditGroup}
+	n := webNames
+	secret := ""
+	ensureUser := func(access Access) error {
+		got, err := p.ensureUser(ctx, n, access, secret)
+		if err == nil {
+			secret = got
+		}
+		return err
+	}
 
 	// Created in both groups at once, then left as it is.
 	for range 2 {
-		if err := p.ensureUser(ctx, n, Access{SysAudit: true}); err != nil {
+		if err := ensureUser(Access{SysAudit: true}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -152,7 +161,7 @@ func TestUserJoinsTheSysAuditGroupWhileAccessAsks(t *testing.T) {
 
 	// Out again. The user's other groups stay.
 	f.groups = append(f.groups, "operators")
-	if err := p.ensureUser(ctx, n, Access{}); err != nil {
+	if err := ensureUser(Access{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.userWrites[len(f.userWrites)-1]; len(f.userWrites) != 2 || !maps.Equal(got, map[string]any{"groups": "kubehenge-clusters,operators"}) {
@@ -163,7 +172,7 @@ func TestUserJoinsTheSysAuditGroupWhileAccessAsks(t *testing.T) {
 	}
 
 	// Back in, appended so that the other groups stay.
-	if err := p.ensureUser(ctx, n, Access{SysAudit: true}); err != nil {
+	if err := ensureUser(Access{SysAudit: true}); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.userWrites[len(f.userWrites)-1]; len(f.userWrites) != 3 || !maps.Equal(got, map[string]any{"groups": testSysAuditGroup, "append": float64(1)}) {
@@ -175,10 +184,10 @@ func TestUserJoinsTheSysAuditGroupWhileAccessAsks(t *testing.T) {
 
 	// Without the group nothing is changed, and Sys.Audit is refused.
 	p.Settings.SysAuditGroup = ""
-	if err := p.ensureUser(ctx, n, Access{}); err != nil || len(f.userWrites) != 3 {
+	if err := ensureUser(Access{}); err != nil || len(f.userWrites) != 3 {
 		t.Errorf("without the group: %v, writes %v", err, f.userWrites)
 	}
-	if err := p.ensureUser(ctx, n, Access{SysAudit: true}); err == nil {
+	if err := ensureUser(Access{SysAudit: true}); err == nil {
 		t.Error("gave Sys.Audit without a group for it")
 	}
 }

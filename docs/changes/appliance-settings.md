@@ -1,3 +1,3 @@
 ### Added
 
-- `kubehenge appliance settings` shows the site CA and time zone. `settings set` changes them with the checks Setup applies.
+- `kubehenge appliance settings` shows the site CA, time zone and VM ID range. `settings set` changes them with the checks Setup applies.

@@ -13,7 +13,7 @@ Then [create clusters](clusters.md).
 
 ### Proxmox VE
 
-- **Proxmox VE 9 on x86-64.** The installer refuses any other release. Kubehenge has no build for other architectures. A cluster that runs two major versions at once needs [care](upgrading.md#upgrading-proxmox-ve).
+- **Proxmox VE 9 on x86-64.** The installer refuses any other release. Kubehenge has no build for other architectures. A Proxmox VE cluster that runs two major versions at once needs [care](upgrading.md#upgrading-proxmox-ve).
 - **Root in the shell of one node** to run the installer.
 - **An administrator** to set up the management cluster, a user with the Administrator role on `/` ([what it needs](#who-may-set-it-up)).
 
@@ -25,7 +25,7 @@ Then [create clusters](clusters.md).
 | The container template | `vztmpl` | Debian's standard container template. The installer uses it where it already is, or downloads it to a storage chosen like the disk's (`--template-storage`). |
 | The Talos disk image, and the images VM templates start from | `import` | Proxmox VE's `local` storage does not allow `import` until you add it (Datacenter, Storage, Edit, Content). |
 | The management cluster's disks | `images` | 32 GB per node. |
-| Cloud-init images | `iso` | Cluster API keeps each new cluster VM's cloud-init ISO here and gets full control of the storage. With several nodes or HA, a node-local storage here warns when the disks are on shared storage, since a VM that restarts on another node cannot find its ISO. Choose a shared storage then. Give it a directory storage of its own with the content type `ISO image` alone (Datacenter, Storage, Add, Directory). In the shell, that is `pvesm add dir kubehenge-iso --path /var/lib/kubehenge-iso --content iso`. Choose it as **Cloud-init images** in the setup. |
+| Cloud-init images | `iso` | Cluster API keeps each new cluster VM's cloud-init ISO here and gets full control of the storage. Give it a storage of its own with the content type `ISO image` alone. On one node that is a directory storage (Datacenter, Storage, Add, Directory), in the shell `pvesm add dir kubehenge-iso --path /var/lib/kubehenge-iso --content iso`. With several nodes or HA and the disks on shared storage, choose a shared storage instead, since a VM that restarts on another node cannot find its ISO. The setup warns about a node-local one. Choose it as **Cloud-init images** in the setup. |
 | Clusters' disks and persistent volumes | `images` | One or more storages, chosen when the management cluster is set up. |
 | VM templates | `images` | Shared storage in a Proxmox VE cluster, so that clones can start on any node. |
 
@@ -88,7 +88,7 @@ sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
 
 On a terminal, the installer is a full-screen guide. It detects the node first, then asks DHCP or static (a static address comes prefilled and is checked for use), asks only what is ambiguous, shows a summary to confirm or change, and installs with a live step list. The commands' output goes to `/var/log/kubehenge-install.log`. If DHCP gives the container no address, it offers a static address and retries.
 
-Without a terminal, with `TERM` empty or `dumb` (a serial console, an editor's shell), or with `--plain`, it prints one line per step and asks nothing. A dropped SSH session or Ctrl+C removes the container it was making. On a node whose own network is static, it then needs `--ip`, or `--ip dhcp` where a DHCP server answers.
+Without a terminal, with `TERM` empty or `dumb` (a serial console, an editor's shell), or with `--plain`, it prints one line per step and asks nothing. On a node whose own network is static, it then needs `--ip`, or `--ip dhcp` where a DHCP server answers. A dropped SSH session or Ctrl+C removes the container it was making.
 
 `install.sh` carries the version of its release and the checksums of the release archive and the OpenTofu release. It needs 1 GiB free in `/tmp` (or `TMPDIR`) for the unpacked release. The installer inside the archive carries the container template's checksum. Every download is checked against its checksum before it is used. Once Proxmox's mirror drops that template, the installer takes the one Proxmox's signed template index lists, with the checksum the index gives. To check the script itself before running it, see [Verifying a release](releasing.md#verifying-a-release).
 
@@ -100,7 +100,7 @@ Without a terminal, with `TERM` empty or `dumb` (a serial console, an editor's s
 | `--storage <storage>` | the only storage that takes container disks, else asked | Where the container's disks go, 9 GiB. Storages with less free are left out. Without a terminal, the best by type (local block storage, then directories, NFS, CIFS, CephFS), then by free space. |
 | `--template-storage <storage>` | where the template already is, else the only storage that takes it, else asked | Where the container template goes. Without a terminal, ranked like `--storage`. |
 | `--bridge <bridge>` | the bridge of the node's default route, else `vmbr0` | A bridge, Open vSwitch bridge or SDN VNet of the node, which the container attaches to. The installer stops before it downloads anything if there is none of that name. |
-| `--vlan <tag>` | none, or the tag of the VLAN device (such as `vmbr1.20`) the node's default route leaves by | The VLAN tag of the container's network, 1 to 4094. Naming `--bridge` yourself leaves the default off. The installer refuses the default when that bridge is not VLAN aware, since a tag there would cut the node's own VLAN network. |
+| `--vlan <tag>` | none, or the tag of the VLAN device (such as `vmbr1.20`) the node's default route leaves by | The VLAN tag of the container's network, 1 to 4094. With `--bridge` given, no tag is taken from the route. The installer refuses the default when that bridge is not VLAN aware, since a tag there would cut the node's own VLAN network. |
 | `--mtu <bytes>` | the bridge's | The MTU of the container's network, 576 to 65535. |
 | `--ip dhcp`, `--ip none` or `--ip <address>/<prefix>` | asked | The container's IPv4 address, such as `192.0.2.40/24`. `none` leaves IPv4 out, on an IPv6-only network, and needs `--ip6`. Without a terminal, `dhcp` where the node's own network uses DHCP, else the install stops. |
 | `--gateway <address>` | none | The default gateway, an IPv4 address, with a static `--ip`. |
@@ -140,7 +140,7 @@ The appliance, the management cluster and every cluster reach the Proxmox VE API
 
 Where the certificate is valid for none of the cluster's names and addresses, the installer stops and says what it names. Then give `--proxmox-url` with a name or address the certificate is valid for.
 
-The management cluster's nodes resolve a name in that URL with the DNS servers from the setup, not with the appliance's resolver. The setup page asks each server for the name, as given and with each of the setup's search domains, and ignores the appliance's hosts file. It refuses to start when a server says it does not know the name and none resolves it. Put an address in the URL, or add a DNS record for the name. Where every server stays silent, the appliance may only be on the wrong network, so the page warns that it could not check. It also warns when the servers and the appliance resolve the name to different addresses.
+The management cluster's nodes resolve a name in that URL with the setup's DNS servers, not with the appliance's resolver or hosts file. The setup refuses a name when a server says it does not know it and none resolves it. Put an address in the URL, or add a DNS record. It warns when every server stays silent, and when the servers and the appliance resolve the name differently.
 
 #### Choosing the address
 
@@ -170,7 +170,7 @@ On the node:
 1. Make the node's name resolve to it first. glibc puts IPv6 first even from `/etc/hosts`, so list only the IPv4 address for the name there, or raise IPv4's precedence in `/etc/gai.conf`.
 2. Run `pvecm updatecerts --force`, then `systemctl restart pveproxy`.
 
-A certificate of your own that lists the address does too (**System**, **Certificates** of the node). Then run `install.sh --upgrade --ctid <id> --proxmox-url https://<address>:8006`.
+A certificate of your own that lists the address works as well (**System**, **Certificates** of the node). Then run `install.sh --upgrade --ctid <id> --proxmox-url https://<address>:8006`.
 
 #### The CA
 
@@ -353,7 +353,7 @@ If it fails, the page shows the error and the log, with the settings still fille
 
 ### After setup
 
-Back up the [appliance](install-settings.md#back-up-the-appliance) and the [management cluster's etcd](install-settings.md#back-up-the-management-clusters-etcd), and set up [notifications](install-settings.md#notifications). Patch hosts with [`ready-for-reboot`](upgrading.md#patching-proxmox-ve-hosts).
+Back up the [appliance](install-settings.md#back-up-the-appliance) and the [management cluster's etcd](install-settings.md#back-up-the-management-clusters-etcd), and set up [notifications](install-settings.md#notifications). Patch nodes with [`ready-for-reboot`](upgrading.md#patching-proxmox-ve-nodes).
 
 ## Create the VM templates
 

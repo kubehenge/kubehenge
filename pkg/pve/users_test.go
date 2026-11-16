@@ -3,6 +3,7 @@ package pve
 import (
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -121,6 +123,48 @@ func TestCreateAdministratorToken(t *testing.T) {
 	}
 	if err := a.DeleteUser(t.Context(), alice, "upgrader@pve"); err != nil {
 		t.Fatalf("deleting a user that is gone: %v", err)
+	}
+}
+
+// A user creates its own token with the ticket its password gets. A node that refuses that ticket
+// at once runs a clock apart from the node that issued it.
+func TestCreateOwnToken(t *testing.T) {
+	t.Parallel()
+	var refuse atomic.Bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api2/json/access/ticket", func(w http.ResponseWriter, r *http.Request) {
+		if r.FormValue("username") != "web@pve" || r.FormValue("password") != "pa55word" {
+			http.Error(w, "authentication failure", http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"username": "web@pve", "ticket": "PVE:web@pve:1", "CSRFPreventionToken": "csrf"}})
+	})
+	mux.HandleFunc("POST /api2/json/access/users/web@pve/token/cluster", func(w http.ResponseWriter, r *http.Request) {
+		if refuse.Load() || r.Header.Get("Cookie") != "PVEAuthCookie=PVE:web@pve:1" || r.Header.Get("Csrfpreventiontoken") != "csrf" || r.FormValue("privsep") != "0" {
+			http.Error(w, "authentication failure", http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"value": "5ec2e7"}})
+	})
+	srv := httptest.NewTLSServer(mux)
+	t.Cleanup(srv.Close)
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := NewAccounts(Config{URL: srv.URL, CAFile: ca})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := a.CreateOwnToken(t.Context(), "web@pve", "pa55word", "cluster", "c"); err != nil || got != "5ec2e7" {
+		t.Fatalf("CreateOwnToken = %q, %v", got, err)
+	}
+	refuse.Store(true)
+	if _, err := a.CreateOwnToken(t.Context(), "web@pve", "pa55word", "cluster", "c"); !errors.Is(err, ErrNodesDisagree) {
+		t.Errorf("a token refused right after the sign-in: %v, want ErrNodesDisagree", err)
+	}
+	if _, err := a.CreateOwnToken(t.Context(), "web@pve", "wrong", "cluster", "c"); !errors.Is(err, ErrAuthentication) || errors.Is(err, ErrNodesDisagree) {
+		t.Errorf("a refused sign-in: %v", err)
 	}
 }
 

@@ -89,7 +89,7 @@ func (a *Appliance) applyPlanned(ctx context.Context, j *Job, env []string, t *p
 		if err == nil || attempt == applyAttempts || !etcdStalled(err) {
 			return err
 		}
-		j.Add(fmt.Sprintf("etcd timed out a request, as slow storage makes it do. Running again in %s, attempt %d of %d", pause, attempt+1, applyAttempts))
+		j.Add(fmt.Sprintf("etcd timed out a request, which slow storage causes. Running again in %s, attempt %d of %d", pause, attempt+1, applyAttempts))
 		select {
 		case <-ctx.Done():
 			if errors.Is(context.Cause(ctx), ErrServiceStopped) {

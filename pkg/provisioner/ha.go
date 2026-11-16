@@ -556,7 +556,9 @@ func (r *HAReconciler) addResource(ctx context.Context, sid, comment string) err
 // removeResource takes a VM out of HA and out of every rule naming it. The VM keeps running.
 func (r *HAReconciler) removeResource(ctx context.Context, sid string) error {
 	err := r.HA.Delete(ctx, "/cluster/ha/resources/"+url.PathEscape(sid), nil)
-	if err != nil && !isMissing(err) {
+	// Proxmox VE refuses to delete a resource that is gone with "cannot delete service '<sid>', not
+	// HA managed!". The HA Job hands its refusal on as text.
+	if err != nil && !isMissing(err) && !strings.Contains(err.Error(), "', not HA managed!") {
 		return fmt.Errorf("taking %s out of HA: %w", sid, err)
 	}
 	return nil
