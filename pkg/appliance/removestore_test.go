@@ -98,6 +98,7 @@ type fakeVM struct {
 	drives      map[string]string
 	// offline answers every request as Proxmox VE does for a VM on a node that is down.
 	offline bool
+	running bool
 }
 
 // nodeVMs answers as Proxmox VE does for its VMs: it refuses to unlink a drive of a protected VM
@@ -120,8 +121,8 @@ type nodeVMs struct {
 // with another SMBIOS UUID is listed before it, so that only the UUID tells them apart.
 func withNodeVM(disk string) *nodeVMs {
 	return &nodeVMs{vms: []*fakeVM{
-		{id: 901, name: "cp-0", node: "pve1", uuid: "11111111-2222-3333-4444-555555555555", drives: map[string]string{}},
-		{id: 1001, name: "mgmt-a", node: "pve2", uuid: nodeUUID, protection: 1, description: "Node VM", drives: map[string]string{
+		{id: 901, name: "cp-0", node: "pve1", uuid: "11111111-2222-3333-4444-555555555555", running: true, drives: map[string]string{}},
+		{id: 1001, name: "mgmt-a", node: "pve2", uuid: nodeUUID, running: true, protection: 1, description: "Node VM", drives: map[string]string{
 			"scsi0":   "local-lvm:vm-1001-disk-0,size=20G",
 			"scsi1":   disk + ",backup=0,wwn=0x5056432d49443031",
 			"scsihw":  "virtio-scsi-single",
@@ -157,7 +158,14 @@ func (f *nodeVMs) serve(t *testing.T, w http.ResponseWriter, r *http.Request) {
 		list := make([]map[string]any, 0, 1+len(f.vms))
 		list = append(list, map[string]any{"vmid": 900, "name": "cp-0", "node": "pve1", "type": "lxc"})
 		for _, v := range f.vms {
-			list = append(list, map[string]any{"vmid": v.id, "name": v.name, "node": v.node, "type": "qemu"})
+			status := "stopped"
+			switch {
+			case v.offline:
+				status = "unknown"
+			case v.running:
+				status = "running"
+			}
+			list = append(list, map[string]any{"vmid": v.id, "name": v.name, "node": v.node, "type": "qemu", "status": status})
 		}
 		reply(t, w, list)
 		return
@@ -525,7 +533,7 @@ func TestAVMOnANodeThatIsDownLeavesTheOthersWorking(t *testing.T) {
 func TestTwoVMsWithTheNodesUUIDFailLoudly(t *testing.T) {
 	t.Parallel()
 	f := withNodeVM(backupDisk)
-	f.vms = append(f.vms, &fakeVM{id: 1700, name: "mgmt-a-restored", node: "pve3", uuid: nodeUUID, drives: map[string]string{}})
+	f.vms = append(f.vms, &fakeVM{id: 1700, name: "mgmt-a-restored", node: "pve3", uuid: nodeUUID, running: true, drives: map[string]string{}})
 	kube := fake.NewClientset(managementNode("cp-0", nodeUUID), zonesTokenSecret())
 	_, zerr := f.appliance(t).followZones(t.Context(), kube, "")
 	derr := f.detachHandle(t, "region/pve2/local-lvm/vm-9000-disk-0")
@@ -540,6 +548,43 @@ func TestTwoVMsWithTheNodesUUIDFailLoudly(t *testing.T) {
 	}
 	if zone := zoneOf(t, kube, "cp-0"); zone != "" {
 		t.Fatalf("cp-0 got zone %q with two VMs of its UUID", zone)
+	}
+}
+
+// A stopped copy restored with the node's UUID is never the node's VM. With the node's own VM
+// unreadable on a Proxmox VE node that is down, the detach fails naming it and cp-0's zone stays.
+// With the node's VM readable, the detach takes it.
+func TestAStoppedCopyIsNeverTheNodesVM(t *testing.T) {
+	t.Parallel()
+	copied := func() *nodeVMs {
+		f := withNodeVM(backupDisk)
+		f.vms = append(f.vms, &fakeVM{id: 1700, name: "mgmt-a-restored", node: "pve3", uuid: nodeUUID, drives: map[string]string{}})
+		return f
+	}
+	f := copied()
+	f.vm(1001).offline = true
+	kube := fake.NewClientset(managementNode("cp-0", nodeUUID), zonesTokenSecret())
+	unknown, err := f.appliance(t).followZones(t.Context(), kube, "")
+	if err != nil || !slices.Equal(unknown, []string{"cp-0"}) {
+		t.Fatalf("unknown %v, error %v, want cp-0 unknown", unknown, err)
+	}
+	if zone := zoneOf(t, kube, "cp-0"); zone != "" {
+		t.Fatalf("cp-0 got zone %q from the stopped copy", zone)
+	}
+	err = f.detachHandle(t, "region/pve2/local-lvm/vm-9000-disk-0")
+	if err == nil || !strings.Contains(err.Error(), "VM 1001 (mgmt-a) on pve2 could not be read") {
+		t.Fatalf("error %v, want the node's unreadable VM named", err)
+	}
+	if got := f.callList(); len(got) > 0 {
+		t.Fatalf("calls %v on the stopped copy, want none", got)
+	}
+
+	f = copied()
+	if err = f.detachHandle(t, "region/pve2/local-lvm/vm-9000-disk-0"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.callList(); !slices.Equal(got, detachedCalls) {
+		t.Fatalf("calls %v, want %v on the running node VM", got, detachedCalls)
 	}
 }
 
