@@ -726,6 +726,28 @@ describe("setup", () => {
     });
   });
 
+  it("gives a bare node address on a VLAN no prefix from the untagged bridge", async () => {
+    fakeServer({
+      ...administrator,
+      ...oneNode,
+      "GET /api/setup": { body: { appliance: true, ready: false, allowed: true } },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await waitFor(() => expect(screen.getByLabelText("VM disks")).toHaveValue("local-lvm"));
+    await next(user);
+    await waitFor(() => expect(screen.getByLabelText("Gateway")).toHaveValue("192.0.2.1"));
+    await user.type(screen.getByLabelText("VLAN tag"), "20");
+    await user.clear(screen.getByLabelText("Gateway"));
+    await user.type(screen.getByLabelText("Gateway"), "10.20.0.1");
+    await user.type(screen.getByLabelText("Node addresses"), "10.20.0.11");
+    await next(user);
+    expect(screen.getByLabelText("Node addresses")).toHaveAccessibleDescription(
+      /is not in the form 192\.0\.2\.11\/24/u,
+    );
+    expect(screen.getByRole("button", { name: "Network" })).toHaveAttribute("aria-current", "step");
+  });
+
   it("shows a stored management cluster as it is saved, past a node that does not answer", async () => {
     window.history.replaceState(null, "", "/administration");
     fakeServer({

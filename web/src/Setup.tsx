@@ -2947,8 +2947,9 @@ function withDefaults(
       imageDatastore: fit(form.imageDatastore, offers.images),
       bootstrapDatastore: fit(form.bootstrapDatastore, offers.isos),
       bridge,
-      nodeAddresses: withPrefix(form.nodeAddresses, onBridge?.cidr),
-      nodeAddresses6: withPrefix(form.nodeAddresses6, onBridge?.cidr6),
+      // A VLAN's network is not the one a node reports on the bridge.
+      nodeAddresses: withPrefix(form.nodeAddresses, filled(form.vlan) ? undefined : onBridge?.cidr),
+      nodeAddresses6: withPrefix(form.nodeAddresses6, filled(form.vlan) ? undefined : onBridge?.cidr6),
       gateway: detect("gateway", onBridge?.gateway ?? ""),
       gateway6: detect("gateway6", onBridge?.gateway6 ?? ""),
       dnsServers: detect("dnsServers", ownFamilies(found.dnsByNode[first]?.servers ?? [], form.families).join(", ")),

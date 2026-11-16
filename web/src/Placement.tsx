@@ -109,7 +109,7 @@ export const nodeNote = (n: PveNode): string => {
  */
 export const nodeAdvice = (node: string, reason: string): string =>
   reason.includes("certificate verify failed")
-    ? `Run pvecm updatecerts on ${node}.`
+    ? `Run pvecm updatecerts --force on ${node}, then restart pveproxy.`
     : `Check that ${node} answers the other nodes.`;
 
 export const nodeFault = (node: string, reason: string | undefined): string | undefined =>
