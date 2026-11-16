@@ -714,6 +714,23 @@ variable "time_zone" {
   }
 }
 
+variable "workload_vm_id_range" {
+  description = "The VM IDs a new cluster's VMs and the VM templates take, both ends included, such as { start = 10000, end = 10999 }. A cluster may set its own. Null, Proxmox VE's next free ID. It is apart from vm_id_range, which draws the management VMs' IDs."
+  type = object({
+    start = number
+    end   = number
+  })
+  default = null
+
+  validation {
+    condition = var.workload_vm_id_range == null || (
+      floor(var.workload_vm_id_range.start) == var.workload_vm_id_range.start && floor(var.workload_vm_id_range.end) == var.workload_vm_id_range.end &&
+      var.workload_vm_id_range.start >= 100 && var.workload_vm_id_range.start <= var.workload_vm_id_range.end && var.workload_vm_id_range.end <= 999999999
+    )
+    error_message = "workload_vm_id_range must be whole numbers with start up to end, within 100 to 999999999, the VM IDs Proxmox VE accepts."
+  }
+}
+
 variable "proxy" {
   description = "The HTTP(S) proxy every download from the management side goes through: url (with credentials if it needs them), no_proxy (comma-separated hosts, domains and networks that bypass it, which has to name the Proxmox VE API host, the nodes' networks and the pod and service ranges) and ca_bundle (PEM, for a proxy that re-signs TLS). Empty strings go direct."
   type = object({

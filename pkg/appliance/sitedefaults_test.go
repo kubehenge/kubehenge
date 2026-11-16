@@ -40,6 +40,23 @@ func TestSiteDefaultsValidation(t *testing.T) {
 			t.Errorf("%s: %v, want %q", name, err, tc.want)
 		}
 	}
+	for name, tc := range map[string]struct {
+		r    provisioner.VMIDRange
+		want string
+	}{
+		"one ID":          {provisioner.VMIDRange{Start: 5000, End: 5000}, ""},
+		"the widest":      {provisioner.VMIDRange{Start: 100, End: 999999999}, ""},
+		"inverted":        {provisioner.VMIDRange{Start: 2000, End: 1000}, "VM ID range 2000-1000 starts above its end"},
+		"below the limit": {provisioner.VMIDRange{Start: 99, End: 1000}, "outside 100 to 999999999"},
+		"above the limit": {provisioner.VMIDRange{Start: 1000, End: 1000000000}, "outside 100 to 999999999"},
+	} {
+		s := settings("pve1")
+		s.WorkloadVMIDRange = &tc.r
+		err := s.Validate()
+		if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+			t.Errorf("VM ID range, %s: %v, want %q", name, err, tc.want)
+		}
+	}
 }
 
 func TestSiteDefaultsReachTheModuleOnlyWhenSet(t *testing.T) {
@@ -47,6 +64,7 @@ func TestSiteDefaultsReachTheModuleOnlyWhenSet(t *testing.T) {
 	a, _ := newAppliance(t)
 	s := settings("pve1")
 	s.SiteCA, s.TimeZone = validAuthority(t), "Europe/Zurich"
+	s.WorkloadVMIDRange = &provisioner.VMIDRange{Start: 10000, End: 10999}
 	if err := a.Apply(s, "correct horse battery staple", ticket(), func(context.Context, []byte) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +76,8 @@ func TestSiteDefaultsReachTheModuleOnlyWhenSet(t *testing.T) {
 		t.Fatalf("main.tf: %v\n%s", err, main)
 	}
 	vars, err := os.ReadFile(filepath.Join(a.Dir, "management", "terraform.tfvars.json"))
-	if err != nil || !strings.Contains(string(vars), `"siteCA"`) || !strings.Contains(string(vars), `"timeZone": "Europe/Zurich"`) {
+	if err != nil || !strings.Contains(string(vars), `"siteCA"`) || !strings.Contains(string(vars), `"timeZone": "Europe/Zurich"`) ||
+		!strings.Contains(string(vars), `"workloadVMIDRange"`) || !strings.Contains(string(main), "workload_vm_id_range") {
 		t.Fatalf("tfvars without the site defaults: %v\n%s", err, vars)
 	}
 	plain, _ := newAppliance(t)
@@ -69,7 +88,7 @@ func TestSiteDefaultsReachTheModuleOnlyWhenSet(t *testing.T) {
 		t.Fatalf("job = %+v", j)
 	}
 	vars, err = os.ReadFile(filepath.Join(plain.Dir, "management", "terraform.tfvars.json"))
-	if err != nil || strings.Contains(string(vars), "siteCA") || strings.Contains(string(vars), "timeZone") {
+	if err != nil || strings.Contains(string(vars), "siteCA") || strings.Contains(string(vars), "timeZone") || strings.Contains(string(vars), "workloadVMIDRange") {
 		t.Fatalf("unset defaults reached the module: %v\n%s", err, vars)
 	}
 }

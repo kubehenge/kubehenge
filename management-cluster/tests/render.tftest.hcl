@@ -89,6 +89,48 @@ run "no_site_ca_leaves_the_chart_without_one" {
   }
 }
 
+run "workload_vm_id_range_reaches_the_chart" {
+  command = plan
+
+  variables {
+    workload_vm_id_range = { start = 10000, end = 10999 }
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).vmIDRange.start == 10000 && yamldecode(helm_release.kubehenge.values[0]).vmIDRange.end == 10999
+    error_message = "the chart is given the workload VM ID range"
+  }
+}
+
+run "no_workload_vm_id_range_leaves_the_chart_without_one" {
+  command = plan
+
+  assert {
+    condition     = !contains(keys(yamldecode(helm_release.kubehenge.values[0])), "vmIDRange")
+    error_message = "without a workload VM ID range the chart gets none"
+  }
+}
+
+run "workload_vm_id_range_refuses_start_above_end" {
+  command = plan
+
+  variables {
+    workload_vm_id_range = { start = 2000, end = 1000 }
+  }
+
+  expect_failures = [var.workload_vm_id_range]
+}
+
+run "workload_vm_id_range_refuses_ids_outside_proxmox_ve_limits" {
+  command = plan
+
+  variables {
+    workload_vm_id_range = { start = 99, end = 1000 }
+  }
+
+  expect_failures = [var.workload_vm_id_range]
+}
+
 run "site_ca_refuses_text_that_is_no_certificate" {
   command = plan
 

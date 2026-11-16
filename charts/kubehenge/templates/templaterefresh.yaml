@@ -147,6 +147,9 @@ spec:
                 - --pool={{ .pool }}
                 - --bridge={{ .bridge }}
                 - --vlan={{ .vlan }}
+                {{- with $.Values.vmIDRange }}
+                - --vm-id-range={{ .start }}-{{ .end }}
+                {{- end }}
                 {{- with .address }}
                 - --build-address={{ . }}
                 {{- end }}

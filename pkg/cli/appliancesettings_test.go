@@ -27,7 +27,7 @@ func TestApplianceSettingsShowAndChangeTheSiteDefaults(t *testing.T) {
 	t.Parallel()
 	f := newFakeInterface(t)
 	out, err := run(t, f.args("admin@pve", "settings")...)
-	if err != nil || out != "Site CA     None\nTime zone   Europe/Zurich\n" {
+	if err != nil || out != "Site CA     None\nTime zone   Europe/Zurich\nVM ID range None\n" {
 		t.Errorf("show: %v\n%q", err, out)
 	}
 	pem := "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----"
@@ -44,7 +44,7 @@ func TestApplianceSettingsShowAndChangeTheSiteDefaults(t *testing.T) {
 func TestApplianceSettingsRefuseWhatTheInterfaceRefuses(t *testing.T) {
 	t.Parallel()
 	f := newFakeInterface(t)
-	if _, err := run(t, f.args("admin@pve", "settings", "set")...); err == nil || !strings.Contains(err.Error(), "--site-ca-file or --time-zone") {
+	if _, err := run(t, f.args("admin@pve", "settings", "set")...); err == nil || !strings.Contains(err.Error(), "--site-ca-file, --time-zone or --vm-id-range") {
 		t.Errorf("nothing to set: %v", err)
 	}
 	if _, err := run(t, f.args("admin@pve", "settings", "set", "--time-zone", "Mars/Base")...); err == nil || !strings.Contains(err.Error(), "not an IANA time zone") {
@@ -55,5 +55,25 @@ func TestApplianceSettingsRefuseWhatTheInterfaceRefuses(t *testing.T) {
 	}
 	if got := field(savedBody(f), "timeZone"); got != "" {
 		t.Errorf("the cleared time zone was sent as %q", got)
+	}
+}
+
+func TestApplianceSettingsSetAndClearTheVMIDRange(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	if _, err := run(t, f.args("admin@pve", "settings", "set", "--vm-id-range", "10000-10999")...); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := savedBody(f)["workloadVMIDRange"].(map[string]any); !ok || got["start"] != float64(10000) || got["end"] != float64(10999) {
+		t.Errorf("the range was sent as %v", savedBody(f)["workloadVMIDRange"])
+	}
+	if _, err := run(t, f.args("admin@pve", "settings", "set", "--vm-id-range", "2000-1000")...); err == nil || !strings.Contains(err.Error(), "starts above its end") {
+		t.Errorf("an inverted range: %v", err)
+	}
+	if _, err := run(t, f.args("admin@pve", "settings", "set", "--vm-id-range", "")...); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := savedBody(f)["workloadVMIDRange"]; ok {
+		t.Errorf("the cleared range was sent as %v", savedBody(f)["workloadVMIDRange"])
 	}
 }

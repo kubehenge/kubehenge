@@ -190,6 +190,7 @@ import {
   sole,
 } from "./ui";
 import { quantity, record, text, texts } from "./values";
+import { siteVMIDAnnotation, vmIDRangeProblem, vmIDRangeText, vmIDRangeVariable, vmIDVariable } from "./VmidRange";
 
 export { firewallOf } from "./Firewall";
 export { nodeCustomisationOf } from "./node-customisation";
@@ -302,6 +303,8 @@ export interface Form {
   place: Place;
   /** Minutes machines of an away host wait before replacement, as text. */
   hostOutageGrace: string;
+  /** The VM IDs the cluster's VMs take, as start-end. Empty takes the site's range, else the next free ID. */
+  vmIDRange: string;
   proxmoxHA: boolean;
   datastoreAllocate: boolean;
   volumeSnapshots: boolean;
@@ -1044,6 +1047,7 @@ export const newForm = (): Form => ({
   storage: "",
   place: anyNode,
   hostOutageGrace: defaultGrace,
+  vmIDRange: "",
   proxmoxHA: true,
   datastoreAllocate: false,
   volumeSnapshots: false,
@@ -1427,6 +1431,9 @@ function networkVariable(form: Form, c: ClusterClass): Record<string, unknown> {
 // proxmoxVariables are the variables of where the nodes go on Proxmox VE and how it looks after them.
 function proxmoxVariables(form: Form, defined: ReadonlySet<string>): Record<string, unknown> {
   const variables: Record<string, unknown> = { ...graceVariables(form) };
+  if (form.vmIDRange.trim() !== "") {
+    variables[vmIDVariable] = vmIDRangeVariable(form.vmIDRange);
+  }
   const nodes = allowedNodes(form.place);
   if (nodes !== undefined) {
     variables["allowedNodes"] = nodes;
@@ -1611,6 +1618,21 @@ interface SummaryOffered {
   datacenterFirewall?: DatacenterFirewallState | undefined;
 }
 
+// vmIDRows are the summary's row of the VM IDs the cluster's VMs take, for a class that has them.
+function vmIDRows(form: Form, c: ClusterClass, defined: ReadonlySet<string>): [string, string][] {
+  return defined.has(vmIDVariable)
+    ? [["VM ID range", vmIDRangeText(form.vmIDRange, c.annotations?.[siteVMIDAnnotation] ?? "")]]
+    : [];
+}
+
+// vmIDProblems holds the range, the site's where the form leaves it empty, to the figures the server
+// holds it to.
+function vmIDProblems(form: Form, c: ClusterClass | undefined): Problems {
+  const range = form.vmIDRange || (c?.annotations?.[siteVMIDAnnotation] ?? "");
+  const problem = variable(c, vmIDVariable) ? vmIDRangeProblem(range, nodesNeeded(form) - 1) : undefined;
+  return problem === undefined ? {} : { vmIDRange: problem };
+}
+
 // proxmoxRows are the summary's rows of where the nodes go on Proxmox VE and how it looks after them.
 function proxmoxRows(form: Form, defined: ReadonlySet<string>, offered: SummaryOffered): [string, string][] {
   const rows: [string, string][] = [];
@@ -1677,6 +1699,7 @@ export function summary(form: Form, c: ClusterClass, offered: SummaryOffered = {
     ["Service range", form.services || "Automatic"],
     ["Storage", form.storage],
     ...proxmoxRows(form, defined, offered),
+    ...vmIDRows(form, c, defined),
     ["Control-plane machines", machine(form.controlPlaneMachine)],
   );
   if (mostWorkers(form) > 0) {
@@ -1862,6 +1885,7 @@ export type FieldKey =
   | "volumeSnapshots"
   | "placement"
   | "hostOutageGrace"
+  | "vmIDRange"
   | "controlPlaneMachine"
   | "workerMachine"
   | "workerNodes"
@@ -2274,6 +2298,7 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
   if (grace !== undefined) {
     p.hostOutageGrace = grace;
   }
+  Object.assign(p, vmIDProblems(form, c));
   for (const key of ["controlPlaneMachine", "workerMachine"] as const) {
     const problem = machineProblem(form, c, key);
     if (problem !== undefined) {

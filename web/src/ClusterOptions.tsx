@@ -71,12 +71,14 @@ import {
   Skeleton,
 } from "./ui";
 import { flag, record, text, texts } from "./values";
+import { VMIDRangeDialog, vmIDRangeOf, vmIDRangeText, vmIDVariable } from "./VmidRange";
 
 /** What the Options view changes, each through a dialog of its own. */
 export type OptionAction =
   | "nodeOS"
   | "placement"
   | "hostOutage"
+  | "vmIDRange"
   | "headlamp"
   | "monitoring"
   | "logs"
@@ -162,6 +164,7 @@ export function OptionDialog({
     nodeOS: NodeOSDialog,
     placement: PlacementDialog,
     hostOutage: HostOutageDialog,
+    vmIDRange: VMIDRangeDialog,
     talos: TalosDialog,
     etcd: EtcdDialog,
     nodeCustomisation: NodeCustomisationDialog,
@@ -348,6 +351,13 @@ export function optionRows<A extends string = never>(
       group: "Nodes",
       action: "hostOutage",
       name: "the host outage wait",
+    },
+    {
+      label: "VM ID range",
+      value: vmIDRangeText(vmIDRangeOf(c.variables[vmIDVariable]), ""),
+      group: "Nodes",
+      action: "vmIDRange",
+      name: "the VM ID range",
     },
   ];
   if (offered.ha) {

@@ -258,6 +258,25 @@ node's own memory with every CNI the class offers, so that a cluster of the defa
       {{- with .clusters.storages }}
       enum: {{ toJson . }}
       {{- end }}
+- name: vmIDRange
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      required: [start, end]
+      description: The VM IDs the cluster's VMs take, both ends included. A new cluster that sets none takes the site's, else Proxmox VE's next free ID.
+      properties:
+        start:
+          type: integer
+          minimum: 100
+          maximum: 999999999
+        end:
+          type: integer
+          minimum: 100
+          maximum: 999999999
+      x-kubernetes-validations:
+        - rule: self.start <= self.end
+          message: The range starts above its end.
 - name: allowedNodes
   required: false
   schema:
@@ -469,6 +488,9 @@ kubehenge.dev/time-zone: {{ .Values.timeZone | quote }}
 {{- end }}
 {{- if .Values.siteCA }}
 kubehenge.dev/site-ca: "set"
+{{- end }}
+{{- with .Values.vmIDRange }}
+kubehenge.dev/vm-id-range: {{ printf "%d-%d" (int .start) (int .end) | quote }}
 {{- end }}
 {{- end -}}
 
@@ -2624,6 +2646,23 @@ Call with the root context.
           path: /spec/template/spec/storage
           valueFrom:
             variable: storage
+# capmox takes the lowest free ID of the range and fails the machine, with no other ID, when it is
+# full. The ProxmoxMachine's spec is the template's, so a range that changes replaces the nodes.
+- name: proxmox-vm-ids
+  enabledIf: {{ `{{ if .vmIDRange }}true{{ end }}` | quote }}
+  definitions:
+    - selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+        kind: ProxmoxMachineTemplate
+        matchResources:
+          controlPlane: true
+          machineDeploymentClass:
+            names: [worker]
+      jsonPatches:
+        - op: add
+          path: /spec/template/spec/vmIDRange
+          valueFrom:
+            variable: vmIDRange
 {{- range $role, $selector := dict "controlPlane" (dict "controlPlane" true) "worker" (dict "machineDeploymentClass" (dict "names" (list "worker"))) }}
 - name: proxmox-{{ $role | kebabcase }}-size
   definitions:

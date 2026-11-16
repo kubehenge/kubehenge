@@ -403,6 +403,34 @@
                   "op": "add",
                   "path": "/spec",
                   "valueFrom": {
+                    "template": "{{ .vmIDRange }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-vmIDRange"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
                     "template": "{{ .workerMachine }}"
                   }
                 }
@@ -652,6 +680,38 @@
               ],
               "minLength": 1,
               "type": "string"
+            }
+          }
+        },
+        {
+          "name": "vmIDRange",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "The VM IDs the cluster's VMs take, both ends included. A new cluster that sets none takes the site's, else Proxmox VE's next free ID.",
+              "properties": {
+                "end": {
+                  "maximum": 999999999,
+                  "minimum": 100,
+                  "type": "integer"
+                },
+                "start": {
+                  "maximum": 999999999,
+                  "minimum": 100,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "start",
+                "end"
+              ],
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "The range starts above its end.",
+                  "rule": "self.start \u003c= self.end"
+                }
+              ]
             }
           }
         },
@@ -3382,6 +3442,34 @@
                   "op": "add",
                   "path": "/spec",
                   "valueFrom": {
+                    "template": "{{ .vmIDRange }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-vmIDRange"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
                     "template": "{{ .workerMachine }}"
                   }
                 }
@@ -3631,6 +3719,38 @@
               ],
               "minLength": 1,
               "type": "string"
+            }
+          }
+        },
+        {
+          "name": "vmIDRange",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "The VM IDs the cluster's VMs take, both ends included. A new cluster that sets none takes the site's, else Proxmox VE's next free ID.",
+              "properties": {
+                "end": {
+                  "maximum": 999999999,
+                  "minimum": 100,
+                  "type": "integer"
+                },
+                "start": {
+                  "maximum": 999999999,
+                  "minimum": 100,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "start",
+                "end"
+              ],
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "The range starts above its end.",
+                  "rule": "self.start \u003c= self.end"
+                }
+              ]
             }
           }
         },
@@ -6370,6 +6490,34 @@
                   "op": "add",
                   "path": "/spec",
                   "valueFrom": {
+                    "template": "{{ .vmIDRange }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-vmIDRange"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
                     "template": "{{ .workerMachine }}"
                   }
                 }
@@ -6619,6 +6767,38 @@
               ],
               "minLength": 1,
               "type": "string"
+            }
+          }
+        },
+        {
+          "name": "vmIDRange",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "The VM IDs the cluster's VMs take, both ends included. A new cluster that sets none takes the site's, else Proxmox VE's next free ID.",
+              "properties": {
+                "end": {
+                  "maximum": 999999999,
+                  "minimum": 100,
+                  "type": "integer"
+                },
+                "start": {
+                  "maximum": 999999999,
+                  "minimum": 100,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "start",
+                "end"
+              ],
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "The range starts above its end.",
+                  "rule": "self.start \u003c= self.end"
+                }
+              ]
             }
           }
         },
@@ -9312,6 +9492,34 @@
                   "op": "add",
                   "path": "/spec",
                   "valueFrom": {
+                    "template": "{{ .vmIDRange }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-vmIDRange"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
                     "template": "{{ .workerMachine }}"
                   }
                 }
@@ -9561,6 +9769,38 @@
               ],
               "minLength": 1,
               "type": "string"
+            }
+          }
+        },
+        {
+          "name": "vmIDRange",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "The VM IDs the cluster's VMs take, both ends included. A new cluster that sets none takes the site's, else Proxmox VE's next free ID.",
+              "properties": {
+                "end": {
+                  "maximum": 999999999,
+                  "minimum": 100,
+                  "type": "integer"
+                },
+                "start": {
+                  "maximum": 999999999,
+                  "minimum": 100,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "start",
+                "end"
+              ],
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "The range starts above its end.",
+                  "rule": "self.start \u003c= self.end"
+                }
+              ]
             }
           }
         },

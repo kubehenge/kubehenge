@@ -66,6 +66,9 @@ type Settings struct {
 	SiteCA string `json:"siteCA,omitempty"`
 	// TimeZone is the IANA time zone of schedules that name none. Empty, UTC.
 	TimeZone string `json:"timeZone,omitempty"`
+	// WorkloadVMIDRange is the VM IDs a new cluster's VMs and the templates take, both ends included.
+	// Unset, Proxmox VE's next free ID.
+	WorkloadVMIDRange *provisioner.VMIDRange `json:"workloadVMIDRange,omitempty"`
 	// ControllerImage replaces the controller image the chart was released with.
 	ControllerImage string `json:"controllerImage,omitempty"`
 	// PodSubnets and ServiceSubnets are the management cluster's own ranges. When unset, the first

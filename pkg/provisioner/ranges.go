@@ -209,6 +209,9 @@ func (d *ClusterDefaulter) Default(ctx context.Context, c *clusterv1.Cluster) er
 	if req, err := admission.RequestFromContext(ctx); err == nil && req.Operation == admissionv1.Update {
 		return keepRanges(req.OldObject.Raw, c)
 	}
+	if err := d.giveSiteVMIDRange(ctx, c); err != nil {
+		return err
+	}
 	n := &c.Spec.ClusterNetwork
 	if len(n.Pods.CIDRBlocks) > 0 && len(n.Services.CIDRBlocks) > 0 {
 		return nil

@@ -150,6 +150,11 @@ siteCA: ""
 # user's browser time zone.
 timeZone: ""
 
+# The Proxmox VE VM IDs a new cluster's VMs take, start and end both included, and the VM templates
+# the weekly build makes. A cluster may set its own (its vmIDRange variable), and a cluster made
+# before this changes keeps what it has. Empty, VMs take Proxmox VE's next free ID.
+vmIDRange: {}
+
 proxmox:
   # The Proxmox VE API, such as https://pve.example.org:8006. Required.
   url: ""

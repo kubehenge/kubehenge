@@ -148,6 +148,7 @@ func (p *Placer) place(ctx context.Context, c *clusterv1.Cluster, online []Node,
 	p.markSkipped(ctx, c, skipped)
 	p.markVersions(ctx, c, online)
 	p.markMTUs(ctx, c, online)
+	p.markVMIDRange(ctx, c)
 	needs, err := needsOf(c, sites)
 	if err != nil {
 		log.Error(err, "reading the cluster's node OS", "cluster", client.ObjectKeyFromObject(c))

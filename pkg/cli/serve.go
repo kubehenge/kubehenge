@@ -355,6 +355,9 @@ func (o *serveOptions) setUpAppliance(conn *pve.Config) error {
 		}
 		b.Client, b.Sources, b.Proxy = session, templates.DefaultSources(provisioner.DefaultReleasePins().Talos()), savedGuestProxy(a)
 		b.Sources.HTTP = savedProxyClient(a.Dir, pveConfig.URL, b.Sources.HTTP.Timeout)
+		if saved := a.SavedSettings(); saved != nil && saved.WorkloadVMIDRange != nil {
+			b.FirstVMID, b.LastVMID = int(saved.WorkloadVMIDRange.Start), int(saved.WorkloadVMIDRange.End)
+		}
 		return b.Create(ctx, tpl)
 	}
 	s.Upgrades = &ui.Upgrades{

@@ -16,6 +16,7 @@ describe("the Health page's condition list", () => {
       "NodesSkipped",
       "NodesLackMemory",
       "StorageLacksSpace",
+      "VMIDRangeFull",
       "FirewallInactive",
       "HARulesPending",
     ];

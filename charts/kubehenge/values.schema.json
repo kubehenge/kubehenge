@@ -158,6 +158,16 @@
       "pattern": "^$|^[A-Za-z0-9_+/-]+$",
       "not": { "const": "Local" }
     },
+    "vmIDRange": {
+      "description": "The VM IDs a new cluster's VMs and the VM templates take, both ends included. Empty, Proxmox VE's next free ID.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start": { "type": "integer", "minimum": 100, "maximum": 999999999 },
+        "end": { "type": "integer", "minimum": 100, "maximum": 999999999 }
+      },
+      "dependencies": { "start": ["end"], "end": ["start"] }
+    },
     "controllerLogs": {
       "description": "How the controller logs, in JSON either way.",
       "type": "object",
