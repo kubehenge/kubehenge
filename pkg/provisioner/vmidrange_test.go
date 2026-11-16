@@ -129,6 +129,38 @@ func TestValidatorKeepsTheIDsOfTemplatesOutOfARange(t *testing.T) {
 	}
 }
 
+// Ranges are shared whole: each equals every range it touches or stays clear of it.
+func TestValidatorRefusesARangeThatPartlyOverlapsAnotherClustersOrTheSites(t *testing.T) {
+	t.Parallel()
+	first := siteRangeCluster("first", `{"start":10000,"end":10019}`)
+	h, kube := hooksFor(t, first)
+	class := &clusterv1.ClusterClass{}
+	if err := kube.Get(t.Context(), client.ObjectKey{Namespace: "kubehenge-system", Name: "kubehenge-rke2"}, class); err != nil {
+		t.Fatal(err)
+	}
+	class.Annotations[SiteVMIDRangeAnnotation] = "20000-20019"
+	if err := kube.Update(t.Context(), class); err != nil {
+		t.Fatal(err)
+	}
+	v := &ClusterValidator{Hooks: h}
+	for _, c := range []struct{ name, rng, want string }{
+		{"a partial overlap with a cluster", `{"start":10010,"end":10029}`, "overlaps 10000-10019 of cluster team-a/first without being the same"},
+		{"an overlap inside a cluster's range", `{"start":10005,"end":10009}`, "overlaps 10000-10019 of cluster team-a/first"},
+		{"a partial overlap with the site", `{"start":19990,"end":20009}`, "overlaps the site's range 20000-20019 without being the same"},
+		{"an identical range", `{"start":10000,"end":10019}`, ""},
+		{"the site's range", `{"start":20000,"end":20019}`, ""},
+		{"a disjoint range", `{"start":30000,"end":30019}`, ""},
+	} {
+		_, err := v.ValidateCreate(t.Context(), siteRangeCluster("second", c.rng))
+		switch {
+		case c.want == "" && err != nil && strings.Contains(err.Error(), VMIDRangeVariable):
+			t.Errorf("%s was refused: %v", c.name, err)
+		case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+			t.Errorf("%s: %v, want it to say %q", c.name, err, c.want)
+		}
+	}
+}
+
 type fixedSites struct{ sites *Sites }
 
 func (f fixedSites) Sites(context.Context) (*Sites, error) { return f.sites, nil }

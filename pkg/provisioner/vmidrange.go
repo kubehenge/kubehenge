@@ -123,13 +123,13 @@ func vmIDRangeChecked(old, c *clusterv1.Cluster) bool {
 
 // validateVMIDRange holds a cluster's VM ID range to what the cluster needs of it alone, then to what
 // the others that share it leave.
-func (v *ClusterValidator) validateVMIDRange(ctx context.Context, reads *pveReads, old, c *clusterv1.Cluster) field.ErrorList {
+func (v *ClusterValidator) validateVMIDRange(ctx context.Context, reads *pveReads, old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) field.ErrorList {
 	if !vmIDRangeChecked(old, c) {
 		return nil
 	}
 	err := checkVMIDRange(c)
 	if err == nil {
-		err = v.checkSharedVMIDRange(ctx, reads, c)
+		err = v.checkSharedVMIDRange(ctx, reads, c, class)
 	}
 	if err == nil {
 		return nil
@@ -137,12 +137,18 @@ func (v *ClusterValidator) validateVMIDRange(ctx context.Context, reads *pveRead
 	return field.ErrorList{field.Invalid(field.NewPath("spec", "topology", "variables").Key(VMIDRangeVariable), VMIDRangeVariable, err.Error())}
 }
 
-// checkSharedVMIDRange refuses a range that, after the templates already in it, cannot hold the
-// cluster and every other cluster on the same range.
-func (v *ClusterValidator) checkSharedVMIDRange(ctx context.Context, reads *pveReads, c *clusterv1.Cluster) error {
+func (r VMIDRange) overlaps(o VMIDRange) bool { return r.Start <= o.End && o.Start <= r.End }
+
+// checkSharedVMIDRange refuses a range that overlaps the site's range or another cluster's without
+// being the same, and one that, after the templates already in it, cannot hold the cluster and every
+// other cluster on the same range. Sharing whole ranges keeps every cluster's IDs countable.
+func (v *ClusterValidator) checkSharedVMIDRange(ctx context.Context, reads *pveReads, c *clusterv1.Cluster, class *clusterv1.ClusterClass) error {
 	r, set, err := optionalVariable[VMIDRange](c, VMIDRangeVariable)
 	if err != nil || !set || v.Hooks.Reader == nil {
 		return nil //nolint:nilerr // checkVMIDRange has judged the variable
+	}
+	if site, parseErr := ParseVMIDRange(class.Annotations[SiteVMIDRangeAnnotation]); parseErr == nil && site != r && site.overlaps(r) {
+		return fmt.Errorf("VM ID range %s overlaps the site's range %s without being the same. Use the site's range, or one that does not overlap it", r, site)
 	}
 	clusters := &clusterv1.ClusterList{}
 	if err = v.Hooks.Reader.List(ctx, clusters); err != nil {
@@ -155,9 +161,14 @@ func (v *ClusterValidator) checkSharedVMIDRange(ctx context.Context, reads *pveR
 		if o.Namespace == c.Namespace && o.Name == c.Name || !Owns(o, v.Hooks.ClassNamespace) || !o.DeletionTimestamp.IsZero() {
 			continue
 		}
-		if theirs, ok, _ := optionalVariable[VMIDRange](o, VMIDRangeVariable); ok && theirs == r {
+		theirs, ok, _ := optionalVariable[VMIDRange](o, VMIDRangeVariable)
+		switch {
+		case !ok:
+		case theirs == r:
 			others += vmIDDemand(o)
 			sharing++
+		case theirs.overlaps(r):
+			return fmt.Errorf("VM ID range %s overlaps %s of cluster %s/%s without being the same. Use that range, or one that does not overlap it", r, theirs, o.Namespace, o.Name)
 		}
 	}
 	templates := v.templatesIn(ctx, reads, r)
