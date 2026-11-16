@@ -107,7 +107,7 @@ func TestIntegrationWakersFollowZones(t *testing.T) { //nolint:paralleltest // s
 			t.Errorf("%s: %v, want refused", what, err)
 		}
 	}
-	if err = patch(ui, "worker",`{"metadata":{"labels":{"topology.kubernetes.io/zone":"pve2"}}}`); !apierrors.IsForbidden(err) {
+	if err = patch(ui, "worker", `{"metadata":{"labels":{"topology.kubernetes.io/zone":"pve2"}}}`); !apierrors.IsForbidden(err) {
 		t.Errorf("a node outside the management nodes: %v, want forbidden", err)
 	}
 

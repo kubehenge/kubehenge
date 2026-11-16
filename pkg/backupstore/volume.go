@@ -111,22 +111,6 @@ func (v *Volume) Wake(ctx context.Context, holder string) error {
 	return nil
 }
 
-// start starts the sleeping store. Its pod must land on a node VM on the Proxmox VE node that holds
-// the disk, so the nodes' zone labels are set first.
-func (v *Volume) start(ctx context.Context, d *appsv1.Deployment) error {
-	if v.VMs == nil {
-		return errors.New("the backup volume's store sleeps, and this client cannot read where the management VMs run to wake it")
-	}
-	unknown, err := FollowZones(ctx, v.Kube, v.VMs, d.Annotations[VolumeZone], v.Log)
-	if err != nil {
-		return err
-	}
-	if len(unknown) > 0 && v.Log != nil {
-		v.Log.Warn("Proxmox VE lists no VM for these management nodes, whose zone labels stay as they are", "nodes", unknown)
-	}
-	return v.scale(ctx, "", 1)
-}
-
 // Done takes holder's wake request away, and puts the store back to the replicas its chart keeps
 // between uses once no holder's is left. On a node's own storage that is none, which detaches the
 // disk again, so that Proxmox VE can migrate the node VMs and a node can go into maintenance.
@@ -152,6 +136,22 @@ func (v *Volume) Done(ctx context.Context, holder string) error {
 		return serr
 	}
 	return nil
+}
+
+// start starts the sleeping store. Its pod must land on a node VM on the Proxmox VE node that holds
+// the disk, so the nodes' zone labels are set first.
+func (v *Volume) start(ctx context.Context, d *appsv1.Deployment) error {
+	if v.VMs == nil {
+		return errors.New("the backup volume's store sleeps, and this client cannot read where the management VMs run to wake it")
+	}
+	unknown, err := FollowZones(ctx, v.Kube, v.VMs, d.Annotations[VolumeZone], v.Log)
+	if err != nil {
+		return err
+	}
+	if len(unknown) > 0 && v.Log != nil {
+		v.Log.Warn("Proxmox VE lists no VM for these management nodes, whose zone labels stay as they are", "nodes", unknown)
+	}
+	return v.scale(ctx, "", 1)
 }
 
 // IdleReplicas annotates the store's Deployment with the replicas it keeps between uses. The storage
