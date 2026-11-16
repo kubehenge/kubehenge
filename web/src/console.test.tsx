@@ -244,8 +244,30 @@ function serve(): Record<string, Route> {
 }
 
 describe("the console", () => {
-  it("greys the fleet out while reading it again fails, until a read succeeds", async () => {
+  it("keeps the fleet rail off the home page, where the list is the fleet, and on every other", async () => {
     window.history.replaceState(null, "", "/");
+    serve();
+    render(<App />);
+    const main = within(await screen.findByRole("main"));
+    await expect(main.findByRole("row", { name: /^web/u })).resolves.toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Fleet" })).not.toBeInTheDocument();
+
+    window.history.pushState(null, "", "/clusters/default/web");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await expect(screen.findByRole("navigation", { name: "Fleet" })).resolves.toBeInTheDocument();
+  });
+
+  it("says in the rail that the fleet was not read", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web");
+    const routes = serve();
+    routes["GET /api/clusters"] = { status: 502, body: { error: "the management cluster did not answer" } };
+    render(<App />);
+    const rail = within(await screen.findByRole("navigation", { name: "Fleet" }));
+    await expect(rail.findByText("Not read")).resolves.toHaveAttribute("title", "the management cluster did not answer");
+  });
+
+  it("greys the fleet out while reading it again fails, until a read succeeds", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web");
     const routes = serve();
     vi.useFakeTimers({ shouldAdvanceTime: true });
     render(<App />);
@@ -266,7 +288,7 @@ describe("the console", () => {
   });
 
   it("greys the fleet out once reading it again hangs, until a read answers", async () => {
-    window.history.replaceState(null, "", "/");
+    window.history.replaceState(null, "", "/clusters/default/web");
     const routes = serve();
     vi.useFakeTimers({ shouldAdvanceTime: true });
     render(<App />);
@@ -285,7 +307,7 @@ describe("the console", () => {
   });
 
   it("does not grey the fleet out for the time its tab was hidden", async () => {
-    window.history.replaceState(null, "", "/");
+    window.history.replaceState(null, "", "/clusters/default/web");
     const routes = serve();
     vi.useFakeTimers({ shouldAdvanceTime: true });
     render(<App />);
@@ -319,8 +341,6 @@ describe("the console", () => {
     await expect(main.findByText("The management cluster did not answer.")).resolves.toBeInTheDocument();
     expect(main.getByText(/^Trying again in \d+ s$/u)).toBeInTheDocument();
     expect(main.queryByRole("link", { name: "Management cluster" })).not.toBeInTheDocument();
-    const rail = within(screen.getByRole("navigation", { name: "Fleet" }));
-    expect(rail.getByText("Not read")).toHaveAttribute("title", "the management cluster did not answer");
 
     routes["GET /api/clusters"] = { body: fleet };
     await user.click(main.getByRole("button", { name: "Try now" }));
@@ -1014,7 +1034,7 @@ describe("the console", () => {
   });
 
   it("moves a cluster its health page finds trouble in to those needing you, linked to that page", async () => {
-    window.history.replaceState(null, "", "/");
+    window.history.replaceState(null, "", "/clusters/default/db");
     const routes = serve();
     routes["GET /api/fleet/health"] = {
       body: [
@@ -1034,8 +1054,11 @@ describe("the console", () => {
     );
     const web = within(rail).getByRole("link", { name: /^web Pod shop/u });
     expect(web).toHaveAttribute("href", "/clusters/default/web/health");
-    expect(within(screen.getByRole("main")).getByText("Pod shop/api: CrashLoopBackOff")).toBeInTheDocument();
+
     // The list says what the rail says, not that Cluster API finds the cluster available.
+    window.history.pushState(null, "", "/");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    expect(await within(screen.getByRole("main")).findByText("Pod shop/api: CrashLoopBackOff")).toBeInTheDocument();
     const row = within(screen.getByRole("main")).getByRole("row", { name: /^web/u });
     expect(within(row).getByText("Degraded")).toBeInTheDocument();
     expect(within(row).queryByText("Available")).not.toBeInTheDocument();
@@ -1063,7 +1086,6 @@ describe("the console", () => {
     serve();
     const user = userEvent.setup({ delay: null });
     render(<App />);
-    await screen.findByRole("navigation", { name: "Fleet" });
     await screen.findAllByRole("link", { name: /^db/u });
 
     await user.keyboard("{Control>}k{/Control}");

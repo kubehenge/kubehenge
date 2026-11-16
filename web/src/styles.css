@@ -408,6 +408,14 @@ output.notice {
   block-size: 100vb;
 }
 
+/* The home page's list is the cluster list, so the rail would show it twice. */
+.shell-home {
+  grid-template:
+    "top top top" var(--top)
+    "main main runs" 1fr
+    / var(--rail) minmax(0, 1fr) auto;
+}
+
 .shell-setup {
   grid-template:
     "top" var(--top)
