@@ -56,9 +56,8 @@ func ProxmoxVMs(connect func(token string) (*proxmox.Client, error)) VMReader {
 // cannot be read, as on a Proxmox VE node that is down, is returned too. Two VMs with the node's
 // UUID fail the call.
 //
-// The label is all that goes stale. The plugin finds a node's VM by its ID or SMBIOS UUID at each
-// attach, and tells the kubelet the zone it reads from this label whenever it registers, so its
-// node pod needs no restart. Only the static backup volume uses the plugin's storage class, so no
+// The plugin finds a node's VM by its ID or SMBIOS UUID at each attach. Its node pod exits while
+// the node has no zone label, and reads the label only when it starts. Only the static backup volume uses the plugin's storage class, so no
 // volume is ever placed by the zones the node registered with.
 func FollowZones(ctx context.Context, kube kubernetes.Interface, read VMReader, zone string, log *slog.Logger) ([]string, error) {
 	secret, err := kube.CoreV1().Secrets(Namespace).Get(ctx, ZonesSecret, metav1.GetOptions{})

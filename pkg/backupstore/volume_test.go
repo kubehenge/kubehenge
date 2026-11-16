@@ -220,6 +220,119 @@ func TestTheSleeperPutsALeftStoreToSleep(t *testing.T) {
 	}
 }
 
+// unzoned is sleepingStore with its node joined without a zone label, as the machine config makes it.
+func unzoned(t *testing.T) []runtime.Object {
+	t.Helper()
+	objects := sleepingStore()
+	n, ok := objects[3].(*corev1.Node)
+	if !ok {
+		t.Fatalf("sleepingStore's fourth object is %T", objects[3])
+	}
+	n.Labels = nil
+	return objects
+}
+
+// sleepFor runs a Sleeper on v for a moment, ticking every millisecond.
+func sleepFor(t *testing.T, v *Volume) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if err := (&Sleeper{Volume: v, Every: time.Millisecond}).Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func zoneOf(t *testing.T, kube *fake.Clientset, name string) string {
+	t.Helper()
+	n, err := kube.CoreV1().Nodes().Get(t.Context(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n.Labels[corev1.LabelTopologyZone]
+}
+
+// The CSI node plugin exits on a node without a zone label, so the Sleeper sets one with no wake.
+func TestTheSleeperLabelsANodeWithoutAZone(t *testing.T) {
+	t.Parallel()
+	kube := fake.NewClientset(unzoned(t)...)
+	sleepFor(t, &Volume{Kube: kube, VMs: onPVE1})
+	if got := zoneOf(t, kube, "mgmt-cp-0"); got != "pve1" {
+		t.Fatalf("the node's zone is %q, want pve1", got)
+	}
+}
+
+// A labelled node keeps the label a wake set, and costs no call to Proxmox VE.
+func TestTheSleeperReadsNoVMsWhileEveryNodeHasAZone(t *testing.T) {
+	t.Parallel()
+	kube := fake.NewClientset(sleepingStore()...)
+	reads := 0
+	sleepFor(t, &Volume{Kube: kube, VMs: func(ctx context.Context, token string) (*VMIndex, error) {
+		reads++
+		return onPVE1(ctx, token)
+	}})
+	if reads != 0 {
+		t.Fatalf("the Sleeper read the VMs %d times", reads)
+	}
+	for _, a := range kube.Actions() {
+		if a.GetResource().Resource == "nodes" && a.GetVerb() == "patch" {
+			t.Fatalf("the Sleeper changed a labelled node: %v", a)
+		}
+	}
+}
+
+// Proxmox VE not answering keeps the node unlabelled, and the store still goes to sleep.
+func TestTheSleeperStillSleepsWhenZonesFail(t *testing.T) {
+	t.Parallel()
+	objects := unzoned(t)
+	d, ok := objects[0].(*appsv1.Deployment)
+	if !ok {
+		t.Fatalf("sleepingStore's first object is %T", objects[0])
+	}
+	one := int32(1)
+	d.Spec.Replicas = &one
+	kube := fake.NewClientset(objects...)
+	reads := 0
+	sleepFor(t, &Volume{Kube: kube, VMs: func(context.Context, string) (*VMIndex, error) {
+		reads++
+		return nil, errors.New("no route to host")
+	}})
+	if reads == 0 {
+		t.Fatal("the Sleeper never asked where the VMs run")
+	}
+	if got := replicasOf(t, kube); got != 0 {
+		t.Fatalf("the store kept %d replicas", got)
+	}
+}
+
+// A node the Secret names that has not joined yet is no node without a zone, and fails nothing.
+func TestTheSleeperPassesOverANodeNotJoined(t *testing.T) {
+	t.Parallel()
+	for what, objects := range map[string][]runtime.Object{"labelled": sleepingStore(), "unlabelled": unzoned(t)} {
+		zones, ok := objects[2].(*corev1.Secret)
+		if !ok {
+			t.Fatalf("sleepingStore's third object is %T", objects[2])
+		}
+		zones.Data["nodes"] = []byte("mgmt-cp-0,mgmt-cp-1")
+		kube := fake.NewClientset(objects...)
+		reads := 0
+		v := &Volume{Kube: kube, VMs: func(ctx context.Context, token string) (*VMIndex, error) {
+			reads++
+			return onPVE1(ctx, token)
+		}}
+		if err := v.labelMissingZones(t.Context()); err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		want := map[string]int{"labelled": 0, "unlabelled": 1}[what]
+		if reads != want {
+			t.Errorf("%s: one tick read the VMs %d times, want %d", what, reads, want)
+		}
+		sleepFor(t, v)
+		if reads != want {
+			t.Errorf("%s: later ticks read the VMs again, %d times in all", what, reads)
+		}
+	}
+}
+
 // A zones Secret that names no joined node says so, and leaves the store asleep.
 func TestAWakeWithNoNamedNodeSaysSo(t *testing.T) {
 	t.Parallel()
