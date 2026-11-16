@@ -3,7 +3,28 @@ package cli
 import (
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
+
+func TestTemplateCommandsReadTheVMIDRangeFlagBeforeConnecting(t *testing.T) {
+	t.Parallel()
+	b := &builderFlags{}
+	cmd := &cobra.Command{}
+	b.add(cmd)
+	if cmd.Flags().Lookup("vm-id-range") == nil {
+		t.Fatal("the builder has no --vm-id-range flag")
+	}
+	if err := cmd.Flags().Set("vm-id-range", "2000-1000"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Flags().Set("node", "pve1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.connect(cmd, nil); err == nil || !strings.Contains(err.Error(), "--vm-id-range") {
+		t.Errorf("connecting with an inverted range: %v", err)
+	}
+}
 
 func TestTemplateBuildsTakeTheVMIDRangeOfTheirFlag(t *testing.T) {
 	t.Parallel()

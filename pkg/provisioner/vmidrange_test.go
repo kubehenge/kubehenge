@@ -139,7 +139,7 @@ func TestFullVMIDRangeIsAConditionNamingTheRangeAndFixAndClearsOnceFree(t *testi
 	c := cluster(variableOf(VMIDRangeVariable, `{"start":10000,"end":10005}`))
 	pm := machineSaying("web-md-0-x", "No free vmid found in vmIDRange")
 	kube := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&clusterv1.Cluster{}).WithObjects(c, pm).Build()
-	p := &Placer{Client: kube}
+	p := &Placer{Client: kube, ClassNamespace: "kubehenge-system", Nodes: &fakeNodes{online: []string{"pve1"}}}
 	condition := func() string {
 		t.Helper()
 		got := &clusterv1.Cluster{}
@@ -152,15 +152,7 @@ func TestFullVMIDRangeIsAConditionNamingTheRangeAndFixAndClearsOnceFree(t *testi
 		}
 		return cond.Message
 	}
-	reload := func() *clusterv1.Cluster {
-		t.Helper()
-		got := &clusterv1.Cluster{}
-		if err := kube.Get(t.Context(), client.ObjectKeyFromObject(c), got); err != nil {
-			t.Fatal(err)
-		}
-		return got
-	}
-	p.markVMIDRange(t.Context(), reload())
+	p.placeAll(t.Context())
 	if got := condition(); got != "No free VM ID in 10000-10005. Widen the cluster's VM ID range, or free IDs in it" {
 		t.Fatalf("the condition's message is %q", got)
 	}
@@ -173,8 +165,18 @@ func TestFullVMIDRangeIsAConditionNamingTheRangeAndFixAndClearsOnceFree(t *testi
 	if err := kube.Create(t.Context(), other); err != nil {
 		t.Fatal(err)
 	}
-	p.markVMIDRange(t.Context(), reload())
+	p.placeAll(t.Context())
 	if got := condition(); got != "" {
 		t.Errorf("the condition stayed as %q once no machine lacked an ID", got)
+	}
+}
+
+func TestBeforeClusterCreateRefusesAVMIDRangeTooNarrowForItsNodes(t *testing.T) {
+	t.Parallel()
+	hooks, _ := hooksFor(t)
+	c := withAddresses(networkCluster("192.168.1.1", 24), `["192.168.1.10-192.168.1.20"]`)
+	c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, variableOf(VMIDRangeVariable, `{"start":10000,"end":10000}`))
+	if resp := callBeforeClusterCreate(t, hooks, c); !strings.Contains(resp.Message, "VM ID range 10000-10000 holds 1 IDs") {
+		t.Errorf("a range of one ID: %+v", resp)
 	}
 }
