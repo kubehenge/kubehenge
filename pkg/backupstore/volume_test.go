@@ -294,15 +294,23 @@ func awake(t *testing.T, objects []runtime.Object) []runtime.Object {
 	return objects
 }
 
-// Proxmox VE not answering keeps the node unlabelled and says so on each tick, and the store still
-// goes to sleep.
+// Proxmox VE not answering keeps the node unlabelled and says so on each tick. The store goes to
+// sleep before the read, which gets no longer than a tick.
 func TestTheSleeperStillSleepsWhenZonesFail(t *testing.T) {
 	t.Parallel()
 	kube := fake.NewClientset(awake(t, unzoned(t))...)
 	var log bytes.Buffer
 	reads := 0
-	sleepFor(t, &Volume{Kube: kube, Log: slog.New(slog.NewTextHandler(&log, nil)), VMs: func(context.Context, string) (*VMIndex, error) {
+	sleepFor(t, &Volume{Kube: kube, Log: slog.New(slog.NewTextHandler(&log, nil)), VMs: func(ctx context.Context, _ string) (*VMIndex, error) {
 		reads++
+		if reads == 1 {
+			if d, err := kube.AppsV1().Deployments(Namespace).Get(ctx, Service, metav1.GetOptions{}); err != nil || *d.Spec.Replicas != 0 {
+				t.Errorf("the store was not asleep when the Sleeper read the VMs: %v %v", d, err)
+			}
+			if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > time.Millisecond {
+				t.Errorf("the read may run until %v, past its tick", deadline)
+			}
+		}
 		return nil, errors.New("no route to host")
 	}})
 	if reads == 0 {
