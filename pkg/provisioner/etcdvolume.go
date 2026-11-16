@@ -26,9 +26,9 @@ type VolumeStore interface {
 	Room(ctx context.Context) (free, size int64, err error)
 }
 
-// ErrVolumeAsleep answers while the backup volume sleeps on a node's own storage. The appliance
-// wakes it once asked.
-var ErrVolumeAsleep = errors.New("the backup volume sleeps until the appliance wakes it")
+// ErrVolumeAsleep answers while the backup volume sleeps on a node's own storage, or its store is
+// starting after Open woke it.
+var ErrVolumeAsleep = errors.New("the backup volume is waking")
 
 // VolumeTarget names the backup volume where a snapshot's target is asked for by name, as the
 // empty name does in the etcdSnapshots variable and a restore request.
@@ -40,7 +40,7 @@ const volumeFolderPrefix = "clusters"
 
 // The reasons of the snapshot condition that are the volume's.
 const (
-	// EtcdSnapshotWaitingForVolume holds while the volume sleeps and the appliance has not woken it.
+	// EtcdSnapshotWaitingForVolume holds while the volume's store starts.
 	EtcdSnapshotWaitingForVolume = "WaitingForVolume"
 	// EtcdSnapshotVolumeFull refuses a snapshot the volume has no room for.
 	EtcdSnapshotVolumeFull = "VolumeFull"
@@ -56,7 +56,7 @@ const (
 )
 
 // volumeWakingMessage says a snapshot or a restore waits for the volume.
-const volumeWakingMessage = "Waiting for the appliance to wake the backup volume."
+const volumeWakingMessage = "Waiting for the backup volume to wake."
 
 // ErrVolumeFull refuses a snapshot the volume has no room for.
 var ErrVolumeFull = errors.New("the backup volume is nearly full")

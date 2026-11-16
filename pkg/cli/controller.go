@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/luthermonson/go-proxmox"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -979,9 +981,16 @@ func (o *controllerOptions) addEtcd(mgr manager.Manager, c *proxmox.Client, remo
 	if err != nil {
 		return fmt.Errorf("a client for the backup volume: %w", err)
 	}
+	volume := &backupstore.Volume{
+		Kube: kube, VMs: backupstore.ProxmoxVMs(o.connect),
+		Log: slog.New(logr.ToSlogHandler(mgr.GetLogger().WithName("backup-volume"))),
+	}
+	if err = mgr.Add(&backupstore.Sleeper{Volume: volume, Every: time.Minute}); err != nil {
+		return fmt.Errorf("the backup volume's sleeper: %w", err)
+	}
 	targets := &provisioner.ClusterTargets{
 		Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, OpenStore: provisioner.OpenTarget,
-		Volume: &backupstore.Volume{Kube: kube},
+		Volume: volume,
 	}
 	dialer := &provisioner.EtcdDialer{Reader: mgr.GetAPIReader(), Remotes: remotes, Talos: provisioner.DialTalos}
 	snapshotter := &provisioner.EtcdSnapshotter{

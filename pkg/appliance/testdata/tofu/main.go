@@ -13,6 +13,21 @@ import (
 	"time"
 )
 
+// raceFailures prints one error diagnostic for each letter of run, as a "race" apply reads them.
+func raceFailures(run string) {
+	const upid = "received an HTTP 500 response - Reason: got no worker upid - start worker failed"
+	for _, c := range run {
+		summary, address, detail := "Error downloading file from url", `module.management.proxmox_download_file.talos[\"pve\"]`, upid
+		switch c {
+		case 'v':
+			summary, address = "Error creating VM", `module.management.proxmox_virtual_environment_vm.nodes[0]`
+		case 'n':
+			detail = "Could not download file, unexpected error: 404 Not Found"
+		}
+		fmt.Printf(`{"@level":"error","@message":"Error: %s","type":"diagnostic","diagnostic":{"summary":"%s","detail":"%s","address":"%s"}}`+"\n", summary, summary, detail, address)
+	}
+}
+
 // waitForInterrupt marks that it is applying, then writes its "state" once interrupted.
 func waitForInterrupt(dir string) int {
 	interrupted := make(chan os.Signal, 1)
@@ -99,6 +114,17 @@ func run(dir string, args []string) int {
 			if n := len(left); n > 0 {
 				_ = os.WriteFile(filepath.Join(dir, "..", "stalls"), left[1:], 0o600)
 				fmt.Println(`{"@level":"error","@message":"Error: Helm release error","type":"diagnostic","diagnostic":{"summary":"Helm release error","detail":"1 error occurred:\n\t* etcdserver: request timed out","address":"module.management.helm_release.kubehenge"}}`)
+				return 1
+			}
+		}
+		// A "race" apply fails with the errors of the first line left in <dir>/../races, which it
+		// takes away: d for a download Proxmox VE did not start a task for, v for a VM's create it
+		// did not, and n for a download that found no file.
+		if strings.Contains(string(vars), `"race"`) {
+			left, _ := os.ReadFile(filepath.Join(dir, "..", "races"))
+			if run, rest, _ := strings.Cut(string(left), "\n"); run != "" {
+				_ = os.WriteFile(filepath.Join(dir, "..", "races"), []byte(rest), 0o600)
+				raceFailures(run)
 				return 1
 			}
 		}

@@ -92,7 +92,7 @@ func TestADeletedClusterTakesItsSnapshotsWhenAsked(t *testing.T) {
 	}
 }
 
-// A sleeping volume holds the deletion until the appliance wakes it.
+// A sleeping volume holds the deletion until it is awake.
 func TestADeletionWaitsForTheVolume(t *testing.T) {
 	t.Parallel()
 	f := newEtcdFixture(t, withRequest(etcdCluster(`{"enabled":true}`)))

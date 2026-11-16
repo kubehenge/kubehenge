@@ -187,8 +187,8 @@ func TestVolumeRoomCountsTheLargestSnapshot(t *testing.T) {
 	}
 }
 
-// On a node's own storage the volume sleeps. The snapshot waits for the appliance to wake it, says
-// so, and is taken at the next look once it is awake.
+// On a node's own storage the volume sleeps. The snapshot waits for it to wake, says so, and is
+// taken at the next look once it is awake.
 func TestEtcdSnapshotsWaitForASleepingVolume(t *testing.T) {
 	t.Parallel()
 	f := newEtcdFixture(t, withRequest(etcdCluster(`{"enabled":true}`)))

@@ -437,12 +437,23 @@ func (a *Appliance) tofu(ctx context.Context, j *Job, env []string, message func
 	case err != nil && run.Err() != nil && ctx.Err() == nil:
 		return fmt.Errorf("tofu %s: interrupted before the Proxmox VE sign-in it runs on expires, so run it again: %w", args[0], err)
 	case err != nil && len(failures) > 0:
-		return fmt.Errorf("tofu %s: %w: %s", args[0], err, strings.Join(failures, "; "))
+		return &tofuError{fmt.Errorf("tofu %s: %w: %s", args[0], err, strings.Join(failures, "; ")), failures}
 	case err != nil:
 		return fmt.Errorf("tofu %s: %w", args[0], err)
 	}
 	return nil
 }
+
+// tofuError is a tofu run that failed with the error diagnostics it printed, each as
+// errorDiagnostic reads it.
+type tofuError struct {
+	err         error
+	diagnostics []string
+}
+
+func (e *tofuError) Error() string { return e.err.Error() }
+
+func (e *tofuError) Unwrap() error { return e.err }
 
 // errorDiagnostic is the summary and detail of a line of OpenTofu's -json output that reports an
 // error, or "" for any other line. The job's error carries them, as the log scrolls out of view.

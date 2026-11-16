@@ -473,16 +473,18 @@ store_idle() {
 }
 # volume_snapshots: the etcd snapshots on the backup volume itself, in $work/volume-list, read
 # through its store with the store's token, over a port-forward to its pod as the appliance reaches
-# it. The store's NetworkPolicy admits nothing else from outside the controller. The test asks the
-# appliance to wake the store with a wake request of its own, as the controller does. The appliance
-# puts a store back to sleep within a minute when no request holds it, so scaling it up by hand
-# loses to a slow attach.
+# it. The store's NetworkPolicy admits nothing else from outside the controller. The test holds the
+# store awake as every user does: a wake request of its own, and a scale to one replica where it
+# sleeps. Once the request is taken away, the controller puts the store back to its idle replicas.
 store_wake=kubehenge.dev/wake-requested-e2e
 volume_snapshots() {
     mapi GET "${store_deployment}"
     idle=$(jq -r '.metadata.annotations["kubehenge.dev/idle-replicas"] // "1"' "${work}/body")
-    asked=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    mapi PATCH "${store_deployment}" "{\"metadata\":{\"annotations\":{\"${store_wake}\":\"${asked}\"}}}"
+    runs_out=$(date -u -d '+30 min' +%Y-%m-%dT%H:%M:%SZ)
+    mapi PATCH "${store_deployment}" "{\"metadata\":{\"annotations\":{\"${store_wake}\":\"${runs_out}\"}}}"
+    if jq -e '(.spec.replicas // 0) == 0' "${work}/body" > /dev/null; then
+        mapi PATCH "${store_deployment}/scale" '{"spec":{"replicas":1}}'
+    fi
     until_true 600 "the backup volume's store, ready" store_ready
     mapi GET /api/v1/namespaces/kubehenge-system/secrets/kubehenge-backup-store
     store_token=$(jq -r .data.token "${work}/body" | base64 -d)
@@ -507,7 +509,8 @@ volume_snapshots() {
         fail "the backup volume's store does not list its objects: ${forward_log}"
     fi
     mapi PATCH "${store_deployment}" "{\"metadata\":{\"annotations\":{\"${store_wake}\":null}}}"
-    until_true 180 "the backup volume's store, back to its idle replicas" store_idle "${idle}"
+    # The controller looks every minute.
+    until_true 180 "the controller putting the backup volume's store back to its idle replicas" store_idle "${idle}"
 }
 volume_backed_up() {
     expect 200 "the etcd backups" request "${work}/admin.jar" "${ui}/api/appliance/etcd-backups"

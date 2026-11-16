@@ -77,8 +77,23 @@ func etcdStalled(err error) bool {
 	return slices.ContainsFunc(etcdStalls, func(s string) bool { return strings.Contains(err.Error(), s) })
 }
 
+// downloadRaced reports whether every error of the tofu run in err is Proxmox VE failing to start a
+// file download's task. Its fork_worker reads the new worker's ID once and gives up when a SIGCHLD
+// of another task ending cuts the read off, which an apply's parallel requests make likely. A
+// download makes nothing before its worker runs, so it is safe to run again. A VM's create leaves
+// its configuration locked, so a run with one fails, as does one with any other error.
+func downloadRaced(err error) bool {
+	var f *tofuError
+	if !errors.As(err, &f) {
+		return false
+	}
+	return !slices.ContainsFunc(f.diagnostics, func(d string) bool {
+		return !strings.Contains(d, "got no worker upid") || !strings.Contains(d, "Error downloading file from url")
+	})
+}
+
 // applyPlanned runs applyOnce, and again up to applyAttempts in all while a run fails on etcd timing
-// out a request.
+// out a request, or on Proxmox VE not starting a download's task.
 func (a *Appliance) applyPlanned(ctx context.Context, j *Job, env []string, t *pve.Ticket, args ...string) error {
 	pause := etcdStallPause
 	if a.stallPause != 0 {
@@ -86,10 +101,19 @@ func (a *Appliance) applyPlanned(ctx context.Context, j *Job, env []string, t *p
 	}
 	for attempt := 1; ; attempt++ {
 		err := a.applyOnce(ctx, j, env, t, args...)
-		if err == nil || attempt == applyAttempts || !etcdStalled(err) {
+		var why string
+		switch {
+		case err == nil:
+			return nil
+		case etcdStalled(err):
+			why = "etcd timed out a request, which slow storage causes"
+		case downloadRaced(err):
+			why = "Proxmox VE did not start a download's task, which another task ending at that moment causes"
+		}
+		if why == "" || attempt == applyAttempts {
 			return err
 		}
-		j.Add(fmt.Sprintf("etcd timed out a request, which slow storage causes. Running again in %s, attempt %d of %d", pause, attempt+1, applyAttempts))
+		j.Add(fmt.Sprintf("%s. Running again in %s, attempt %d of %d", why, pause, attempt+1, applyAttempts))
 		select {
 		case <-ctx.Done():
 			if errors.Is(context.Cause(ctx), ErrServiceStopped) {

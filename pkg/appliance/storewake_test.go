@@ -23,15 +23,15 @@ func storeDeployment(replicas int32, idle string) *appsv1.Deployment {
 		Spec: appsv1.DeploymentSpec{Replicas: &replicas},
 	}
 	if idle != "" {
-		d.Annotations = map[string]string{idleReplicas: idle}
+		d.Annotations = map[string]string{backupstore.IdleReplicas: idle}
 	}
 	return d
 }
 
 func zonesToken() *corev1.Secret {
 	return &corev1.Secret{
-		Name: zonesSecret, Namespace: backupstore.Namespace,
-		Data: map[string][]byte{zonesKey: []byte(standInToken)},
+		Name: backupstore.ZonesSecret, Namespace: backupstore.Namespace,
+		Data: map[string][]byte{"token": []byte(standInToken), "nodes": []byte("mgmt-cp-0,mgmt-cp-1,mgmt-cp-2")},
 	}
 }
 
@@ -60,15 +60,15 @@ var (
 
 // hostsAt stands in for Proxmox VE, which says where each VM runs, and fails a token it never gave.
 // hosts maps each VM's SMBIOS UUID to its Proxmox VE node.
-func hostsAt(t *testing.T, hosts map[string]string) func(context.Context, string) (*vmIndex, error) {
+func hostsAt(t *testing.T, hosts map[string]string) backupstore.VMReader {
 	t.Helper()
-	return func(_ context.Context, token string) (*vmIndex, error) {
+	return func(_ context.Context, token string) (*backupstore.VMIndex, error) {
 		if token != standInToken {
 			t.Errorf("Proxmox VE was asked with token %q, not the one in the chart's Secret", token)
 		}
-		index := &vmIndex{byUUID: map[string][]clusterVM{}}
+		index := &backupstore.VMIndex{ByUUID: map[string][]backupstore.VM{}}
 		for uuid, node := range hosts {
-			index.byUUID[strings.ToLower(uuid)] = []clusterVM{{Name: uuid, Node: node, Type: "qemu"}}
+			index.ByUUID[strings.ToLower(uuid)] = []backupstore.VM{{Name: uuid, Node: node, Type: "qemu"}}
 		}
 		return index, nil
 	}
@@ -110,7 +110,7 @@ func TestTheStoreSleepsBetweenBackupsOnLocalStorage(t *testing.T) {
 	if err := <-woke; err != nil {
 		t.Fatal(err)
 	}
-	if err := restStore(ctx, kube, time.Now()); err != nil {
+	if err := a.storeVolume(kube).Done(ctx, applianceHolder); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := deps.Get(ctx, backupstore.Service, metav1.GetOptions{}); *got.Spec.Replicas != 0 {
@@ -124,15 +124,15 @@ func TestTheStoreStaysUpOnSharedStorage(t *testing.T) {
 	up := storeDeployment(1, "1")
 	up.Status.ReadyReplicas = 1
 	kube := fake.NewClientset(up)
-	a := &Appliance{vmHosts: func(context.Context, string) (*vmIndex, error) {
+	a := &Appliance{vmHosts: func(context.Context, string) (*backupstore.VMIndex, error) {
 		t.Error("a store on shared storage asked Proxmox VE where the node VMs run")
-		return &vmIndex{}, nil
+		return &backupstore.VMIndex{}, nil
 	}}
 	ctx := t.Context()
 	if err := a.wakeStore(ctx, kube); err != nil {
 		t.Fatal(err)
 	}
-	if err := restStore(ctx, kube, time.Now()); err != nil {
+	if err := a.storeVolume(kube).Done(ctx, applianceHolder); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := kube.AppsV1().Deployments(backupstore.Namespace).Get(ctx, backupstore.Service, metav1.GetOptions{}); *got.Spec.Replicas != 1 {
@@ -158,7 +158,10 @@ func TestAMovedNodeVMsZoneIsCorrectedBeforeTheStoreWakes(t *testing.T) {
 	kube := fake.NewClientset(ready, zonesToken(),
 		zoned("mgmt-cp-0", "pve1", withBeta...), zoned("mgmt-cp-1", "pve1", zoneOnly...), zoned("mgmt-cp-2", "pve3", zoneOnly...))
 	var atWake map[string]map[string]string
-	kube.PrependReactor("patch", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
+	kube.PrependReactor("patch", "deployments", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if action.GetSubresource() != "scale" {
+			return false, nil, nil
+		}
 		atWake = map[string]map[string]string{}
 		nodes, err := kube.Tracker().List(corev1.SchemeGroupVersion.WithResource("nodes"), corev1.SchemeGroupVersion.WithKind("Node"), "")
 		if err != nil {
@@ -217,7 +220,7 @@ func TestAWakeGoesOnWithOneManagementVMGone(t *testing.T) {
 	t.Parallel()
 	sleeping := func() *appsv1.Deployment {
 		d := storeDeployment(0, "0")
-		d.Annotations[volumeZone] = "pve1"
+		d.Annotations[backupstore.VolumeZone] = "pve1"
 		d.Status.ReadyReplicas = 1
 		return d
 	}

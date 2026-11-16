@@ -191,6 +191,53 @@ func TestApplyRunsAgainWhileEtcdTimesOut(t *testing.T) {
 	}
 }
 
+// Proxmox VE fails to start a task's worker when another task ends at that moment. A run whose
+// every error is a download it did not start runs again, as those made nothing. A VM's create,
+// which leaves its configuration locked, fails the job at once, as does any other error beside a
+// raced download. Each line of races is one run: d a raced download, v a raced VM create, n a
+// download that found no file.
+func TestApplyRunsAgainWhenADownloadDidNotStart(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, races string
+		state       string
+		applies     int
+	}{
+		{"a download raced", "d\n", StateSucceeded, 2},
+		{"two downloads raced", "dd\n", StateSucceeded, 2},
+		{"a VM create raced", "v\n", StateFailed, 1},
+		{"a VM create raced and a download found no file", "vn\n", StateFailed, 1},
+		{"a download raced and a VM create raced", "dv\n", StateFailed, 1},
+		{"a download raced, then found no file", "d\nn\n", StateFailed, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			a, _ := newAppliance(t)
+			a.stallPause = time.Millisecond
+			writePlan(t, a, change{nodeVMAddress + "[0]", []string{"update"}, 1001})
+			if err := os.WriteFile(filepath.Join(a.Dir, "races"), []byte(tc.races), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			j := applyWith(t, a, "race")
+			if j.State != tc.state {
+				t.Fatalf("apply: %+v", j)
+			}
+			if tc.state == StateFailed && !strings.Contains(j.Error, "Error ") {
+				t.Fatalf("the job's error lacks OpenTofu's: %s", j.Error)
+			}
+			applies := 0
+			for _, args := range tofuCalls(t, a) {
+				if args[0] == "apply" {
+					applies++
+				}
+			}
+			if applies != tc.applies {
+				t.Fatalf("%d applies, want %d", applies, tc.applies)
+			}
+		})
+	}
+}
+
 // A service stop in the pause before the next run ends the job as a stop mid-run does.
 func TestStopDuringTheEtcdPauseSaysRunItAgain(t *testing.T) {
 	t.Parallel()

@@ -1714,7 +1714,7 @@ Without a target, snapshots go to `clusters/<namespace>.<name>/etcd` on the back
 
 A snapshot that would leave less than a tenth of the volume free is refused. The condition `EtcdSnapshotSucceeded` then reads `VolumeFull` with the room left. Lower `keep`, move the cluster to a bucket target, or grow the volume (`backup_volume.size_gb`, [install-settings.md](install-settings.md#module-variables)).
 
-On node-local storage the volume is detached between backups. A snapshot waits up to a minute for it to attach, and the condition reads `WaitingForVolume` meanwhile.
+On node-local storage the volume is detached between backups. The controller attaches it for each snapshot, also while the appliance is stopped. A snapshot waits up to a minute for it, and the condition reads `WaitingForVolume` meanwhile. An attach that fails sets the reason `Failed` with the cause.
 
 Every distribution restores from the volume through the interface, kubectl and the CLI. A snapshot that fails its check, or a transfer cut short, leaves every node as it was. On kubeadm, RKE2 and k3s the first control-plane node needs three times the snapshot's size free under `/var/lib/kubehenge-restore`. [architecture.md](architecture.md#backup-volume) says how the snapshot gets there.
 
