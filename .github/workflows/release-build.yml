@@ -268,7 +268,8 @@ jobs:
           digest capmox "$CAPMOX_REPOSITORY" "$printed"
           printed=$(make -s helm-addon-image HELM_ADDON_IMAGE="$HELM_ADDON_REPOSITORY" | tail -n 1)
           digest helm-addon "$HELM_ADDON_REPOSITORY" "$printed"
-          printed=$(make -s proxmox-csi-image PROXMOX_CSI_IMAGE="$PROXMOX_CSI_REPOSITORY" | tail -n 1)
+          printed=$(make -s proxmox-csi-image PROXMOX_CSI_IMAGE="$PROXMOX_CSI_REPOSITORY" |
+            tail -n 1)
           digest proxmox-csi "$PROXMOX_CSI_REPOSITORY" "$printed"
 
       - name: Appliance archive and index

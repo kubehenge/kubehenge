@@ -97,10 +97,15 @@ func checkEtcdDatabase(path string) (err error) {
 		if tx.Bucket(etcdKeyBucket) == nil || tx.Bucket(etcdMetaBucket) == nil {
 			return errors.New("the snapshot is no etcd database")
 		}
+		// Check reads the pages in its own goroutine until it closes the channel, so the channel is
+		// drained before View closes the transaction under it.
+		var damage error
 		for cerr := range tx.Check() {
-			return fmt.Errorf("the snapshot's database is damaged: %w", cerr)
+			if damage == nil {
+				damage = fmt.Errorf("the snapshot's database is damaged: %w", cerr)
+			}
 		}
-		return nil
+		return damage
 	})
 	if err != nil {
 		return fmt.Errorf("checking the snapshot: %w", err)

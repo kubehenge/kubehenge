@@ -202,6 +202,8 @@ describe("etcd snapshot settings", () => {
     await user.click(await screen.findByRole("button", { name: "Edit etcd snapshots" }));
     const dialog = screen.getByRole("dialog", { name: "Edit etcd snapshots" });
     const target = within(dialog).getByLabelText("Target");
+    // The class's targets load once the dialog opens.
+    await within(target).findByRole("option", { name: /^store:/u });
     expect(target).toHaveDisplayValue(shown);
     await user.selectOptions(target, pick);
     await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
