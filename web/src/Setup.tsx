@@ -3288,10 +3288,7 @@ function setupFields({
         </fieldset>
         <fieldset className="group">
           <legend>Backup targets</legend>
-          <p className="muted">
-            Without etcd backups, every cluster&apos;s CAs, kubeconfigs and backup keys are lost with the management
-            cluster.
-          </p>
+          <p className="muted">etcd snapshots go to the backup volume. A target keeps a copy off the host.</p>
           <BackupTargets
             initial={form.backupTargets}
             showAll={more.attempted}

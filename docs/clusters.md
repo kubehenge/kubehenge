@@ -923,7 +923,7 @@ A cluster at another site can name a mirror near it in `releaseMirror` (Release 
 
 ### Mirroring the charts
 
-A chart mirror serves the charts of one repository host from an address you choose. Set one per host under Advanced in the setup (Chart mirrors), or `chart_repositories` in the module ([variables](install-settings.md#module-variables)).
+A chart mirror serves the charts of one repository host from an address you choose. Set one per host under Site in the setup (Chart mirrors), or `chart_repositories` in the module ([variables](install-settings.md#module-variables)).
 
 - A host that serves OCI charts (`ghcr.io`) needs an `oci://` mirror, such as `ghcr.io=oci://registry.example.org/ghcr`. The charts of `oci://ghcr.io/istio/release/charts` are then fetched from `oci://registry.example.org/ghcr/istio/release/charts`.
 - A host that serves a chart repository (`charts.jetstack.io`) needs an `https://` or `http://` one, such as `charts.jetstack.io=https://charts.example.org/jetstack`.
@@ -943,7 +943,7 @@ A mirror that no chart uses, or of another kind than its host, is refused. Chart
 
 ### Mirroring the releases
 
-RKE2 and k3s nodes download their release from GitHub as they boot. A release mirror serves those files instead, for every cluster that names no mirror of its own ([above](#a-clusters-own-release-mirror)). Set it under Advanced in the setup (Release mirror), or `release_mirror` in the module ([variables](install-settings.md#module-variables)).
+RKE2 and k3s nodes download their release from GitHub as they boot. A release mirror serves those files instead, for every cluster that names no mirror of its own ([above](#a-clusters-own-release-mirror)). Set it under Site in the setup (Release mirror), or `release_mirror` in the module ([variables](install-settings.md#module-variables)).
 
 - A node checks every file against the release's pins before installing anything, so a mirror cannot change what it runs. A file the mirror lacks fails the node's boot with the file and the mirror named.
 - The interface and `kubehenge release pin --mirror` read a release's checksums from the same mirror before pinning it.
@@ -958,7 +958,7 @@ Each node takes `sha256sum-amd64.txt` and `install.sh` of its release. RKE2 node
 
 ### Behind a proxy
 
-Set the proxy under Advanced in the setup ([setup](install.md#network)), or `proxy` in the module ([variables](install-settings.md#module-variables)). It takes an address, a user and password if the proxy asks, exceptions and the authority of a proxy that re-signs TLS. The module's `proxy.url` is the one place the credentials sit inside the address.
+Set the proxy under Site in the setup ([setup](install.md#network)), or `proxy` in the module ([variables](install-settings.md#module-variables)). It takes an address, a user and password if the proxy asks, exceptions and the authority of a proxy that re-signs TLS. The module's `proxy.url` is the one place the credentials sit inside the address.
 
 It reaches OpenTofu, the appliance's downloads, the Talos nodes, the Cluster API operator and providers, the controller and the VM template builds. A build's VM uses it for packages, `curl` and image pulls, and trusts the authority while it builds.
 
