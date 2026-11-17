@@ -3,7 +3,8 @@
 # (pkg/templates/el/mirrors.sh): a mirror service and two mirrors on an HTTP server on loopback, the
 # first mirror serving AppStream's repomd.xml as a mirror does while it syncs, and a stand-in for dnf
 # that reads each repository from the first mirror of its list and fails on that file, without
-# trying the next, as dnf does. Needs Python 3 and curl, and no EL host.
+# trying the next, as dnf does. Then how they pin the repositories to the image's minor release and
+# read its vault once its own server drops it. Needs Python 3 and curl, and no EL host.
 #
 #   test/unit/el-mirrors.sh
 # shellcheck disable=SC2016 # dnf's variables, which the repository files and lists hold unfilled.
@@ -207,6 +208,59 @@ rm "${root}/read"
 from_repositories "${lists}" dnf_reads "${repos}" 2> /dev/null && status=0 || status=$?
 expect "with every mirror broken the step fails" 1 "${status}"
 lines "after three attempts" "${root}/read" 3
+
+# Every step reads the minor release of the bake's image, where dnf's $releasever is the major one.
+pinned=${root}/pinned
+mkdir "${pinned}"
+cat > "${pinned}/rocky.repo" << 'EOF'
+[baseos]
+name=Rocky Linux $releasever - BaseOS
+mirrorlist=https://mirrors.rockylinux.org/mirrorlist?arch=$basearch&repo=BaseOS-$releasever$rltype
+enabled=1
+
+[epel]
+baseurl=https://dl.fedoraproject.org/pub/epel/$releasever_major${releasever_minor:+.$releasever_minor}/Everything/$basearch/
+enabled=1
+EOF
+printf '[baseos]\nmirrorlist=https://mirrors.almalinux.org/mirrorlist/$releasever/baseos?arch=x86_64_v2\nenabled=1\n' \
+    > "${pinned}/almalinux-baseos.repo"
+use_metalinks "${pinned}"
+pin_release "${pinned}" 10.2
+has "Rocky's metalink names the minor release" "${pinned}/rocky.repo" \
+    'metalink=https://mirrors.rockylinux.org/metalink?arch=$basearch&repo=BaseOS-10.2$rltype'
+has "AlmaLinux's mirror list names it" "${pinned}/almalinux-baseos.repo" \
+    'mirrorlist=https://mirrors.almalinux.org/mirrorlist/10.2/baseos?arch=x86_64_v2'
+has "and so do the names" "${pinned}/rocky.repo" 'name=Rocky Linux 10.2 - BaseOS'
+has "dnf's other variables stay" "${pinned}/rocky.repo" '/epel/$releasever_major${releasever_minor:+.$releasever_minor}/'
+
+# A minor release its own server no longer holds comes from the vault. One still there, or a server
+# that does not answer, leaves the repository on its mirrors.
+repomd vault AppStream "${good}"
+vaulted=${root}/vaulted
+mkdir "${vaulted}"
+printf '%s\n' "baseos ${site}/one/BaseOS/x86_64/os/ ${site}/vault/BaseOS/x86_64/os/" \
+    "appstream ${site}/gone/AppStream/x86_64/os/ ${site}/vault/AppStream/x86_64/os/" \
+    "kubehenge-containerd http://127.0.0.1:1/epel/ ${site}/vault/epel/" > "${root}/vault"
+use_vault "${root}/vault" "${vaulted}" 2> "${root}/said"
+holds "AppStream's one mirror is the vault" "${vaulted}/appstream" "${site}/vault/AppStream/x86_64/os/"
+has "it says why" "${root}/said" "appstream: ${site}/gone/AppStream/x86_64/os/ is gone"
+for id in baseos kubehenge-containerd; do
+    listed=no
+    [ ! -e "${vaulted}/${id}" ] || listed=yes
+    expect "${id} stays on its mirrors" no "${listed}"
+done
+
+# The vault's list replaces a metalink and a folder alike.
+printf '[appstream]\nmetalink=https://mirrors.rockylinux.org/metalink?arch=$basearch&repo=AppStream-10.1\nenabled=1\n' \
+    > "${pinned}/rocky-appstream.repo"
+printf '[kubehenge-containerd]\nbaseurl=https://dl.fedoraproject.org/pub/epel/10.1/Everything/x86_64/\nenabled=1\n' \
+    > "${pinned}/kubehenge-containerd.repo"
+printf '%s\n' "${site}/vault/epel/" > "${vaulted}/kubehenge-containerd"
+point_at_mirrors "${pinned}" "${vaulted}"
+has "the metalink gives way to the vault" "${pinned}/rocky-appstream.repo" "mirrorlist=file://${vaulted}/appstream"
+lacks "and goes" "${pinned}/rocky-appstream.repo" "metalink="
+has "the folder gives way to the vault" "${pinned}/kubehenge-containerd.repo" "mirrorlist=file://${vaulted}/kubehenge-containerd"
+lacks "and goes" "${pinned}/kubehenge-containerd.repo" "baseurl="
 
 if [ "${failures}" -ne 0 ]; then
     echo "el-mirrors: ${failures} of $((passes + failures)) checks failed"

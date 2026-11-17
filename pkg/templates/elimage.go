@@ -18,16 +18,29 @@ const imageModeFilesDir = "el"
 
 // elFamily is what an Enterprise Linux family in image mode brings to its bake.
 type elFamily struct {
-	// distro, releasever, repos and reposPackage compose the minimal root file system: the
-	// manifests' name for the family, its major release, the ids of the repositories its packages
-	// come from and the package that defines them.
+	// distro, repos and reposPackage compose the minimal root file system: the manifests' name for
+	// the family, the repositories its packages come from and the package that defines them.
 	distro       string
-	releasever   string
-	repos        []string
+	repos        []elRepository
 	reposPackage string
-	// containerd is where a kubeadm node's containerd and runc come from, built for the family's
-	// CPU level. The family itself has neither.
-	containerd *repository
+	// mirror and vault hold a folder for each minor release, named by it, with its images and
+	// repositories: the family's own server while the minor release is the newest, and the vault
+	// once a newer one replaces it.
+	mirror, vault string
+	// containerd is where a kubeadm node's containerd and runc come from for a minor release,
+	// built for the family's CPU level. The family itself has neither.
+	containerd func(minor string) *repository
+}
+
+// elRepository is one of the family's repositories: its id in the family's repository files and its
+// folder in a minor release's.
+type elRepository struct{ id, folder string }
+
+// elMinor is the minor release of the release's build, such as 10.2. Every package of a bake comes
+// from it, so that a new minor release reaches the templates only as a new pinned build.
+func elMinor(r *Release) string {
+	minor, _, _ := strings.Cut(r.Build, "-")
+	return minor
 }
 
 var (
@@ -44,17 +57,34 @@ var (
 )
 
 // repositories are those a bake of the distribution adds to the family's.
-func (f *elFamily) repositories(b *Bake) []*repository {
+func (f *elFamily) repositories(r *Release, b *Bake) []*repository {
 	switch b.Distribution {
 	case RKE2:
 		return []*repository{rke2SELinux}
 	case K3s:
 		return []*repository{k3sSELinux}
 	case Kubeadm:
-		return []*repository{kubernetesRepository(b.KubernetesVersion), f.containerd}
+		return []*repository{kubernetesRepository(b.KubernetesVersion), f.containerd(elMinor(r))}
 	case Talos:
 	}
 	return nil
+}
+
+// releaseFiles tell build.sh and node.sh the minor release every package comes from (el/release),
+// and where each repository with a vault keeps it on its own server and in the vault (el/vault).
+func (f *elFamily) releaseFiles(files map[string]string, r *Release, repos []*repository) {
+	minor := elMinor(r)
+	files[imageModeFilesDir+"/release"] = minor + "\n"
+	var sb strings.Builder
+	for _, repo := range f.repos {
+		fmt.Fprintf(&sb, "%s %s%s/%s %s%s/%s\n", repo.id, f.mirror, minor, repo.folder, f.vault, minor, repo.folder)
+	}
+	for _, repo := range repos {
+		if repo.vault != "" {
+			fmt.Fprintf(&sb, "kubehenge-%s %s %s\n", repo.id, repo.baseURL, repo.vault)
+		}
+	}
+	files[imageModeFilesDir+"/vault"] = sb.String()
 }
 
 // manifest is what bootc-base-imagectl composes the minimal root file system from: upstream's
@@ -62,11 +92,11 @@ func (f *elFamily) repositories(b *Bake) []*repository {
 // modules hold br_netfilter, which every distribution's pod network needs. Composed with the
 // kernel, they come from the same mirror's metadata: a later install can reach a mirror one sync
 // behind, which the metalink still accepts and which lacks a kernel published hours before.
-func (f *elFamily) manifest(d Distribution) string {
+func (f *elFamily) manifest(d Distribution, minor string) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "releasever: %s\nrepos:\n", f.releasever)
+	fmt.Fprintf(&sb, "releasever: %s\nrepos:\n", minor)
 	for _, r := range f.repos {
-		fmt.Fprintf(&sb, "  - %s\n", r)
+		fmt.Fprintf(&sb, "  - %s\n", r.id)
 	}
 	fmt.Fprintf(&sb, "variables:\n  distro: %q\npackages:\n  - %s\n  - cloud-utils-growpart\n  - kernel-modules-extra\n", f.distro, f.reposPackage)
 	if d == RKE2 || d == K3s {
@@ -82,11 +112,11 @@ func (f *elFamily) manifest(d Distribution) string {
 
 // recipe builds the node image in a VM of the family's cloud image and installs it onto the
 // template's disk (el/build.sh), then boots it as a clone would be.
-func (f *elFamily) recipe(b *Bake, keys map[string]string) (Recipe, error) {
+func (f *elFamily) recipe(r *Release, b *Bake, keys map[string]string) (Recipe, error) {
 	if b.Distribution == Talos {
-		return f.talosRecipe(b, keys)
+		return f.talosRecipe(r, b, keys)
 	}
-	repos := f.repositories(b)
+	repos := f.repositories(r, b)
 	if repos == nil {
 		return Recipe{}, fmt.Errorf("no node image of %s", b.Distribution)
 	}
@@ -94,7 +124,8 @@ func (f *elFamily) recipe(b *Bake, keys map[string]string) (Recipe, error) {
 	if err != nil {
 		return Recipe{}, err
 	}
-	files[imageModeFilesDir+"/manifest.yaml"] = f.manifest(b.Distribution)
+	f.releaseFiles(files, r, repos)
+	files[imageModeFilesDir+"/manifest.yaml"] = f.manifest(b.Distribution, elMinor(r))
 	userData, err := bakeUserData(files, build)
 	if err != nil {
 		return Recipe{}, err

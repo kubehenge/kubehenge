@@ -80,6 +80,8 @@ Each Kubehenge release makes templates from one build of each node OS's cloud im
 
 The image comes from the publisher's mirror (`repo.almalinux.org`, `dl.rockylinux.org`). Once a newer minor release of the node OS replaces it there, it comes from the publisher's vault (`vault.almalinux.org`, `dl.rockylinux.org`).
 
+Every package a build installs comes from the image's minor release, such as 10.2. A newer minor release reaches templates only with a Kubehenge release that pins its image. Once the publisher moves the minor release to its vault, the build reads its packages there. EPEL's containerd follows the same minor release, from EPEL's archive once it moves there.
+
 ### Package checks
 
 Every package a build installs is signed, and checked against a key accepted only with its known fingerprint. The keys are the family's own, pkgs.k8s.io's for kubeadm and Rancher's for the RKE2 and k3s policies. For kubeadm's containerd, which the EL families do not carry, the key is EPEL's (on AlmaLinux, AlmaLinux's own build of EPEL for `x86-64-v2`).

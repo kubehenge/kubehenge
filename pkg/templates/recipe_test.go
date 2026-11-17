@@ -501,10 +501,10 @@ func TestRecipeRefuses(t *testing.T) {
 
 func TestRepositoryFile(t *testing.T) {
 	t.Parallel()
-	got := almaLinux10EL.containerd.file()
+	got := almaLinux10EL.containerd("10.2").file()
 	want := `[kubehenge-containerd]
 name=AlmaLinux EPEL 10 for x86-64-v2 (containerd)
-baseurl=https://epel.repo.almalinux.org/$releasever${releasever_minor:+z}/x86_64_v2/
+baseurl=https://epel.repo.almalinux.org/10.2/x86_64_v2/
 enabled=1
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/kubehenge-almalinux-epel.asc
@@ -536,9 +536,11 @@ func TestPolicyRepositoriesSignTheirMetadata(t *testing.T) {
 	}
 }
 
+// The compose reads the minor release of the family's pinned build. Fails a manifest that names the
+// major release alone, which reads whichever minor release is newest.
 func TestManifest(t *testing.T) {
 	t.Parallel()
-	want := `releasever: 10
+	want := `releasever: 10.2
 repos:
   - baseos
   - appstream
@@ -552,17 +554,140 @@ include:
   - minimal/manifest.yaml
   - standard/generic-growfs.yaml
 `
-	if got := almaLinux10EL.manifest(Kubeadm); got != want {
+	if got := almaLinux10EL.manifest(Kubeadm, "10.2"); got != want {
 		t.Errorf("got\n%s\nwant\n%s", got, want)
 	}
 	// RKE2 and k3s install into /usr/local at boot, so it lives in /var on their nodes.
 	for _, d := range []Distribution{RKE2, K3s} {
-		if got := almaLinux10EL.manifest(d); !strings.Contains(got, "\nopt-usrlocal: \"var\"\n") {
+		if got := almaLinux10EL.manifest(d, "10.2"); !strings.Contains(got, "\nopt-usrlocal: \"var\"\n") {
 			t.Errorf("%s's manifest:\n%s", d, got)
 		}
 	}
-	if got := rocky10EL.manifest(Kubeadm); !strings.Contains(got, "  - rocky-repos\n") || !strings.Contains(got, `distro: "rocky10"`) {
+	if got := rocky10EL.manifest(Kubeadm, "10.2"); !strings.Contains(got, "  - rocky-repos\n") || !strings.Contains(got, `distro: "rocky10"`) {
 		t.Errorf("Rocky Linux's manifest:\n%s", got)
+	}
+	for _, f := range []Family{almaLinux{}, rocky{}} {
+		for _, r := range f.Releases() {
+			minor, _, _ := strings.Cut(r.Build, "-")
+			b := Bake{Distribution: RKE2, NodeOS: NodeOS{Family: f.Name(), Release: r.Name}}
+			recipe, err := f.Recipe(&r, &b, fakeKeys(f.Keys(&r, &b)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, files := parseCloudConfig(t, recipe.UserData)
+			if got, want := files["el/manifest.yaml"], "releasever: "+minor+"\n"; !strings.HasPrefix(got, want) {
+				t.Errorf("%s %s, build %s: the manifest starts\n%s\nwant %q", f.Title(), r.Name, r.Build, got, want)
+			}
+		}
+	}
+}
+
+// elBakes are a bake of each distribution of every EL family's releases, with their recipe's files.
+func elBakes(t *testing.T) []elBake {
+	t.Helper()
+	var bakes []elBake
+	for _, f := range []Family{almaLinux{}, rocky{}} {
+		for _, r := range f.Releases() {
+			for _, d := range []Distribution{RKE2, K3s, Kubeadm, Talos} {
+				b := Bake{Distribution: d, NodeOS: NodeOS{Family: f.Name(), Release: r.Name}, KubernetesVersion: "v1.37.1"}
+				if d == Talos {
+					b = Bake{Distribution: Talos, NodeOS: b.NodeOS, TalosVersion: "v1.14.5", Talos: testTalosPin}
+				}
+				recipe, err := f.Recipe(&r, &b, fakeKeys(f.Keys(&r, &b)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, files := parseCloudConfig(t, recipe.UserData)
+				minor, _, _ := strings.Cut(r.Build, "-")
+				bakes = append(bakes, elBake{f, r, d, minor, files})
+			}
+		}
+	}
+	return bakes
+}
+
+type elBake struct {
+	family       Family
+	release      Release
+	distribution Distribution
+	minor        string
+	files        map[string]string
+}
+
+func (b *elBake) String() string {
+	return fmt.Sprintf("%s %s (build %s), %s", b.family.Title(), b.release.Name, b.release.Build, b.distribution)
+}
+
+// Every package of a bake comes from the minor release of the pinned build: the compose's, the
+// builder's own and node.sh's. Fails a step that reads the family's files as they come, whose
+// $releasever is the major release and so reads whichever minor release is newest.
+func TestTheComposeReadsTheBuildsMinorRelease(t *testing.T) {
+	t.Parallel()
+	for _, b := range elBakes(t) {
+		if got := b.files["el/release"]; got != b.minor+"\n" {
+			t.Errorf("%s: el/release is %q, want %q", &b, got, b.minor+"\n")
+		}
+		for name, content := range b.files {
+			if strings.HasPrefix(name, "repos/") && strings.Contains(content, "$releasever") {
+				t.Errorf("%s: %s reads dnf's release:\n%s", &b, name, content)
+			}
+		}
+		if repo, ok := b.files["repos/containerd.repo"]; ok && !strings.Contains(repo, "/"+b.minor+"/") {
+			t.Errorf("%s: containerd comes from another minor release:\n%s", &b, repo)
+		}
+	}
+	// Each pins before its first read of the repositories, fetch_mirrors among them.
+	for name, first := range map[string]string{"el/build.sh": "use_metalinks", "el/node.sh": "dnf -y install"} {
+		content, err := recipeFiles.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		script := string(content)
+		pin := strings.Index(script, "\npin_release ")
+		if pin < 0 || pin > strings.Index(script, first) || !strings.Contains(script, `el/release`) {
+			t.Errorf("%s does not pin the repositories to el/release before %s", name, first)
+		}
+	}
+}
+
+// A family moves a minor release to its vault once a newer one replaces it, and Rocky Linux's mirror
+// service then still names mirrors that dropped it. Every repository with a vault is listed for
+// use_vault (el/mirrors.sh), which reads the vault only for a folder its own server no longer holds.
+// test/unit/el-mirrors.sh proves that on a server on loopback.
+func TestAVaultedMinorComposesFromTheVault(t *testing.T) {
+	t.Parallel()
+	want := map[string][]string{
+		"AlmaLinux": {
+			"baseos https://repo.almalinux.org/almalinux/%[1]s/BaseOS/x86_64_v2/os/ https://vault.almalinux.org/%[1]s/BaseOS/x86_64_v2/os/",
+			"appstream https://repo.almalinux.org/almalinux/%[1]s/AppStream/x86_64_v2/os/ https://vault.almalinux.org/%[1]s/AppStream/x86_64_v2/os/",
+		},
+		"Rocky Linux": {
+			"baseos https://dl.rockylinux.org/pub/rocky/%[1]s/BaseOS/x86_64/os/ https://dl.rockylinux.org/vault/rocky/%[1]s/BaseOS/x86_64/os/",
+			"appstream https://dl.rockylinux.org/pub/rocky/%[1]s/AppStream/x86_64/os/ https://dl.rockylinux.org/vault/rocky/%[1]s/AppStream/x86_64/os/",
+		},
+	}
+	// AlmaLinux's EPEL keeps every minor release's folder. EPEL archives its own.
+	const epel = "kubehenge-containerd https://dl.fedoraproject.org/pub/epel/%[1]s/Everything/x86_64/ https://dl.fedoraproject.org/pub/archive/epel/%[1]s/Everything/x86_64/"
+	for _, b := range elBakes(t) {
+		var lines []string
+		for _, line := range want[b.family.Title()] {
+			lines = append(lines, fmt.Sprintf(line, b.minor))
+		}
+		if b.family.Name() == rockyName && b.distribution == Kubeadm {
+			lines = append(lines, fmt.Sprintf(epel, b.minor))
+		}
+		if got, want := b.files["el/vault"], strings.Join(lines, "\n")+"\n"; got != want {
+			t.Errorf("%s: el/vault is\n%s\nwant\n%s", &b, got, want)
+		}
+	}
+	content, err := recipeFiles.ReadFile("el/build.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(content)
+	vault, fetch := strings.Index(script, "\nuse_vault el/vault "), strings.Index(script, "\nfetch_mirrors ")
+	if vault < 0 || vault > fetch {
+		t.Error("el/build.sh does not hand el/vault to use_vault before it fetches the mirror lists")
 	}
 }
 

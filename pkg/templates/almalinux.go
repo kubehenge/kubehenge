@@ -4,7 +4,6 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-	"strings"
 )
 
 const almaLinuxName = "almalinux"
@@ -44,12 +43,12 @@ func (almaLinux) Releases() []Release {
 // once a newer minor release has replaced it. The folder named 10 holds the newest minor release's
 // builds alone.
 func (almaLinux) Image(ctx context.Context, s *Sources, r *Release) (Resolved, error) {
-	minor, _, _ := strings.Cut(r.Build, "-")
+	minor := elMinor(r)
 	return s.signedImage(ctx, &pinnedImage{
 		signer: signingKey{name: "AlmaLinux OS 10", armoured: almaLinux10Key, fingerprint: AlmaLinux10KeyFingerprint},
 		dirs: []string{
-			"https://repo.almalinux.org/almalinux/" + minor + "/cloud/x86_64_v2/images",
-			"https://vault.almalinux.org/" + minor + "/cloud/x86_64_v2/images",
+			almaLinux10EL.mirror + minor + "/cloud/x86_64_v2/images",
+			almaLinux10EL.vault + minor + "/cloud/x86_64_v2/images",
 		},
 		file:   fmt.Sprintf("AlmaLinux-10-GenericCloud-%s.x86_64_v2.qcow2", r.Build),
 		sums:   "CHECKSUM",
@@ -62,20 +61,24 @@ func (almaLinux) Image(ctx context.Context, s *Sources, r *Release) (Resolved, e
 const AlmaLinuxEPELAltArchKeyFingerprint = "68DD137B7690F4735197C4B1B620C02335D447A6"
 
 var almaLinux10EL = &elFamily{
-	distro: "almalinux10", releasever: "10", repos: []string{"baseos", "appstream"}, reposPackage: "almalinux-repos",
-	// EPEL's own containerd needs x86-64-v3. AlmaLinux rebuilds it for v2, signed with a key of its own.
-	containerd: containerdRepository("AlmaLinux EPEL 10 for x86-64-v2",
-		"https://epel.repo.almalinux.org/$releasever${releasever_minor:+z}/x86_64_v2/",
-		&RepositoryKey{
-			Name: "almalinux-epel", URL: "https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux-10-EPEL-AltArch",
-			Fingerprints: []string{AlmaLinuxEPELAltArchKeyFingerprint},
-		}),
+	distro: "almalinux10", reposPackage: "almalinux-repos",
+	repos:  []elRepository{{"baseos", "BaseOS/x86_64_v2/os/"}, {"appstream", "AppStream/x86_64_v2/os/"}},
+	mirror: "https://repo.almalinux.org/almalinux/", vault: "https://vault.almalinux.org/",
+	// EPEL's own containerd needs x86-64-v3. AlmaLinux rebuilds it for v2, signed with a key of its
+	// own, and keeps every minor release's folder.
+	containerd: func(minor string) *repository {
+		return containerdRepository("AlmaLinux EPEL 10 for x86-64-v2", "https://epel.repo.almalinux.org/"+minor+"/x86_64_v2/", "",
+			&RepositoryKey{
+				Name: "almalinux-epel", URL: "https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux-10-EPEL-AltArch",
+				Fingerprints: []string{AlmaLinuxEPELAltArchKeyFingerprint},
+			})
+	},
 }
 
-func (almaLinux) Keys(_ *Release, b *Bake) []RepositoryKey {
-	return keysOf(almaLinux10EL.repositories(b))
+func (almaLinux) Keys(r *Release, b *Bake) []RepositoryKey {
+	return keysOf(almaLinux10EL.repositories(r, b))
 }
 
-func (almaLinux) Recipe(_ *Release, b *Bake, keys map[string]string) (Recipe, error) {
-	return almaLinux10EL.recipe(b, keys)
+func (almaLinux) Recipe(r *Release, b *Bake, keys map[string]string) (Recipe, error) {
+	return almaLinux10EL.recipe(r, b, keys)
 }

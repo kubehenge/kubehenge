@@ -42,7 +42,7 @@ output:
 
 // talosRecipe bakes a Talos release in the builder VM: the pinned imager writes the nocloud disk
 // onto the template's own disk, which is never booted.
-func (*elFamily) talosRecipe(b *Bake, keys map[string]string) (Recipe, error) {
+func (f *elFamily) talosRecipe(r *Release, b *Bake, keys map[string]string) (Recipe, error) {
 	if b.Talos.Imager == "" {
 		return Recipe{}, lasting(fmt.Errorf("this Kubehenge build pins no Talos %s", b.TalosVersion))
 	}
@@ -54,6 +54,7 @@ func (*elFamily) talosRecipe(b *Bake, keys map[string]string) (Recipe, error) {
 	if err != nil {
 		return Recipe{}, err
 	}
+	f.releaseFiles(files, r, nil)
 	files[imageModeFilesDir+"/talos-imager"] = b.Talos.ImagerRef() + "\n"
 	files[imageModeFilesDir+"/talos-profile.yaml"] = talosProfile(b.TalosVersion, b.Talos)
 	if minor < talosUnprivilegedMinor {
