@@ -47,11 +47,15 @@ type VMIDRange struct {
 	End   int64 `json:"end"`
 }
 
-// ParseVMIDRange reads start-end, and refuses a range Check refuses.
+// ParseVMIDRange reads start-end, and refuses a range Check refuses. Every ID Proxmox VE accepts
+// fits in 32 bits, so the parse stops at them and the IDs convert to int on any platform.
 func ParseVMIDRange(text string) (VMIDRange, error) {
 	from, to, found := strings.Cut(strings.TrimSpace(text), "-")
-	start, err1 := strconv.ParseInt(strings.TrimSpace(from), 10, 64)
-	end, err2 := strconv.ParseInt(strings.TrimSpace(to), 10, 64)
+	start, err1 := strconv.ParseInt(strings.TrimSpace(from), 10, 32)
+	end, err2 := strconv.ParseInt(strings.TrimSpace(to), 10, 32)
+	if found && (errors.Is(err1, strconv.ErrRange) || errors.Is(err2, strconv.ErrRange)) {
+		return VMIDRange{}, fmt.Errorf("VM ID range %s is outside %d to %d. Use IDs within it", strings.TrimSpace(text), MinVMID, MaxVMID)
+	}
 	if !found || err1 != nil || err2 != nil {
 		return VMIDRange{}, fmt.Errorf("VM ID range %q is not start-end. Write it like 100000-100999", text)
 	}

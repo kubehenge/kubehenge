@@ -13,6 +13,33 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+// A range past 32 bits is outside what Proxmox VE accepts, and says so rather than that it is no
+// range at all.
+func TestParseVMIDRange(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ text, want string }{
+		{"100000-100999", ""},
+		{" 100 - 999999999 ", ""},
+		{"99-1000", "outside 100 to 999999999"},
+		{"100-1000000000", "outside 100 to 999999999"},
+		{"100-99999999999", "outside 100 to 999999999"},
+		{"99999999999-100", "outside 100 to 999999999"},
+		{"1000-100", "starts above its end"},
+		{"100", "is not start-end"},
+		{"a-b", "is not start-end"},
+	} {
+		r, err := ParseVMIDRange(tc.text)
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("%q: %v", tc.text, err)
+		case tc.want == "" && r.String() != strings.ReplaceAll(strings.TrimSpace(tc.text), " ", ""):
+			t.Errorf("%q reads as %s", tc.text, r)
+		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+			t.Errorf("%q: %v, want %q", tc.text, err, tc.want)
+		}
+	}
+}
+
 func withReplicas(c *clusterv1.Cluster, controlPlanes, workers int32) *clusterv1.Cluster {
 	c.Spec.Topology.ControlPlane.Replicas = &controlPlanes
 	c.Spec.Topology.Workers.MachineDeployments = []clusterv1.MachineDeploymentTopology{{Name: "pool", Class: "worker", Replicas: &workers}}

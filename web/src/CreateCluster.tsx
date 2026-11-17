@@ -117,10 +117,7 @@ const copiedLabels: Partial<Record<keyof Form, string>> = {
 };
 
 // copiedFields lists the labels of the copied values that differ from a new form's.
-function copiedFields(form: Form, from: Cluster | undefined): string[] {
-  if (from === undefined) {
-    return [];
-  }
+function copiedFields(form: Form): string[] {
   const fresh = newForm();
   return Object.entries(copiedLabels).flatMap(([key, label]) =>
     isCopiedKey(key) && startKeys.has(key) && JSON.stringify(form[key]) !== JSON.stringify(fresh[key]) ? [label] : [],
@@ -144,7 +141,7 @@ function lacksSharedKey(
 
 // copiedContext is what the steps say was copied from the cluster the form started from, if any.
 function copiedContext(form: Form, from: Cluster | undefined): { from: string; labels: string[] } | undefined {
-  return from === undefined ? undefined : { from: from.name, labels: copiedFields(form, from) };
+  return from === undefined ? undefined : { from: from.name, labels: copiedFields(form) };
 }
 
 // isCopiedKey narrows a key of copiedLabels, which Object.entries gives as a string, back to the
