@@ -168,6 +168,8 @@ expect_lanes web/package-lock.json "[${appliance_lane}]"
 expect_lanes web/src/app.test.tsx '[]'
 expect_lanes web/src/a11y.test.ts '[]'
 expect_lanes web/screenshots.ts '[]'
+expect_lanes web/flows/fixture.ts '[]'
+expect_lanes web/playwright.config.ts '[]'
 expect_lanes test/unit/scope.sh '[]'
 expect_lanes scripts/changelog.sh '[]'
 expect_lanes scripts/subjects.sh '[]'
