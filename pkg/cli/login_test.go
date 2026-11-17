@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -287,6 +288,143 @@ func TestAnExpiredApplianceCertificateKeepsTheApplianceCommands(t *testing.T) {
 	if err := login(expiredCertificate(t)); err == nil || !strings.Contains(err.Error(), "unknown authority") {
 		t.Errorf("login with another expired certificate: %v", err)
 	}
+}
+
+// signedBy is a certificate for 127.0.0.1 valid from notBefore to notAfter, signed by parent and
+// its key, or self-signed as a CA where parent is nil.
+func signedBy(t *testing.T, parent *tls.Certificate, notBefore, notAfter time.Time) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()), IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1)},
+		NotBefore: notBefore, NotAfter: notAfter,
+		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	issuer, signer := tmpl, any(key)
+	if parent == nil {
+		tmpl.IsCA, tmpl.BasicConstraintsValid = true, true
+	} else {
+		if issuer, err = x509.ParseCertificate(parent.Certificate[0]); err != nil {
+			t.Fatal(err)
+		}
+		signer = parent.PrivateKey
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, issuer, &key.PublicKey, signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+}
+
+// serving is the fake's interface served with whatever certificate *cert holds at each handshake.
+func serving(t *testing.T, f *fakeInterface, cert *tls.Certificate) *httptest.Server {
+	t.Helper()
+	f.srv.Close()
+	srv := httptest.NewUnstartedServer(f.srv.Config.Handler)
+	// httptest serves its own certificate to a client that names no server, as one dialling an
+	// address does, unless each handshake gets a config of its own.
+	srv.TLS = &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+			return &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{*cert}}, nil
+		},
+	}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func pemOf(cert tls.Certificate) []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]})
+}
+
+// An expired CA given as --ca vouches for no certificate it signed, even one valid when it was:
+// only the very certificate in the file is trusted past its expiry.
+func TestAnExpiredCAVouchesForNoOtherCertificate(t *testing.T) {
+	t.Parallel()
+	start := time.Now().Add(-30 * 24 * time.Hour)
+	ca := signedBy(t, nil, start, time.Now().Add(-24*time.Hour))
+	other := signedBy(t, &ca, start.Add(-time.Hour), start.Add(time.Hour))
+	srv := serving(t, newFakeInterface(t), &other)
+	caFile := writeTemp(t, string(pemOf(ca)))
+	_, err := runIn(t, filepath.Join(t.TempDir(), "login.json"), "login", srv.URL, "--ca", caFile, "--user", "admin@pve", "--password-file", writeTemp(t, fakePassword))
+	if err == nil || !strings.Contains(err.Error(), errOtherCertificate.Error()+": run kubehenge login "+srv.URL+" --ca "+caFile) {
+		t.Errorf("a login through another certificate the expired CA signed: %v", err)
+	}
+}
+
+// The appliance renews its certificate in place, and the login made with --ca on that file keeps
+// working. With the file gone, the refusal names the login that fixes it.
+func TestARenewedCertificateKeepsTheLogin(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	cert := signedBy(t, nil, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	srv := serving(t, f, &cert)
+	tlsCrt := filepath.Join(t.TempDir(), "tls.crt")
+	if err := os.WriteFile(tlsCrt, pemOf(cert), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.run("login", srv.URL, "--ca", tlsCrt, "--user", "admin@pve", "--password-file", writeTemp(t, fakePassword)); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	cert = signedBy(t, nil, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if err := os.WriteFile(tlsCrt, pemOf(cert), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := f.run("appliance", "upgrades"); err != nil || !strings.Contains(out, "Installed     0.1.0") {
+		t.Errorf("appliance upgrades after the renewal: %v\n%s", err, out)
+	}
+	if err := os.Remove(tlsCrt); err != nil {
+		t.Fatal(err)
+	}
+	cert = signedBy(t, nil, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if _, err := f.run("appliance", "upgrades"); err == nil || !strings.HasSuffix(err.Error(), "run kubehenge login "+srv.URL+" --ca "+tlsCrt) {
+		t.Errorf("appliance upgrades through a certificate no longer trusted: %v", err)
+	}
+}
+
+// A --ca file without a certificate is named, and logging in again with it would not help.
+func TestACAFileWithoutACertificateIsNamed(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	empty := writeTemp(t, "not a certificate")
+	_, err := f.run("login", f.srv.URL, "--ca", empty, "--user", "admin@pve", "--password-file", writeTemp(t, fakePassword))
+	if err == nil || err.Error() != empty+" holds no PEM certificate" {
+		t.Errorf("login with a --ca holding no certificate: %v", err)
+	}
+}
+
+// An answer is written whole however large, up to what the interface takes back as an export, and
+// one past that is refused rather than cut.
+func TestAnAnswerIsWrittenWholeOrRefused(t *testing.T) {
+	t.Parallel()
+	kubeconfig := "apiVersion: v1\nkind: Config\n# " + strings.Repeat("x", 5<<20) + "\n"
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/clusters/team-a/web/kubeconfig", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, kubeconfig)
+	})
+	mux.HandleFunc("GET /api/clusters/team-a/huge/kubeconfig", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.CopyN(w, zeros{}, maxInterfaceAnswer+1)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	if out, err := runCluster(t, srv.URL, "dev@pve!ci=secret", "kubeconfig", "web", "-n", "team-a"); err != nil || out != kubeconfig {
+		t.Errorf("a kubeconfig of %d bytes: %v, wrote %d", len(kubeconfig), err, len(out))
+	}
+	if _, err := runCluster(t, srv.URL, "dev@pve!ci=secret", "kubeconfig", "huge", "-n", "team-a"); err == nil || !strings.Contains(err.Error(), "over 64 MiB") {
+		t.Errorf("an answer past the cap: %v", err)
+	}
+}
+
+// zeros reads as an endless run of zero bytes.
+type zeros struct{}
+
+func (zeros) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
 }
 
 // --user signs in by password although the token variable is set, as a flag beats the environment.

@@ -2052,7 +2052,7 @@ kubehenge cluster delete web --yes
 - `kubehenge login <url>` signs in once for every command, `appliance` and `cluster` alike. `kubehenge logout` ends it.
 - Sign in as a user with `--user root@pam --password-file <file>` (or `KUBEHENGE_PASSWORD`), and `--totp` for a second factor. The login is then the session, which the interface ends after its session time. Run `kubehenge login` again when it says the login has ended.
 - Sign in with a token through `--token-file` (or `KUBEHENGE_PROXMOX_TOKEN`), which lasts as long as the token does. Neither the password nor the token shows in a process list.
-- `--ca` names the CA of the interface's certificate where the system does not trust it. The login is kept in `kubehenge/login.json` in the user's config folder, readable by that user alone. `KUBEHENGE_LOGIN_FILE` names another file.
+- `--ca` names the CA of the interface's certificate where the system does not trust it. Every command reads that file again, so a certificate renewed in place keeps working. The login is kept in `kubehenge/login.json` in the user's config folder, readable by that user alone. `KUBEHENGE_LOGIN_FILE` names another file.
 - A cluster is found by its name. `-n` names its namespace where more than one has a cluster of that name.
 - Any HTTP client can do the same: send `Authorization: PVEAPIToken=<user>@<realm>!<name>=<secret>` to the interface's `/api/clusters`.
 

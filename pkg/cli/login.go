@@ -23,8 +23,9 @@ import (
 const (
 	// interfaceTimeout bounds each request to the interface.
 	interfaceTimeout = 2 * time.Minute
-	// maxInterfaceAnswer bounds what is read of one answer.
-	maxInterfaceAnswer = 4 << 20
+	// maxInterfaceAnswer bounds what is read of one answer. An export the interface takes back is
+	// as large.
+	maxInterfaceAnswer = maxExportFile
 	// loginFileEnv names the file the login is kept in, where the user's config folder is not the place.
 	loginFileEnv = "KUBEHENGE_LOGIN_FILE"
 	loginDirMode = 0o700
@@ -35,10 +36,13 @@ const (
 )
 
 // login is what `kubehenge login` keeps: where the interface is and how to reach it as one user. A
-// password sign-in keeps the session it made, a token is kept as it is.
+// password sign-in keeps the session it made, a token is kept as it is. CAFile, where CA was read
+// from, is read again on every run, so that a certificate the appliance renews in place is
+// trusted. CA stands in while the file is gone.
 type login struct {
 	URL    string `json:"url"`
 	CA     string `json:"ca,omitempty"`
+	CAFile string `json:"caFile,omitempty"`
 	Token  string `json:"token,omitempty"`
 	Cookie string `json:"cookie,omitempty"`
 	Value  string `json:"value,omitempty"`
@@ -155,10 +159,19 @@ func newInterfaceClient(l *login) (*interfaceClient, error) {
 		return nil, errors.New("http.DefaultTransport has been replaced by one that cannot be cloned")
 	}
 	transport := defaults.Clone()
+	if l.CAFile != "" {
+		if raw, err := os.ReadFile(l.CAFile); err == nil { //nolint:gosec // the file the user named at login
+			l.CA = string(raw)
+		}
+	}
 	if l.CA != "" {
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM([]byte(l.CA)) {
-			return nil, errors.New("the login's CA holds no certificate: run kubehenge login <url> again")
+			name := l.CAFile
+			if name == "" {
+				name = "the login's CA"
+			}
+			return nil, fmt.Errorf("%s holds no PEM certificate", name)
 		}
 		transport.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12, ServerName: servedName(l.CA)}
 	}
@@ -205,12 +218,16 @@ func openAppliance(ctx context.Context) (*interfaceClient, error) {
 	return c, nil
 }
 
+// errOtherCertificate refuses an interface that serves a certificate other than the expired one
+// the login trusts.
+var errOtherCertificate = errors.New("the interface serves a certificate other than the login's expired one")
+
 // pinExpired trusts the login's CA after it has expired, as the appliance's own certificate given
 // to login --ca does one day, by verifying it as of its first valid moment. Verifying it against the
 // clock would lock the appliance's shell out of login and the appliance commands, recovery
 // included, and the interface warns about the expiry itself. The cluster commands keep checking the
-// clock. Only that certificate is trusted then, not the rest of the CA file, which a clock turned
-// back might take.
+// clock. Only the very certificate is trusted then. An expired CA vouches for nothing it signed,
+// which a clock turned back would otherwise take.
 func (c *interfaceClient) pinExpired() {
 	leaf := firstCertificate(c.login.CA)
 	transport, ok := c.http.Transport.(*http.Transport)
@@ -221,6 +238,20 @@ func (c *interfaceClient) pinExpired() {
 	pinned.AddCert(leaf)
 	transport.TLSClientConfig.RootCAs = pinned
 	transport.TLSClientConfig.Time = func() time.Time { return leaf.NotBefore }
+	transport.TLSClientConfig.VerifyConnection = func(cs tls.ConnectionState) error {
+		if len(cs.PeerCertificates) == 0 || !bytes.Equal(cs.PeerCertificates[0].Raw, leaf.Raw) {
+			return errOtherCertificate
+		}
+		return nil
+	}
+}
+
+// caPath is the --ca a new login takes: the file the login was made with, where it names one.
+func caPath(file string) string {
+	if file == "" {
+		return "<path>"
+	}
+	return file
 }
 
 // versionHeader carries the interface's version, which it tells only a request whose session or
@@ -255,6 +286,9 @@ func (c *interfaceClient) open(ctx context.Context, method, path string, body an
 		req.Header.Set(csrfHeader, c.login.CSRF)
 	}
 	res, err := c.http.Do(req)
+	if _, refused := errors.AsType[*tls.CertificateVerificationError](err); refused || errors.Is(err, errOtherCertificate) {
+		return nil, fmt.Errorf("reaching the interface: %w: run kubehenge login %s --ca %s", err, c.login.URL, caPath(c.login.CAFile))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("reaching the interface: %w", err)
 	}
@@ -287,9 +321,12 @@ func (c *interfaceClient) call(ctx context.Context, method, path string, body, o
 		return nil, err
 	}
 	defer func() { _ = res.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(res.Body, maxInterfaceAnswer))
+	raw, err := io.ReadAll(io.LimitReader(res.Body, maxInterfaceAnswer+1))
 	if err != nil {
 		return nil, fmt.Errorf("reading the interface's answer: %w", err)
+	}
+	if len(raw) > maxInterfaceAnswer {
+		return nil, fmt.Errorf("the interface's answer is over %d MiB, the most a command reads", maxInterfaceAnswer>>20)
 	}
 	if out != nil && len(raw) > 0 {
 		if err := json.Unmarshal(raw, out); err != nil {
@@ -312,7 +349,8 @@ KUBEHENGE_PASSWORD, and --totp for an account with a second factor. The login is
 makes, which the interface ends after its session time. Give --token-file, or set
 KUBEHENGE_PROXMOX_TOKEN, to a Proxmox VE API token (user@realm!name=secret) instead, which lasts
 as long as the token does. --ca names the PEM file with the CA of the interface's certificate, else
-the system trust store is used.
+the system trust store is used. Every command reads that file again, so a certificate renewed in
+place keeps working.
 
 The login is kept in the config folder's kubehenge/login.json, readable by you alone. Set
 ` + loginFileEnv + ` to keep it elsewhere.`,
@@ -324,6 +362,9 @@ The login is kept in the config folder's kubehenge/login.json, readable by you a
 			if caFile != "" {
 				pem, err := os.ReadFile(caFile) //nolint:gosec // the file the user named
 				if err != nil {
+					return fmt.Errorf("--ca: %w", err)
+				}
+				if l.CAFile, err = filepath.Abs(caFile); err != nil {
 					return fmt.Errorf("--ca: %w", err)
 				}
 				l.CA = string(pem)
