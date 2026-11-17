@@ -296,15 +296,15 @@ func TestApplianceRefusalsAreTheInterfaces(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"user@pve", []string{"etcd-backups"}, "user@pve needs Sys.Modify on / (403)"},
-		{"user@pve", []string{"upgrades"}, "user@pve needs Sys.Modify on / (403)"},
-		{"admin@pve", []string{"etcd-backups", "restore", "20270301T120000Z-v1.37.1.db.age", "--passphrase-file", writeTemp(t, "wrong")}, "wrong passphrase (403)"},
+		{"user@pve", []string{"etcd-backups"}, "user@pve needs Sys.Modify on /"},
+		{"user@pve", []string{"upgrades"}, "user@pve needs Sys.Modify on /"},
+		{"admin@pve", []string{"etcd-backups", "restore", "20270301T120000Z-v1.37.1.db.age", "--passphrase-file", writeTemp(t, "wrong")}, "wrong passphrase"},
 	} {
 		if _, err := f.run(f.args(c.user, c.args...)...); err == nil || err.Error() != c.want {
 			t.Errorf("%v: %v, want %q", c.args[0], err, c.want)
 		}
 	}
-	if err := f.login("admin@pve", "not it"); err == nil || err.Error() != "sign-in failed: check the user name, password and realm (401)" {
+	if err := f.login("admin@pve", "not it"); err == nil || err.Error() != "sign-in failed: check the user name, password and realm" {
 		t.Errorf("a wrong password: %v", err)
 	}
 	if _, err := newFakeInterface(t).run("appliance", "etcd-backups"); err == nil || err.Error() != notLoggedIn {
@@ -328,7 +328,7 @@ func TestApplianceReadyForReboot(t *testing.T) {
 	if !errors.Is(err, errNotReadyForReboot) || !strings.Contains(err.Error(), "management: etcd member kubehenge-cp-1 on pve2 is not healthy") {
 		t.Errorf("a member down: %v", err)
 	}
-	if _, err = f.run(f.args("user@pve", "ready-for-reboot")...); err == nil || err.Error() != "user@pve needs Sys.Modify on / (403)" {
+	if _, err = f.run(f.args("user@pve", "ready-for-reboot")...); err == nil || err.Error() != "user@pve needs Sys.Modify on /" {
 		t.Errorf("a user without privileges: %v", err)
 	}
 }
@@ -423,7 +423,7 @@ func TestApplianceTakeOver(t *testing.T) {
 	if _, err := f.run(f.args("admin@pve", "take-over", "--passphrase-file", writeTemp(t, "right"))...); err == nil || !strings.Contains(err.Error(), "Give --overwrite") {
 		t.Errorf("without --overwrite: %v", err)
 	}
-	if _, err := f.run(f.args("admin@pve", "take-over", "--overwrite", "--passphrase-file", writeTemp(t, "wrong"))...); err == nil || err.Error() != "wrong passphrase (403)" {
+	if _, err := f.run(f.args("admin@pve", "take-over", "--overwrite", "--passphrase-file", writeTemp(t, "wrong"))...); err == nil || err.Error() != "wrong passphrase" {
 		t.Errorf("wrong passphrase: %v", err)
 	}
 	out, err := f.run(f.args("admin@pve", "take-over", "--overwrite", "--passphrase-file", writeTemp(t, "right"))...)
@@ -450,7 +450,7 @@ func TestApplianceNotifications(t *testing.T) {
 	if err == nil || err.Error() != "Email did not take the test" || !strings.Contains(out, "Webhook  sent 2027-03-01T12:05:00Z: Kubehenge test") {
 		t.Errorf("test: %v\n%s", err, out)
 	}
-	if _, err := f.run(f.args("user@pve", "notifications", "test")...); err == nil || err.Error() != "user@pve needs Sys.Modify on / (403)" {
+	if _, err := f.run(f.args("user@pve", "notifications", "test")...); err == nil || err.Error() != "user@pve needs Sys.Modify on /" {
 		t.Errorf("test as user@pve: %v", err)
 	}
 }

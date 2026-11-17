@@ -55,8 +55,11 @@ func newApplianceCommand() *cobra.Command {
 		Short: "Look after the appliance from its shell, as its Administration pages do",
 		Long: `Look after the appliance from its shell, as its Administration pages do.
 
-Run it in the appliance. Every command except health reaches the interface as the user of
-"kubehenge login". The user's privileges and the interface's checks apply as on its pages.`,
+Run it in the appliance. Every command except health reaches the interface as the user
+"kubehenge login" signed in. The user's privileges and the interface's checks apply as on its pages.
+
+Sign in first, in the appliance with
+"kubehenge login https://127.0.0.1 --ca /etc/kubehenge/tls.crt --user root@pam --password-file <file>".`,
 	}
 	cmd.AddCommand(o.healthCommand(), o.upgradesCommand(), o.upgradeCommand(), o.etcdBackupsCommand(), o.notificationsCommand(),
 		o.activityCommand(), o.takeOverCommand(), o.readyForRebootCommand(), o.exportCommand(), o.importCommand(),

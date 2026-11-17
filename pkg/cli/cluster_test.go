@@ -446,11 +446,11 @@ func TestClusterCommandsSayWhatWentWrong(t *testing.T) {
 		args  []string
 		want  string
 	}{
-		{"dev@pve!ci=guess", []string{"list"}, "the login has ended: run kubehenge login <url> again"},
-		{"", []string{"list"}, "not logged in: run kubehenge login <url>"},
+		{"dev@pve!ci=guess", []string{"list"}, "the login has ended: run kubehenge login " + srv.URL + " again"},
+		{"", []string{"list"}, "not signed in: run kubehenge login <url>"},
 		{"dev@pve!ci=secret", []string{"get", "gone"}, "no cluster gone"},
 		{"dev@pve!ci=secret", []string{"get", "twin"}, "clusters named twin are in a, b: give --namespace"},
-		{"dev@pve!ci=secret", []string{"scale", "twin", "-n", "b", "--workers", "md-0=1"}, "you need VM.Allocate on pool b (403)"},
+		{"dev@pve!ci=secret", []string{"scale", "twin", "-n", "b", "--workers", "md-0=1"}, "you need VM.Allocate on pool b"},
 		{"dev@pve!ci=secret", []string{"scale", "web", "--workers", "md-0"}, `--workers "md-0": give POOL=N`},
 		{"dev@pve!ci=secret", []string{"scale", "web"}, "give --control-planes, --workers or both"},
 		{"dev@pve!ci=secret", []string{"timeouts", "web"}, "give --control-planes, --pool or both"},

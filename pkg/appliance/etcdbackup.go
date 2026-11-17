@@ -779,7 +779,7 @@ func (a *Appliance) RestoreEtcd(ctx context.Context, name, passphrase string, ti
 		if err := a.Talos.Restore(ctx, acc.admin, acc.nodes, open, j.Add); err != nil {
 			return fmt.Errorf("restoring etcd: %w", err)
 		}
-		j.Add("etcd runs, restored, on every control-plane node that answers")
+		j.Add("etcd is restored and runs on every control-plane node that answered")
 		return nil
 	})
 }

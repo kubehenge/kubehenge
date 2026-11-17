@@ -25,7 +25,7 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
-// clusterOptions reach Kubehenge's interface as the user of "kubehenge login".
+// clusterOptions reach Kubehenge's interface as the user "kubehenge login" signed in.
 type clusterOptions struct {
 	namespace, output string
 }
@@ -37,8 +37,8 @@ func newClusterCommand() *cobra.Command {
 		Short: "List, create, scale, upgrade and delete clusters through Kubehenge's interface",
 		Long: `List, create, scale, upgrade and delete clusters through Kubehenge's interface.
 
-Every command calls the interface as the user of "kubehenge login". That user's privileges on each
-cluster's pool decide what it may do, as they do for a user signed in to the interface.`,
+Every command calls the interface as the user "kubehenge login" signed in. That user's privileges on
+each cluster's pool decide what it may do, as they do for a user signed in to the interface.`,
 	}
 
 	list := &cobra.Command{

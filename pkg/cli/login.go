@@ -32,7 +32,7 @@ const (
 	heldTries    = 100
 	heldPause    = 10 * time.Millisecond
 	csrfHeader   = "X-Kubehenge-Csrf"
-	notLoggedIn  = "not logged in: run kubehenge login <url>"
+	notLoggedIn  = "not signed in: run kubehenge login <url>"
 )
 
 // login is what `kubehenge login` keeps: where the interface is and how to reach it as one user. A
@@ -142,6 +142,9 @@ func whileHeld(do func() error) error {
 type interfaceClient struct {
 	login *login
 	http  *http.Client
+	// signingIn is set while `kubehenge login` makes the login, where a refused certificate is fixed
+	// by the --ca it is given and not by repeating the command.
+	signingIn bool
 }
 
 // openInterface is a client for the login on file.
@@ -287,6 +290,9 @@ func (c *interfaceClient) open(ctx context.Context, method, path string, body an
 	}
 	res, err := c.http.Do(req)
 	if _, refused := errors.AsType[*tls.CertificateVerificationError](err); refused || errors.Is(err, errOtherCertificate) {
+		if c.signingIn {
+			return nil, fmt.Errorf("reaching the interface: %w: give --ca the CA of the interface's certificate", err)
+		}
 		return nil, fmt.Errorf("reaching the interface: %w: run kubehenge login %s --ca %s", err, c.login.URL, caPath(c.login.CAFile))
 	}
 	if err != nil {
@@ -306,10 +312,10 @@ func (c *interfaceClient) open(ctx context.Context, method, path string, body an
 	// A 401 without the version refused the login itself. One with it refused something else, such
 	// as nodes whose clocks disagree, and its reason says what. So does a sign-in step's refusal.
 	if res.StatusCode == http.StatusUnauthorized && res.Header.Get(versionHeader) == "" && !strings.HasPrefix(path, "/api/session") {
-		return nil, errors.New("the login has ended: run kubehenge login <url> again")
+		return nil, fmt.Errorf("the login has ended: run kubehenge login %s again", c.login.URL)
 	}
 	if json.Unmarshal(answer, &e) == nil && e.Error != "" {
-		return nil, fmt.Errorf("%s (%d)", e.Error, res.StatusCode)
+		return nil, errors.New(e.Error)
 	}
 	return nil, fmt.Errorf("the interface answered %s", res.Status)
 }
@@ -340,25 +346,24 @@ func newLoginCommand() *cobra.Command {
 	var caFile, user, passwordFile, tokenFile, totp string
 	cmd := &cobra.Command{
 		Use:   "login <url>",
-		Short: "Sign in to Kubehenge's interface for every command",
+		Short: "Sign in to Kubehenge's interface for the appliance and cluster commands",
 		Long: `Sign in to Kubehenge's interface once. The appliance and cluster commands then use the login
 until it ends or kubehenge logout removes it.
 
 Give --user to sign in as a Proxmox VE user, with the password from --password-file or
-KUBEHENGE_PASSWORD, and --totp for an account with a second factor. The login is the session that
-makes, which the interface ends after its session time. Give --token-file, or set
-KUBEHENGE_PROXMOX_TOKEN, to a Proxmox VE API token (user@realm!name=secret) instead, which lasts
-as long as the token does. --ca names the PEM file with the CA of the interface's certificate, else
-the system trust store is used. Every command reads that file again, so a certificate renewed in
-place keeps working.
+KUBEHENGE_PASSWORD, and --totp for an account with a second factor. That login ends after the
+interface's session time, eight hours by default, and when the interface restarts.
 
-The login is kept in the config folder's kubehenge/login.json, readable by you alone. Set
-` + loginFileEnv + ` to keep it elsewhere.`,
+Give --token-file or set KUBEHENGE_PROXMOX_TOKEN to sign in with a Proxmox VE API token
+(user@realm!name=secret) instead. That login lasts as long as the token.
+
+The login is kept in kubehenge/login.json in your config folder (~/.config on Linux), readable by
+you alone. It holds the session or the token. Set ` + loginFileEnv + ` to keep it elsewhere.`,
 		Example: `  kubehenge login https://kubehenge.example.org --user root@pam --password-file ~/password
   kubehenge login https://kubehenge.example.org --token-file ~/token`,
 		Args: argsSay(cobra.ExactArgs(1), "give the interface's address"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			l := &login{URL: strings.TrimSuffix(args[0], "/")}
+			l := &login{URL: interfaceURL(args[0])}
 			if caFile != "" {
 				pem, err := os.ReadFile(caFile) //nolint:gosec // the file the user named
 				if err != nil {
@@ -375,7 +380,7 @@ The login is kept in the config folder's kubehenge/login.json, readable by you a
 			if err := l.save(cmd.Context()); err != nil {
 				return err
 			}
-			return say(cmd, "Logged in to "+l.URL)
+			return say(cmd, "Signed in to "+l.URL)
 		},
 	}
 	f := cmd.Flags()
@@ -387,16 +392,30 @@ The login is kept in the config folder's kubehenge/login.json, readable by you a
 	return cmd
 }
 
+// interfaceURL is the address a user typed, as one with a scheme. An address without one is taken
+// as https, which the interface serves, so that a bare host name works.
+func interfaceURL(typed string) string {
+	typed = strings.TrimSuffix(typed, "/")
+	if !strings.Contains(typed, "://") {
+		return "https://" + typed
+	}
+	return typed
+}
+
 // signInTo fills in how l reaches the interface, by user and password or by token, and checks it.
 func signInTo(ctx context.Context, l *login, user, passwordFile, tokenFile, totp string) error {
+	if user != "" && tokenFile != "" {
+		return errors.New("give --user or --token-file, not both")
+	}
 	// A flag beats the environment, so --user signs in by password with the token variable set.
-	if user != "" && tokenFile != "" || user == "" && tokenFile == "" && os.Getenv("KUBEHENGE_PROXMOX_TOKEN") == "" {
+	if user == "" && tokenFile == "" && os.Getenv("KUBEHENGE_PROXMOX_TOKEN") == "" {
 		return errors.New("give --user, or a token in --token-file or KUBEHENGE_PROXMOX_TOKEN")
 	}
 	c, err := newInterfaceClient(l)
 	if err != nil {
 		return err
 	}
+	c.signingIn = true
 	c.pinExpired()
 	if user == "" {
 		if l.Token, err = secretFrom(tokenFile, "KUBEHENGE_PROXMOX_TOKEN"); err != nil {
@@ -463,10 +482,13 @@ func newLogoutCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			switch err := os.Remove(path); {
+			case errors.Is(err, fs.ErrNotExist):
+				return say(cmd, "Not signed in")
+			case err != nil:
 				return fmt.Errorf("removing the login: %w", err)
 			}
-			return say(cmd, "Logged out")
+			return say(cmd, "Signed out")
 		},
 	}
 }

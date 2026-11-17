@@ -107,7 +107,7 @@ func TestAnEndedLoginSaysToLogInAgain(t *testing.T) {
 	if err := os.WriteFile(path, []byte(strings.Replace(string(raw), `"value":"session"`, `"value":"expired"`, 1)), 0o600); err != nil { //nolint:gosec // the test's own login file
 		t.Fatal(err)
 	}
-	if _, err := f.run("cluster", "list"); err == nil || !strings.Contains(err.Error(), "run kubehenge login <url> again") {
+	if _, err := f.run("cluster", "list"); err == nil || !strings.Contains(err.Error(), "run kubehenge login "+f.srv.URL+" again") {
 		t.Errorf("an ended session: %v", err)
 	}
 }
@@ -131,7 +131,7 @@ func TestLoginKeepsAToken(t *testing.T) {
 	if _, err := f.run("login", f.srv.URL, "--ca", f.certFile()); err == nil {
 		t.Error("a login with neither a user nor a token")
 	}
-	if out, err := f.run("login", f.srv.URL, "--ca", f.certFile(), "--token-file", writeTemp(t, "dev@pve!ci=secret")); err != nil || !strings.Contains(out, "Logged in to") {
+	if out, err := f.run("login", f.srv.URL, "--ca", f.certFile(), "--token-file", writeTemp(t, "dev@pve!ci=secret")); err != nil || !strings.Contains(out, "Signed in to") {
 		t.Fatalf("login: %v\n%s", err, out)
 	}
 	if out, err := f.run("cluster", "list", "-o", "json"); err != nil || !strings.Contains(out, `"clusters"`) {
@@ -139,6 +139,50 @@ func TestLoginKeepsAToken(t *testing.T) {
 	}
 	if _, err := f.run("login", f.srv.URL, "--ca", f.certFile(), "--token-file", writeTemp(t, "dev@pve!ci=guess")); err == nil {
 		t.Error("a refused token was kept")
+	}
+}
+
+// An address typed without its scheme is taken as https, so that a bare host name works.
+func TestLoginTakesABareHostAsHTTPS(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	f.token = "dev@pve!ci=secret"
+	bare := strings.TrimPrefix(f.srv.URL, "https://")
+	out, err := f.run("login", bare, "--ca", f.certFile(), "--token-file", writeTemp(t, "dev@pve!ci=secret"))
+	if err != nil || !strings.Contains(out, "Signed in to "+f.srv.URL) {
+		t.Fatalf("login with %q: %v\n%s", bare, err, out)
+	}
+	if out, err := f.run("cluster", "list", "-o", "json"); err != nil || !strings.Contains(out, `"clusters"`) {
+		t.Errorf("cluster list: %v\n%s", err, out)
+	}
+}
+
+// A login given both a user and a token names the rule, and a refused certificate names the flag
+// that fixes it.
+func TestLoginRefusalsSayWhatToGive(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	_, err := f.run("login", f.srv.URL, "--ca", f.certFile(), "--user", "admin@pve", "--token-file", writeTemp(t, "dev@pve!ci=secret"))
+	if err == nil || err.Error() != "give --user or --token-file, not both" {
+		t.Errorf("a user and a token: %v", err)
+	}
+	_, err = f.run("login", f.srv.URL, "--token-file", writeTemp(t, "dev@pve!ci=secret"))
+	if err == nil || !strings.HasSuffix(err.Error(), ": give --ca the CA of the interface's certificate") {
+		t.Errorf("an unknown certificate: %v", err)
+	}
+}
+
+// Logging out twice says the second time that there was no login to end.
+func TestLogoutWithoutALoginSaysSo(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	if err := f.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Signed out", "Not signed in"} {
+		if out, err := f.run("logout"); err != nil || strings.TrimSpace(out) != want {
+			t.Errorf("logout: %v, %q, want %q", err, out, want)
+		}
 	}
 }
 
@@ -220,8 +264,8 @@ func TestOnlyARefusedLoginSaysToLogInAgain(t *testing.T) {
 	t.Cleanup(srv.Close)
 	ca := writeTemp(t, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})))
 	for want, by := range map[string][]string{
-		clocks + " (401)": {"--user", "admin@pve", "--password-file", writeTemp(t, "pw")},
-		"the login has ended: run kubehenge login <url> again": {"--token-file", writeTemp(t, "dev@pve!ci=revoked")},
+		clocks: {"--user", "admin@pve", "--password-file", writeTemp(t, "pw")},
+		"the login has ended: run kubehenge login " + srv.URL + " again": {"--token-file", writeTemp(t, "dev@pve!ci=revoked")},
 	} {
 		file := filepath.Join(t.TempDir(), "login.json")
 		if out, err := runIn(t, file, append([]string{"login", srv.URL, "--ca", ca}, by...)...); err != nil {
@@ -351,7 +395,7 @@ func TestAnExpiredCAVouchesForNoOtherCertificate(t *testing.T) {
 	srv := serving(t, newFakeInterface(t), &other)
 	caFile := writeTemp(t, string(pemOf(&ca)))
 	_, err := runIn(t, filepath.Join(t.TempDir(), "login.json"), "login", srv.URL, "--ca", caFile, "--user", "admin@pve", "--password-file", writeTemp(t, fakePassword))
-	if err == nil || !strings.Contains(err.Error(), errOtherCertificate.Error()+": run kubehenge login "+srv.URL+" --ca "+caFile) {
+	if err == nil || !strings.Contains(err.Error(), errOtherCertificate.Error()+": give --ca the CA of the interface's certificate") {
 		t.Errorf("a login through another certificate the expired CA signed: %v", err)
 	}
 }
