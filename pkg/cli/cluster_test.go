@@ -446,7 +446,7 @@ func TestClusterCommandsSayWhatWentWrong(t *testing.T) {
 		args  []string
 		want  string
 	}{
-		{"dev@pve!ci=guess", []string{"list"}, "Proxmox VE refused the API token (401)"},
+		{"dev@pve!ci=guess", []string{"list"}, "the login has ended: run kubehenge login <url> again"},
 		{"", []string{"list"}, "not logged in: run kubehenge login <url>"},
 		{"dev@pve!ci=secret", []string{"get", "gone"}, "no cluster gone"},
 		{"dev@pve!ci=secret", []string{"get", "twin"}, "clusters named twin are in a, b: give --namespace"},
