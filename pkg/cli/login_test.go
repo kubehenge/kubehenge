@@ -186,6 +186,50 @@ func TestASecondFactorLoginKeepsTheSessionTheCodeStarts(t *testing.T) {
 	}
 }
 
+// Only a refused session or token says to log in again. A wrong code, or a refusal the interface
+// gives a signed-in user, shows the interface's reason, which logging in again would not change.
+func TestOnlyARefusedLoginSaysToLogInAgain(t *testing.T) {
+	t.Parallel()
+	const clocks = "Proxmox VE nodes disagree about the time. Compare timedatectl on each node and read pvecm status."
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/session", func(w http.ResponseWriter, _ *http.Request) {
+		answer(w, http.StatusOK, `{}`)
+	})
+	mux.HandleFunc("POST /api/session", func(w http.ResponseWriter, _ *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: "__Host-kubehenge-session", Value: "s", Path: "/", Secure: true})
+		answer(w, http.StatusOK, `{"csrf":"c"}`)
+	})
+	mux.HandleFunc("GET /api/clusters", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := r.Cookie("__Host-kubehenge-session"); err == nil {
+			w.Header().Set("X-Kubehenge-Version", "0.1.0")
+			answer(w, http.StatusUnauthorized, `{"error":"`+clocks+`"}`)
+			return
+		}
+		answer(w, http.StatusUnauthorized, `{"error":"Proxmox VE refused the API token"}`)
+	})
+	srv := httptest.NewTLSServer(mux)
+	t.Cleanup(srv.Close)
+	ca := writeTemp(t, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})))
+	for want, by := range map[string][]string{
+		clocks + " (401)": {"--user", "admin@pve", "--password-file", writeTemp(t, "pw")},
+		"the login has ended: run kubehenge login <url> again": {"--token-file", writeTemp(t, "dev@pve!ci=revoked")},
+	} {
+		file := filepath.Join(t.TempDir(), "login.json")
+		if out, err := runIn(t, file, append([]string{"login", srv.URL, "--ca", ca}, by...)...); err != nil {
+			t.Fatalf("login: %v\n%s", err, out)
+		}
+		if _, err := runIn(t, file, "cluster", "list"); err == nil || err.Error() != want {
+			t.Errorf("%v: %v, want %q", by[0], err, want)
+		}
+	}
+	totp := secondFactorInterface(t)
+	ca = writeTemp(t, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: totp.Certificate().Raw})))
+	_, err := runIn(t, filepath.Join(t.TempDir(), "login.json"), "login", totp.URL, "--ca", ca, "--user", "otp@pve", "--password-file", writeTemp(t, "pw"), "--totp", "000000")
+	if err == nil || !strings.HasPrefix(err.Error(), "Wrong code") {
+		t.Errorf("a wrong code: %v", err)
+	}
+}
+
 // --user signs in by password although the token variable is set, as a flag beats the environment.
 func TestUserBeatsTheTokenVariable(t *testing.T) {
 	f := newFakeInterface(t)

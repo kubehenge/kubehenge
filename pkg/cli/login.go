@@ -184,6 +184,10 @@ func servedName(pemData string) string {
 	return ""
 }
 
+// versionHeader carries the interface's version, which it tells only a request whose session or
+// token it took.
+const versionHeader = "X-Kubehenge-Version"
+
 // open sends a request and returns the answer, its body unread, once it says the request went
 // through. The caller closes the body.
 func (c *interfaceClient) open(ctx context.Context, method, path string, body any) (*http.Response, error) {
@@ -226,7 +230,9 @@ func (c *interfaceClient) open(ctx context.Context, method, path string, body an
 	var e struct {
 		Error string `json:"error"`
 	}
-	if res.StatusCode == http.StatusUnauthorized && c.login.Cookie != "" {
+	// A 401 without the version refused the login itself. One with it refused something else, such
+	// as nodes whose clocks disagree, and its reason says what. So does a sign-in step's refusal.
+	if res.StatusCode == http.StatusUnauthorized && res.Header.Get(versionHeader) == "" && !strings.HasPrefix(path, "/api/session") {
 		return nil, errors.New("the login has ended: run kubehenge login <url> again")
 	}
 	if json.Unmarshal(answer, &e) == nil && e.Error != "" {
