@@ -2,6 +2,8 @@ package provisioner
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -61,5 +63,144 @@ func TestManagementTalosRestore(t *testing.T) {
 	f.down["10.0.0.21"], f.down["10.0.0.22"] = true, true
 	if err := m.Restore(context.Background(), []byte("talosconfig of web"), []string{"10.0.0.21", "10.0.0.22", "10.0.0.23"}, open, func(string) {}); err == nil {
 		t.Error("restored with no node answering")
+	}
+}
+
+// restoreManagement restores the management cluster of nodes 10.0.0.21 and 10.0.0.22 through f, a
+// step timing out after stepTimeout, and returns its log and error.
+func restoreManagement(f *fakeTalos, stepTimeout time.Duration) ([]string, error) {
+	m := &ManagementTalos{Dial: f.dial, Poll: time.Millisecond, StepTimeout: stepTimeout}
+	var log []string
+	open := func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader("etcd database")), nil }
+	err := m.Restore(context.Background(), []byte("talosconfig of web"), []string{"10.0.0.21", "10.0.0.22"}, open,
+		func(line string) { log = append(log, line) })
+	return log, err
+}
+
+// Talos leaving the management cluster's etcd Failed after the bootstrap gets the first node the
+// snapshot again and bootstraps it once more.
+func TestManagementTalosRestoreStartsAFailedEtcdAgain(t *testing.T) {
+	t.Parallel()
+	f := &fakeTalos{starting: func(bootstraps int) (string, bool) {
+		if bootstraps < 2 {
+			return talosEtcdFailed, false
+		}
+		return talosEtcdRunning, true
+	}}
+	log, err := restoreManagement(f, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"10.0.0.21 wipe", "10.0.0.22 wipe", "10.0.0.21 upload", "10.0.0.21 bootstrap", "10.0.0.21 upload", "10.0.0.21 bootstrap"}
+	if got := f.restoreCalls(); !slices.Equal(got, want) {
+		t.Errorf("calls %v\nwant %v", got, want)
+	}
+	if string(f.uploaded["10.0.0.21"]) != "etcd database" {
+		t.Errorf("uploaded %q", f.uploaded["10.0.0.21"])
+	}
+	if !slices.Contains(log, "Starting etcd again on 10.0.0.21 after Talos left it Failed") {
+		t.Errorf("log %q", log)
+	}
+}
+
+// An etcd Talos left Failed before the upload, as when its first image pull after the wipe failed,
+// takes the snapshot and the bootstrap as one waiting in Preparing does.
+func TestManagementTalosRestoreUploadsToAFailedEtcd(t *testing.T) {
+	t.Parallel()
+	f := &fakeTalos{pullFailed: map[string]bool{"10.0.0.21": true}}
+	if _, err := restoreManagement(f, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"10.0.0.21 wipe", "10.0.0.22 wipe", "10.0.0.21 upload", "10.0.0.21 bootstrap"}
+	if got := f.restoreCalls(); !slices.Equal(got, want) {
+		t.Errorf("calls %v\nwant %v", got, want)
+	}
+}
+
+// The management cluster's restore waits for each other node to join, and reboots one whose etcd
+// Talos left Failed rather than bootstrapping it.
+func TestManagementTalosRestoreRebootsAJoinerLeftFailed(t *testing.T) {
+	t.Parallel()
+	f := &fakeTalos{pullFailed: map[string]bool{"10.0.0.22": true}}
+	log, err := restoreManagement(f, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(f.rebooted, []string{"10.0.0.22"}) || slices.Contains(f.calls, "10.0.0.22 bootstrap") {
+		t.Errorf("rebooted %v, calls %v", f.rebooted, f.calls)
+	}
+	if !slices.Contains(log, "Rebooting 10.0.0.22 after Talos left its etcd Failed") {
+		t.Errorf("log %q", log)
+	}
+}
+
+// An etcd that stays Failed is bootstrapped again at most once a poll, until the step's time is
+// up. The error then says it stayed Failed, and why as Talos says.
+func TestManagementTalosRestoreGivesUpOnAFailedEtcd(t *testing.T) {
+	t.Parallel()
+	f := &fakeTalos{starting: func(int) (string, bool) { return talosEtcdFailed, false }}
+	_, err := restoreManagement(f, 300*time.Millisecond)
+	want := fmt.Sprintf("starting etcd on 10.0.0.21 did not finish: 10.0.0.21: etcd stayed Failed after starting it again, Talos says %q", fakePullFailure)
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("error %v, want one naming %q", err, want)
+	}
+	// Every read of etcd after the first bootstrap found it Failed, and each led to one bootstrap.
+	reads, bootstraps := 0, 0
+	for _, c := range f.calls {
+		switch {
+		case c == "10.0.0.21 bootstrap":
+			bootstraps++
+		case c == "10.0.0.21 etcd" && bootstraps > 0:
+			reads++
+		}
+	}
+	if bootstraps < 3 || bootstraps-1 > reads {
+		t.Errorf("%d bootstraps for %d reads of a Failed etcd", bootstraps, reads)
+	}
+}
+
+// A re-upload a node is not ready for is tried again on the next poll. Any other failure of it
+// ends the step.
+func TestManagementTalosRestoreRetriesStartingEtcdAgain(t *testing.T) {
+	t.Parallel()
+	failedOnce := func(bootstraps int) (string, bool) {
+		if bootstraps < 2 {
+			return talosEtcdFailed, false
+		}
+		return talosEtcdRunning, true
+	}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"not ready", errTalosNotReady, ""},
+		{"refused", errors.New("permission denied"), "starting etcd: 10.0.0.21: permission denied"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := &fakeTalos{starting: failedOnce}
+			uploads := 0
+			f.fail = func(_, call string) error {
+				if call != "upload" {
+					return nil
+				}
+				uploads++
+				if uploads == 2 {
+					return tc.err
+				}
+				return nil
+			}
+			_, err := restoreManagement(f, 5*time.Second)
+			if tc.want == "" && err != nil {
+				t.Fatal(err)
+			}
+			if tc.want != "" && (err == nil || err.Error() != tc.want) {
+				t.Fatalf("error %v, want %q", err, tc.want)
+			}
+			if tc.want == "" && uploads != 3 {
+				t.Errorf("%d uploads, want the failed one tried again", uploads)
+			}
+		})
 	}
 }

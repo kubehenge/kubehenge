@@ -69,7 +69,7 @@ func TestTalosEtcdRestore(t *testing.T) {
 	}
 	st := f.status()
 	if st.Phase != RestoreSucceeded || st.Machine != "web-cp-0" || len(st.Replaced) != 0 || !st.Paused ||
-		!strings.Contains(st.Message, "other 2 control-plane nodes join it again") {
+		!strings.Contains(st.Message, "other 2 control-plane nodes joined it again") {
 		t.Errorf("status %+v", st)
 	}
 	if got := f.deleting(); len(got) != 0 {
@@ -96,6 +96,72 @@ func TestTalosEtcdRestoreReplacesANodeThatDoesNotAnswer(t *testing.T) {
 	}
 }
 
+// Each time Talos leaves etcd Failed after a bootstrap, the first node gets the snapshot again and
+// is bootstrapped once more, until etcd runs.
+func TestTalosEtcdRestoreStartsAFailedEtcdAgain(t *testing.T) {
+	t.Parallel()
+	f, talos := newTalosRestoreFixture(t, nil)
+	talos.starting = func(bootstraps int) (string, bool) {
+		if bootstraps < 3 {
+			return talosEtcdFailed, false
+		}
+		return talosEtcdRunning, true
+	}
+	f.reconcile()
+	again := []string{"10.0.0.11 upload", "10.0.0.11 bootstrap"}
+	want := slices.Concat(talosWipes, again, again, again)
+	if got := talos.restoreCalls(); !slices.Equal(got, want) {
+		t.Errorf("called %v, want %v", got, want)
+	}
+	checkBumped(t, talos.uploaded["10.0.0.11"])
+	if st := f.status(); st.Phase != RestoreSucceeded {
+		t.Errorf("status %+v", st)
+	}
+}
+
+// An etcd that is on its way up, or runs but is not healthy yet, is waited on, not bootstrapped
+// again.
+func TestTalosEtcdRestoreWaitsForAStartingEtcd(t *testing.T) {
+	t.Parallel()
+	f, talos := newTalosRestoreFixture(t, nil)
+	states := []string{talosEtcdPreparing, "Waiting", "Starting", talosEtcdRunning}
+	reads := 0
+	talos.starting = func(int) (string, bool) {
+		reads++
+		if reads <= len(states) {
+			return states[reads-1], false
+		}
+		return talosEtcdRunning, true
+	}
+	f.reconcile()
+	want := append(slices.Clone(talosWipes), "10.0.0.11 upload", "10.0.0.11 bootstrap")
+	if got := talos.restoreCalls(); !slices.Equal(got, want) {
+		t.Errorf("called %v, want %v", got, want)
+	}
+	if st := f.status(); st.Phase != RestoreSucceeded || reads <= len(states) {
+		t.Errorf("status %+v after %d reads of etcd", st, reads)
+	}
+}
+
+// A joining node whose etcd Talos left Failed is rebooted once, never bootstrapped, and the restore
+// waits until it has joined.
+func TestTalosEtcdRestoreRebootsAJoinerLeftFailed(t *testing.T) {
+	t.Parallel()
+	f, talos := newTalosRestoreFixture(t, nil)
+	talos.pullFailed = map[string]bool{"10.0.0.12": true}
+	f.reconcile()
+	want := append(slices.Clone(talosWipes), "10.0.0.11 upload", "10.0.0.11 bootstrap")
+	if got := talos.restoreCalls(); !slices.Equal(got, want) {
+		t.Errorf("called %v, want %v", got, want)
+	}
+	if !slices.Equal(talos.rebooted, []string{"10.0.0.12"}) {
+		t.Errorf("rebooted %v, want the joiner left Failed once", talos.rebooted)
+	}
+	if st := f.status(); st.Phase != RestoreSucceeded || !strings.Contains(st.Message, "other 2 control-plane nodes joined it again") {
+		t.Errorf("status %+v", st)
+	}
+}
+
 // A node that is not ready yet is asked again. Any other failure once etcd may be wiped tries the
 // whole restore once more.
 func TestTalosEtcdRestoreTriesAgain(t *testing.T) {
@@ -110,7 +176,7 @@ func TestTalosEtcdRestoreTriesAgain(t *testing.T) {
 		phase    RestorePhase
 		message  string
 	}{
-		{"a node still booting", 2, errTalosNotReady, nil, RestoreSucceeded, "join it again"},
+		{"a node still booting", 2, errTalosNotReady, nil, RestoreSucceeded, "joined it again"},
 		{"once", 1, errNotEmpty, retried, RestoreSucceeded, "The first attempt failed"},
 		{"for good", 100, errNotEmpty, nil, RestoreFailed, "may be wiped"},
 	} {

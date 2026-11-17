@@ -41,8 +41,8 @@ type TalosNode interface {
 	// WipeEtcd resets the node without leaving etcd first, wiping its EPHEMERAL partition and etcd's
 	// data with it, and reboots it. Its machine configuration stays.
 	WipeEtcd(ctx context.Context) error
-	// Etcd is the state of the node's etcd service, as Talos names it, and whether it is healthy.
-	Etcd(ctx context.Context) (string, bool, error)
+	// Etcd is the state of the node's etcd service.
+	Etcd(ctx context.Context) (TalosService, error)
 	// UploadEtcdSnapshot hands the node the snapshot BootstrapRecovered restores etcd from.
 	UploadEtcdSnapshot(ctx context.Context, snapshot io.Reader) error
 	// BootstrapRecovered starts etcd on the node as a cluster of one from the uploaded snapshot, a
@@ -62,6 +62,14 @@ type TalosEtcdNode interface {
 	EtcdDefragment(ctx context.Context) error
 	// EtcdDisarm clears the etcd alarms.
 	EtcdDisarm(ctx context.Context) error
+}
+
+// TalosService is a service on a Talos node: its state as Talos names it, whether it is healthy,
+// and the first line of its last event, which says why it Failed when it did.
+type TalosService struct {
+	State   string
+	Healthy bool
+	Event   string
 }
 
 // EtcdListed is a member of etcd's member list.
@@ -228,15 +236,21 @@ func (n *talosNode) WipeEtcd(ctx context.Context) error {
 	return nil
 }
 
-func (n *talosNode) Etcd(ctx context.Context) (string, bool, error) {
+func (n *talosNode) Etcd(ctx context.Context) (TalosService, error) {
 	services, err := n.c.ServiceInfo(ctx, "etcd")
 	if err != nil {
-		return "", false, fmt.Errorf("%s: reading etcd's state: %w", n.address, notReady(err))
+		return TalosService{}, fmt.Errorf("%s: reading etcd's state: %w", n.address, notReady(err))
 	}
-	for _, s := range services {
-		return s.Service.GetState(), s.Service.GetHealth().GetHealthy(), nil
+	if len(services) == 0 {
+		return TalosService{}, fmt.Errorf("%s: %w: etcd is not among its services", n.address, errTalosNotReady)
 	}
-	return "", false, fmt.Errorf("%s: %w: etcd is not among its services", n.address, errTalosNotReady)
+	s := services[0].Service
+	etcd := TalosService{State: s.GetState(), Healthy: s.GetHealth().GetHealthy()}
+	if events := s.GetEvents().GetEvents(); len(events) > 0 {
+		// Talos's message can span lines, such as an image pull's, while a restore's status is one.
+		etcd.Event, _, _ = strings.Cut(strings.TrimSpace(events[len(events)-1].GetMsg()), "\n")
+	}
+	return etcd, nil
 }
 
 func (n *talosNode) UploadEtcdSnapshot(ctx context.Context, snapshot io.Reader) error {
