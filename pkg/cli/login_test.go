@@ -129,6 +129,18 @@ func TestLoginKeepsAToken(t *testing.T) {
 	}
 }
 
+// --user signs in by password although the token variable is set, as a flag beats the environment.
+func TestUserBeatsTheTokenVariable(t *testing.T) {
+	f := newFakeInterface(t)
+	t.Setenv("KUBEHENGE_PROXMOX_TOKEN", "dev@pve!ci=secret")
+	if err := f.login("admin@pve", fakePassword); err != nil {
+		t.Fatalf("a password login with the token variable set: %v", err)
+	}
+	if _, err := f.run("login", f.srv.URL, "--ca", f.certFile(), "--user", "admin@pve", "--token-file", writeTemp(t, "dev@pve!ci=secret")); err == nil {
+		t.Error("a login with both a user and a token file")
+	}
+}
+
 // A command that reads the login while another command saves one reads a whole login.
 func TestALoginIsReadWholeWhileAnotherIsSaved(t *testing.T) {
 	t.Parallel()

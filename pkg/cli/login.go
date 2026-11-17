@@ -303,7 +303,8 @@ The login is kept in the config folder's kubehenge/login.json, readable by you a
 
 // signInTo fills in how l reaches the interface, by user and password or by token, and checks it.
 func signInTo(ctx context.Context, l *login, user, passwordFile, tokenFile, totp string) error {
-	if (user == "") == (tokenFile == "" && os.Getenv("KUBEHENGE_PROXMOX_TOKEN") == "") {
+	// A flag beats the environment, so --user signs in by password with the token variable set.
+	if user != "" && tokenFile != "" || user == "" && tokenFile == "" && os.Getenv("KUBEHENGE_PROXMOX_TOKEN") == "" {
 		return errors.New("give --user, or a token in --token-file or KUBEHENGE_PROXMOX_TOKEN")
 	}
 	c, err := newInterfaceClient(l)
