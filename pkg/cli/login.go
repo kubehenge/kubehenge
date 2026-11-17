@@ -26,11 +26,12 @@ const (
 	// maxInterfaceAnswer bounds what is read of one answer.
 	maxInterfaceAnswer = 4 << 20
 	// loginFileEnv names the file the login is kept in, where the user's config folder is not the place.
-	loginFileEnv  = "KUBEHENGE_LOGIN_FILE"
-	loginFileMode = 0o600
-	loginDirMode  = 0o700
-	csrfHeader    = "X-Kubehenge-Csrf"
-	notLoggedIn   = "not logged in: run kubehenge login <url>"
+	loginFileEnv = "KUBEHENGE_LOGIN_FILE"
+	loginDirMode = 0o700
+	heldTries    = 100
+	heldPause    = 10 * time.Millisecond
+	csrfHeader   = "X-Kubehenge-Csrf"
+	notLoggedIn  = "not logged in: run kubehenge login <url>"
 )
 
 // login is what `kubehenge login` keeps: where the interface is and how to reach it as one user. A
@@ -67,7 +68,12 @@ func readLogin(ctx context.Context) (*login, error) {
 	if err != nil {
 		return nil, err
 	}
-	raw, err := os.ReadFile(path) //nolint:gosec // the user's own login file
+	var raw []byte
+	err = whileHeld(func() error {
+		var readErr error
+		raw, readErr = os.ReadFile(path) //nolint:gosec // the user's own login file
+		return readErr
+	})
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, errors.New(notLoggedIn)
 	}
@@ -93,10 +99,36 @@ func (l *login) save(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("keeping the login: %w", err)
 	}
-	if err := os.WriteFile(path, raw, loginFileMode); err != nil {
+	// A command reading the login while another saves it sees the old file or the new one, never
+	// half of one. CreateTemp makes the file readable by its owner alone.
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".login-*.json")
+	if err != nil {
+		return fmt.Errorf("keeping the login: %w", err)
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	_, err = tmp.Write(raw)
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = whileHeld(func() error { return os.Rename(tmp.Name(), path) })
+	}
+	if err != nil {
 		return fmt.Errorf("keeping the login: %w", err)
 	}
 	return nil
+}
+
+// whileHeld runs do again while it fails other than for a missing file, for a second at most.
+// Windows refuses to open or replace a file while another command replaces or reads it, and lets
+// go of it a moment later. Elsewhere such a failure lasts.
+func whileHeld(do func() error) error {
+	err := do()
+	for try := 0; err != nil && !errors.Is(err, fs.ErrNotExist) && try < heldTries; try++ {
+		time.Sleep(heldPause)
+		err = do()
+	}
+	return err
 }
 
 // interfaceClient talks to Kubehenge's interface as the user of the login. Every command that

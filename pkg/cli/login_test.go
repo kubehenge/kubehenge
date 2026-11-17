@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"context"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -124,5 +126,42 @@ func TestLoginKeepsAToken(t *testing.T) {
 	}
 	if _, err := f.run("login", f.srv.URL, "--ca", f.certFile(), "--token-file", writeTemp(t, "dev@pve!ci=guess")); err == nil {
 		t.Error("a refused token was kept")
+	}
+}
+
+// A command that reads the login while another command saves one reads a whole login.
+func TestALoginIsReadWholeWhileAnotherIsSaved(t *testing.T) {
+	t.Parallel()
+	ctx := context.WithValue(t.Context(), loginFileKey{}, filepath.Join(t.TempDir(), "login.json"))
+	logins := []*login{
+		{URL: "https://kubehenge.example.org", Token: "dev@pve!ci=" + strings.Repeat("0123456789abcdef", 64)},
+		{URL: "https://k.example", Cookie: "c", Value: "v", CSRF: "x"},
+	}
+	if err := logins[0].save(ctx); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	var failed error
+	go func() {
+		defer close(done)
+		for range 100 {
+			if _, err := readLogin(ctx); err != nil {
+				failed = err
+				return
+			}
+		}
+	}()
+	for i := 0; ; i++ {
+		select {
+		case <-done:
+			if failed != nil {
+				t.Errorf("a read beside the saves: %v", failed)
+			}
+			return
+		default:
+		}
+		if err := logins[i%2].save(ctx); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
