@@ -1,6 +1,6 @@
 import type { Locator, Page } from "@playwright/test";
 
-import { cluster, expect, isRecord, refusal, sent, test } from "./fixture.ts";
+import { cluster, expect, isRecord, refusal, sent, test, written } from "./fixture.ts";
 
 const staged = (page: Page): Locator => page.getByRole("region", { name: "Staged changes" });
 
@@ -11,7 +11,7 @@ async function applyStaged(page: Page, problems: { allow: (entry: string) => voi
   const review = page.getByRole("dialog", { name: "Review plan" });
   const patch = sent(page, "PATCH", "/api/clusters/clusters/web");
   await review.getByRole("button", { name: "Apply" }).click();
-  const body: unknown = (await patch).postDataJSON();
+  const body = await written(patch, { generation: true });
   await expect(review.getByText(refusal)).toBeVisible();
   await expect(review.getByRole("button", { name: "Apply" })).toBeEnabled();
   await review.getByRole("button", { name: "Keep staged" }).click();
@@ -33,7 +33,7 @@ test("turns Istio on and discards the change", async ({ page, problems }) => {
 
   const plan = sent(page, "POST", "/api/clusters/clusters/web/plan");
   await istio.click();
-  expect((await plan).postDataJSON()).toEqual({ variables: { istio: { enabled: true } } });
+  expect(await written(plan)).toEqual({ variables: { istio: { enabled: true } } });
   await expect(staged(page).getByText("1 change not applied")).toBeVisible();
   await expect(staged(page).getByText("Istio: Off to On, ambient mode")).toBeVisible();
 

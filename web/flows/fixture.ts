@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 
 import { test as base, expect, type Page, type Request } from "@playwright/test";
 
-import { demoOrigin, demoTime, startDemo } from "./demo.ts";
+import { demoTime, startDemo } from "./demo.ts";
 
 export { expect } from "@playwright/test";
 
@@ -17,7 +17,6 @@ interface Problems {
 }
 
 const binary = process.env["KUBEHENGE_BIN"];
-const port = process.env["FLOWS_PORT"] ?? "18444";
 const firstErrorStatus = 400;
 
 const pathOf = (r: Request): string => new URL(r.url()).pathname;
@@ -29,11 +28,11 @@ export const test = base.extend<{ problems: Problems }, { origin: string }>({
       if (binary === undefined) {
         throw new Error("KUBEHENGE_BIN names no binary. `make ui-flows` builds one and runs the tests with it.");
       }
-      const server = await startDemo(resolve(binary), port);
+      const demo = await startDemo(resolve(binary));
       try {
-        await use(demoOrigin(port));
+        await use(demo.origin);
       } finally {
-        server.kill();
+        demo.server.kill();
       }
     },
     { scope: "worker" },
@@ -96,6 +95,23 @@ export function sent(page: Page, method: string, path: string): Promise<Request>
     const url = new URL(r.url());
     return r.method() === method && url.pathname + url.search === path;
   });
+}
+
+/**
+ * written waits for the request, checks that it carries the headers the page sends with a write
+ * (the anti-forgery token, and for a change the cluster's generation it was made against), and
+ * returns its JSON body. The demo refuses a write before it looks at either header, so only this
+ * check holds them.
+ */
+export async function written(request: Promise<Request>, { generation = false } = {}): Promise<unknown> {
+  const sentRequest = await request;
+  const headers = await sentRequest.allHeaders();
+  expect(headers["x-kubehenge-csrf"], "the anti-forgery header").toMatch(/^\S+$/u);
+  if (generation) {
+    expect(headers["x-kubehenge-generation"], "the generation header").toMatch(/^\d+$/u);
+  }
+  const body: unknown = sentRequest.postDataJSON();
+  return body;
 }
 
 export const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;

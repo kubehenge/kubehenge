@@ -1,4 +1,4 @@
-import { cluster, expect, refusal, sent, test } from "./fixture.ts";
+import { cluster, expect, refusal, sent, test, written } from "./fixture.ts";
 
 test("scales a worker pool through Add to plan and Review plan", async ({ page, problems }) => {
   problems.allow("403 PATCH /api/clusters/clusters/web");
@@ -9,7 +9,7 @@ test("scales a worker pool through Add to plan and Review plan", async ({ page, 
   await scale.getByLabel("Workers").fill("6");
   const plan = sent(page, "POST", "/api/clusters/clusters/web/plan");
   await scale.getByRole("button", { name: "Add to plan" }).click();
-  expect((await plan).postDataJSON()).toEqual({ workerPools: { "md-0": 6 } });
+  expect(await written(plan)).toEqual({ workerPools: { "md-0": 6 } });
   await expect(scale).toBeHidden();
 
   const staged = page.getByRole("region", { name: "Staged changes" });
@@ -24,7 +24,7 @@ test("scales a worker pool through Add to plan and Review plan", async ({ page, 
 
   const apply = sent(page, "PATCH", "/api/clusters/clusters/web");
   await review.getByRole("button", { name: "Apply" }).click();
-  expect((await apply).postDataJSON()).toEqual({ workerPools: { "md-0": 6 } });
+  expect(await written(apply, { generation: true })).toEqual({ workerPools: { "md-0": 6 } });
   await expect(review.getByText(refusal)).toBeVisible();
   // The plan stays staged and the dialog usable.
   await expect(review.getByRole("button", { name: "Apply" })).toBeEnabled();

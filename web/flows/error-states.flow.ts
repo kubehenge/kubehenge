@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 
-import { expect, refusal, sent, test } from "./fixture.ts";
+import { expect, refusal, sent, test, written } from "./fixture.ts";
 
 // Each state the demo can show, as its page renders it. The demo's clusters are in pkg/ui/demo-fleet.json.
 
@@ -103,7 +103,7 @@ test("staging shows a tainted worker, a skipped upgrade and a node that is not r
   // Accepting the removed APIs is a change, which the demo refuses where the page shows it.
   const accept = sent(page, "POST", "/api/clusters/clusters/staging/upgrade-checks/accept?version=v1.37.1%2Brke2r1");
   await page.getByRole("button", { name: "Upgrade anyway" }).click();
-  await accept;
+  expect(await written(accept)).toBeNull();
   await expect(page.getByText(/the demo changes nothing\. Install Kubehenge to manage clusters/iu)).toBeVisible();
   await expect(page.getByRole("button", { name: "Upgrade anyway" })).toBeEnabled();
 });
@@ -153,7 +153,7 @@ test("a change the demo refuses shows its reason and leaves the page usable", as
   await page.goto("/clusters/clusters/web/backups");
   const post = sent(page, "POST", "/api/clusters/clusters/web/backups");
   await page.getByRole("button", { name: "Back up now" }).click();
-  await post;
+  expect(await written(post)).toBeNull();
   await expect(page.getByText(refusal)).toBeVisible();
   await expect(page.getByRole("button", { name: "Back up now" })).toBeEnabled();
   await expect(page.getByText("velero-scheduled-20261013030000")).toBeVisible();

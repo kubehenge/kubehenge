@@ -11,7 +11,7 @@ import { join, resolve } from "node:path";
 
 import { type Browser, chromium } from "playwright";
 
-import { demoOrigin, demoTime, hostResolverRule, startDemo, viewport } from "./flows/demo.ts";
+import { demoTime, hostResolverRule, startDemo, viewport } from "./flows/demo.ts";
 
 interface Shot {
   file: string;
@@ -22,8 +22,6 @@ interface Shot {
   clip?: { x: number; y: number; width: number; height: number };
 }
 
-const port = process.env["SCREENSHOT_PORT"] ?? "18443";
-const origin = demoOrigin(port);
 const settle = 1500;
 const readyDeadline = 15_000;
 
@@ -53,7 +51,7 @@ if (binary === undefined || outArg === undefined) {
 const out = resolve(outArg);
 mkdirSync(out, { recursive: true });
 
-const server = await startDemo(binary, port);
+const { server, origin } = await startDemo(binary);
 
 let browser: Browser | undefined;
 try {

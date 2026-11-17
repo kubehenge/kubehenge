@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 
-import { cluster, expect, refusal, sent, test } from "./fixture.ts";
+import { cluster, expect, refusal, sent, test, written } from "./fixture.ts";
 
 // What each step shows that no other step does.
 const steps = [
@@ -10,6 +10,45 @@ const steps = [
   ["Policies", "Pod security"],
   ["Identity providers", "No identity providers"],
 ] as const;
+
+// What the wizard sends for a copy of ci named fresh: the name, the version and the 3 workers the
+// test sets or keeps, and the demo's own defaults for the rest.
+const freshCluster = {
+  name: "fresh",
+  class: "kubehenge-k3s",
+  version: "v1.36.6+k3s1",
+  controlPlaneReplicas: 1,
+  workerReplicas: 3,
+  variables: {
+    controlPlaneEndpoint: "10.20.70.61",
+    network: {
+      bridge: "vmbr0",
+      ipFamilies: ["IPv4"],
+      addresses: ["10.20.70.62-10.20.70.66"],
+      prefix: 24,
+      gateway: "10.20.70.1",
+      dnsServers: ["10.20.0.53"],
+    },
+    storage: "local-lvm",
+    controlPlaneMachine: { cores: 4, memoryMiB: 8192, diskGiB: 40 },
+    workerMachine: { cores: 4, memoryMiB: 16_384, diskGiB: 80 },
+    nodeOS: { family: "almalinux", release: "10" },
+    firewall: { enabled: false },
+    cni: "cilium",
+    headlamp: { enabled: true },
+    backups: {
+      enabled: true,
+      target: "offsite",
+      schedule: "0 2 * * *",
+      timeZone: "UTC",
+      retentionDays: 7,
+      volumes: "all",
+    },
+    etcdSnapshots: { enabled: true, target: "offsite", schedule: "0 */12 * * *", timeZone: "UTC", keep: 14 },
+    oidc: [],
+    upgrades: { mode: "patch", window: { start: "02:00", durationMinutes: 240, timeZone: "UTC" } },
+  },
+};
 
 async function startFromCI(page: Page, name: string): Promise<void> {
   await page.goto("/clusters/new");
@@ -52,14 +91,7 @@ test("creates a cluster through each step to the confirmation", async ({ page, p
   const dryRun = sent(page, "POST", "/api/clusters?dryRun=All");
   await page.getByRole("button", { name: "Next" }).click();
   await expect(stepButton(page, "Confirm")).toHaveAttribute("aria-current", "step");
-  const checked: unknown = (await dryRun).postDataJSON();
-  expect(checked).toMatchObject({
-    name: "fresh",
-    class: "kubehenge-k3s",
-    version: "v1.36.6+k3s1",
-    controlPlaneReplicas: 1,
-    workerReplicas: 3,
-  });
+  expect(await written(dryRun)).toEqual(freshCluster);
 
   const summary = page.locator(".wizard-body");
   await expect(summary.getByText("API server")).toBeVisible();
@@ -79,7 +111,7 @@ test("creates a cluster through each step to the confirmation", async ({ page, p
   // The demo refuses the creation itself, so the page stays on the confirmation and nothing is listed.
   const create = sent(page, "POST", "/api/clusters");
   await page.getByRole("button", { name: "Create", exact: true }).click();
-  expect((await create).postDataJSON()).toEqual(checked);
+  expect(await written(create)).toEqual(freshCluster);
   await expect(page.getByText(refusal)).toBeVisible();
   await expect(page.getByRole("button", { name: "Create", exact: true })).toBeEnabled();
   await expect(stepButton(page, "Confirm")).toHaveAttribute("aria-current", "step");

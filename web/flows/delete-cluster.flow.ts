@@ -1,4 +1,4 @@
-import { cluster, expect, refusal, sent, test } from "./fixture.ts";
+import { cluster, expect, refusal, sent, test, written } from "./fixture.ts";
 
 test("deletes a cluster once its name is typed", async ({ page, problems }) => {
   problems.allow("403 DELETE /api/clusters/clusters/web");
@@ -18,7 +18,7 @@ test("deletes a cluster once its name is typed", async ({ page, problems }) => {
 
   const request = sent(page, "DELETE", "/api/clusters/clusters/web");
   await confirm.click();
-  expect((await request).postDataJSON()).toEqual({ confirm: "web" });
+  expect(await written(request)).toEqual({ confirm: "web" });
   await expect(dialog.getByText(refusal)).toBeVisible();
   await expect(confirm).toBeEnabled();
 

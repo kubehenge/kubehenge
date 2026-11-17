@@ -157,10 +157,12 @@
     {
       // The flow tests run in Node. A test is one run of steps in order, some in a loop over the
       // views or the sign-ins, and reads a request it waited for as `(await request).postDataJSON()`.
-      // Playwright's `use(...)` in a fixture reads as a React hook to the hooks rule.
+      // Playwright's `use(...)` in a fixture reads as a React hook to the hooks rule. The demo's
+      // start-up wraps a socket's and a process's events in promises.
       "files": ["flows/*.ts", "playwright.config.ts"],
       "rules": {
         "import/no-nodejs-modules": "off",
+        "promise/avoid-new": "off",
         "eslint/no-await-in-loop": "off",
         "unicorn/no-await-expression-member": "off",
         "react-hooks/rules-of-hooks": "off"

@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 
-import { cluster, expect, refusal, sent, test } from "./fixture.ts";
+import { cluster, expect, refusal, sent, test, written } from "./fixture.ts";
 
 async function openUpgrade(page: Page): Promise<ReturnType<Page["getByRole"]>> {
   await page.goto("/clusters/clusters/web");
@@ -8,7 +8,7 @@ async function openUpgrade(page: Page): Promise<ReturnType<Page["getByRole"]>> {
   const plan = sent(page, "POST", "/api/clusters/clusters/web/plan");
   await page.getByRole("button", { name: "Upgrade" }).click();
   const upgrade = page.getByRole("dialog", { name: "Upgrade web" });
-  expect((await plan).postDataJSON()).toEqual({ version: "v1.37.2+rke2r1" });
+  expect(await written(plan)).toEqual({ version: "v1.37.2+rke2r1" });
   await expect(upgrade.getByLabel("Kubernetes version")).toHaveValue("v1.37.2+rke2r1");
   return upgrade;
 }
@@ -35,7 +35,7 @@ test("shows the upgrade's checks and applies the waiting add-on changes now", as
   const apply = upgrade.getByRole("button", { name: "Apply now" });
   const post = sent(page, "POST", "/api/clusters/clusters/web/addon-changes");
   await apply.click();
-  await post;
+  expect(await written(post)).toBeNull();
   await expect(upgrade.getByText(refusal)).toBeVisible();
   await expect(apply).toBeEnabled();
   await upgrade.getByRole("button", { name: "Cancel" }).click();
@@ -58,7 +58,7 @@ test("upgrades a cluster through Add to plan and Review plan", async ({ page, pr
 
   const patch = sent(page, "PATCH", "/api/clusters/clusters/web");
   await review.getByRole("button", { name: "Apply" }).click();
-  expect((await patch).postDataJSON()).toMatchObject({ version: "v1.37.2+rke2r1" });
+  expect(await written(patch, { generation: true })).toEqual({ version: "v1.37.2+rke2r1" });
   await expect(review.getByText(refusal)).toBeVisible();
   await expect(review.getByRole("button", { name: "Apply" })).toBeEnabled();
 
