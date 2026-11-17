@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kubehenge/kubehenge/pkg/backupstore"
 	"github.com/kubehenge/kubehenge/pkg/release"
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
@@ -348,8 +349,8 @@ func (u *Updater) checkSpace() error {
 	free := u.FreeSpace
 	if free == nil {
 		free = func(p string) (uint64, error) {
-			_, f, err := DiskUse(p)
-			return f, err
+			_, f, err := backupstore.DiskUse(p)
+			return f, err //nolint:wrapcheck // DiskUse names the path
 		}
 	}
 	have, err := free(filepath.Dir(u.share()))
@@ -532,7 +533,7 @@ func (sw *swap) rollBack(ctx context.Context, cause error) error {
 		}
 	}
 	if err != nil {
-		return fmt.Errorf("%w; rolling back to %s failed too: %w", cause, u.Current, err)
+		return fmt.Errorf("%w. Rolling back to %s failed too: %w", cause, u.Current, err)
 	}
 	return fmt.Errorf("%w; %w to %s", cause, ErrRolledBack, u.Current)
 }

@@ -1,13 +1,21 @@
 import type { JSX } from "react";
 
 import { api } from "./api";
-import type { ManagementHealth, RebootReadiness } from "./types";
+import { nodeAdvice } from "./Placement";
+import type { BackupSummary, ManagementHealth, RebootReadiness } from "./types";
 import { Detail, ErrorBox, Said, Skeleton, Status, filled, pollCache, pollIdle, usePoll } from "./ui";
 
 const managementCache = pollCache<ManagementHealth>();
 const managementKept = { cache: managementCache, key: "" };
 const rebootCache = pollCache<RebootReadiness>();
 const rebootKept = { cache: rebootCache, key: "" };
+
+// proxmoxShort says whether the management cluster's view of Proxmox VE is missing anything.
+function proxmoxShort(p: ManagementHealth["proxmox"]): boolean {
+  return (
+    p !== undefined && (!p.ok || filled(p.blind) || (p.tokens ?? []).length > 0 || (p.unreachable ?? []).length > 0)
+  );
+}
 
 export function healthVerdict(h: ManagementHealth): { state: "ok" | "warning" | "error"; text: string } {
   if (!h.answers) {
@@ -20,11 +28,9 @@ export function healthVerdict(h: ManagementHealth): { state: "ok" | "warning" | 
   const short =
     nodes.some((n) => !n.ready) ||
     (h.controllers ?? []).some((c) => c.ready < c.wanted) ||
-    h.proxmox?.ok === false ||
-    filled(h.proxmox?.blind) ||
-    (h.proxmox?.tokens ?? []).length > 0 ||
-    (h.proxmox?.unreachable ?? []).length > 0 ||
-    (h.etcd !== undefined && h.etcd.healthy < h.etcd.members);
+    proxmoxShort(h.proxmox) ||
+    (h.etcd !== undefined && h.etcd.healthy < h.etcd.members) ||
+    filled(h.backups?.error);
   return short ? { state: "warning", text: "Degraded" } : { state: "ok", text: "Healthy" };
 }
 
@@ -63,7 +69,7 @@ function UnreachableNodes({ nodes }: { nodes: NodeFault[] }): JSX.Element | null
         <li key={`node/${n.node}`} className="token-problem">
           <Status state="error" text="Not reachable" />
           <span>
-            {n.node}: {n.reason}
+            {n.node}: {n.reason}. {nodeAdvice(n.node, n.reason)}
           </span>
         </li>
       ))}
@@ -124,6 +130,33 @@ function UnownedVMs({ vms }: { vms: { vmid: number }[] }): JSX.Element | null {
       </p>
       <p className="muted">In Kubehenge&apos;s pools, owned by no cluster. Nothing deletes them.</p>
     </div>
+  );
+}
+
+/** SameHostWarning says that one Proxmox VE node's loss can take every backup, and what survives it. */
+export function SameHostWarning(): JSX.Element {
+  return <p className="warning">Losing one Proxmox VE node can lose every backup. Add a bucket target.</p>;
+}
+
+// BackupLine says where the management backups are and when the last ran, or why the last failed.
+export function BackupLine({ backups }: { backups: BackupSummary }): JSX.Element {
+  const last = backups.last === undefined ? "none yet" : new Date(backups.last).toLocaleString();
+  return (
+    <>
+      {filled(backups.error) ? (
+        <Status state="error" text="Failed" />
+      ) : (
+        <Status state={backups.last === undefined ? "warning" : "ok"} text={`Last ${last}`} />
+      )}{" "}
+      <span className="muted">{backups.where.join(", ")}</span>
+      {filled(backups.error) && (
+        <span className="mono">
+          {" "}
+          <Said text={backups.error} />
+        </span>
+      )}
+      {backups.sameHost === true && <SameHostWarning />}
+    </>
   );
 }
 
@@ -199,6 +232,14 @@ function AnsweringHealth({
             <dt>Proxmox VE API</dt>
             <dd>
               <Status state={h.proxmox.ok ? "ok" : "error"} text={h.proxmox.ok ? "Reachable" : "Not reachable"} />
+            </dd>
+          </>
+        )}
+        {h.backups !== undefined && (
+          <>
+            <dt>Backups</dt>
+            <dd>
+              <BackupLine backups={h.backups} />
             </dd>
           </>
         )}

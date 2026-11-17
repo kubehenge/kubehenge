@@ -33,7 +33,7 @@ Once a worker has joined, the control-plane nodes carry `node-role.kubernetes.io
 
 ## Create a cluster in the interface
 
-**Create cluster** on the cluster list opens a wizard of six steps: General, Network, Machines, Add-ons, Identity providers and Confirm.
+**Create cluster** on the cluster list opens a wizard of seven steps: General, Network, Machines, Add-ons, Policies, Identity providers and Confirm. The egress proxy, CIS hardening, Pod security and automatic upgrades below are on Policies.
 
 ![The wizard's General step: distribution, node OS, Kubernetes version, control-plane nodes and workers](images/create-cluster.png)
 
@@ -47,7 +47,7 @@ Without `VM.Allocate` on the workload pool, **Create cluster** is off and says s
 
 | Field | What it is |
 | --- | --- |
-| Start from | Once there is a cluster: the cluster to copy settings from, by default the newest that works, or **Defaults**. It copies the distribution, node OS, node counts and sizes, bridge, VLAN, MTU, queues, prefix length, gateway, DNS servers, load balancer, pod network and storage. It also copies placement, Proxmox VE HA, HA group labels, Headlamp, monitoring, logs, Pod Security, CIS hardening, Istio, Rancher registration and identity providers. Everything else starts at its default. Choosing another cluster keeps the name, the namespace, and the Kubernetes version while the distribution stays. |
+| Start from | Once there is a cluster: the cluster to copy settings from, or **Defaults**, which is chosen until another is. The later steps say **Copied from** that cluster. It copies the distribution, node OS, node counts and sizes, bridge, VLAN, MTU, queues, prefix length, gateway, DNS servers, load balancer, pod network and storage. It also copies placement, Proxmox VE HA, HA rule labels, Headlamp, monitoring, logs, Pod Security, CIS hardening, Istio, Rancher registration and identity providers. Everything else starts at its default. Choosing another cluster keeps the name and the namespace. It keeps the Kubernetes version too where the distribution stays the same. |
 | Namespace | Only where an administrator has named [more namespaces for clusters](#more-namespaces-for-clusters): the namespace in the management cluster the cluster goes to, `clusters` unless another is chosen. |
 | Name | Lowercase letters, digits and dashes, starting with a letter and ending with a letter or digit, at most 40 characters. It also names the cluster's Proxmox VE pool and VMs. |
 | Distribution | kubeadm, RKE2, k3s or Talos: one per ClusterClass in the management cluster. A distribution without a VM template in the template pool says so. Its clusters cannot be created until an administrator builds one ([templates.md](templates.md)). Where cluster creators may have missing templates built, **Build template** does it from the wizard. |
@@ -65,7 +65,10 @@ Without `VM.Allocate` on the workload pool, **Create cluster** is off and says s
 | VLAN tag | Optional, 1 to 4094. With a tag, the wizard fills in nothing from the bridge's untagged network. A VNet of a VLAN zone tags its traffic already, so Kubehenge refuses a tag on it. |
 | MTU | Optional, 1280 to 65520, [below](#interface-mtu-and-queues). |
 | Queues | Optional, 1 to 64. The queues of the VMs' virtio interface, which spread its traffic over several vCPUs. Unset, it has one. |
-| Firewall security groups | Optional. Proxmox VE security groups that turn on the firewall of every node's interface, [below](#firewall). |
+| Firewall | On. The nodes' Proxmox VE firewall, [below](#firewall). |
+| Serving ports open | On. The API, ingress, the load balancer, NodePorts and ping, open to anyone. |
+| Further open ports | Optional. Ports the firewall opens to anywhere, such as `tcp/8443`. |
+| Firewall security groups | Optional. Proxmox VE security groups, applied before the serving ports. |
 | Address families | IPv4, IPv6, or both for dual-stack, the first one primary. Fixed for the cluster's life, [below](#ipv6-and-dual-stack). |
 | API address | The control plane's virtual IP: an unused address in the nodes' network of the primary family, outside the node addresses. |
 | Node addresses | Where the nodes take their addresses from: ranges (`192.0.2.21-192.0.2.29`), networks or single addresses inside the gateway's network, one per line or separated by commas. The wizard asks for at least one address more than there are nodes, for the extra node an upgrade or a replacement adds. It counts an autoscaled pool at its most. Leave more for scaling up. |
@@ -115,25 +118,50 @@ Kubehenge sets both ranges on every cluster it creates. It takes those you give,
 
 #### Firewall
 
-Name Proxmox VE security groups to turn on the firewall of every node's interface. Without groups it stays off.
+Every node's VM and interface get the Proxmox VE firewall, on by default. It drops inbound traffic that no rule below accepts.
 
-- **Before.** The datacenter firewall is on (Datacenter, Firewall, Options). Each group exists under Datacenter, Firewall, Security Group, or the controller refuses it.
-- **The Proxmox VE nodes' own firewall.** It lets the API in only from each node's local network and the `management` IPSet.
-- **Lockout check.** The controller refuses groups that would cut the appliance or the management cluster off the API, and names the addresses to add to the IPSet. The setup's pre-flight does the same.
-- **Names.** Up to 16 groups of 2 to 18 letters, digits, `-` and `_`. The first is a letter.
-- **When.** Each VM's firewall is written before it first starts. Changing the groups replaces every node, one at a time.
+- **Datacenter firewall.** The VMs' rules act only while it is on (Datacenter, Firewall, Options). Kubehenge never turns it on. While it is off, the wizard, the cluster's options, `kubehenge cluster list` and the `FirewallInactive` condition say so, and a warning event is recorded. A cluster whose own firewall is off gets no condition.
+- **Off.** Clear **Firewall** in the wizard or the cluster's options, or set `firewall.enabled: false`. The nodes then get no VM firewall.
+- **Serving ports closed.** Clear **Serving ports open**, or set `firewall.servingPorts: false`. The nodes then accept only the cluster's own traffic, the management side, the security groups and the further ports.
+- **When.** Each VM's rules are written before it first starts. Switching the firewall, its serving ports, its further ports or its groups replaces every node, one at a time.
+- **Privileges.** The rules and IPSets live on each VM. They need no right beyond those the controller holds on its VMs.
+
+Where the datacenter firewall's state cannot be read, the `FirewallInactive` condition is Unknown and the wizard shows the state as unknown. The reason is `SysAuditMissing` when the token lacks Sys.Audit on `/`, `TokenRefused` when Proxmox VE refuses the token itself, and `ProxmoxUnreachable` after three reads in a row get no answer.
 
 ##### What the firewall accepts
 
-- **Without a group.** All traffic from the cluster's API address, node addresses and pod ranges. That covers etcd, the kubelet and the pod network on any port.
-- **From the management side.** All traffic from the management cluster's nodes and the appliance. The appliance's interface and Headlamp reach the API server directly.
-- **Only through the groups.** Everything else inbound: `kubectl` and `talosctl` from your machines, ingress, NodePorts, load-balancer addresses and Cluster Mesh peers.
+The rules apply in this order, and the first that matches decides.
 
-A new address of the nodes, the management cluster or the appliance goes into each running VM's `kubehenge` IPSet. No node is replaced. When the appliance gets a new address by DHCP, the clusters accept it within a minute.
+1. **The cluster's own traffic.** All traffic from the cluster's API address, node addresses and pod ranges. That covers etcd, the kubelet and the pod network on any port.
+2. **The management side.** All traffic from the management cluster's nodes and the appliance. The appliance's interface and Headlamp reach the API server directly.
+3. **Cluster Mesh peers.** All traffic from the nodes and pods of each cluster it is [linked](#cluster-mesh) with. A listed cluster that does not list it back adds nothing.
+4. **Security groups.** Groups named under **Firewall security groups**, in their order. A group can drop or narrow anything below, such as the API to one network. Each exists under Datacenter, Firewall, Security Group, or the controller refuses it. Up to 16 groups of 2 to 18 letters, digits, `-` and `_`, the first a letter.
+5. **Load-balancer addresses**, while the serving ports are open. All traffic to the addresses of the [load balancer](#load-balancer).
+6. **Serving ports, from anywhere**, while they are open. The Kubernetes API (6443), ingress (80 and 443), NodePorts (30000 to 32767, TCP and UDP) and ICMP echo of both families. On Talos also Talos's API (50000), which takes only the cluster's client certificates, as the Kubernetes API does.
+7. **Further ports.** `firewall.ports`, such as `tcp/8443` or `udp/4000-4010` in the wizard.
+
+SSH (22) is not among them, so it stays closed unless a group lets it in ([below](#ssh-to-the-nodes)). The NodePort rule covers Kubernetes' default range, since no class sets another. A Service on another port needs it in `firewall.ports`. On k3s without a load balancer, servicelb answers on each node's address, so its ports need opening too.
+
+A new address of the nodes, the management cluster, the appliance, a mesh peer or the load balancer goes into each running VM's `kubehenge` or `kubehenge-lb` IPSet. No node is replaced. When the appliance gets a new address by DHCP, the clusters accept it within a minute. While the controller is away, the IPSets keep what was last written.
+
+##### SSH to the nodes
+
+Make a security group that lets SSH in from your administrators' network, then name it under **Firewall security groups**. On a Proxmox VE node, with `192.0.2.0/24` as that network:
+
+```sh
+pvesh create /cluster/firewall/groups --group ssh
+pvesh create /cluster/firewall/groups/ssh --type in --action ACCEPT --proto tcp --dport 22 --source 192.0.2.0/24 --enable 1
+```
+
+Without `--enable 1`, Proxmox VE stores the rule switched off. In the web interface, that is Datacenter, Firewall, Security Group, **Create** `ssh`, then a rule with direction `in`, action `ACCEPT`, protocol `tcp`, destination port `22`, source `192.0.2.0/24` and **Enable** ticked. Talos nodes run no SSH.
+
+##### Lockout check
+
+Security groups act only with the datacenter firewall on, which also turns on each Proxmox VE node's own firewall. That one lets the API in only from the node's local network and the `management` IPSet. So the controller refuses security groups that would cut the appliance or the management cluster off the API, and names the addresses to add to the IPSet. It checks them also while the datacenter firewall is off, since they act once it is on. A firewall without groups is never refused, since the VMs' rules leave the nodes' own firewall alone. The setup check does the same.
 
 Both of Proxmox VE's firewalls read what Kubehenge writes: the default one on iptables and the one on nftables (Host, Firewall, Options, nftables). The end-to-end tests run the nftables one.
 
-With the iptables firewall, a bridge behind NAT needs the conntrack zone rule from Proxmox VE's [Network Configuration guide](https://pve.proxmox.com/wiki/Network_Configuration#_masquerading_nat_with_iptables). Without it the firewall drops the nodes' outbound connections. The nftables firewall needs none.
+With the iptables firewall, a bridge behind NAT needs the conntrack zone rule from Proxmox VE's [Network Configuration guide](https://pve.proxmox.com/wiki/Network_Configuration#sysadmin_network_masquerading). Without it the firewall drops the nodes' outbound connections. The nftables firewall needs none.
 
 #### IPv6 and dual-stack
 
@@ -149,7 +177,7 @@ A cluster has IPv4, IPv6, or both. IPv6 and dual-stack are unsupported on every 
 
 ##### IPv6-only networks
 
-Much of what the nodes and add-ons download has no IPv6 address (GitHub among them). An IPv6-only network needs NAT64 with DNS64, or mirrors. The management cluster can pull through [registry mirrors and chart mirrors](install.md#mirroring-the-charts). RKE2 and k3s nodes fetch their release from GitHub as they boot, unless the management cluster sets a [release mirror](install.md#mirroring-the-releases).
+Much of what the nodes and add-ons download has no IPv6 address (GitHub among them). An IPv6-only network needs NAT64 with DNS64, or mirrors. The management cluster can pull through [registry mirrors and chart mirrors](#mirroring-the-charts). RKE2 and k3s nodes fetch their release from GitHub as they boot, unless the management cluster sets a [release mirror](#mirroring-the-releases).
 
 #### Load balancer
 
@@ -218,7 +246,7 @@ RKE2 installs its choice itself. For kubeadm, and for k3s and Talos given Cilium
 | Placement | The Proxmox VE nodes the cluster's VMs may run on: **Any node**, **HA rule nodes**, or **Chosen nodes**. |
 | Proxmox VE HA | Shown when the management cluster has Proxmox VE HA and the storage is shared. On by default. |
 | Newest CSI plugin release | Shown when the management cluster lets clusters choose it. Off by default. See [Persistent volumes](#persistent-volumes). |
-| HA group labels | Shown unless the management cluster switched them off for every cluster ([install-settings.md](install-settings.md#ha-group-labels)). On by default. See below. |
+| HA rule labels | Shown unless the management cluster switched them off for every cluster ([install-settings.md](install-settings.md#ha-rule-labels)). On by default. See below. |
 | Volume snapshots | Shown when the storage is local to each node. Off by default. See [Volume snapshots](#volume-snapshots). |
 
 Placement and the four options below it change later under **Options**.
@@ -246,6 +274,7 @@ A node is left out while it lacks the cluster's storage, template, bridge or VNe
 - **A node back online** counts with the memory it reports itself, not the figures from before it went down.
 - **New clusters:** the create wizard warns, without blocking, when no node it may use has the free memory.
 - **No room anywhere:** the placement stays as it was. The cluster's `NodesLackMemory` condition names the memory needed and the best node's free memory.
+- **Thick storage full:** the interface refuses a new cluster whose disks do not fit a storage that reserves each disk's whole size. A cluster made with kubectl gets the `StorageLacksSpace` condition instead, naming the storage, its nodes, the space needed and the space free. An autoscaled pool counts at its fewest workers. Where only its most workers do not fit, the wizard warns on **Most workers** and on Confirm, and the cluster's events show `AutoscalerNoRoom`.
 - **Bridge or VNet:** a bridge on none of the nodes the cluster may use is refused on creation or change. A VNet counts as present where its zone is applied.
 
 #### Proxmox VE HA
@@ -260,9 +289,9 @@ Proxmox VE's HA manager migrates VMs that share a node apart. It restarts the VM
 
 Workers are not HA resources. The health check replaces a worker lost with its node.
 
-#### HA group labels
+#### HA rule labels
 
-**Add HA group labels** has the cloud controller manager label each node with its Proxmox VE node's HA groups (or HA node-affinity rules). The label is `group.topology.proxmox.sinextra.dev/<group or rule>`, with an empty value. Reading the groups takes `Sys.Audit` on `/`. While the option is on, Kubehenge's controller adds the cluster's user to a group holding it there, unpropagated.
+**Add HA rule labels** has the cloud controller manager label each node with its Proxmox VE node's HA groups (or HA node-affinity rules). The label is `group.topology.proxmox.sinextra.dev/<group or rule>`, with an empty value. Reading the groups takes `Sys.Audit` on `/`. While the option is on, Kubehenge's controller adds the cluster's user to a group holding it there, unpropagated.
 
 The token can then read the Proxmox VE cluster's own configuration (firewall rules, backup jobs, HA, corosync) but change nothing. It reads no more of the guests, storages or nodes than before. Switching the option takes no privilege beyond changing the cluster.
 
@@ -355,6 +384,7 @@ Every change to the cluster waits for etcd to sync its write-ahead log to the co
 - Put the control planes on local SSD or NVMe storage. It syncs in well under 5 ms.
 - Ceph and NFS are often slower, since each write crosses the network first.
 - Their latency swings with the load of every other VM. Ceph on SSD or NVMe can keep up, unlike spinning disks.
+- The same holds for the management cluster's storage. Its etcd waits 15 s for a request rather than 7 s, so a stall of a few seconds slows an install without failing it.
 
 ##### The etcd disk slow warning
 
@@ -428,9 +458,9 @@ Choose the target, the schedule, its time zone, how long each backup is kept and
 
 #### etcd snapshot settings
 
-[etcd snapshots](#etcd-snapshots) are on by default wherever an administrator set a backup target, and absent without one. Choose the target, the schedule, its time zone (the browser's to start with) and how many snapshots are kept. On RKE2 and k3s, also choose [the distribution's own upload](#the-distributions-own-upload).
+[etcd snapshots](#etcd-snapshots) are on by default. Choose the target (a backup target or **Backup volume**), the schedule, its time zone (the site time zone to start with, else the browser's) and how many snapshots are kept. On RKE2 and k3s, also choose [the distribution's own upload](#the-distributions-own-upload).
 
-They use the backups' access key, entered once for both. Without `Sys.Modify` on the workload pool to store it, they wait as backups do. With backups on, the snapshots go to the backups' target, since one access key reaches one store. A cluster started from another takes that cluster's snapshot settings, or the default where it never set any.
+On a backup target they use the backups' access key, entered once for both. Without `Sys.Modify` on the workload pool to store it, they wait as backups do. With backups on, the snapshots go to the backups' target, since one access key reaches one store. A cluster started from another takes that cluster's snapshot settings, or the default where it never set any.
 
 #### Pod security
 
@@ -472,7 +502,7 @@ Under a NetworkPolicy that denies by default, allow ztunnel's port 15008/TCP bet
 
 **Proxy** (Management proxy, Own proxy or No proxy) is the proxy for the add-ons that reach beyond the cluster. Those are cert-manager (ACME and DNS providers), Velero (server and node agents), Argo CD, Flux's controllers, Headlamp and Rancher.
 
-- The management side's proxy ([install.md](install.md#behind-a-proxy)) and its exceptions are the default.
+- The management side's proxy ([below](#behind-a-proxy)) and its exceptions are the default.
 - Add-on settings are plain text, so a proxy address holding a user name or password is not passed on. Give the cluster its own address without credentials.
 - The cluster's pod and service ranges, `localhost`, `127.0.0.1`, `.svc` and `.cluster.local` bypass the proxy. Add an internal S3 store, Git server or identity provider under Exceptions.
 - The add-ons' pods do not trust a proxy that re-signs TLS. Kubehenge does not add its authority to them.
@@ -528,7 +558,7 @@ Kubehenge keeps Rancher's cluster within the Kubernetes versions Rancher's relea
 
 **Upgrade automatically** is off, patch releases, or patch and minor releases, inside a window. The window is every day from 02:00 for four hours in your browser's time zone. The cluster's **Options** change it later ([upgrading.md](upgrading.md#automatically-inside-a-window)).
 
-The nodes of a kubeadm, RKE2 or k3s cluster move to new builds of their VM template in the same window whatever this says ([below](#node-image-refresh)).
+The nodes of a kubeadm, RKE2 or k3s cluster move to new builds of their VM template in the same window whatever this says, unless **Update node images** is unticked ([below](#node-image-refresh)).
 
 ### Identity providers
 
@@ -622,7 +652,7 @@ The Summary shows, in order:
   - Other nodes you may see follow empty, as places for new machines. Machines on nodes you may not see come last.
   - It carries the Machines view's warning when one node runs more than one control-plane VM.
 - The status, distribution, Kubernetes version, API endpoint, and pod and service ranges.
-- The ready control-plane nodes and workers, with autoscaled pools as `md-0: 2 of 0 to 5, autoscaled`.
+- The ready control-plane nodes and workers, with autoscaled pools as `Workers: 2 of 0 to 5, autoscaled`.
 - The Proxmox VE pool, namespace, creator and creation date, and the last automatic upgrade.
 - For kubeadm, RKE2 and k3s, the VM template build the nodes run, their next build and their last ([Node image refresh](#node-image-refresh)).
 - For Talos, the release the nodes run, the one new machines boot first when it differs, and the node being upgraded ([Talos upgrades](#talos-upgrades)).
@@ -670,7 +700,7 @@ When one Proxmox VE node runs more than one control-plane VM, the page warns and
 - **Options:** every setting that can change once the cluster exists, each listed with what changing it does [below](#change-settings).
   - Each has **Edit** (**Upgrade** for the Talos release, **Uninstall** for Rancher on the cluster that runs it). It is disabled for those who may not change the cluster.
   - The pod network and CIS hardening are fixed, so they have none.
-- **Activity:** who did what to the cluster, newest first ([install.md](install.md#activity)). Below it are the management cluster's events of its objects over the last day.
+- **Activity:** who did what to the cluster, newest first ([architecture.md](architecture.md#activity)). Below it are the management cluster's events of its objects over the last day.
 
 ### Status
 
@@ -707,7 +737,7 @@ Nothing changes in the cluster until the changes are applied. A bar above the vi
 
 ## Pools
 
-**Machines** lists the control plane and each worker pool with its nodes, cores, memory and disk. A new cluster starts with one pool, `md-0`.
+**Machines** lists the control plane and each worker pool with its nodes, cores, memory and disk. A new cluster starts with one pool, Workers. Cluster API names it `md-0`, and both names work in the CLI. Beside a pool of your own named `workers`, it shows as `md-0`.
 
 ![The Machines view: the pools with their sizes, then every machine with its role, Proxmox VE node, version and address](images/machines.png)
 
@@ -763,7 +793,7 @@ A pool with 0 as its fewest empties while nothing waits.
 - The autoscaler reads what a new worker would hold from the pool's machines: the cores and 90% of their memory and disk.
 - It also reads the pool's node labels (`node.cluster.x-k8s.io/…`), so a pod's node selector can bring a worker up from none.
 - A pod that asks for more than 90% of a worker's memory is never given one.
-- Control planes stay kept for the control plane while a pool may grow, even while every pool is at none. A cluster whose pools may all go down to none therefore runs no workloads at those times.
+- Control planes keep their taint while a pool may grow, even while every pool is at none. A cluster whose pools may all go down to none therefore runs no workloads at those times.
 
 ### What a cluster must hold
 
@@ -780,6 +810,7 @@ A pool with 0 as its fewest empties while nothing waits.
 The Scale dialog warns when a pool's remaining workers need more memory than the allowed Proxmox VE nodes have free. It is only advice, since memory frees and fills as other VMs come and go.
 
 - A worker that finds no room waits. The cluster's events show `AutoscalerNoRoom` with the Proxmox VE provider's reason.
+- Thick storage too small for the pools at their maximum also shows `AutoscalerNoRoom`, before any worker waits.
 - After 30 minutes the autoscaler gives the machine up and tries again.
 - Shared storage suits autoscaled pools best, as it lets a new worker start on whichever allowed node has the room.
 
@@ -850,7 +881,7 @@ A network that reaches few hosts needs four settings. Each works on every distri
 | Time servers | `network.ntp` | NTP servers, with the hypervisor's clock as the fallback. |
 | Proxy | `egressProxy` | The proxy for the container runtime, the installers of RKE2 and k3s, and the distribution's service. The add-ons use it too. |
 | Registry mirrors | `registryMirrors` | Mirrors that images are pulled from before the registry itself. |
-| Trusted CAs | `trustedCAs` | Authorities in the node OS's trust store, which the container runtime and the distribution read. |
+| Trusted CAs | `trustedCAs` | Authorities in the node OS's trust store, which the container runtime and the distribution read. A cluster that sets none gets the management cluster's site CA. Set the site CA as `siteCA` in the chart values, **Site CA** in Setup or `kubehenge appliance settings set --site-ca-file`. |
 
 Where each lands on a node:
 
@@ -876,19 +907,73 @@ A change replaces every node, one at a time, as a change of the node customisati
 ### Authorities
 
 - An authority is PEM and holds certificates only.
-- Kubehenge refuses a private key, text around the certificates, and a certificate that has expired or is not yet valid.
+- Kubehenge refuses a private key, a damaged BEGIN or END line, and a certificate that has expired or is not yet valid. Names and comments between the blocks pass, as in curl's `cacert.pem`.
+- Kubehenge stores the certificates alone, also from kubectl and GitOps. Keep that form in Git, or Argo CD shows the cluster as out of sync.
+- To keep another form in Git, give the Argo CD Application the annotation `argocd.argoproj.io/compare-options: ServerSideDiff=true,IncludeMutationWebhook=true`. Flux needs nothing.
 - One mirror host has one authority, also where two registries share the host.
 
 ### RKE2 and k3s installs
 
 - RKE2 and k3s nodes download their release's files and install script as they boot, through the proxy.
 - They come from GitHub: `github.com`, `api.github.com`, `raw.githubusercontent.com` and the hosts its downloads redirect to.
-- A release mirror replaces GitHub for every cluster of the management cluster ([install.md](install.md#mirroring-the-releases)). Nodes reach it through the proxy unless its host is in `noProxy`.
+- A release mirror replaces GitHub for every cluster of the management cluster ([below](#mirroring-the-releases)). Nodes reach it through the proxy unless its host is in `noProxy`.
 - A node checks every file against the release's pins, then installs from those files with no further download.
 
 ### A cluster's own release mirror
 
-A cluster at another site can name a mirror near it in `releaseMirror` (Release mirror under Options), which replaces the management cluster's for its nodes. It takes `url` and, for an `https://` mirror the usual authorities do not sign, `caBundle`, which the node uses for that download alone. The pins stay the management cluster's, so every file is checked against them whichever mirror served it ([install.md](install.md#mirroring-the-releases)). A change replaces the nodes one at a time, as the other site settings do. Running nodes keep the release they installed.
+A cluster at another site can name a mirror near it in `releaseMirror` (Release mirror under Options), which replaces the management cluster's for its nodes. It takes `url` and, for an `https://` mirror the usual authorities do not sign, `caBundle`, which the node uses for that download alone. The pins stay the management cluster's, so every file is checked against them whichever mirror served it ([below](#mirroring-the-releases)). A change replaces the nodes one at a time, as the other site settings do. Running nodes keep the release they installed.
+
+### Mirroring the charts
+
+A chart mirror serves the charts of one repository host from an address you choose. Set one per host under Site in the setup (Chart mirrors), or `chart_repositories` in the module ([variables](install-settings.md#module-variables)).
+
+- A host that serves OCI charts (`ghcr.io`) needs an `oci://` mirror, such as `ghcr.io=oci://registry.example.org/ghcr`. The charts of `oci://ghcr.io/istio/release/charts` are then fetched from `oci://registry.example.org/ghcr/istio/release/charts`.
+- A host that serves a chart repository (`charts.jetstack.io`) needs an `https://` or `http://` one, such as `charts.jetstack.io=https://charts.example.org/jetstack`.
+- The mirror holds the same charts under the same digests, because a re-packed chart is refused. Copy OCI charts with a tool that keeps the digest (`crane copy`, `oras cp` or `skopeo copy`) and chart archives byte for byte.
+- A mirror whose certificate the usual authorities do not sign needs its authority under Chart mirror certificate. The Add-on Provider for Helm trusts it beside the proxy's.
+- A mirror outside the proxy's exceptions is fetched through the proxy.
+
+#### Listing what to copy
+
+`kubehenge charts` lists what to copy, each chart as `<repository>/<name>:<version>@sha256:<digest>`. Give it the values file of Kubehenge's chart (`charts/kubehenge/values.yaml` of the release), and `--mirror` to see where each chart then comes from:
+
+```sh
+kubehenge charts charts/kubehenge/values.yaml --mirror ghcr.io=oci://registry.example.org/ghcr
+```
+
+A mirror that no chart uses, or of another kind than its host, is refused. Charts without a mirror are fetched from their repository.
+
+### Mirroring the releases
+
+RKE2 and k3s nodes download their release from GitHub as they boot. A release mirror serves those files instead, for every cluster that names no mirror of its own ([above](#a-clusters-own-release-mirror)). Set it under Site in the setup (Release mirror), or `release_mirror` in the module ([variables](install-settings.md#module-variables)).
+
+- A node checks every file against the release's pins before installing anything, so a mirror cannot change what it runs. A file the mirror lacks fails the node's boot with the file and the mirror named.
+- The interface and `kubehenge release pin --mirror` read a release's checksums from the same mirror before pinning it.
+- A mirror whose certificate the usual authorities do not sign needs its authority under Release mirror certificate. The nodes trust it for the download alone.
+- Nodes reach the mirror through the cluster's proxy unless its host is in the proxy's exceptions (`egressProxy.noProxy`).
+
+#### What to copy
+
+The mirror answers on GitHub's paths beneath its address: `<mirror>/<repository>/releases/download/<version>/<file>` and `<mirror>/<repository>/raw/<version>/install.sh`, such as `https://mirror.example.org/github/k3s-io/k3s/releases/download/v1.36.5+k3s1/k3s`. A generic proxy repository of `https://github.com` serves this layout.
+
+Each node takes `sha256sum-amd64.txt` and `install.sh` of its release. RKE2 nodes take `rke2.linux-amd64.tar.gz`, `rke2-images-core.linux-amd64.tar.zst` and `rke2-images-<cni>.linux-amd64.tar.zst` for the cluster's CNI. k3s nodes take `k3s` and `k3s-airgap-images-amd64.tar.zst`.
+
+### Behind a proxy
+
+Set the proxy under Site in the setup ([setup](install.md#network)), or `proxy` in the module ([variables](install-settings.md#module-variables)). It takes an address, a user and password if the proxy asks, exceptions and the authority of a proxy that re-signs TLS. The module's `proxy.url` is the one place the credentials sit inside the address.
+
+It reaches OpenTofu, the appliance's downloads, the Talos nodes, the Cluster API operator and providers, the controller and the VM template builds. A build's VM uses it for packages, `curl` and image pulls, and trusts the authority while it builds.
+
+Kubehenge adds these exceptions:
+
+- the Proxmox VE API host
+- the management nodes' network and the build VM's network
+- the management cluster's pod and service ranges
+- `localhost`, `127.0.0.1`, `.svc` and `.cluster.local`
+
+Add the workload clusters' node networks and any internal registry.
+
+Proxmox VE downloads disk images through the datacenter's proxy. The Add-on Provider for Helm gets the authority too. Clusters' own nodes are not covered.
 
 ## Node customisation
 
@@ -1020,20 +1105,23 @@ New machines, from scaling up or a repair, clone the template of the release the
 
 ![The Options view: node, network, storage and add-on settings, each with its value and Edit](images/options.png)
 
-A setting that is only on or off has a switch in its row. These are Proxmox VE HA, HA group labels, the CSI plugin's newest release, volume snapshots and Istio. The switch says what switching it on brings, or why it cannot be. The rest have **Edit**.
+A setting that is only on or off has a switch in its row. These are Proxmox VE HA, HA rule labels, the CSI plugin's newest release, volume snapshots and Istio. The switch says what switching it on brings, or why it cannot be. The rest have **Edit**.
 
 | Group | Setting | Shown | Changing it |
 | --- | --- | --- | --- |
 | Nodes | Node OS | kubeadm, RKE2 and k3s | Replaces every node with a clone of the new node OS's template, one at a time as in an upgrade. That template has to be built first ([templates.md](templates.md#node-oses)). A node OS not released yet, or without a template, cannot be chosen. Moving an RKE2 cluster to FIPS mode, or out of it, works the same way. It needs canal. |
 | Nodes | Talos release | Talos | **Upgrade** upgrades the nodes in place ([Talos upgrades](#talos-upgrades)). |
 | Nodes | Placement | always | Applies to the VMs created after it, by scaling up, an upgrade or a replacement. Those running stay where they are. Nodes the cluster has that you cannot see are listed too, and may be kept ([Machines](#machines)). |
+| Nodes | VM ID range | always | Replaces every node, one at a time, onto IDs in the new range ([variables](#variables)). |
 | Nodes | Proxmox VE HA | where the management cluster has Proxmox VE HA and the storage is shared | Takes the control-plane VMs into HA or out of it ([Machines](#machines)). |
-| Nodes | HA group labels | unless the management cluster switched them off for every cluster, or while they are on | [Machines](#machines). |
+| Nodes | HA rule labels | unless the management cluster switched them off for every cluster, or while they are on | [Machines](#machines). |
 | Nodes | Autoscaler | always | Its expander, its timing and where it runs ([Autoscaling](#autoscaling)). |
+| Nodes | Registry mirrors, Trusted CAs, Release mirror | always, the release mirror on RKE2 and k3s | Replaces every node, one at a time. A cluster without its own Trusted CAs takes the management cluster's site CA, a few clusters at a time and inside their upgrade windows ([below](#sites-with-limited-access)). |
+| Network | Bridge, VLAN, address families | always | Fixed for the cluster's life. |
 | Network | Pod network | always | Fixed for the cluster's life ([Pod network](#pod-network)). |
 | Network | Load balancer | always | See the list below. |
 | Network | Cluster Mesh | on a cluster that runs Cilium | See the list below. |
-| Network | Firewall security groups | always | Replaces every node, one at a time. No groups turns the firewall off ([Firewall](#firewall)). |
+| Network | Firewall | always | On or off, the serving ports open or closed, further ports and security groups. Replaces every node, one at a time ([Firewall](#firewall)). |
 | Storage | CSI plugin | where the management cluster lets clusters choose its newest release, or while the cluster runs it | [Persistent volumes](#persistent-volumes). |
 | Storage | Volume snapshots | where the management cluster lets clusters take them, or while they are on | [Volume snapshots](#volume-snapshots). |
 | Add-ons | Headlamp, Monitoring, Logs, Certificates, Istio, Rancher, GitOps | always | See the list below. |
@@ -1328,7 +1416,7 @@ The monitoring add-on's Alertmanager routes every alert but the always-firing Wa
 An address holds no user name or password. The variable is plain text, so every secret is a stored credential, like the [DNS-01 one](#dns-providers):
 
 - Type it under the cluster's **Options**, **Monitoring**, or when creating the cluster. The interface keeps it in the Secret `<cluster>.<purpose>` beside the Cluster and never shows it again.
-- With kubectl, create that Secret yourself ([With kubectl](#with-kubectl)) with the type `kubehenge.dev/user-credential` and the labels `kubehenge.dev/user-credential=<purpose>` and `kubehenge.dev/credential-cluster=<cluster>`.
+- With kubectl, create that Secret yourself ([With kubectl](#with-kubectl)) with the type `kubehenge.dev/user-credential` and the labels `kubehenge.dev/user-credential=<purpose>` and `kubehenge.dev/credential-cluster=<cluster>`. Kubehenge never deletes such a Secret or makes the Cluster its owner, so it stays when you delete or re-create the Cluster. Storing it again in the interface makes the Cluster its owner.
 - Kubehenge's controller copies the values into the Secrets `kubehenge-alertmanager` and `kubehenge-prometheus` of the `monitoring` namespace.
 - Storing, replacing or removing a credential needs `Sys.Modify` on the cluster's pool ([Who may do what](#who-may-do-what)).
 
@@ -1352,16 +1440,36 @@ The interface says which volumes stay when you switch monitoring off. Delete the
 
 The default StorageClass `proxmox` puts volumes on the cluster's storage. They belong to a VM named `<name>-<hash>-volumes`, tagged `kubehenge` and `volumes`, in the cluster's pool. The VM is never started and exists so that only this cluster's token may attach them. Kubehenge protects it, so Proxmox VE refuses to delete it by hand. A released volume is deleted through that VM.
 
+Kubehenge offers any storage that allows the content type `images` and that you may allocate space on, whatever its type. Only [volume snapshots](#volume-snapshots) limit the type.
+
 Kubernetes does not let a StorageClass change its parameters. Where the default class `proxmox` has other parameters than the cluster's storage asks for, the controller deletes it and the CSI plugin's release creates it again. Volumes keep working. Only volumes created after that get `discard` and `ssd`.
 
 ### Volumes on node-local storage
 
 On storage local to each node, a volume lives on one node. A pod can use it only on a worker running on that node.
 
-The Proxmox VE provider places a replacement worker in an upgrade, a node image refresh or a health-check repair. It does not look at volumes, and Kubehenge cannot steer it. When no worker is left on a volume's node, its pod stays Pending with `volume node affinity conflict`.
+Kubehenge keeps a worker on every node that holds the cluster's bound volumes. It records those nodes in the cluster's `kubehenge.dev/volume-nodes` annotation.
 
+- **Replacements:** in an upgrade, a node image refresh or a health-check repair, a new worker goes to a node whose volumes would be left without a worker. That is usually its predecessor's node.
+- **More workers:** when a pool grows, new workers go to the nodes with volumes and no worker first.
+- **A node that goes offline** before such a worker's VM is made loses the worker to another node.
+- **No workers:** a cluster that asks for no workers runs its pods on its control planes, which count instead.
 - **Shared storage** has no such limit.
-- **Workers on every node with volumes:** choose the nodes under **Placement** so that each has a worker.
+
+When a volume's node has no worker, the cluster's `VolumesWithoutWorker` condition names the volumes and the fix. `kubectl describe cluster` shows it.
+
+| Reason | Fix |
+| --- | --- |
+| `NodeOffline`, `NodeInMaintenance` | Bring the node back. |
+| `NodeNotAllowed` | Add the node to `allowedNodes`, or move the volumes. |
+| `StorageInactive` | Activate the cluster's storage on the node. |
+| `NodeUnavailable` | The condition says what keeps the cluster's VMs off the node and how to fix it. That is the node's CPU level, a missing bridge, templates it cannot clone, too little free memory or a newer Proxmox VE major release. |
+| `TooFewWorkers` | Add workers, at least one per node with volumes. |
+| `NoWorker` | Delete the machine the condition names. Its replacement goes to the node with volumes. While a worker is on its way out, the condition names it, and the fix follows once it is replaced or gone. |
+| `NodeGone` | The node left the Proxmox VE cluster. Restore the volumes from a backup or delete their claims. |
+
+The create wizard and the change checks warn when a cluster has fewer workers than nodes its volumes are on. An autoscaled pool counts at its minimum.
+
 - **Moving a volume:** the CSI plugin's `pvecsictl migrate --config <file> -n <namespace> <pvc> <node>` moves the disk and rewrites its node affinity. It stops the pod using the volume.
 - **Root access:** the tool needs `root@pam` credentials, so Kubehenge never runs it.
 
@@ -1598,11 +1706,33 @@ etcd gives file space back only when a member is defragmented, and the member se
 
 ## etcd snapshots
 
-A cluster with etcd snapshots on has Kubehenge's controller copy its etcd database to one of the backup targets an administrator set. The database holds every object the cluster's API holds. The copy happens on the cluster's schedule and whenever asked.
+Every cluster has etcd snapshots on by default. Kubehenge's controller copies the cluster's etcd database to one of the backup targets an administrator set, or without a target to the management cluster's backup volume. The database holds every object the cluster's API holds. The copy happens on the cluster's schedule and whenever asked.
+
+### On the backup volume
+
+Without a target, snapshots go to `clusters/<namespace>.<name>/etcd` on the backup volume (`kubehenge-system/kubehenge-backups`), encrypted with age as in a bucket. A cluster with a bucket target has its snapshots in the bucket only. Use a bucket to keep copies off the management cluster's storage.
+
+A snapshot that would leave less than a tenth of the volume free is refused. The condition `EtcdSnapshotSucceeded` then reads `VolumeFull` with the room left. Lower `keep`, move the cluster to a bucket target, or grow the volume (`backup_volume.size_gb`, [install-settings.md](install-settings.md#module-variables)).
+
+On node-local storage the volume is detached between backups. The controller attaches it for each snapshot, also while the appliance is stopped. A snapshot waits up to a minute for it, and the condition reads `WaitingForVolume` meanwhile. An attach that fails sets the reason `Failed` with the cause.
+
+Every distribution restores from the volume through the interface, kubectl and the CLI. A snapshot that fails its check, or a transfer cut short, leaves every node as it was. On kubeadm, RKE2 and k3s the first control-plane node needs three times the snapshot's size free under `/var/lib/kubehenge-restore`. [architecture.md](architecture.md#backup-volume) says how the snapshot gets there.
+
+Where the API server does not answer, most often after etcd lost its quorum, the controller first stops every control plane. It resets etcd on the first node to that node alone on its own data, so its API server answers, and streams the snapshot in. This needs the first node's own etcd data to be readable. Should the restore fail after that reset, etcd runs on the first node alone, the other control planes stay stopped, and the cluster carries the condition `EtcdOnOneNode`. Restore again from the same snapshot. The other control planes are then made again.
+
+`kubehenge cluster etcd-snapshots` lists, takes, downloads and restores snapshots from the CLI. [The distribution's own upload](#the-distributions-own-upload) needs a bucket target.
+
+Deleting a cluster keeps its snapshots on the volume and its backup keys, as in a bucket. Three ways delete them too:
+
+- Tick **Delete etcd snapshots** in the Delete cluster dialog.
+- Add `--delete-etcd-snapshots` to `kubehenge cluster delete`.
+- With kubectl or GitOps, set the annotation `kubehenge.dev/delete-etcd-snapshots: "true"` before the delete.
+
+The Backups view of any cluster in the same namespace lists the deleted clusters whose snapshots are kept, under **Deleted clusters**. Their **Delete** takes the snapshots and the backup keys once the name is typed. From the CLI, `kubehenge cluster removed-etcd-snapshots list -n NAMESPACE` lists them, and `kubehenge cluster removed-etcd-snapshots delete NAME -n NAMESPACE --yes` deletes them.
 
 ### Schedule and layout
 
-The schedule is by default every 12 hours from 00:00 in the time zone chosen. The interface starts with the browser's zone. The variable without a zone means UTC. Each cluster runs a few minutes after the hour, at an offset of its own. The controller keeps the newest 14 by default and deletes older ones.
+The schedule is by default every 12 hours from 00:00 in the time zone chosen. The interface starts with the site time zone, else the browser's. The variable without a zone means the site time zone, else UTC. Each cluster runs a few minutes after the hour, at an offset of its own. The controller keeps the newest 14 by default and deletes older ones.
 
 Snapshots go under `<prefix>/<namespace>.<name>/etcd` in the target's bucket, beside the cluster's Velero backups. They are named by when they were taken in UTC and the Kubernetes version, as `20261021T120000Z-v1.36.5-rke2r1.db.age`. Each object carries the Kubernetes version, the distribution, etcd's revision and the SHA-256 and size of the database in its metadata. Snapshots work on their own, with or without Velero backups.
 
@@ -1709,7 +1839,7 @@ A restore that fails before etcd was restored starts every control plane again a
 
 #### Restore by hand
 
-Without that, **Restore…** lists the steps for the chosen snapshot, with the commands for the cluster's distribution. Those for the nodes run as root over SSH or the VM's console, after downloading the snapshot to the first node as `/var/lib/kubehenge-restore/snapshot.db`. On RKE2 and k3s, `etcdutl` and `openssl` first move the snapshot's revision on, on any machine that has both. The `kubectl` ones run with the management cluster's kubeconfig.
+Without that, **Restore…** lists the steps for the chosen snapshot, with the commands for the cluster's distribution. Those for the nodes run as root over SSH or the VM's console, after downloading the snapshot to the first node as `/var/lib/kubehenge-restore/snapshot.db`. The firewall keeps SSH closed until a security group [lets it in](#ssh-to-the-nodes). On RKE2 and k3s, `etcdutl` and `openssl` first move the snapshot's revision on, on any machine that has both. The `kubectl` ones run with the management cluster's kubeconfig.
 
 ## Delete
 
@@ -1720,6 +1850,26 @@ Once the VMs are gone, Kubehenge's controller removes the cluster's pool, user, 
 Only a VM deleted by hand, outside Cluster API, leaves its cloud-init ISO (`user-data-<VMID>.iso` on the cloud-init storage) behind. Remove it under the storage's ISO Images in Proxmox VE.
 
 Deleting the cluster that runs Rancher first removes every registered cluster from Rancher.
+
+### Delete with kubectl or GitOps
+
+A cluster is deleted only once it carries the annotation `kubehenge.dev/allow-deletion`. Without it, the API server refuses the delete. This also holds for a GitOps prune and a deleted namespace. The interface and `kubehenge cluster delete --yes` set it themselves.
+
+```sh
+kubectl -n clusters annotate cluster prod kubehenge.dev/allow-deletion=true
+kubectl -n clusters delete cluster prod
+```
+
+A deleted namespace stays `Terminating` until each cluster in it carries the annotation:
+
+```sh
+kubectl -n clusters annotate clusters --all kubehenge.dev/allow-deletion=true
+kubectl delete namespace clusters
+```
+
+With GitOps, add the annotation to the cluster's manifest and let it sync. Then remove the manifest.
+
+The annotation goes through even on a cluster that no longer meets a rule, such as one whose trusted authority expired. An update is checked only on the settings it changes.
 
 ### A deletion that waits
 
@@ -1733,7 +1883,7 @@ Each add-on installs into namespaces of its own. A cluster that enforces an admi
 
 ### What the add-ons need from a policy
 
-Namespaces, privileges and registries, as the code and the chart define them. A namespace marked exempt is outside Pod Security Admission in every cluster. Kyverno exempts it only where the cluster runs the add-on. Every image is pinned by its digest.
+The table lists each add-on's namespaces, privileges and registries. A namespace marked exempt is outside Pod Security Admission in every cluster. Kyverno exempts it only where the cluster runs the add-on. Every image is pinned by its digest.
 
 <!-- addon-footprint:start -->
 
@@ -1888,8 +2038,8 @@ export KUBEHENGE_URL=https://kubehenge.example.org
 export KUBEHENGE_PROXMOX_TOKEN='ci@pve!kubehenge=<secret>'
 kubehenge cluster list
 kubehenge cluster create -f web.yaml
-kubehenge cluster scale web --control-planes 3 --workers md-0=5
-kubehenge cluster timeouts web --control-planes drain=30m,detach=10m --pool md-0=drain=1h
+kubehenge cluster scale web --control-planes 3 --workers workers=5
+kubehenge cluster timeouts web --control-planes drain=30m,detach=10m --pool workers=drain=1h
 kubehenge cluster update web --host-outage-grace-minutes 60 --label team=web
 kubehenge cluster upgrade web --version v1.37.1
 kubehenge cluster kubeconfig web > web.kubeconfig
@@ -1999,6 +2149,8 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
   - The ClusterClasses stay in `kubehenge-system`, which `topology.classRef.namespace` names. Every namespace therefore uses the same ones.
 - **Ranges** come from `spec.clusterNetwork`. Without it, Kubehenge picks them as the interface does ([Network](#network)).
   - Kubehenge refuses to create a cluster whose ranges overlap its nodes' network.
+  - They are set when the cluster is created. Kubehenge refuses a change to them later.
+  - An update that leaves them out, such as `kubectl edit` deleting them or a merge patch setting `clusterNetwork` to null, keeps the cluster's.
 
 ### Pools and timeouts
 
@@ -2020,6 +2172,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `csi` | no | `datastoreAllocate` (default false) runs the CSI plugin's newest release, with `Datastore.Allocate` for the cluster's token on its storage ([above](#persistent-volumes)). It needs a management cluster that lets clusters choose it and a storage of the cluster's own. `volumeSnapshots` (default false) takes volume snapshots, with the cluster's own volumes copied with its own token ([above](#volume-snapshots)), on storage local to each node. |
 | `hostOutageGraceMinutes` | no | Minutes to hold the replacement of machines whose host is offline or in HA maintenance, or whose storage is unavailable ([troubleshooting.md](troubleshooting.md#machines-whose-replacement-waits-for-a-host)). Default 30. 0 waits for the host for ever, otherwise 5 to 10080. A server that needs longer to start than 30 minutes needs more. A host removed from the Proxmox VE cluster ends the wait at once. Set in the wizard's **Machines** step, in **Options**, or with `kubehenge cluster create --host-outage-grace-minutes` and `kubehenge cluster update NAME --host-outage-grace-minutes`. |
 | `ccm` | no | `haGroups` has the cloud controller manager label the nodes with their Proxmox VE HA groups, with `Sys.Audit` on `/` for the cluster's token ([above](#machines)). Default true, unless the management cluster switched the labels off for every cluster. Then it may not be true. |
+| `vmIDRange` | no | The VM IDs the cluster's VMs take, `start` and `end` both included, within 100 to 999999999. Unset, the cluster takes the site's **VM ID range**, else Proxmox VE's next free ID. Changing it replaces every node ([VM ID range](#vm-id-range)). Set in the wizard's **Machines** step or in **Options**. |
 | `controlPlaneMachine`, `workerMachine` | no | `cores` (default 2), `memoryMiB` (a multiple of 8, default 4096 for the control plane and 6144 for workers, with the minimums [above](#machines)), `diskGiB` (default 30 for the control plane and 40 for workers, at least 20). A disk only grows. |
 | `cni` | kubeadm only | kubeadm: `cilium` or `calico`. RKE2: `canal` (default), `calico` or `cilium`. k3s and Talos: `flannel` (default), `cilium` or `calico`. The class refuses a change once the cluster exists. |
 | `nodeOS` | no | kubeadm, RKE2 and k3s: `family` and `release`, a node OS Kubehenge builds templates of ([templates.md](templates.md#node-oses)). Default AlmaLinux 10. `fips: true` boots the nodes in [FIPS mode](templates.md#fips-mode), on RKE2 with `cni` canal alone. kubeadm and k3s refuse it. Changing it replaces every node ([above](#change-settings)). |
@@ -2030,8 +2183,8 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `headlamp` | no | `enabled` (default false). `hostname`, to serve it through the cluster's ingress controller. `tlsSecret`, a Secret in the `headlamp` namespace with the certificate for `hostname`. When unset, one from the certificates add-on while it is on, else the ingress controller's default certificate. `access`, `token` (default) or `view`, read-only without sign-in ([above](#add-ons)). |
 | `monitoring` | no | `enabled` (default false), which installs cert-manager too ([above](#add-ons)). `hostname`, to serve Grafana through the cluster's ingress controller. `tlsSecret`, a Secret in the `monitoring` namespace with the certificate for `hostname`. When unset, as for `headlamp`. `alertReceivers`, `remoteWrite` and `externalAlertmanagers`, with their secrets as stored credentials ([above](#monitoring-alerts-and-remote-write)). |
 | `logs` | no | Loki and Grafana Alloy, which need `monitoring` ([above](#add-ons)). `enabled` (default false). `collector`, `node` (default) or `api`. `retentionDays` (1 to 366, default 7). `sizeGiB`, Loki's volume (1 to 1024, default 10), which only grows. `outputs`, up to 4 more destinations ([above](#add-ons)). Each has `name`, `kind` (`syslog`, `otlp` or `loki`), `endpoint`, optional `caBundle` (PEM), `streams` (a list of `containers`, `events`, `nodes` and `audit`, default all) and `auth` (`none`, `basic` or `bearer`, default `none`). |
-| `backups` | no | Velero ([above](#back-up-and-restore)). `enabled` (default false). `target`, the name of one of the administrator's targets, needed while `enabled`. `schedule`, a cron expression of five fields or a descriptor such as `@weekly` (default `0 2 * * *`). `timeZone` (default `UTC`). `retentionDays` (1 to 3650, default 7). `volumes`, `all` (default) or `annotated`, only the volumes a pod names in its `backup.velero.io/backup-volumes` annotation. `existingSecret`, a Secret of your own in the cluster's `velero` namespace. It holds the store's keys as Velero's credentials file under the key `cloud`. It replaces the credential stored through the interface for the cluster, or else for every cluster. Kubehenge creates the namespace, and switching backups off deletes it with the Secret. `readFrom`, up to 10 clusters of the same namespace backing up to the same target whose backups this one lists to restore ([Restore into another cluster](#restore-into-another-cluster)). |
-| `etcdSnapshots` | no | etcd snapshots ([above](#etcd-snapshots)). `enabled` (default false). `target`, the name of one of the administrator's targets, needed while `enabled`. `schedule`, as for `backups` (default `0 */12 * * *`). `timeZone` (default `UTC`). `keep`, the number of snapshots kept (1 to 1000, default 14). `distributionUpload` (default false), on RKE2 and k3s only and while `enabled`, the distribution's own upload ([above](#the-distributions-own-upload)). They are written with the credential stored through the interface for the cluster, or else for every cluster. While `backups` is enabled too, `target` must be the backups' target. |
+| `backups` | no | Velero ([above](#back-up-and-restore)). `enabled` (default false). `target`, the name of one of the administrator's targets, needed while `enabled`. `schedule`, a cron expression of five fields or a descriptor such as `@weekly` (default `0 2 * * *`). `timeZone` (default the site time zone, else `UTC`). `retentionDays` (1 to 3650, default 7). `volumes`, `all` (default) or `annotated`, only the volumes a pod names in its `backup.velero.io/backup-volumes` annotation. `existingSecret`, a Secret of your own in the cluster's `velero` namespace. It holds the store's keys as Velero's credentials file under the key `cloud`. It replaces the credential stored through the interface for the cluster, or else for every cluster. Kubehenge creates the namespace, and switching backups off deletes it with the Secret. `readFrom`, up to 10 clusters of the same namespace backing up to the same target whose backups this one lists to restore ([Restore into another cluster](#restore-into-another-cluster)). |
+| `etcdSnapshots` | no | etcd snapshots ([above](#etcd-snapshots)). `enabled` (default true). `target`, the name of one of the administrator's targets. Without one the snapshots go to the management cluster's backup volume. `schedule`, as for `backups` (default `0 */12 * * *`). `timeZone` (default the site time zone, else `UTC`). `keep`, the number of snapshots kept (1 to 1000, default 14). `distributionUpload` (default false), on RKE2 and k3s only and while `enabled`, with a `target`, the distribution's own upload ([above](#the-distributions-own-upload)). They are written with the credential stored through the interface for the cluster, or else for every cluster. While `backups` is enabled too, `target` must be the backups' target. |
 | `podSecurity` | no | `admission`, the level Pod Security Admission enforces in every namespace that labels none of its own: `privileged`, `baseline` (default) or `restricted`. Changing it replaces the control-plane machines. `kyverno`, the level Kyverno enforces in every namespace: `off` (default), `baseline` or `restricted` ([above](#add-ons)). |
 | `istio` | no | `enabled` (default false): Istio in ambient mode ([above](#add-ons)). |
 | `namespaceLabels` | no | Up to 20 labels, as key and value, put on the namespaces the add-ons install into ([above](#add-ons-and-your-policies)). Keys and values follow Kubernetes' label syntax. The webhook refuses `kubernetes.io/metadata.name`. |
@@ -2043,12 +2196,19 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `registryMirrors` | no | Up to 16 entries. `registry` is a lower-case host name with an optional port, or `*` for every registry. `endpoints` are 1 to 4 `http://` or `https://` addresses, tried in order. A path has to end in `/v2`. `caBundle` is the PEM authority of the endpoints. |
 | `trustedCAs` | no | Up to 8 PEM bundles of certificates, for the nodes' trust store. |
 | `releaseMirror` | RKE2 and k3s only | The cluster's own release mirror ([above](#a-clusters-own-release-mirror)). `url` is an `http://` or `https://` address without credentials, a query or a trailing slash. `caBundle` is the PEM authority of an `https://` mirror. Unset, the management cluster's mirror or GitHub. |
-| `securityGroups` | no | Up to 16 Proxmox VE security group names, which turn on the firewall of the nodes' interfaces ([above](#firewall)). Changing it replaces every node. |
+| `firewall` | no | `enabled` (default `true`), `servingPorts` (default `true`) and `ports`, a list of `protocol` (`tcp` or `udp`), `port` and an optional `endPort` ([above](#firewall)). Changing it replaces every node. |
+| `securityGroups` | no | Up to 16 Proxmox VE security group names, applied after the cluster's own traffic and before the serving ports. They need the firewall on ([above](#firewall)). Changing it replaces every node. |
 | `gitops` | no | `enabled` (default false). `engine`, `argocd` (default) or `flux`. `repository`, with `url` (`https://` or `ssh://`), `revision` (a branch or full ref, default `main`) and `path` (default `.`) and `caBundle` (PEM, for an `https://` server the usual authorities do not sign, not with Flux and `existingSecret`). `auth`, `none` (default), `deployKey`, `token` or `existingSecret`. `deployKey` works over `ssh://`. The key is in the Secret `<name>-gitops` beside the Cluster, its public half under `identity.pub`. `token` is the cluster's `gitops` credential, `username` and `password`. With `existingSecret`, the field `existingSecret` names the Secret. `knownHosts`, the server's host keys as known_hosts lines, at least one for the URL's host and port. It is required over `ssh://` except for Flux with `existingSecret`. `hostname` and `tlsSecret`, to serve the web interface through the ingress controller. `admins`, the first provider's groups that administer Argo CD. `signIn`, with `clientID` (the provider's own when unset) and `clientSecret`, `none` (default, PKCE), `stored` or `existingSecret`. `stored` is the cluster's `oidc-client` credential, key `clientSecret`. With `existingSecret`, the field `signIn.existingSecret` names the Secret. `ui` (default false), Flux's web interface, which needs `hostname` and a client secret. `ui` and `admins` need an identity provider in `oidc`. |
 | `oidc` | no | Up to eight providers: `issuerURL`, `clientID`, `usernameClaim`, `usernamePrefix`, `groupsClaim`, `groupsPrefix`, `scopes`, `certificateAuthority` ([above](#signing-in-with-openid-connect)). Unset, the providers set for every cluster. |
 | `upgrades` | no | Automatic Kubernetes upgrades. `mode` (`off`, `patch` or `minor`, default `off`) and `window` ([upgrading.md](upgrading.md#automatically-inside-a-window)). `nodeImages` (default true) sets whether the nodes move to new builds of their VM template in the window ([above](#node-image-refresh)). On Talos it sets whether they move to new Talos patch releases ([above](#talos-upgrades)). |
 | `talosVersion` | Talos only | The Talos release the nodes run, such as `v1.14.4`. Changing it upgrades them in place ([above](#talos-upgrades)). |
 | `autoscaler` | no | How the cluster autoscaler sizes the autoscaled pools ([above](#autoscaling)). `placement`, `management` (default) or `workload`. `expander`, `least-waste` (default), `most-pods` or `random`. `scaleDownDelayAfterAddMinutes` and `scaleDownUnneededMinutes`, 1 to 1440, default 10. |
+
+#### VM ID range
+
+The range needs one ID per node at the cluster's largest size, and one spare for the control plane and for each pool, which roll one machine beyond their size. Clusters that share a range need that many each, beside the templates already in it. Two ranges are either the same or do not overlap, and a partial overlap is refused. A scale or a new cluster that the range cannot hold is refused.
+
+Empty in **Options**, or removed in kubectl, takes the next free ID. A machine that finds no free ID fails for good, and the cluster has a `VMIDRangeFull` condition that names the range. Widen the range, then delete the failed machine so Cluster API makes it again.
 
 ### Day two
 
@@ -2056,6 +2216,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 kubectl -n clusters patch cluster prod --type=json \
   -p '[{"op":"replace","path":"/spec/topology/workers/machineDeployments/0/replicas","value":5}]'
 kubectl -n clusters patch cluster prod --type=merge -p '{"spec":{"topology":{"version":"v1.37.1+rke2r1"}}}'
+kubectl -n clusters annotate cluster prod kubehenge.dev/allow-deletion=true
 kubectl -n clusters delete cluster prod
 ```
 

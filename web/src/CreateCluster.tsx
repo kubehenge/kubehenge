@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState, type JSX } from "react";
 
-import { AddOnsStep } from "./AddOnsStep";
+import { AddOnsStep, PoliciesStep } from "./AddOnsStep";
 import { api, bridgesOf, dnsOf } from "./api";
 import { clusterPath } from "./cluster-paths";
 import {
   bridgeMtuProblems,
   bridgeNodeProblems,
+  gatewayProblems,
   classBridges,
   classStorages,
   createRoom,
+  spreadOver,
   csiOffer,
+  capacityProblems,
   csiProblems,
   fieldProblems,
   snapshotsOffer,
@@ -36,18 +39,21 @@ import {
   withNamespace,
   withRoom,
   withTalosRelease,
+  withSiteZone,
   type FieldKey,
   type Form,
   type Step,
 } from "./create-form";
 import { ConfirmStep, useCreateCheck } from "./CreateCheck";
 import { GeneralStep, IdentityStep, MachinesStep, NetworkStep, useClassTalos, useFreeAddresses } from "./CreateSteps";
+import { useDatacenterFirewall } from "./Firewall";
 import { useFleet } from "./fleet";
 import { offersHA, offersHAGroups, useHARules } from "./Placement";
 import { navigate } from "./router";
-import { clusterKey, fromCluster, startable, startDefault, startKeys } from "./start-from";
+import { clusterKey, fromCluster, startable, startKeys } from "./start-from";
 import type { Bridge, Cluster, ClusterClass, NodeDNS, PveNode, Storage, Versions } from "./types";
-import { Detail, Dialog, ErrorBox, errorMessage, filled, sole } from "./ui";
+import { CopiedFrom, Detail, Dialog, ErrorBox, errorMessage, filled, siteZoneOf, sole } from "./ui";
+import { record } from "./values";
 
 // customisationRefusal is the server's error where it names the node customisation, which then shows with it.
 const customisationRefusal = (error: string | undefined): string | undefined =>
@@ -88,6 +94,98 @@ const raising = new Set<keyof Form>([
   "existingCertManager",
 ]);
 
+const haControlPlanes = 3;
+
+// copiedLabels are the labels of the fields whose values a form copies from the cluster it started
+// from, by the form key. Those that the cluster left at the wizard's own value are not marked.
+const copiedLabels: Partial<Record<keyof Form, string>> = {
+  nodeOS: "Node OS",
+  controlPlaneReplicas: "Control-plane nodes",
+  workerReplicas: "Workers",
+  bridge: "Bridge",
+  vlan: "VLAN tag",
+  mtu: "MTU",
+  queues: "Queues",
+  prefix: "Prefix length",
+  gateway: "Gateway",
+  dnsServers: "DNS servers",
+  searchDomains: "Search domains",
+  ntpServers: "Time servers",
+  storage: "Storage",
+  cni: "Pod network",
+  loadBalancer: "Load balancer",
+};
+
+// copiedFields lists the labels of the copied values that differ from a new form's.
+function copiedFields(form: Form): string[] {
+  const fresh = newForm();
+  return Object.entries(copiedLabels).flatMap(([key, label]) =>
+    isCopiedKey(key) && startKeys.has(key) && JSON.stringify(form[key]) !== JSON.stringify(fresh[key]) ? [label] : [],
+  );
+}
+
+// storageOf is the storage entered, or else the only one offered.
+function storageOf(entered: Form, usable: Storage[]): string {
+  return filled(entered.storage) ? entered.storage : (sole(usable.map((s) => s.storage)) ?? "");
+}
+
+// lacksSharedKey tells whether the namespace the cluster goes to, or else the user's own, is known
+// to hold no access key for every cluster.
+function lacksSharedKey(
+  sharedKeys: Record<string, boolean>,
+  namespace: string,
+  sessionNamespace: string | undefined,
+): boolean {
+  return sharedKeys[namespace || (sessionNamespace ?? "")] === false;
+}
+
+// copiedContext is what the steps say was copied from the cluster the form started from, if any.
+function copiedContext(form: Form, from: Cluster | undefined): { from: string; labels: string[] } | undefined {
+  return from === undefined ? undefined : { from: from.name, labels: copiedFields(form) };
+}
+
+// isCopiedKey narrows a key of copiedLabels, which Object.entries gives as a string, back to the
+// form field it labels.
+function isCopiedKey(key: string): key is keyof Form {
+  return Object.hasOwn(copiedLabels, key);
+}
+
+// createLabelOf is Confirm's create button: it says so when the cluster waits for memory, or when
+// its disks may exceed the free space.
+function createLabelOf(room: ReturnType<typeof createRoom>): string {
+  if (room.nodeWarning !== undefined) {
+    return "Create and wait";
+  }
+  return room.diskWarning === undefined ? "Create" : "Create anyway";
+}
+
+// controlPlanesFor is three control planes where the cluster has three online nodes it may use to
+// spread them over, unless the user or the cluster started from chose a count.
+function controlPlanesFor(entered: Form, nodes: PveNode[], kept: boolean): number {
+  if (kept || spreadOver(nodes, entered) < haControlPlanes) {
+    return entered.controlPlaneReplicas;
+  }
+  return haControlPlanes;
+}
+
+// CreateButton is Confirm's primary button. It says so when the cluster waits for memory, or when
+// its disks exceed the free space of storage that may take them.
+function CreateButton({
+  blocked,
+  label,
+  onCreate,
+}: {
+  blocked: boolean;
+  label: string;
+  onCreate: () => void;
+}): JSX.Element {
+  return (
+    <button type="button" className="primary" disabled={blocked} onClick={onCreate}>
+      {label}
+    </button>
+  );
+}
+
 export function CreateCluster({
   canTrust,
   namespaces,
@@ -103,7 +201,11 @@ export function CreateCluster({
   const [storages, setStorages] = useState<Storage[]>([]);
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [nodes, setNodes] = useState<PveNode[]>([]);
+  // Whether each namespace holds the access key for every cluster.
+  const [sharedKeys, setSharedKeys] = useState<Record<string, boolean>>({});
+  const [sessionNamespace, setSessionNamespace] = useState<string>();
   const rules = useHARules();
+  const datacenterFirewall = useDatacenterFirewall();
   const [step, setStep] = useState<Step>("General");
   const [error, setError] = useState<string>();
   // The server's own words for the credentials that were not stored, behind the error's Detail.
@@ -118,7 +220,15 @@ export function CreateCluster({
   const cls = classes.find((c) => c.name === entered.className);
   // What the user set, and what the cluster started from set, stays when a default would replace it.
   const kept = (k: keyof Form): boolean => touched.has(k) || (filled(entered.from) && startKeys.has(k));
+  // The gateway the free addresses were looked for on before the user typed their own, so that a
+  // gateway typed over it moves no address the user left alone.
+  const [gatewayBase, setGatewayBase] = useState<string>();
   const set = <K extends keyof Form>(k: K, v: Form[K]): void => {
+    if (k === "gateway") {
+      setGatewayBase((b) => b ?? chosen.gateway);
+    } else if (k === "bridge") {
+      setGatewayBase(undefined);
+    }
     setEntered((f) => (raising.has(k) ? withRoom({ ...f, [k]: v }, cls) : { ...f, [k]: v }));
     setTouched((t) => (t.has(k) ? t : new Set([...t, k])));
   };
@@ -163,7 +273,12 @@ export function CreateCluster({
   useEffect(() => {
     async function loadClasses(): Promise<void> {
       try {
-        setClasses(await api.classes());
+        const listed = await api.classes();
+        const zone = siteZoneOf(listed);
+        if (zone !== "") {
+          setEntered((f) => withSiteZone(f, zone));
+        }
+        setClasses(listed);
       } catch (err) {
         setError(errorMessage(err));
       }
@@ -191,18 +306,23 @@ export function CreateCluster({
     }
     async function loadClusters(): Promise<void> {
       try {
-        const listed = await api.clusters();
-        setClusters(listed);
-        // A new cluster starts as the newest working one is, unless a distribution was chosen meanwhile.
-        const last = startDefault(listed);
-        if (last !== undefined) {
-          setEntered((f) => (f.className === "" ? fromCluster(last, f) : f));
-        }
+        setClusters(await api.clusters());
       } catch {
         // The controller refuses a storage another cluster uses in any case. The list only says so sooner.
         setClusters([]);
       }
     }
+    async function loadSharedKeys(): Promise<void> {
+      try {
+        const s = await api.session();
+        setSharedKeys({ ...s.sharedBackupKeys });
+        setSessionNamespace(s.namespace);
+      } catch {
+        // Unknown counts as stored: the server refuses a cluster that has no key, so nothing is lost.
+        setSharedKeys({});
+      }
+    }
+    void loadSharedKeys();
     void loadClasses();
     void loadStorages();
     void loadNodes();
@@ -219,12 +339,20 @@ export function CreateCluster({
   const { net, network, network6, node } = filled(entered.vlan)
     ? noNetwork
     : bridgeNetwork(bridge, bridgesByNode, dnsByNode);
+  // Registering needs a Rancher that one of the clusters runs.
+  const rancherExists = clusters.some((x) => record(x.variables["rancher"])["install"] === true);
+  const formNamespace = namespaces.length > 1 ? namespaceOf(entered, namespaces) : "";
   const chosen: Form = withBackupChoices(
     {
       ...withBridgeNetwork(withTalosRelease(entered, talos, offered), net, kept),
-      namespace: namespaces.length > 1 ? namespaceOf(entered, namespaces) : "",
+      namespace: formNamespace,
+      taken: clusters.filter((x) => formNamespace === "" || x.namespace === formNamespace).map((x) => x.name),
+      rancherExists,
+      controlPlaneReplicas: controlPlanesFor(entered, nodes, kept("controlPlaneReplicas")),
+      noSharedKey: lacksSharedKey(sharedKeys, namespaceOf(entered, namespaces), sessionNamespace),
+      rancherRegister: entered.rancherRegister,
       bridge,
-      storage: filled(entered.storage) ? entered.storage : (sole(usableStorages.map((s) => s.storage)) ?? ""),
+      storage: storageOf(entered, usableStorages),
     },
     cls,
     canTrust,
@@ -234,7 +362,8 @@ export function CreateCluster({
     bridge,
     vlan: entered.vlan,
     families: entered.families,
-    gateway: chosen.gateway,
+    // A gateway the user mistypes must not move the addresses they left alone to its network.
+    gateway: gatewayBase ?? chosen.gateway,
     prefix: chosen.prefix,
     gateway6: chosen.gateway6,
     prefix6: chosen.prefix6,
@@ -254,6 +383,7 @@ export function CreateCluster({
   };
   // Starting from another cluster, or from none, replaces all but the name and namespace.
   const chooseFrom = (key: string): void => {
+    setGatewayBase(undefined);
     const c = clusters.find((x) => clusterKey(x) === key);
     setEntered((f) => (c === undefined ? { ...newForm(), name: f.name, namespace: f.namespace } : fromCluster(c, f)));
     setTouched((t) => new Set(["from", ...[...t].filter((k) => k === "name")]));
@@ -262,20 +392,29 @@ export function CreateCluster({
     setEntered((f) => withNamespace(f, namespace, namespaceOf(f, namespaces)));
   };
 
+  const copiedFrom = clusters.find((x) => clusterKey(x) === entered.from);
+  // React Compiler keeps the context's value while its inputs stay.
+  const copied = copiedContext(form, copiedFrom);
   const index = steps.indexOf(step);
   const previous = steps[index - 1];
   const following = steps[index + 1];
   const byField = {
     ...fieldProblems(step, form, cls),
     ...bridgeMtuProblems(step, form, bridgeOptions),
+    ...gatewayProblems(step, form, net),
     ...bridgeNodeProblems(step, form, {
       bridgesByNode,
       online: nodes.filter((x) => x.online).map((x) => x.node),
     }),
+    ...capacityProblems(step, form, { nodes, storages: usableStorages }),
     ...csiProblems(step, form, csi),
     ...snapshotsProblems(step, form, snapshots),
   };
   const open = Object.values(byField);
+  // A cluster that fits the nodes but not what they have free now waits for room.
+  const room = createRoom(form, nodes, usableStorages);
+  const createLabel = createLabelOf(room);
+  const refused = Object.keys(capacityProblems("Machines", form, { nodes, storages: usableStorages })).length > 0;
   const shown = (k: FieldKey): string | undefined => (attempted.has(step) || touched.has(k) ? byField[k] : undefined);
   const wizardRef = useRef<HTMLDivElement>(null);
 
@@ -316,7 +455,8 @@ export function CreateCluster({
       return;
     }
     fleet?.show(c);
-    const pending = pendingCredentials(form, cls);
+    // The access key went with the request.
+    const pending = pendingCredentials(form, cls).filter((p) => p.purpose !== "backup");
     const stored = await Promise.allSettled(
       pending.map(async (p) => api.storeCredential(p.purpose, p.values, { namespace: c.namespace, name: c.name })),
     );
@@ -372,127 +512,139 @@ export function CreateCluster({
           ))}
         </nav>
         <div className="wizard-body" ref={wizardRef}>
-          {step === "General" && (
-            <GeneralStep
-              form={form}
-              set={set}
-              shown={shown}
-              classes={classes}
-              cls={cls}
-              offered={offered}
-              talos={talos}
-              onChooseClass={chooseClass}
-              namespaces={namespaces}
-              onChooseNamespace={chooseNamespace}
-              starts={startable(clusters)}
-              onChooseFrom={chooseFrom}
-            />
-          )}
-          {step === "Network" && (
-            <NetworkStep
-              form={form}
-              set={set}
-              shown={shown}
-              cls={cls}
-              bridgeOptions={bridgeOptions}
-              network={network}
-              network6={network6}
-              free={free}
-              checked={typed}
-            />
-          )}
-          {step === "Machines" && (
-            <MachinesStep
-              form={form}
-              set={set}
-              shown={shown}
-              cls={cls}
-              usableStorages={usableStorages}
-              placed={variable(cls, "allowedNodes") !== undefined}
-              haOffered={haOffered}
-              csi={csi}
-              snapshots={snapshots}
-              haGroups={haGroups}
-              nodes={nodes}
-              rules={rules}
-              attempted={attempted.has(step)}
-              refusal={checkRefusal(error, checked, { form, cls })}
-            />
-          )}
-          {step === "Add-ons" && (
-            <AddOnsStep
-              form={form}
-              set={set}
-              shown={shown}
-              cls={cls}
-              canTrust={canTrust}
-              namespace={namespaceOf(form, namespaces)}
-              showAll={attempted.has("Add-ons")}
-            />
-          )}
-          {step === "Identity providers" && (
-            <IdentityStep form={form} set={set} canTrust={canTrust} showAll={attempted.has("Identity providers")} />
-          )}
-          {step === "Confirm" && cls && (
-            <ConfirmStep
-              read={checked.read}
-              room={createRoom(form, nodes, usableStorages)}
-              summary={summary(form, cls, {
-                ha: haOffered,
-                csi: csi.offered,
-                snapshots: snapshots.offered,
-                haGroups,
-              })}
-            />
-          )}
+          <CopiedFrom.Provider value={copied}>
+            {step === "General" && (
+              <GeneralStep
+                form={form}
+                set={set}
+                shown={shown}
+                classes={classes}
+                cls={cls}
+                offered={offered}
+                talos={talos}
+                onChooseClass={chooseClass}
+                namespaces={namespaces}
+                onChooseNamespace={chooseNamespace}
+                starts={startable(clusters)}
+                onChooseFrom={chooseFrom}
+                growthWarning={room.growthWarning}
+              />
+            )}
+            {step === "Network" && (
+              <NetworkStep
+                form={form}
+                set={set}
+                shown={shown}
+                cls={cls}
+                bridgeOptions={bridgeOptions}
+                network={network}
+                network6={network6}
+                free={free}
+                checked={typed}
+                datacenter={datacenterFirewall}
+              />
+            )}
+            {step === "Machines" && (
+              <MachinesStep
+                form={form}
+                set={set}
+                shown={shown}
+                cls={cls}
+                usableStorages={usableStorages}
+                placed={variable(cls, "allowedNodes") !== undefined}
+                haOffered={haOffered}
+                csi={csi}
+                snapshots={snapshots}
+                haGroups={haGroups}
+                nodes={nodes}
+                rules={rules}
+                attempted={attempted.has(step)}
+                refusal={checkRefusal(error, checked, { form, cls })}
+              />
+            )}
+            {step === "Add-ons" && (
+              <AddOnsStep
+                form={form}
+                set={set}
+                shown={shown}
+                cls={cls}
+                canTrust={canTrust}
+                namespace={namespaceOf(form, namespaces)}
+                showAll={attempted.has("Add-ons")}
+              />
+            )}
+            {step === "Policies" && (
+              <PoliciesStep
+                form={form}
+                set={set}
+                shown={shown}
+                cls={cls}
+                canTrust={canTrust}
+                namespace={namespaceOf(form, namespaces)}
+              />
+            )}
+            {step === "Identity providers" && (
+              <IdentityStep form={form} set={set} canTrust={canTrust} showAll={attempted.has("Identity providers")} />
+            )}
+            {step === "Confirm" && cls && (
+              <ConfirmStep
+                read={checked.read}
+                room={createRoom(form, nodes, usableStorages)}
+                summary={summary(form, cls, {
+                  ha: haOffered,
+                  csi: csi.offered,
+                  snapshots: snapshots.offered,
+                  haGroups,
+                  datacenterFirewall,
+                })}
+              />
+            )}
 
-          <ErrorBox message={error} />
-          {reasons.length > 0 && <Detail>{reasons.join(" ")}</Detail>}
-          {created === undefined ? (
-            <div className="actions">
-              <button type="button" onClick={() => (touched.size > 0 ? setDiscarding(true) : navigate("/"))}>
-                Cancel
-              </button>
-              <span className="spacer" />
-              <button
-                type="button"
-                disabled={previous === undefined}
-                onClick={() => {
-                  if (previous !== undefined) {
-                    setStep(previous);
-                  }
-                }}
-              >
-                Back
-              </button>
-              {step === "Confirm" ? (
+            <ErrorBox message={error} />
+            {reasons.length > 0 && <Detail>{reasons.join(" ")}</Detail>}
+            {created === undefined ? (
+              <div className="actions">
+                <button type="button" onClick={() => (touched.size > 0 ? setDiscarding(true) : navigate("/"))}>
+                  Cancel
+                </button>
+                <span className="spacer" />
+                <button
+                  type="button"
+                  disabled={previous === undefined}
+                  onClick={() => {
+                    if (previous !== undefined) {
+                      setStep(previous);
+                    }
+                  }}
+                >
+                  Back
+                </button>
+                {step === "Confirm" ? (
+                  <CreateButton
+                    blocked={[busy, !checked.accepted, refused].some(Boolean)}
+                    label={createLabel}
+                    onCreate={() => {
+                      void create();
+                    }}
+                  />
+                ) : (
+                  <button type="button" className="primary" onClick={next}>
+                    Next
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="actions">
                 <button
                   type="button"
                   className="primary"
-                  disabled={busy || !checked.accepted}
-                  onClick={() => {
-                    void create();
-                  }}
+                  onClick={() => navigate(clusterPath(created.namespace, created.name, "options"))}
                 >
-                  Create
+                  Open cluster
                 </button>
-              ) : (
-                <button type="button" className="primary" onClick={next}>
-                  Next
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="actions">
-              <button
-                type="button"
-                className="primary"
-                onClick={() => navigate(clusterPath(created.namespace, created.name, "options"))}
-              >
-                Open cluster
-              </button>
-            </div>
-          )}
+              </div>
+            )}
+          </CopiedFrom.Provider>
         </div>
       </div>
       {discarding && (

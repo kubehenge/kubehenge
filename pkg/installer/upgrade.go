@@ -127,7 +127,7 @@ func (r *Runner) publicName(ctx context.Context, c *x509.Certificate, address st
 			return host
 		}
 	}
-	r.sayf(out, "kubehenge: leaving %s out of the certificate: this node's DNS does not resolve it to %s; give it with --name to keep it", host, address)
+	r.sayf(out, "kubehenge: leaving %s out of the certificate, since this node's DNS does not resolve it to %s. Give it with --name to keep it", host, address)
 	return ""
 }
 
@@ -263,7 +263,7 @@ func (r *Runner) updateEntry(ctx context.Context, url string, out io.Writer) {
 		return
 	}
 	if _, err := r.Exec.Run(ctx, "/usr/local/sbin/kubehenge-pve-entry", "--url", url); err != nil {
-		r.sayf(out, "kubehenge: the entry still leads to %s; see %s", current, r.LogPath)
+		r.sayf(out, "kubehenge: the entry still leads to %s. See %s", current, r.LogPath)
 		return
 	}
 	r.sayf(out, "On every other node with the entry, run: kubehenge-pve-entry --url %s", url)
@@ -299,6 +299,14 @@ func (r *Runner) stageSoftware(ctx context.Context, tofu tofuPlan) error {
 	return nil
 }
 
+// stageCA pushes the CA of the Proxmox VE API beside its places, for the upgrade script to rename.
+func (r *Runner) stageCA(ctx context.Context, ca []byte) error {
+	if err := r.pushData(ctx, "proxmox-ca.pem", ca, "/etc/kubehenge/proxmox-ca.pem.new", "0644"); err != nil {
+		return err
+	}
+	return r.pushData(ctx, "proxmox-ca.crt", ca, "/usr/local/share/ca-certificates/proxmox-ca.crt.new", "0644")
+}
+
 // Upgrade replaces the software of an installed appliance with a release no older, keeps its
 // state, and stops if the management cluster is being applied.
 func (r *Runner) Upgrade(ctx context.Context, out io.Writer) (*Result, error) {
@@ -327,10 +335,7 @@ func (r *Runner) Upgrade(ctx context.Context, out io.Writer) (*Result, error) {
 		return nil, userErr("copying the software into container "+c.CTID+" failed", "See "+r.LogPath+" for the command's message")
 	}
 	if plan.newCA {
-		if err = r.pushData(ctx, "proxmox-ca.pem", plan.ca.PEM, "/etc/kubehenge/proxmox-ca.pem.new", "0644"); err != nil {
-			return nil, err
-		}
-		if err = r.pushData(ctx, "proxmox-ca.crt", plan.ca.PEM, "/usr/local/share/ca-certificates/proxmox-ca.crt.new", "0644"); err != nil {
+		if err = r.stageCA(ctx, plan.ca.PEM); err != nil {
 			return nil, err
 		}
 	}
@@ -352,6 +357,10 @@ func (r *Runner) Upgrade(ctx context.Context, out io.Writer) (*Result, error) {
 	}
 	r.address, r.address6 = r.addresses(ctx)
 	_ = r.stepUpdates(ctx)
+	// An appliance installed before the installer protected it gets its protection here.
+	if err = r.Protect(ctx); err != nil {
+		r.warnings = append(r.warnings, "container "+c.CTID+" is not protected against deletion ("+err.Error()+"). Protect it with: pct set "+c.CTID+" --protection 1")
+	}
 	r.sayf(out, "\nKubehenge %s is running in container %s. Apply the management cluster again from the interface to upgrade it too.", r.version, c.CTID)
 	if plan.newURL != "" {
 		r.sayf(out, "The appliance reaches the Proxmox VE API at %s. The management cluster and the clusters do from its next apply.", plan.newURL)

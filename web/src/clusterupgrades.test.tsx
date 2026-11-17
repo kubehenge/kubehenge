@@ -64,7 +64,7 @@ describe("cluster upgrades", () => {
     expect(within(dialog).getByLabelText("From")).toHaveValue("02:00");
     await user.click(within(dialog).getByLabelText("Update node images"));
     expect(within(dialog).queryByLabelText("From")).not.toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() => expect(sent()).toStrictEqual({ variables: { upgrades: { mode: "off", nodeImages: false } } }));
   });
@@ -126,12 +126,12 @@ describe("cluster upgrades", () => {
       ).toStrictEqual(["v1.14.2 (running)", "v1.15.3", "v1.14.4"]),
     );
     await user.selectOptions(dialog.getByLabelText("Talos release"), "v1.15.3");
-    await user.click(dialog.getByRole("button", { name: "Upgrade" }));
+    await user.click(dialog.getByRole("button", { name: "Add to plan" }));
     await expect(dialog.findByRole("alert")).resolves.toHaveTextContent(
       "Talos v1.15.3 does not run kubernetes v1.36.5.",
     );
     answer = { status: 200, body: talos };
-    await user.click(dialog.getByRole("button", { name: "Upgrade" }));
+    await user.click(dialog.getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     // The refused release was planned, never sent.
@@ -190,16 +190,16 @@ describe("cluster upgrades", () => {
     expect(document.title).toBe("web: Options · Kubehenge");
     await user.click(screen.getByRole("button", { name: "Edit automatic upgrades" }));
     const dialog = screen.getByRole("dialog", { name: "Edit automatic upgrades" });
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.selectOptions(within(dialog).getByLabelText("Upgrade automatically"), "minor");
     await user.click(within(dialog).getByLabelText("Sat"));
     await user.click(within(dialog).getByLabelText("Mon"));
     await user.selectOptions(within(dialog).getByLabelText("Time zone"), "Europe/Berlin");
     await user.type(within(dialog).getByLabelText("Days of the month"), "32");
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     expect(within(dialog).getByLabelText("Days of the month")).toHaveAttribute("aria-invalid", "true");
     await user.clear(within(dialog).getByLabelText("Days of the month"));
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(sent()).toStrictEqual({

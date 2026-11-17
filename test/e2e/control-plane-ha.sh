@@ -5,10 +5,11 @@
 # address from another server and takes writes, etcd keeping its quorum on the two left, until the
 # control plane's health check has the dead server replaced. The control plane then shrinks back to
 # one server, keeping what was written, and nothing of the cluster is left once it is deleted.
-# Every node's NIC firewall is on throughout, through a security group that lets in SSH and the API
-# alone: the servers join, elect and replace each other behind it, the runner reaches SSH's port
-# and the API but not the kubelet or a NodePort, a pod reaches a pod on another node, and a change
-# of the firewall's sources reaches the running VMs' IPSets without replacing one.
+# Every node's NIC firewall is on throughout, as the class's default with its serving ports open,
+# plus a security group that lets in SSH: the servers join, elect and replace each other behind it,
+# the runner reaches SSH's port, the API and a NodePort but not the kubelet, a pod reaches a pod on
+# another node, and a change of the firewall's sources reaches the running VMs' IPSets without
+# replacing one.
 #
 #   test/e2e/control-plane-ha.sh
 #
@@ -59,7 +60,7 @@ firewall_restore() {
 cleanup() {
     status=$?
     if [ "${status}" -ne 0 ]; then
-        printf '\nleaving the cluster in %s for inspection; delete it with: kubectl delete namespace %s\n' "${ns}" "${ns}"
+        printf '\nleaving the cluster in %s for inspection; delete it with: kubectl -n %s annotate clusters --all kubehenge.dev/allow-deletion=true && kubectl delete namespace %s\n' "${ns}" "${ns}" "${ns}"
     fi
     firewall_restore
     rm -rf "${work}"
@@ -142,6 +143,35 @@ ${vm_list}
 EOF
     seen=
 }
+# serving_rules: whether every VM's firewall has Kubehenge's rules for the API, ingress, the
+# NodePorts and ICMP echo of both families, the rule for its load-balancer IPSet, and that IPSet.
+# The security group comes after the cluster's own traffic and before the load-balancer addresses
+# and the serving ports, so a group can drop or narrow those.
+# shellcheck disable=SC2310,SC2312 # polled.
+serving_rules() {
+    vm_list=$(cluster_vms) || return 1
+    [ -n "${vm_list}" ] || return 1
+    while read -r vm_node vm_id; do
+        listed=$(pve_get "nodes/${vm_node}/qemu/${vm_id}/firewall/rules") || return 1
+        rules=$(printf '%s' "${listed}" |
+            jq -c '[.data[] | select(.comment // "" | startswith("kubehenge:")) | "\(.proto // "")/\(.dport // .["icmp-type"] // .dest // .source)"] | sort') || return 1
+        seen="VM ${vm_id} on ${vm_node}: ${rules}"
+        printf '%s' "${rules}" | jq -e 'index("tcp/6443") and index("tcp/80") and index("tcp/443") and
+            index("tcp/30000:32767") and index("udp/30000:32767") and index("icmp/echo-request") and
+            index("ipv6-icmp/echo-request") and index("/+guest/kubehenge-lb") and index("/+guest/kubehenge")' > /dev/null || return 1
+        order=$(printf '%s' "${listed}" | jq -c --arg g "${group}" '.data | sort_by(.pos) |
+            map(if .type == "group" then (if .action == $g then "group" else "other group" end)
+                elif .source == "+guest/kubehenge" then "own" elif (.comment // "" | startswith("kubehenge:")) then "serving"
+                else "other" end)') || return 1
+        seen="VM ${vm_id} on ${vm_node}: ${rules}, in order ${order}"
+        printf '%s' "${order}" | jq -e 'index(["own"]) as $own | index(["group"]) as $group | index(["serving"]) as $serving |
+            $own != null and $group != null and $serving != null and $own < $group and $group < $serving' > /dev/null || return 1
+        pve_get "nodes/${vm_node}/qemu/${vm_id}/firewall/ipset" | jq -e '[.data[].name] | index("kubehenge-lb")' > /dev/null || return 1
+    done << EOF
+${vm_list}
+EOF
+    seen=
+}
 # port_state <address> <port>: dropped when the connection times out, as a firewall's drop does,
 # refused when nothing listens, and open when something answers.
 port_state() {
@@ -177,17 +207,16 @@ fixture_pod() {
         workload -n e2e-firewall apply -f -
 }
 
-step "a security group that lets in SSH and the API, and the datacenter firewall"
-# The API's port is in the group because the runner, like any administrator's machine, is no source
-# of the cluster's own, and the steps below reach the cluster through its virtual IP.
+step "a security group that lets in SSH, and the datacenter firewall"
+# The API's port is left to the class's default rules: the runner, like any administrator's
+# machine, is no source of the cluster's own, and the steps below reach the cluster through its
+# virtual IP.
 firewall_before=$(pve_get cluster/firewall/options | jq -r '.data.enable // 0')
 pve -X PUT -d enable=1 "${KUBEHENGE_PROXMOX_URL}/api2/json/cluster/firewall/options" > /dev/null
 pve -X POST -d "group=${group}" -d "comment=Kubehenge end-to-end test" "${KUBEHENGE_PROXMOX_URL}/api2/json/cluster/firewall/groups" > /dev/null
 group_made=true
-for port in 22 6443; do
-    pve -X POST -d type=in -d action=ACCEPT -d proto=tcp -d "dport=${port}" -d enable=1 \
-        "${KUBEHENGE_PROXMOX_URL}/api2/json/cluster/firewall/groups/${group}" > /dev/null
-done
+pve -X POST -d type=in -d action=ACCEPT -d proto=tcp -d dport=22 -d enable=1 \
+    "${KUBEHENGE_PROXMOX_URL}/api2/json/cluster/firewall/groups/${group}" > /dev/null
 
 step "a k3s cluster with one server"
 kubectl create namespace "${ns}"
@@ -243,8 +272,14 @@ until_true 600 "three etcd members" etcd_members 3
 kubectl -n "${ns}" wait --for=condition=Available cluster/ha --timeout=10m
 workload get nodes -o wide
 
-step "the firewall lets in SSH and the API, keeps out the kubelet and NodePorts, and passes the cluster's own traffic"
+step "the firewall lets in SSH, the API and NodePorts, keeps out the kubelet, and passes the cluster's own traffic"
 until_true 120 "every NIC with firewall=1" firewalled_nics
+firewall_on=$(kubectl -n "${ns}" get cluster/ha -o jsonpath='{.spec.topology.variables[?(@.name=="firewall")].value.enabled}')
+[ "${firewall_on}" = true ] || fail "the cluster did not get the class's default firewall"
+until_true 120 "every VM has the serving-port rules and its load-balancer IPSet" serving_rules
+# The datacenter firewall is on, so the cluster is never marked as one whose firewall does nothing.
+firewall_inactive=$(kubectl -n "${ns}" get cluster/ha -o jsonpath='{.status.conditions[?(@.type=="FirewallInactive")].status}')
+[ -z "${firewall_inactive}" ] || fail "FirewallInactive set while the datacenter firewall is on"
 node_addresses=$(workload get nodes -o jsonpath='{range .items[*]}{.status.addresses[?(@.type=="InternalIP")].address}{"\n"}{end}')
 node_count=$(echo "${node_addresses}" | wc -l)
 [ "${node_count}" -eq 4 ] || fail "expected four nodes' addresses, have: ${node_addresses}"
@@ -262,14 +297,14 @@ fixture_pod client "${client_node}" pause
 workload -n e2e-firewall wait --for=condition=Ready pod/server pod/client --timeout=10m
 workload -n e2e-firewall create service nodeport server --tcp=8080:8080
 node_port=$(workload -n e2e-firewall get service server -o jsonpath='{.spec.ports[0].nodePort}')
-until_true 120 "the NodePort ${node_port} is dropped on every node" every_node_is dropped "${node_port}"
+until_true 120 "the NodePort ${node_port} is open on every node" every_node_is open "${node_port}"
 server_ip=$(workload -n e2e-firewall get pod server -o jsonpath='{.status.podIP}')
 server_node_address=$(workload get node "${server_node}" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
 # The exec itself runs through the kubelet's port, which the firewall keeps from the runner but
 # gives the API servers.
 reaches() { workload -n e2e-firewall exec client -- /agnhost connect "$1" --timeout=3s > /dev/null 2>&1; }
 until_true 120 "a pod reaches a pod on another node" reaches "${server_ip}:8080"
-until_true 120 "a pod reaches the NodePort the runner cannot" reaches "${server_node_address}:${node_port}"
+until_true 120 "a pod reaches the NodePort" reaches "${server_node_address}:${node_port}"
 workload delete namespace e2e-firewall --wait --timeout=5m
 
 step "a changed source reaches the running VMs' IPSets, replacing none"
@@ -290,6 +325,16 @@ set_appliance_addresses "${addresses_before}"
 until_true 180 "no VM's IPSet holds ${source_address}" ipsets_hold absent "${source_address}"
 vms_after=$(cluster_vms | sort)
 [ "${vms_after}" = "${vms_before}" ] || fail "a source's change replaced a VM"
+
+step "with the datacenter firewall off, the cluster says its firewall does nothing"
+inactive() {
+    seen=$(kubectl -n "${ns}" get cluster/ha -o jsonpath='{.status.conditions[?(@.type=="FirewallInactive")].status}')
+    [ "${seen}" = "$1" ]
+}
+pve -X PUT -d enable=0 "${KUBEHENGE_PROXMOX_URL}/api2/json/cluster/firewall/options" > /dev/null
+until_true 180 "the cluster's FirewallInactive condition is True" inactive True
+pve -X PUT -d enable=1 "${KUBEHENGE_PROXMOX_URL}/api2/json/cluster/firewall/options" > /dev/null
+until_true 180 "the cluster's FirewallInactive condition is gone" inactive ""
 
 step "the server holding the virtual IP dies; the API stays reachable and takes writes"
 # The class's 300 s before a not-ready node counts as dead only adds waiting here; the integration
@@ -350,6 +395,7 @@ until_true 60 "the ProxmoxCluster marked for deletion" marked
 # capmox has to reconcile that deletion while the Cluster still stands. Unpatched, it never looks
 # again once the Cluster goes, and the delete below runs out of time.
 sleep 15
+webhook_retried kubectl -n "${ns}" annotate cluster/ha kubehenge.dev/allow-deletion=true > /dev/null
 kubectl -n "${ns}" delete cluster/ha --wait --timeout=30m
 left=$(vms)
 [ "${left}" = 0 ] || fail "VMs of the cluster are still there"

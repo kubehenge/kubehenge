@@ -367,7 +367,7 @@ func (h *Hooks) checkNodeOS(ctx context.Context, reads *pveReads, c *clusterv1.C
 	}
 	f, r, _ := templates.ReleaseOf(o)
 	return fmt.Errorf("%s %s needs CPU type %s, which no allowed node (%s) offers. Choose another node OS",
-		f.Title(), r.Name, templates.CPUTypeOf(r), strings.Join(names, ", "))
+		f.Title(), r.Name, templates.CPUTypeOf(&r), strings.Join(names, ", "))
 }
 
 // buildableNodeOS is the cluster's node OS once Kubehenge builds templates of it and its FIPS
@@ -533,7 +533,7 @@ func (h *Hooks) checkNUMA(ctx context.Context, reads *pveReads, c *clusterv1.Clu
 			return err
 		}
 		if cores < templates.NUMAMinCores {
-			return fmt.Errorf("the templates use NUMA, which needs at least %d cores per machine, and worker pool %s has %d", templates.NUMAMinCores, md.Name, cores)
+			return fmt.Errorf("the templates use NUMA, which needs at least %d cores per machine, and worker pool %s has %d", templates.NUMAMinCores, PoolLabel(md.Name, TopologyPools(c)), cores)
 		}
 	}
 	return nil

@@ -280,7 +280,7 @@ describe("vM templates", () => {
     // The default node OS comes chosen. One not released yet is shown but cannot be chosen.
     const nodeOS = within(dialog).getByLabelText("Node OS");
     expect(nodeOS).toHaveValue("almalinux-10");
-    expect(within(nodeOS).getByRole("option", { name: "openSUSE Leap 16.1: not released yet" })).toBeDisabled();
+    expect(within(nodeOS).getByRole("option", { name: "openSUSE Leap 16.1 (not released)" })).toBeDisabled();
     // FIPS mode is offered for RKE2 alone. A distribution without it goes back to the default.
     await user.selectOptions(nodeOS, "almalinux-10-fips");
     await user.selectOptions(within(dialog).getByLabelText("Distribution"), "k3s");

@@ -2,7 +2,8 @@ import { useState, type JSX } from "react";
 
 import { adminPath } from "./admin-views";
 import { api } from "./api";
-import { BackupWarning, ExportBox, RecreateDialog } from "./ManagementRecovery";
+import { SameHostWarning } from "./ManagementHealth";
+import { BackupWarning, ExportBox, RecoverDialog, RecreateDialog } from "./ManagementRecovery";
 import { Link } from "./router";
 import type { EtcdSnapshot, ManagementBackups as Backups, ManagementBackupSettings } from "./types";
 import {
@@ -65,6 +66,7 @@ export function ManagementBackups({ running }: { running: boolean }): JSX.Elemen
   }
   return (
     <>
+      {b.volume !== undefined && <VolumeBox volume={b.volume} sameHost={b.summary?.sameHost === true} />}
       <div className="box">
         <h3>Management cluster etcd</h3>
         <BackupWarning
@@ -119,6 +121,81 @@ export function ManagementBackups({ running }: { running: boolean }): JSX.Elemen
         />
       )}
     </>
+  );
+}
+
+// VolumeBox shows the backups on the management cluster's own volume, which run with no settings,
+// and the appliance's copy of the latest.
+function VolumeBox({
+  volume: v,
+  sameHost,
+}: {
+  volume: NonNullable<Backups["volume"]>;
+  sameHost: boolean;
+}): JSX.Element {
+  const [recovering, setRecovering] = useState(false);
+  return (
+    <div className="box">
+      <h3>Backup volume</h3>
+      <dl className="summary">
+        <dt>Claim</dt>
+        <dd className="mono">{v.claim}</dd>
+        <dt>Schedule</dt>
+        <dd>Every 6 h, newest 28 kept</dd>
+        <dt>Last snapshot</dt>
+        <dd>
+          {v.last === undefined ? (
+            <span className="muted">None yet</span>
+          ) : (
+            <>
+              <span className="mono">{v.last.name}</span> <span className="muted">{age(v.last.time)} ago</span>
+            </>
+          )}
+        </dd>
+        {v.export !== undefined && (
+          <>
+            <dt>Export</dt>
+            <dd>
+              <span className="mono">{v.export.name}</span> <span className="muted">{bytes(v.export.bytes)}</span>
+            </dd>
+          </>
+        )}
+        {v.copy !== undefined && (
+          <>
+            <dt>Appliance copy</dt>
+            <dd>
+              {v.copy.snapshot === undefined ? (
+                <span className="muted">None</span>
+              ) : (
+                <span className="mono">{v.copy.snapshot}</span>
+              )}{" "}
+              <span className="muted">
+                {bytes(v.copy.bytes)} of {bytes(v.copy.cap)}
+              </span>
+            </dd>
+          </>
+        )}
+        {v.next !== undefined && (
+          <>
+            <dt>Next</dt>
+            <dd>{when(v.next)}</dd>
+          </>
+        )}
+      </dl>
+      {v.error !== undefined && (
+        <p className="warning" role="alert">
+          <Status state="error" text="Failed" /> {when(v.failed)}: {sentence(v.error)}
+        </p>
+      )}
+      {v.copy?.error !== undefined && <p className="warning">{sentence(v.copy.error)}</p>}
+      {sameHost && <SameHostWarning />}
+      <div className="actions">
+        <button type="button" className="danger" onClick={() => setRecovering(true)}>
+          Recover…
+        </button>
+      </div>
+      {recovering && <RecoverDialog onClose={() => setRecovering(false)} />}
+    </div>
   );
 }
 

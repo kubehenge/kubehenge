@@ -444,11 +444,19 @@ resource "proxmox_virtual_environment_vm" "node" {
   # A VM given another node moves there rather than being made again, which would take its etcd
   # member with it.
   migrate = true
+  # The backups VM's disk may still be attached to a node VM, so a destroy deletes the node VMs
+  # first. The order runs this way round so that an apply targeting the backups VM alone, as a
+  # removal that lifts its protection does, makes or changes no node VM.
+  depends_on = [proxmox_virtual_environment_vm.backups]
 
   machine         = "q35"
   scsi_hardware   = "virtio-scsi-single"
   on_boot         = true
   stop_on_destroy = true
+  # Proxmox VE refuses to destroy a protected VM, from its interface and API alike. Before an apply
+  # that replaces or removes a node VM, the appliance lifts the flag on exactly that VM, and sets it
+  # again on any other node VM found without it. Migration, HA included, is not affected.
+  protection = true
   # Rebooting on a hardware change would take every node down at once; a change of cores or
   # memory takes effect when each node next reboots, as a Talos upgrade reboots them one by one.
   reboot_after_update = false
@@ -530,8 +538,11 @@ resource "proxmox_virtual_environment_vm" "node" {
   serial_device {}
 
   lifecycle {
-    # Talos upgrades nodes in place; a newer image is only for nodes added later.
-    ignore_changes = [disk[0].import_from]
+    # Talos upgrades nodes in place; a newer image is only for nodes added later. The CSI plugin
+    # lifts a node VM's protection for each detach and marks the description meanwhile, and the
+    # appliance sets protection outside the plan (pkg/appliance/protection.go), so an apply in the
+    # middle of a detach changes neither.
+    ignore_changes = [disk[0].import_from, description, protection]
 
     precondition {
       condition     = length(local.address_overlaps) == 0

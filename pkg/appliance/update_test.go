@@ -526,7 +526,7 @@ func TestUpdateRollBackFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := u.Run(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "; rolling back to 0.1.0 failed too: the interface answered 502") {
+	if err == nil || !strings.Contains(err.Error(), ". Rolling back to 0.1.0 failed too: the interface answered 502") {
 		t.Fatalf("update: %v", err)
 	}
 	installedIs(t, u, "0.1.0", "")

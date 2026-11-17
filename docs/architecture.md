@@ -43,7 +43,7 @@ workload clusters on Proxmox VE VMs
 
 ## Management cluster
 
-The management cluster is an appliance that runs Cluster API, its providers and Kubehenge, and nobody's workloads. Monitoring, Rancher and everything else users run go into the clusters it creates. Kept bare, it stays small. Its attack surface is what Kubehenge needs. Losing a workload cluster never touches the piece that repairs it.
+The management cluster runs Cluster API, its providers and Kubehenge, and nobody's workloads. Monitoring, Rancher and everything else users run go into the clusters it creates. It stays small. Its attack surface is only what Kubehenge needs. Losing a workload cluster does not affect the cluster that repairs it.
 
 ### Operating system
 
@@ -82,7 +82,7 @@ Each provider's probes allow 5 s. Its liveness probe tolerates six misses. The k
 
 Each provider runs its release's own image, by the digest `versions.tf` names, with two exceptions:
 
-- **capmox v0.9.2**, with five fixes of its own that upstream's release lacks (`capmox_build` in `management-cluster/versions.tf`). It also writes a VM's firewall from the security groups a cluster names ([clusters.md](clusters.md#firewall)), which upstream has no setting for.
+- **capmox v0.9.2**, with five fixes of its own that upstream's release lacks (`capmox_build` in `management-cluster/versions.tf`). It also writes a VM's firewall from the ports and security groups a cluster's class gives it ([clusters.md](clusters.md#firewall)), which upstream has no setting for.
 - **The Add-on Provider for Helm v0.6.4**, with three fixes (`helm_addon_build`):
   - The provider creates a cluster's release once, never twice.
   - It pulls or checks each chart by the digest its version carries.
@@ -110,7 +110,17 @@ The appliance backs up the management cluster's etcd from outside it. A restore 
 
 On the schedule set under **Administration, Backups**, it asks a control-plane node's Talos API for a snapshot with a talosconfig of the `os:etcd:backup` role. It checks etcd's own checksum at the end of the stream. It encrypts the snapshot to an age key and uploads it to the chosen backup target. The key's private half is stored only in the target, encrypted with the state passphrase.
 
-A restore downloads and decrypts the snapshot on the appliance and checks it against the SHA-256 recorded with it. With the admin talosconfig from the state, it wipes etcd on every control-plane node. It then uploads the snapshot to the first node, bootstraps etcd from it and waits for the others to join ([install.md](install.md#back-up-the-management-clusters-etcd)).
+A restore downloads and decrypts the snapshot on the appliance and checks it against the SHA-256 recorded with it. With the admin talosconfig from the state, it wipes etcd on every control-plane node. It then uploads the snapshot to the first node, bootstraps etcd from it and waits for the others to join ([install-settings.md](install-settings.md#back-up-the-management-clusters-etcd)).
+
+### Backup volume
+
+The module installs the Proxmox CSI plugin in the management cluster, from the workload add-on's chart and images. Its token holds `VM.Audit` and `VM.Config.Disk`, so it attaches and grows disks but deletes none. The storage class `kubehenge-management` keeps a released volume.
+
+The backup volume is the disk of a stopped VM, `kubehenge-backups`, outside the management pool. The VM has protection on, and a static volume binds its disk, so deleting the management VMs leaves it. A small store in `kubehenge-system` serves it with a token from a Secret. The appliance reaches it through a port-forward to its pod, and the controller over the network, which a NetworkPolicy opens to the controller's pods alone. The snapshots and exports on it are encrypted to an age key sealed with the state passphrase.
+
+The appliance alone sets each management node's `topology.kubernetes.io/zone` label, to the Proxmox VE node its VM runs on. It reads that with a read-only token on the management pool, after each apply and before each backup. A node whose VM it cannot find keeps its label. A node restart never puts back an old label.
+
+A restore of a kubeadm, RKE2 or k3s cluster from the volume first checks the snapshot whole, as `etcdutl snapshot status` does. The controller then starts a pod of Kubehenge's image on the first control-plane node and streams the snapshot to it through the cluster's API server. Nothing stops until the node holds the snapshot in full and checked. The restore then runs as from a bucket ([clusters.md](clusters.md#on-the-backup-volume)).
 
 ## ClusterClasses
 
@@ -189,7 +199,9 @@ A workload cluster's cloud controller manager and CSI plugin controller reach Pr
 - **A user and API token per cluster**, with rights on its pool only.
   - The token reads the VMs and configures their disks.
   - A group of all clusters' users adds space on the workload storages and reading the nodes.
-  - No token may delete arbitrary volumes, change a storage's definition or read beyond its pool and nodes. The CSI plugin's newest release and the HA group labels are the exceptions (below).
+  - No token may delete arbitrary volumes, change a storage's definition or read beyond its pool and nodes. The CSI plugin's newest release and the HA rule labels are the exceptions (below).
+  - The user creates its own token, which holds what the user holds. Proxmox VE lets another user create such a token only with `Permissions.Modify` on `/`. The controller creates the user with a random password, signs in as it once and keeps the password nowhere.
+  - A token whose secret is lost is replaced with its user, which the controller creates again with Kubehenge's groups and rights. A user in a group that Kubehenge did not give it is left as it is, and so is one holding a permission the controller can see (on the cluster's pool and storages). The cluster's error then names what to take away. Proxmox VE hides permissions on other paths from the controller, so a replacement drops those. To give a cluster's user more rights, add it to a group of your own. A realm that asks for a second factor also stops the replacement.
 - **A volume owner VM**, in the pool, never started. The CSI plugin creates volumes under its VMID, so only this cluster's token may attach them.
   - Deleting the cluster deletes its volumes.
 
@@ -213,7 +225,7 @@ The admission webhook and `BeforeClusterCreate` allow that only on a storage the
 
 They also refuse any cluster on a storage where another cluster holds the grant. The controller checks the same on every reconcile. When a check fails it takes the grant back, installs the earlier release and records a `DatastoreAllocateRefused` event.
 
-### HA group labels
+### HA rule labels
 
 The cloud controller manager labels each node with the HA groups, or HA node-affinity rules, of its Proxmox VE node. Proxmox VE lists those only with `Sys.Audit` on `/`.
 
@@ -894,7 +906,7 @@ A worker pool with Cluster API's `cluster-api-autoscaler-node-group-min-size` an
 
 The node addresses must hold the control planes, every pool at its most and one machine for a rollout. The validating webhook and `BeforeClusterCreate` refuse a change that makes a shortage worse.
 
-While a pool grows, the controller records `AutoscalerNoRoom` for a worker whose VM Proxmox VE cannot place for want of memory. The autoscaler gives that machine up after 30 minutes.
+While a pool grows, the controller records `AutoscalerNoRoom` for a worker whose VM Proxmox VE cannot place for want of memory. The autoscaler gives that machine up after 30 minutes. The controller records it too where thick storage cannot hold the pools at their maximum.
 
 ### Rights of the autoscaler
 
@@ -949,6 +961,19 @@ Users sign in through the Proxmox VE API, with no second user directory. Every P
 - Failed sign-ins are limited per user at an address and per address, never per user alone. Nobody can lock an administrator out from elsewhere.
 - The address is the connection's peer. From a peer listed in `--trusted-proxy` it is the right-most `X-Forwarded-For` entry that is not listed.
 - The frontend loads no inline script or style. The Content-Security-Policy allows none.
+- **Five failed sign-ins** for one user from one address within 15 minutes block that user from that address for the rest of the 15 minutes.
+- **Twenty failed sign-ins** from one address in that time refuse the address, whatever users they name.
+- Sessions also end when the interface restarts on an upgrade or a certificate renewal.
+
+#### Behind a reverse proxy
+
+The interface needs a host name of its own, never a path such as `https://tools.example.org/kubehenge/`, because its pages and API use absolute paths.
+
+- **Ports.** Forward 443 to the appliance's 443. Headlamp is served on port 8443 of the same name, which the interface's Headlamp links use, so forward that port too.
+- **Host.** Pass the `Host` header on unchanged, and set `--public-url` (the installer's `--name`) to the name users type.
+- **Sign-in limits.** The limits count the connection's address, which behind a proxy is the proxy's, so five wrong passwords lock a user out for everyone. List the proxy with `--trusted-proxy`.
+  - From a listed proxy, the client is the right-most `X-Forwarded-For` entry that is not itself listed. The proxy must append to that header, as most do.
+  - Requests from any other address count under their own address, whatever headers they carry.
 
 #### Live pages
 
@@ -1085,6 +1110,15 @@ A Talos node's log is read through its Talos API with the cluster's talosconfig.
 
 The interface logs each sign-in and change with its user. Each such line also goes into `activity.jsonl` in the appliance's folder, which the Activity pages read. It keeps 90 days and stays under 8 MiB by dropping its older half.
 
+**Administration, Activity** lists who did what through the interface, newest first, over the last day to 90 days. That covers sign-ins, refused sign-ins and every change, with the cluster it touched. An action that ended in an error is marked failed. Below it are the management cluster's events of the last day. It needs `Sys.Audit` on `/`.
+
+Each cluster's **Activity** view lists what was done to that cluster, for everyone who sees it ([clusters.md](clusters.md#the-cluster-page)). Changes made with kubectl or through the management cluster's API show only when **kubectl changes** is on ([details](install-settings.md#kubectl-changes)).
+
+| Command | Does |
+| --- | --- |
+| `kubehenge appliance activity` | lists the appliance's activity of the last 7 days. `--days` goes back up to 90 |
+| `kubehenge appliance activity --cluster namespace/name` | lists one cluster's |
+
 #### The management cluster's audit events
 
 The management cluster's API server audits with the workload clusters' policy (`charts/kubehenge/files/audit-policy.yaml`), set through Talos's `KubeAuditPolicyConfig`. With `api_audit_log`, it writes those events to its output instead of a file on the node.
@@ -1201,6 +1235,70 @@ The appliance (`appliance/install.sh`) checks everything it downloads against ch
 Its first-run page runs the `management-cluster/` module with OpenTofu on the administrator's session, whose ticket and CSRF token reach OpenTofu through its environment only. OpenTofu installs the module's providers from the release archive alone, checked against the module's lock file. The state is encrypted with a key derived from a passphrase nothing stores. Every later apply asks for it again, unless automatic upgrades of the management cluster are on ([Upgrades](#upgrades)).
 
 The management cluster's admin kubeconfig and talosconfig stay inside that state. An administrator can open the state with the passphrase on the Administration page, and every download is logged.
+
+### What the installer does
+
+1. Checks the node: root, Proxmox VE 9, quorum, no appliance in the cluster yet and an existing bridge. Then it asks, all before it changes anything: DHCP or static, which storage where several fit, the API address where several are as good, whether to trust the API's CA, and whether to add the interface entry. Options answer in advance. A summary lists every value to confirm or change.
+2. Downloads Kubehenge's release archive (`install.sh`) and OpenTofu, and checks both against the checksums it carries.
+3. Chooses the Proxmox VE API's address and CA ([install.md](install.md#the-proxmox-ve-api)), and asks on the terminal where it needs your word. It checks that the API's certificate is valid for that address.
+4. Uses the container template where a storage holds it, or downloads it and checks it against its checksum. Then it creates an unprivileged Debian container with nesting enabled, started at boot and tagged `kubehenge`, and waits for its addresses.
+   - If the container cannot resolve the API's name, it takes the next name or address the certificate covers.
+5. Makes a certificate for the container's host name, address and `--name`, or checks the one given with `--cert`.
+   - A made certificate is signed by the Proxmox VE cluster's CA, whose key never leaves the node. It is self-signed when the node cannot read that key.
+   - It is valid for 825 days, the longest browsers accept from a private CA.
+6. Sets up the container.
+   - It installs Kubehenge, OpenTofu, the management-cluster module, the service units and the shared Headlamp, a single Kubernetes web interface for every cluster.
+   - It adds the API's CA to the container's trust store and switches off the template's SSH and mail servers.
+   - It starts the interface on ports 443 and 8443 (the shared Headlamp) as an unprivileged user.
+   - It installs Debian's `unattended-upgrades` for daily security updates through the installer's proxy, and only warns where Debian's mirrors are out of reach. `--upgrade` adds it where it is missing.
+   - It sets the container's protection, so Proxmox VE refuses to destroy it until that is taken off.
+7. If you said yes, adds the Kubernetes entry to this node's Proxmox VE interface.
+8. Prints the address and the certificate's fingerprint.
+
+With `--name`, a line before the sign-in one says to point the name at the appliance's address in your DNS.
+
+If a step up to starting the interface fails, the installer removes the container it created, so running it again starts clean. A failure to add the interface entry leaves the working appliance in place and says so.
+
+### What Cluster API's token may do
+
+Cluster API acts as `kubehenge-cluster-api@pve` with roles the module creates, each holding only what the Proxmox VE provider's calls need. Proxmox VE's built-in roles are not used, since they gain privileges with its releases.
+
+| On | Role | Privileges |
+| --- | --- | --- |
+| the workload pool, propagated | `<name>-cluster-api-vms` | `VM.Allocate`, `VM.Audit`, `VM.PowerMgmt`, `VM.Config.CPU`, `VM.Config.Memory`, `VM.Config.Network`, `VM.Config.Disk`, `VM.Config.CDROM`, `VM.Config.Options`, `VM.GuestAgent.Audit`, `VM.GuestAgent.Unrestricted` |
+| the templates pool | `<name>-cluster-api-templates` | `VM.Clone`, `VM.Audit` |
+| the bootstrap storage | `<name>-cluster-api-bootstrap` | `Datastore.Allocate`, `Datastore.AllocateTemplate`, `Datastore.Audit` |
+| each bridge or VNet, propagated | `<name>-cluster-api-network` | `SDN.Use` |
+| the clusters' storages | `<name>-allocate-space` | `Datastore.AllocateSpace` |
+| `/` and `/nodes` | `<name>-audit` | `Sys.Audit` |
+
+`VM.GuestAgent.Unrestricted` serves kubeadm's cloud-init status check, which runs a command through the guest agent. `Datastore.Allocate` on the bootstrap storage is the only privilege that lets Proxmox VE delete a cloud-init ISO. Give that storage nothing else you need to keep.
+
+### What the run creates
+
+It creates objects on Proxmox VE and installs charts in the management cluster.
+
+#### On Proxmox VE
+
+- the three pools.
+- the management cluster's VMs, with Proxmox VE's protection on, so that Proxmox VE refuses to destroy them. A run that replaces or removes one lifts it on that VM alone, and sets it again should the run fail.
+- a user and API token for Cluster API, with no rights on the management cluster's own VMs. It manages VMs in the clusters' pool, clones templates, uses the chosen storages and bridges and writes cloud-init images.
+- a user and API token for Kubehenge's controller, which creates each cluster's own pool, user and token ([Each cluster's own corner of Proxmox VE](#each-clusters-own-corner-of-proxmox-ve)).
+- while the template refresh is on, a user and API token for the weekly template build ([details](install-settings.md#what-the-template-builds-may-do)).
+- with [Proxmox VE HA](install-settings.md#proxmox-ve-ha) on, a user and API token for HA resources and rules.
+- with [etcd restores](install-settings.md#etcd-restores) on, a user and API token for restores through the guest agent.
+- a group for the clusters' users and the roles all of these use.
+- with [HA rule labels](install-settings.md#ha-rule-labels) on, a second group holding `Sys.Audit` on `/`.
+- the Talos disk image, and the management cluster's VMs, tagged `kubehenge` and `management`.
+
+#### In the management cluster
+
+- cert-manager.
+- the Cluster API Operator with Cluster API and its providers for Proxmox VE, kubeadm, RKE2, k3s, Talos, IP address management and Helm add-ons.
+  - The Talos providers come from Kubehenge's forks, [cluster-api-bootstrap-provider-talos](https://github.com/kubehenge/cluster-api-bootstrap-provider-talos) and [cluster-api-control-plane-provider-talos](https://github.com/kubehenge/cluster-api-control-plane-provider-talos).
+- the `kubehenge` chart, with Kubehenge's ClusterClasses and its controller.
+
+The kubeadm, RKE2, k3s and Talos controllers run only while a cluster uses their distribution ([Provider controllers](#provider-controllers)).
 
 ## Signing in to clusters
 
@@ -1338,6 +1436,25 @@ Pod and service ranges must stay clear of the nodes' network and of each other.
 - A cluster that runs Cilium, which may join a Cluster Mesh later, also keeps its pods clear of every other cluster's pods and services.
 - Its validating webhook refuses ranges that are no IPv4 networks or overlap the nodes' network or each other.
 - Every class honours the Cluster's ranges, kubeadm's pod subnet among them, which the Tigera operator needs to install Calico. The k3s provider reads its own server configuration only, so the k3s class copies them there.
+
+### Hosts each part reaches
+
+| Who | Reaches |
+| --- | --- |
+| The node running the installer | GitHub, for Kubehenge's release and OpenTofu. `download.proxmox.com`, for the container template, unless a storage holds it already. The installer downloads through the datacenter's HTTP proxy, where one is set. |
+| The appliance | GitHub, for the release index and upgrades. While it applies the management cluster: `quay.io` (cert-manager's chart) and the Talos Image Factory. While it makes VM templates: the node OSes' image mirrors and vaults for their signed checksums (`repo.almalinux.org`, `vault.almalinux.org`, `dl.rockylinux.org`), and the package repositories' signing keys (`pkgs.k8s.io`, `rpm.rancher.io`). |
+| The Proxmox VE nodes | the Talos Image Factory and the node OSes' image mirrors and vaults, which Proxmox VE downloads disk images from |
+| The management cluster's nodes, for time | NTP servers on UDP 123: Talos's default public ones, or the hosts set under Time servers in the setup's Network step. |
+| Clusters' nodes, for time | NTP servers on UDP 123: the node image's public pool, or the hosts in the cluster's **Time servers** ([clusters.md](clusters.md#network)). Talos's default is `time.cloudflare.com`. |
+| The management cluster's nodes | Container registries and the Cluster API providers' release files. `factory.talos.dev`, where the controller registers the Talos schematic for an upgrade's installer. While the template refresh and request Jobs make templates, the node OSes' image mirrors and vaults for their signed checksums (`repo.almalinux.org`, `vault.almalinux.org`, `dl.rockylinux.org`). Every Talos template's build VM image is checked against `repo.almalinux.org` or `vault.almalinux.org` there. RKE2's and k3s's release channels, for automatic upgrades, and their releases' checksum files and install scripts on GitHub, read once per release. The add-on chart repositories: `ghcr.io` (the Proxmox VE cloud controller manager and CSI plugin), `helm.cilium.io`, `docs.tigera.io`, `kubernetes-sigs.github.io` (Headlamp), `releases.rancher.com` and `charts.jetstack.io`. |
+| Clusters' nodes | Container registries. On Talos, `factory.talos.dev`, the registry an upgrade's installer comes from. On RKE2 and k3s, GitHub (`github.com` and `raw.githubusercontent.com`), for the release and its images, which a node installs when it boots. A site that blocks them gives each cluster a proxy, registry mirrors, trusted CAs and a mirror of the releases ([clusters.md](clusters.md#sites-with-limited-access)). |
+| The VM that prepares a template | Its node OS's package mirrors and `quay.io` (for the image builder's tool image, by digest). Once a newer minor release replaces the image's, its node OS's vault (`vault.almalinux.org`, `dl.rockylinux.org`). For Talos, `ghcr.io` and `pkg-containers.githubusercontent.com`, where `ghcr.io` redirects its downloads, for Sidero's imager, installer base and guest agent. For RKE2 and k3s, `rpm.rancher.io` (their SELinux policies). For kubeadm, `pkgs.k8s.io`, the node OS's EPEL mirror (containerd), `registry.k8s.io`, GitHub (for cosign) and Sigstore's `tuf-repo-cdn.sigstore.dev`, to check the images' signatures. |
+
+The management cluster's nodes can pull images through registry mirrors instead ([setup](install.md#network), Site). Registry mirrors cover images only. The Add-on Provider for Helm fetches every chart from its own repository, the cloud controller manager and CSI plugin included. A site without access to those hosts also needs [chart mirrors](clusters.md#mirroring-the-charts).
+
+A site without GitHub also needs a [release mirror](clusters.md#mirroring-the-releases) for RKE2 and k3s.
+
+GitHub and several other hosts above have no IPv6 address. An IPv6-only network reaches them through NAT64 with DNS64, or through registry, chart and release mirrors.
 
 ### The Gateway API
 

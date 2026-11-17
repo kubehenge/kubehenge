@@ -12,6 +12,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
@@ -43,6 +48,9 @@ type sessionView struct {
 	// Namespaces are every namespace the interface creates and changes clusters in, Namespace
 	// first. Unset when not known.
 	Namespaces []string `json:"namespaces,omitempty"`
+	// SharedBackupKeys tells, for each namespace the user can read it in, whether the access key for
+	// every cluster is stored there. A namespace left out is one it could not be read in.
+	SharedBackupKeys map[string]bool `json:"sharedBackupKeys,omitempty"`
 }
 
 // signedInView describes a signed-in session. Where the interface manages clusters is an addition
@@ -103,7 +111,7 @@ func (s *Server) signIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if utf8.RuneCountInString(username) > maxUsernameLength {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("The user name and realm together are at most %d characters.", maxUsernameLength))
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("the user name and realm together are at most %d characters", maxUsernameLength))
 		return
 	}
 	done, ok := s.limiter.reserve(signInCounts(username, r)...)
@@ -257,7 +265,31 @@ func (s *Server) whoAmI(w http.ResponseWriter, r *http.Request, u user) {
 		create, trust := held.Has(privChange), held.Has(privKubeconfig)
 		v.CanCreate, v.CanTrust = &create, &trust
 	}
+	namespaces := v.Namespaces
+	if len(namespaces) == 0 {
+		namespaces = []string{v.Namespace}
+	}
+	v.SharedBackupKeys = sharedBackupKeys(r.Context(), s.currentKube(), namespaces)
 	writeJSON(w, http.StatusOK, v)
+}
+
+// sharedBackupKeys reads, under the user's own rights, whether each namespace holds the access key
+// the controller falls back to for a cluster without one of its own.
+func sharedBackupKeys(ctx context.Context, kube client.Client, namespaces []string) map[string]bool {
+	if kube == nil {
+		return nil
+	}
+	found := map[string]bool{}
+	for _, ns := range namespaces {
+		err := kube.Get(ctx, client.ObjectKey{Namespace: ns, Name: provisioner.CredentialName("", "backup")}, &corev1.Secret{})
+		switch {
+		case err == nil:
+			found[ns] = true
+		case apierrors.IsNotFound(err):
+			found[ns] = false
+		}
+	}
+	return found
 }
 
 func (s *Server) signOut(w http.ResponseWriter, r *http.Request, u user) {
@@ -269,8 +301,8 @@ func (s *Server) signOut(w http.ResponseWriter, r *http.Request, u user) {
 // clientAddress is the connection's peer, or behind a trusted proxy (Server.TrustedProxies) the
 // client it forwards for. Forwarding headers from any other peer are not believed.
 func clientAddress(r *http.Request) string {
-	if client, ok := r.Context().Value(clientAddressKey{}).(string); ok {
-		return client
+	if peer, ok := r.Context().Value(clientAddressKey{}).(string); ok {
+		return peer
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

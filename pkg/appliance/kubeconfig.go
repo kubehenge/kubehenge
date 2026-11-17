@@ -196,7 +196,7 @@ func (a *Appliance) renewTokenWhenDue(ctx context.Context, now time.Time, kube k
 	}
 	token, err := requestInterfaceToken(ctx, kube)
 	if apierrors.IsUnauthorized(err) {
-		return fmt.Errorf("%w; the token ran out while the appliance was off: apply the management cluster again on the Administration page", err)
+		return fmt.Errorf("%w. The token ran out while the appliance was off. Apply the management cluster again on the Administration page", err)
 	}
 	if err != nil {
 		return err

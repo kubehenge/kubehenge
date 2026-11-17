@@ -27,6 +27,8 @@ export interface Session {
   namespace?: string;
   /** Every namespace the interface creates and changes clusters in, namespace first. */
   namespaces?: string[];
+  /** Whether each namespace holds the access key for every cluster. A namespace left out could not be read. */
+  sharedBackupKeys?: Record<string, boolean>;
 }
 
 /** A cluster, by where it lives. */
@@ -186,6 +188,8 @@ export interface MachineSize {
 
 /** A worker pool to add or change: its workers, and its own size, or the cluster's with null. */
 export interface PoolChange {
+  /** Adds the pool, so that a name the cluster's pools already go by is refused. */
+  add?: boolean;
   replicas?: number;
   machine?: MachineSize | null;
   /** Replaces all the pool's timeouts. Those left out are the class's. */
@@ -563,6 +567,8 @@ export interface Cluster {
   pool: string;
   allowed: { change: boolean; kubeconfig: boolean };
   machines?: Machine[];
+  /** The Proxmox VE nodes holding the cluster's volumes on node-local storage. Each needs a worker. */
+  volumeNodes?: string[];
   /** The cluster's name in the shared Headlamp. */
   headlamp?: string;
   /** How each peer the cluster lists for Cluster Mesh stands, while it is on. */
@@ -704,6 +710,12 @@ export interface Storage {
   usable: boolean;
   /** Whether the user may give a cluster's token Datastore.Allocate there. */
   allocatable: boolean;
+  /** The storage plugin, such as lvm, lvmthin, zfspool, rbd, dir or nfs. Absent where Proxmox VE did not say. */
+  type?: string;
+  /** Whether a ZFS pool allocates a disk's space on write. */
+  sparse?: boolean;
+  /** How a storage that keeps files lays out a new disk: off, metadata, falloc or full. Absent is off. */
+  preallocation?: string;
 }
 
 export interface PveNode {
@@ -726,6 +738,11 @@ export interface HARule {
   strict?: boolean;
   /** The nodes the user sees that the rule keeps to: its own, or every other one for a negative rule. */
   allowed: string[];
+}
+
+/** Whether Proxmox VE's datacenter firewall is on. "unknown" to a user without Sys.Audit on /. */
+export interface DatacenterFirewall {
+  state: "on" | "off" | "unknown";
 }
 
 export interface HARules {
@@ -824,6 +841,14 @@ export interface ManagementSettings {
    */
   releaseMirror?: { url?: string; caBundle?: string };
   /**
+   * The PEM authority of the site's private CA. Every connection that names none of its own trusts it.
+   */
+  siteCA?: string;
+  /** The IANA time zone of schedules that name none. Empty, UTC. */
+  timeZone?: string;
+  /** The VM IDs of new clusters' VMs and the VM templates, both ends included. Unset, the next free ID. */
+  workloadVMIDRange?: { start: number; end: number };
+  /**
    * The proxy downloads go through. The address has no credentials. The server never sends the
    * password, only passwordSet. Sent back, an empty password keeps the saved one and clearPassword
    * removes it.
@@ -852,7 +877,7 @@ export interface ManagementSettings {
   etcdRestore?: boolean;
   /** The weekly build of the node OS VM templates. Absent, it runs with its defaults. */
   templateRefresh?: TemplateRefreshSettings;
-  /** Clusters have the cloud controller manager's HA group labels unless they switch them off, with Sys.Audit on / for their token. Absent, they have them. */
+  /** Clusters have the cloud controller manager's HA rule labels unless they switch them off, with Sys.Audit on / for their token. Absent, they have them. */
   clusterSysAudit?: boolean;
   /** Kubehenge's controller reads nodes' boot logs through their guest agents, with VM.GuestAgent.FileRead. Absent, it does. */
   nodeBootLogs?: boolean;
@@ -1028,6 +1053,15 @@ export interface EtcdSnapshot {
   storedSize?: number;
 }
 
+/** A removed cluster whose etcd snapshots the backup volume still keeps. */
+export interface RemovedCluster {
+  namespace: string;
+  name: string;
+  snapshots: EtcdSnapshot[];
+  /** Set while the cluster's backup keys, which the snapshots open with, are kept. */
+  keys: boolean;
+}
+
 /** How the management cluster's etcd is backed up. */
 export interface ManagementBackupSettings {
   target: string;
@@ -1056,6 +1090,20 @@ export interface ManagementBackups {
   exportedAt?: string;
   /** Set once the appliance holds the recovery key that opens the specs' Secrets. */
   specKey?: boolean;
+  /** The backups on the management cluster's own volume, which need no settings. */
+  volume?: {
+    claim: string;
+    last?: EtcdSnapshot;
+    next?: string;
+    error?: string;
+    failed?: string;
+    copy?: { snapshot?: string; bytes: number; cap: number; error?: string };
+    export?: { name: string; time: string; bytes: number };
+    /** Set where one Proxmox VE host's loss can take the volume. */
+    sharesHost?: boolean;
+  };
+  /** Where the backups are, when the last ran and why one failed. */
+  summary?: BackupSummary;
 }
 
 export interface ManagementSnapshots {
@@ -1195,8 +1243,11 @@ export interface SetupStatus {
   applianceVMID?: number;
   /** The appliance's addresses moved away from those its certificate is for. For administrators only. */
   addressMoved?: { from: string[]; to: string[] };
-  /** The appliance's disk is at least 80 % full. For administrators only. */
-  diskFull?: { usedPercent: number; freeMiB: number };
+  /**
+   * The appliance's disk is at least 80 % full, or its copy of the management backups nears its cap
+   * or lacks room for the next. For administrators only.
+   */
+  diskFull?: { usedPercent: number; freeMiB: number; backupCopy?: { mib: number; capMiB: number } };
   /** The Proxmox VE API's certificate goes unverified (--proxmox-insecure); for administrators only. */
   proxmoxInsecure?: boolean;
   /** An earlier run left its encrypted state, so the setup takes that run's passphrase. */
@@ -1230,6 +1281,16 @@ export interface ManagementHealth {
   etcd?: { healthy: number; members: number };
   /** VMs in Kubehenge's pools that no cluster owns. Nothing deletes them. */
   unowned?: { checked: string; vms: { vmid: number; name?: string; node?: string; pool: string }[] };
+  /** Where the management backups are, when the last ran, and why the last one failed. */
+  backups?: BackupSummary;
+}
+
+export interface BackupSummary {
+  where: string[];
+  last?: string;
+  error?: string;
+  /** Set while one Proxmox VE host's loss can take every backup: no bucket target is set. */
+  sameHost?: boolean;
 }
 
 /** Whether a Proxmox VE node may be rebooted, or why not. */
@@ -1251,6 +1312,18 @@ export interface RebootReadiness {
 }
 
 /** What the setup would run into: errors stop it, warnings do not. */
+/** What saving a site CA does to the clusters that inherit it. */
+export interface SiteCARoll {
+  inherits: number;
+  /** Clusters that replace their nodes at once. */
+  now: number;
+  /** Clusters that wait for their upgrade window, and the first time one opens. */
+  windows: number;
+  opens?: string;
+  /** Clusters that wait for a free place among those rolling. */
+  waiting: number;
+}
+
 export interface SetupFindings {
   errors: string[];
   warnings: string[];
@@ -1470,6 +1543,8 @@ export interface CreateRequest {
   variables: Record<string, unknown>;
   pods?: string[];
   services?: string[];
+  /** The cluster's own access key for its backup target, stored before the cluster is made. */
+  backupKey?: Record<string, string>;
 }
 
 export interface ChangeRequest {

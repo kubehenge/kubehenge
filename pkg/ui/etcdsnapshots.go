@@ -82,7 +82,7 @@ func (s *Server) etcdSnapshots(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	view.Automatic = automatic
-	if settings.Target == "" {
+	if !settings.Enabled {
 		writeJSON(w, http.StatusOK, view)
 		return
 	}
@@ -95,7 +95,15 @@ func (s *Server) etcdSnapshots(w http.ResponseWriter, r *http.Request, u user) {
 	if err == nil {
 		view.Snapshots, err = provisioner.ListEtcdSnapshots(ctx, t.Store, t.Folder)
 	}
-	if err != nil {
+	switch {
+	case errors.Is(err, provisioner.ErrVolumeAsleep):
+		view.Snapshots = []provisioner.EtcdSnapshot{}
+		view.Message = "The backup volume is waking. The snapshots show in a minute."
+	case err != nil && settings.Target == provisioner.VolumeTarget:
+		s.Log.InfoContext(r.Context(), "reading a cluster's etcd snapshots", "cluster", c.Namespace+"/"+c.Name, "error", err)
+		view.Snapshots = []provisioner.EtcdSnapshot{}
+		view.Message = "The backup volume could not be read: " + err.Error()
+	case err != nil:
 		s.Log.InfoContext(r.Context(), "reading a cluster's etcd snapshots", "cluster", c.Namespace+"/"+c.Name, "error", err)
 		view.Snapshots = []provisioner.EtcdSnapshot{}
 		view.Message = "Target " + settings.Target + " could not be read: " + err.Error()
@@ -110,11 +118,38 @@ func (s *Server) etcdTarget(ctx context.Context, u user, c *clusterv1.Cluster, t
 		open = provisioner.OpenTarget
 	}
 	targets := &provisioner.ClusterTargets{Client: u.kube, ClassNamespace: s.ClassNamespace, OpenStore: open}
+	if target == provisioner.VolumeTarget {
+		volume, err := s.snapshotVolume()
+		if err != nil {
+			return nil, err
+		}
+		targets.Volume = volume
+		t, err := targets.Open(ctx, c, target, false)
+		if err != nil {
+			return nil, fmt.Errorf("opening the backup volume: %w", err)
+		}
+		return t, nil
+	}
 	t, err := targets.Open(ctx, c, target, false)
 	if err != nil {
 		return nil, fmt.Errorf("opening target %s: %w", target, err)
 	}
 	return t, nil
+}
+
+// snapshotVolume is the backup volume as the interface reaches it. Asking for it wakes it on a
+// node's own storage, through a request of the interface's own that runs out by itself, so that a
+// look at the snapshots and a restore after it find the volume awake. The page asks again with each
+// poll, so a release after each look would stop and start the store every 30 seconds. Once the
+// request ran out, the controller puts the volume back to sleep.
+func (s *Server) snapshotVolume() (provisioner.BackupVolume, error) { //nolint:ireturn // tests stand in for the volume
+	if s.Volume != nil {
+		return s.Volume, nil
+	}
+	if s.Appliance == nil {
+		return nil, errors.New("the interface does not reach the backup volume")
+	}
+	return s.Appliance.SnapshotVolume() //nolint:wrapcheck // the appliance names what failed
 }
 
 // automaticRestore tells whether the controller restores the cluster's etcd through the guest
@@ -258,6 +293,10 @@ func (s *Server) findSnapshot(w http.ResponseWriter, r *http.Request, u user, c 
 	if err == nil {
 		all, err = provisioner.ListEtcdSnapshots(ctx, t.Store, t.Folder)
 	}
+	if errors.Is(err, provisioner.ErrVolumeAsleep) {
+		writeError(w, http.StatusConflict, "the backup volume is waking. Try again in a minute")
+		return nil, false
+	}
 	if err != nil {
 		s.snapshotError(w, r, c, err)
 		return nil, false
@@ -278,8 +317,8 @@ func snapshotTarget(w http.ResponseWriter, c *clusterv1.Cluster, name string) (s
 		return "", false
 	}
 	settings, _ := provisioner.EtcdSnapshotsOf(c)
-	if settings.Target == "" {
-		writeError(w, http.StatusConflict, "etcd snapshots have no target")
+	if !settings.Enabled {
+		writeError(w, http.StatusConflict, "etcd snapshots are off for this cluster")
 		return "", false
 	}
 	return settings.Target, true

@@ -1,10 +1,12 @@
 import { useEffect, useState, type JSX, type ReactNode } from "react";
 
 import { api, ApiError, httpPreconditionFailed } from "./api";
-import { effects, planRows, worstEffect } from "./plan-rows";
+import { clusterPath } from "./cluster-paths";
+import { changeLines, effects, planRows, worstEffect } from "./plan-rows";
 import { StagingContext, useStaging, type Staging } from "./staging-context";
 import type { ChangeRequest, Cluster, ClusterClass } from "./types";
 import { Dialog, ErrorBox, errorMessage } from "./ui";
+import { Accept, ChecksList, needsAccepting, stillChecking, useChecks } from "./Upgrade";
 
 // mergedPools is two changes of pools as one: a pool's later change adds to its earlier one, and a
 // deletion ends both.
@@ -122,11 +124,17 @@ export function StagedBar({ cluster: c }: { cluster: Cluster }): JSX.Element | n
     return <ErrorBox message={staging?.dropped} />;
   }
   const { changes } = staging.staged.plan;
+  const lines = changeLines({ before: c, after: staging.staged.plan.cluster }, changes);
   return (
     <section className="staged" aria-label="Staged changes">
       <strong>
         {changes.length} {changes.length === 1 ? "change" : "changes"} not applied
       </strong>
+      <ul className="staged-lines">
+        {lines.map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
       <span className="staged-effect">{effects[worstEffect(changes)]}</span>
       <span className="spacer" />
       <button type="button" onClick={() => staging.discard()}>
@@ -165,11 +173,22 @@ function PlanDialog({
     void load();
   }, [className]);
   const { staged } = staging;
+  const checks = useChecks({ before: c, after: staged?.plan.cluster ?? c, version: staged?.req.version });
+  // What was accepted is the answers on screen at the time, so that a later answer asks again.
+  const [acceptedFor, setAcceptedFor] = useState<string>();
   if (staged === undefined) {
     return null;
   }
   const { plan } = staged;
+  const answers = checks.map((ch) => `${ch.what}: ${ch.state} ${ch.text}`).join("\n");
+  const accepted = acceptedFor === answers;
+  // Replacing nodes is a risk the admin confirms, whether or not a check found a problem.
+  const risky = needsAccepting(checks) || !["none", "scales"].includes(worstEffect(plan.changes));
+  const stopped = stillChecking(checks) || (risky && !accepted);
   const apply = async (): Promise<void> => {
+    if (stopped) {
+      return;
+    }
     setBusy(true);
     setError(undefined);
     try {
@@ -193,7 +212,7 @@ function PlanDialog({
           <button type="button" onClick={onClose}>
             Keep staged
           </button>
-          <button type="submit" className="primary" disabled={busy}>
+          <button type="submit" className="primary" disabled={busy || stopped}>
             Apply
           </button>
         </>
@@ -205,6 +224,14 @@ function PlanDialog({
           {w}
         </p>
       ))}
+      <ChecksList checks={checks} healthPath={clusterPath(c.namespace, c.name, "health")} label="Before applying" />
+      <Accept
+        required={risky}
+        accepted={accepted}
+        onChange={(yes) => {
+          setAcceptedFor(yes ? answers : undefined);
+        }}
+      />
       <div className="scroll">
         <table className="grid plan stack">
           <thead>

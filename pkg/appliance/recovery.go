@@ -35,7 +35,7 @@ var (
 	// ErrExportDamaged is a file that is no export, or an export that was changed.
 	ErrExportDamaged = errors.New("the file is no export of this appliance's state, or it was changed")
 	// ErrHasState refuses an import over a state the appliance holds.
-	ErrHasState = errors.New("this appliance has a management cluster already; import into a new appliance")
+	ErrHasState = errors.New("this appliance has a management cluster already. Import into a new appliance")
 	// ErrNoWarning is a dismissal asked for while nothing is warned of.
 	ErrNoWarning = errors.New("the management cluster's etcd is backed up, or there is no management cluster")
 )
@@ -59,10 +59,10 @@ func (w *EtcdBackupWarning) Shown() bool { return w != nil && w.Dismissal == nil
 
 func (a *Appliance) dismissalFile() string { return a.etcdBackupFile("warning-dismissed.json") }
 
-// etcdBackupWarning is the warning that stands now, nil when the backups are on or there is no
-// management cluster.
+// etcdBackupWarning is the warning that stands now, nil when the backups go to a target or the
+// backup volume, or there is no management cluster.
 func (a *Appliance) etcdBackupWarning(st *EtcdBackupStatus) *EtcdBackupWarning {
-	if st.Settings != nil || !a.Ready() {
+	if st.Settings != nil || st.Volume != nil || !a.Ready() {
 		return nil
 	}
 	w := &EtcdBackupWarning{}
@@ -203,7 +203,7 @@ func (a *Appliance) ExportState(ctx context.Context, statePassphrase, exportPass
 	if err != nil {
 		return nil, err
 	}
-	talosconfig, err := a.Credential(ctx, statePassphrase, "talosconfig")
+	talosconfig, err := a.Credential(ctx, statePassphrase, talosconfigName)
 	if err != nil {
 		return nil, err
 	}
@@ -327,7 +327,7 @@ func (a *Appliance) ImportState(ctx context.Context, sealed []byte, exportPassph
 	// reads the admin talosconfig from the state, works without it.
 	if a.Talos != nil {
 		if talosconfig, err := a.etcdBackupCredential(ctx, []byte(b.Talosconfig), &keys); err == nil {
-			if err := writeFileAtomic(a.etcdBackupFile("talosconfig"), talosconfig); err != nil {
+			if err := writeFileAtomic(a.etcdBackupFile(talosconfigName), talosconfig); err != nil {
 				return err
 			}
 			return writeJSONFile(a.etcdBackupFile("keys.json"), keys)
@@ -349,7 +349,7 @@ func (a *Appliance) importSpecKey(key string) error {
 // with, and nothing after: the cluster's bootstrap and health, which cannot finish on nodes whose
 // etcd is empty. Each node's module waits for the one before, so naming the last names them all.
 func recreateTargets(nodes int) []string {
-	return []string{"-target=proxmox_virtual_environment_vm.node", fmt.Sprintf("-target=module.talos_node_%d", max(nodes, 1)-1)}
+	return []string{"-target=" + nodeVMAddress, fmt.Sprintf("-target=%smodule.talos_node_%d", moduleAddress, max(nodes, 1)-1)}
 }
 
 // RecreateRequest is what a recreation of the management cluster was started with.
@@ -374,25 +374,19 @@ func (a *Appliance) RecreateManagement(ctx context.Context, name, passphrase str
 	if settings == nil || !a.HasState() {
 		return errors.New("there is no management cluster state to recreate it from: import an export first")
 	}
-	b, err := a.backupSetup()
+	acc, err := a.etcdRestoreAccess(ctx, passphrase)
 	if err != nil {
 		return err
 	}
-	admin, err := a.Credential(ctx, passphrase, "talosconfig")
-	if err != nil {
-		return err
-	}
-	nodes, err := provisioner.TalosEndpoints(admin)
-	if err != nil {
-		return fmt.Errorf("the management cluster's talosconfig: %w", err)
-	}
-	folder := provisioner.ManagementEtcdFolder(b.target.Prefix)
 	r := &recreation{
-		name: name, passphrase: passphrase, ticket: ticket, settings: settings, setup: b, folder: folder, admin: admin, nodes: nodes,
+		name: name, passphrase: passphrase, ticket: ticket, settings: settings, setup: acc.setup, folder: acc.folder, admin: acc.admin, nodes: acc.nodes,
 		targets: recreateTargets(len(settings.Nodes)), ready: ready,
 	}
 	//nolint:contextcheck // the run outlives the request that starts it
 	return a.startIn(&a.job, sessionRunner(ticket), "recreate", RecreateRequest{Snapshot: name}, func(ctx context.Context, j *Job) error {
+		if err := a.stopEtcdSnapshot(ctx, j); err != nil {
+			return err
+		}
 		return a.recreate(ctx, j, r)
 	})
 }
@@ -455,5 +449,5 @@ func (a *Appliance) applyVMs(ctx context.Context, j *Job, r *recreation) error {
 		return err
 	}
 	j.Add("Making the VMs and configuring the nodes")
-	return a.tofu(ctx, j, env, jsonMessage, append([]string{"apply", "-auto-approve", "-input=false", "-json"}, r.targets...)...)
+	return a.applyPlanned(ctx, j, env, r.ticket, r.targets...)
 }

@@ -1,0 +1,368 @@
+{
+  "about": "Certificate bundles and the verdict on their layout, read by the Go and the web interface's tests so that both refuse the same. Lines are joined with lineEnd (default LF), with one after the last unless noFinalLineEnd. An empty problem accepts the bundle.",
+  "cases": [
+    {
+      "name": "one block",
+      "lines": ["-----BEGIN CERTIFICATE-----", "MIIBAA==", "-----END CERTIFICATE-----"],
+      "problem": ""
+    },
+    {
+      "name": "two blocks",
+      "lines": [
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----",
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----"
+      ],
+      "problem": ""
+    },
+    {
+      "name": "CRLF",
+      "lineEnd": "\r\n",
+      "lines": [
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----",
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----"
+      ],
+      "problem": ""
+    },
+    {
+      "name": "no final line end",
+      "noFinalLineEnd": true,
+      "lines": ["-----BEGIN CERTIFICATE-----", "MIIBAA==", "-----END CERTIFICATE-----"],
+      "problem": ""
+    },
+    {
+      "name": "blank lines around",
+      "lines": [
+        "",
+        "",
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----",
+        "  ",
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----",
+        ""
+      ],
+      "problem": ""
+    },
+    {
+      "name": "body over several lines, indented",
+      "lines": ["-----BEGIN CERTIFICATE-----", "  MIIB", "\tAA==", "-----END CERTIFICATE-----"],
+      "problem": ""
+    },
+    {
+      "name": "spaces after the boundaries",
+      "lines": ["-----BEGIN CERTIFICATE----- ", "MIIBAA==", "-----END CERTIFICATE-----  "],
+      "problem": ""
+    },
+    {
+      "name": "blocks joined on one line",
+      "lines": [
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE----------BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----"
+      ],
+      "problem": ""
+    },
+    {
+      "name": "comment separators",
+      "lines": [
+        "# ---------- Example Issuing CA 1 ----------",
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----",
+        "# ---------- Example Root CA ----------",
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----"
+      ],
+      "problem": ""
+    },
+    {
+      "name": "a line of dashes",
+      "lines": [
+        "--------------------------------------------------",
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----"
+      ],
+      "problem": ""
+    },
+    {
+      "name": "curl's cacert.pem header and names",
+      "lines": [
+        "##",
+        "## Bundle of CA Root Certificates",
+        "## SHA256: 794d161a45dc3373553f9c9957efe7c0101b50a6554cf8ccbd0804f3be20f2f1",
+        "##",
+        "",
+        "",
+        "Microsoft RSA Root Certificate Authority 2017",
+        "=============================================",
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----",
+        "",
+        "ISRG Root X1",
+        "============",
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----"
+      ],
+      "problem": ""
+    },
+    {
+      "name": "p11-kit names",
+      "lines": ["# Example Root CA", "-----BEGIN CERTIFICATE-----", "MIIBAA==", "-----END CERTIFICATE-----"],
+      "problem": ""
+    },
+    {
+      "name": "comments naming BEGIN and END",
+      "lines": [
+        "# BEGIN of the chain",
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----",
+        "-- END of the chain --",
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----"
+      ],
+      "problem": ""
+    },
+    {
+      "name": "openssl x509 -text",
+      "lines": [
+        "Certificate:",
+        "    Data:",
+        "        Version: 3 (0x2)",
+        "            30:45:02:21:00:d3:5c:9b:7e:61:aa:10:42:8f:2e:91:0c:3b:77:52:",
+        "subject=CN=site",
+        "issuer=CN=site",
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----"
+      ],
+      "problem": ""
+    },
+    {
+      "name": "openssl pkcs12 -nokeys",
+      "lines": [
+        "Bag Attributes",
+        "    friendlyName: site",
+        "    localKeyID: 01 02 03",
+        "subject=CN=site",
+        "issuer=CN=site",
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----"
+      ],
+      "problem": ""
+    },
+    {
+      "name": "BEGIN line lost a dash",
+      "lines": ["----BEGIN CERTIFICATE-----", "MIIBAA==", "-----END CERTIFICATE-----"],
+      "problem": "has a damaged BEGIN or END line on line 1"
+    },
+    {
+      "name": "BEGIN line lost a letter",
+      "lines": ["-----BEGN CERTIFICATE-----", "MIIBAA==", "-----END CERTIFICATE-----"],
+      "problem": "has a damaged BEGIN or END line on line 1"
+    },
+    {
+      "name": "BEGIN line lost its dashes",
+      "lines": ["BEGIN CERTIFICATE", "MIIBAA==", "-----END CERTIFICATE-----"],
+      "problem": "has a damaged BEGIN or END line on line 1"
+    },
+    {
+      "name": "BEGIN line missing",
+      "lines": ["MIIBAA==", "-----END CERTIFICATE-----"],
+      "problem": "has a damaged BEGIN or END line on line 2"
+    },
+    {
+      "name": "certificate text without its BEGIN line",
+      "lines": [
+        "Bag Attributes",
+        "MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw",
+        "-----END CERTIFICATE-----"
+      ],
+      "problem": "has certificate text without its BEGIN line on line 2"
+    },
+    {
+      "name": "second BEGIN line lost a dash",
+      "lines": [
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----",
+        "----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----"
+      ],
+      "problem": "has a damaged BEGIN or END line on line 4"
+    },
+    {
+      "name": "END line again after the block",
+      "lines": ["-----BEGIN CERTIFICATE-----", "MIIBAA==", "-----END CERTIFICATE-----", "-----END CERTIFICATE-----"],
+      "problem": "has a damaged BEGIN or END line on line 4"
+    },
+    {
+      "name": "text after the last block",
+      "lines": ["-----BEGIN CERTIFICATE-----", "MIIBAA==", "-----END CERTIFICATE-----", "", "extra"],
+      "problem": "has text after its last PEM block on line 5"
+    },
+    {
+      "name": "END line lost a dash",
+      "lines": ["-----BEGIN CERTIFICATE-----", "MIIBAA==", "-----END CERTIFICATE----"],
+      "problem": "block 1 is not a complete PEM block"
+    },
+    {
+      "name": "BEGIN inside a block",
+      "lines": [
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----"
+      ],
+      "problem": "block 1 is not a complete PEM block"
+    },
+    {
+      "name": "block without its END line",
+      "lines": ["-----BEGIN CERTIFICATE-----", "MIIBAA=="],
+      "problem": "block 1 is not a complete PEM block"
+    },
+    {
+      "name": "END of another kind",
+      "lines": ["-----BEGIN CERTIFICATE-----", "MIIBAA==", "-----END PRIVATE KEY-----"],
+      "problem": "block 1 is not a complete PEM block"
+    },
+    {
+      "name": "body that is no base64",
+      "lines": ["-----BEGIN CERTIFICATE-----", "MIIB!A==", "-----END CERTIFICATE-----"],
+      "problem": "block 1 is not a complete PEM block"
+    },
+    {
+      "name": "second block cut short",
+      "lines": [
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----",
+        "-----BEGIN CERTIFICATE-----",
+        "MII",
+        "-----END CERTIFICATE-----"
+      ],
+      "problem": "block 2 is not a complete PEM block"
+    },
+    {
+      "name": "a private key",
+      "lines": [
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----",
+        "-----BEGIN PRIVATE KEY-----",
+        "MIIBAA==",
+        "-----END PRIVATE KEY-----"
+      ],
+      "problem": "holds a private key. Give certificates only"
+    },
+    { "name": "no block", "lines": ["just text"], "problem": "holds no PEM certificate" },
+    {
+      "name": "a header line in a block",
+      "lines": ["-----BEGIN CERTIFICATE-----", "Comment: site root", "MIIBAA==", "-----END CERTIFICATE-----"],
+      "problem": ""
+    },
+    {
+      "name": "an indented body run before a block",
+      "lines": [
+        "    MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw",
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----"
+      ],
+      "problem": "has certificate text without its BEGIN line on line 1"
+    },
+    {
+      "name": "spaces after the last block",
+      "lines": ["-----BEGIN CERTIFICATE-----", "MIIBAA==", "-----END CERTIFICATE-----", " \t "],
+      "problem": ""
+    },
+    {
+      "name": "CR inside a body line",
+      "lines": ["-----BEGIN CERTIFICATE-----", "MIIB\rAA==", "-----END CERTIFICATE-----"],
+      "problem": ""
+    },
+    {
+      "name": "NEL line after the last block",
+      "lines": ["-----BEGIN CERTIFICATE-----", "MIIBAA==", "-----END CERTIFICATE-----", "\u0085"],
+      "problem": ""
+    },
+    {
+      "name": "BOM before a body run between blocks",
+      "lines": [
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----",
+        "﻿MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw",
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----"
+      ],
+      "problem": ""
+    },
+    {
+      "name": "NEL before a body run between blocks",
+      "lines": [
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----",
+        "\u0085MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw",
+        "-----BEGIN CERTIFICATE-----",
+        "MIIBAA==",
+        "-----END CERTIFICATE-----"
+      ],
+      "problem": "has certificate text without its BEGIN line on line 4"
+    },
+    {
+      "name": "64 KiB",
+      "repeat": 1040,
+      "lines": ["-----BEGIN CERTIFICATE-----", "MIIBAA==", "-----END CERTIFICATE-----"],
+      "problem": ""
+    },
+    {
+      "name": "over 64 KiB",
+      "repeat": 1041,
+      "lines": ["-----BEGIN CERTIFICATE-----", "MIIBAA==", "-----END CERTIFICATE-----"],
+      "problem": "at most 64 KiB"
+    },
+    {
+      "name": "over 64 KiB in UTF-8 bytes, under it in characters",
+      "repeat": 800,
+      "lines": ["# ÄÄÄÄÄÄÄÄÄÄ", "-----BEGIN CERTIFICATE-----", "MIIBAA==", "-----END CERTIFICATE-----"],
+      "problem": "at most 64 KiB"
+    },
+    {
+      "name": "over 64 KiB, within an authority's 256",
+      "repeat": 1041,
+      "maxKiB": 256,
+      "lines": ["-----BEGIN CERTIFICATE-----", "MIIBAA==", "-----END CERTIFICATE-----"],
+      "problem": ""
+    },
+    {
+      "name": "over 256 KiB",
+      "repeat": 4162,
+      "maxKiB": 256,
+      "lines": ["-----BEGIN CERTIFICATE-----", "MIIBAA==", "-----END CERTIFICATE-----"],
+      "problem": "at most 256 KiB"
+    }
+  ]
+}

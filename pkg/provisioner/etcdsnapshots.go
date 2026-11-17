@@ -98,7 +98,7 @@ type EtcdSnapshots struct {
 // withDefaults fills in what the cluster left to the chart's schema.
 func (s *EtcdSnapshots) withDefaults() {
 	s.Schedule = cmp.Or(s.Schedule, defaultEtcdSnapshotSchedule)
-	s.TimeZone = cmp.Or(s.TimeZone, defaultBackupTimeZone)
+	s.TimeZone = cmp.Or(s.TimeZone, siteZone())
 	s.Keep = cmp.Or(s.Keep, defaultEtcdSnapshotKeep)
 }
 
@@ -113,15 +113,18 @@ func (s *EtcdSnapshots) valid() error {
 }
 
 // EtcdSnapshotsOf reads a cluster's etcdSnapshots variable with the chart's defaults. Unset, they
-// are off.
+// are on, to the backup volume.
 func EtcdSnapshotsOf(c *clusterv1.Cluster) (EtcdSnapshots, error) {
-	s, _, err := optionalVariable[EtcdSnapshots](c, etcdSnapshotsVariable)
+	s, found, err := optionalVariable[EtcdSnapshots](c, etcdSnapshotsVariable)
+	if !found {
+		s.Enabled = true
+	}
 	s.withDefaults()
 	return s, err
 }
 
-// checkEtcdSnapshots holds a cluster's etcdSnapshots variable to a target of the class and a
-// schedule cron reads, as checkBackups holds its backups.
+// checkEtcdSnapshots holds a cluster's etcdSnapshots variable to a schedule cron reads and a target
+// of the class, as checkBackups holds its backups. No target is the backup volume.
 func checkEtcdSnapshots(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) error {
 	s, err := EtcdSnapshotsOf(c)
 	if err != nil {
@@ -130,11 +133,11 @@ func checkEtcdSnapshots(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass
 	if err := checkEtcdUpload(c, &s); err != nil || !s.Enabled {
 		return err
 	}
-	if s.Target == "" {
-		return errors.New("etcdSnapshots: choose a target")
-	}
 	if err := s.valid(); err != nil {
 		return err
+	}
+	if s.Target == VolumeTarget {
+		return nil
 	}
 	if err := checkSharedTarget(old, c, &s); err != nil {
 		return err
@@ -146,6 +149,23 @@ func checkEtcdSnapshots(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass
 	}
 	return targetOffered(class, s.Target, "etcd snapshots")
 }
+
+// etcdCredentialMissing says what the controller lacks to write the cluster's etcd snapshots to its
+// target: the store's keys, from the cluster's own credential or the one for every cluster. It is
+// empty where snapshots are off or the keys are there.
+func etcdCredentialMissing(ctx context.Context, c client.Reader, cluster *clusterv1.Cluster) (string, error) {
+	s, err := EtcdSnapshotsOf(cluster)
+	if err != nil || !s.Enabled || s.Target == "" {
+		return "", err
+	}
+	_, why, err := backupCredential(ctx, c, cluster)
+	return why, err
+}
+
+// EtcdSnapshotWaitingForKey is the reason of the snapshot condition of a cluster whose snapshots
+// have no keys for their target yet. The condition holds until a key is stored, and is the one place
+// that says so.
+const EtcdSnapshotWaitingForKey = "WaitingForKey"
 
 // checkSharedTarget holds etcd snapshots and backups that are both on to one target. Both are
 // written with the one access key the cluster has, which reaches one store. A cluster already on two
@@ -459,8 +479,14 @@ func (s *EtcdSnapshotter) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		}
 		return ctrl.Result{}, fmt.Errorf("reading the cluster: %w", err)
 	}
-	if !Owns(cluster, s.ClassNamespace) || !cluster.DeletionTimestamp.IsZero() {
+	if !Owns(cluster, s.ClassNamespace) {
 		return ctrl.Result{}, nil
+	}
+	if !cluster.DeletionTimestamp.IsZero() {
+		return s.removed(ctx, cluster)
+	}
+	if err := s.holdDeletion(ctx, cluster); err != nil {
+		return ctrl.Result{}, err
 	}
 	settings, err := EtcdSnapshotsOf(cluster)
 	if err != nil {
@@ -468,6 +494,9 @@ func (s *EtcdSnapshotter) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 	if !settings.Enabled {
 		return ctrl.Result{}, s.off(ctx, cluster)
+	}
+	if waiting, werr := s.snapshotsWaitForKey(ctx, cluster); werr != nil || waiting {
+		return ctrl.Result{RequeueAfter: etcdSnapshotWait}, werr
 	}
 	_, requested := cluster.Annotations[EtcdSnapshotRequestAnnotation]
 	if RestoreInProgress(cluster) || !meta.IsStatusConditionTrue(cluster.Status.Conditions, clusterv1.ClusterControlPlaneInitializedCondition) {
@@ -483,15 +512,26 @@ func (s *EtcdSnapshotter) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 	tctx, cancel := context.WithTimeout(ctx, EtcdSnapshotTimeout)
 	defer cancel()
-	t, err := s.Targets.Open(tctx, cluster, settings.Target, true)
+	t, err := s.openForSnapshot(tctx, cluster, settings.Target)
+	if errors.Is(err, ErrVolumeAsleep) {
+		return ctrl.Result{RequeueAfter: etcdSnapshotWait}, s.condition(ctx, cluster, &metav1.Condition{
+			Type: EtcdSnapshotCondition, Status: metav1.ConditionFalse, Reason: EtcdSnapshotWaitingForVolume,
+			Message: volumeWakingMessage,
+		})
+	}
 	var taken EtcdSnapshot
 	if err == nil {
+		defer s.release(ctx, t)
 		taken, err = s.take(tctx, cluster, t)
 	}
 	if err != nil {
+		reason := "Failed"
+		if errors.Is(err, ErrVolumeFull) {
+			reason = EtcdSnapshotVolumeFull
+		}
 		s.failure(ctx, cluster, err)
 		return ctrl.Result{RequeueAfter: etcdSnapshotRetry}, s.record(ctx, cluster, nil, &metav1.Condition{
-			Type: EtcdSnapshotCondition, Status: metav1.ConditionFalse, Reason: "Failed", Message: err.Error(),
+			Type: EtcdSnapshotCondition, Status: metav1.ConditionFalse, Reason: reason, Message: err.Error(),
 		})
 	}
 	_, pruneErr := PruneEtcdSnapshots(tctx, t.Store, t.Folder, settings.Keep)
@@ -516,6 +556,25 @@ func (s *EtcdSnapshotter) succeeded(ctx context.Context, cluster *clusterv1.Clus
 	}
 	next, err := s.nextSnapshot(cluster, settings)
 	return ctrl.Result{RequeueAfter: max(next.Sub(s.now()), etcdSnapshotWait)}, err
+}
+
+// snapshotsWaitForKey sets the snapshot condition to waiting while the cluster has no keys for its
+// target, and says whether it did. Once a key is there it clears the wait at once: the control
+// plane may still be coming up, and no snapshot would set the condition for a while.
+func (s *EtcdSnapshotter) snapshotsWaitForKey(ctx context.Context, cluster *clusterv1.Cluster) (bool, error) {
+	missing, err := etcdCredentialMissing(ctx, s.Client, cluster)
+	if err != nil {
+		return false, err
+	}
+	if missing == "" {
+		if have := meta.FindStatusCondition(cluster.Status.Conditions, EtcdSnapshotCondition); have != nil && have.Reason == EtcdSnapshotWaitingForKey {
+			return false, s.condition(ctx, cluster, nil)
+		}
+		return false, nil
+	}
+	return true, s.condition(ctx, cluster, &metav1.Condition{
+		Type: EtcdSnapshotCondition, Status: metav1.ConditionFalse, Reason: EtcdSnapshotWaitingForKey, Message: missing,
+	})
 }
 
 // off clears what a cluster that no longer snapshots shows of its snapshots: a request nobody will
@@ -649,6 +708,13 @@ type ClusterTargets struct {
 	Client         client.Client
 	ClassNamespace string
 	OpenStore      OpenStore
+	// Volume is the backup volume, for clusters whose snapshots name no target. It may be nil
+	// where nothing reads the volume.
+	Volume BackupVolume
+	// Holder names what holds the volume awake through these targets, for each cluster apart:
+	// "snapshots" where empty. The restorer names itself, so that a snapshot ending does not let
+	// the volume sleep under a restore.
+	Holder string
 }
 
 // ClusterTarget is a cluster's way into its snapshot folder in its target, with its keys.
@@ -658,6 +724,9 @@ type ClusterTarget struct {
 	Keys   *corev1.Secret
 	// CACertificate is the target's CA, when it has one, for whatever else fetches from the store.
 	CACertificate string
+
+	volume VolumeStore
+	done   func(context.Context) error
 }
 
 // EtcdIdentity is the age identity the cluster's snapshots are encrypted to.
@@ -713,8 +782,12 @@ func DecryptEtcdSnapshot(r io.Reader, identity string, w io.Writer) (string, int
 }
 
 // Open opens the target a cluster's etcd snapshots name, with the credential its backups use, and
-// reads its keys. It makes them first when create is set.
+// reads its keys. It makes them first when create is set. VolumeTarget opens the cluster's folder
+// on the backup volume, which needs no credential. Release lets the volume sleep again.
 func (ts *ClusterTargets) Open(ctx context.Context, cluster *clusterv1.Cluster, name string, create bool) (*ClusterTarget, error) {
+	if name == VolumeTarget {
+		return ts.openVolume(ctx, cluster, create)
+	}
 	target, found, err := classTarget(ctx, ts.Client, ts.ClassNamespace, cluster, name)
 	if err != nil {
 		return nil, err
@@ -755,6 +828,14 @@ func (s *EtcdSnapshotter) failure(ctx context.Context, cluster *clusterv1.Cluste
 	s.mu.Unlock()
 	ctrl.LoggerFrom(ctx).Info("etcd snapshot failed", "error", err.Error())
 	s.eventf(cluster, corev1.EventTypeWarning, "EtcdSnapshotFailed", "etcd snapshot failed: %v", err)
+}
+
+// release lets the backup volume sleep again after a snapshot. A request left behind runs out by
+// itself.
+func (*EtcdSnapshotter) release(ctx context.Context, t *ClusterTarget) {
+	if err := t.Release(ctx); err != nil {
+		ctrl.LoggerFrom(ctx).Info("letting the backup volume sleep", "error", err.Error())
+	}
 }
 
 func (s *EtcdSnapshotter) eventf(cluster *clusterv1.Cluster, kind, reason, format string, args ...any) {

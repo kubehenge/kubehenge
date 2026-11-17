@@ -20,6 +20,7 @@ import (
 	runtimehooksv1 "sigs.k8s.io/cluster-api/api/runtime/hooks/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/kubehenge/kubehenge/pkg/pve"
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
@@ -369,6 +370,39 @@ func TestOnlineNodesSkipsANodeWhoseStatusCannotBeRead(t *testing.T) {
 	}
 	if got := p.Unreachable(); len(got) != 1 || got[0].Node != "pve2" || !strings.Contains(got[0].Reason, "500") {
 		t.Errorf("Unreachable = %v, want pve2 with the 500", got)
+	}
+}
+
+// Only the storage configuration tells a dir storage that preallocates, or a ZFS pool that is not
+// sparse, from one that allocates on write.
+func TestSitesReadsEachStoragesFreeSpaceAndHowItAllocates(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var data any = []any{}
+		switch {
+		case r.URL.Path == "/api2/json/cluster/resources" && r.URL.Query().Get("type") == "storage":
+			used, size := int64(90)<<30, int64(100)<<30
+			data = []map[string]any{
+				{"storage": "local-lvm", "node": "pve1", "shared": 0, "content": "images", "plugintype": "lvm", "disk": used, "maxdisk": size, "status": "available"},
+				{"storage": "files", "node": "pve1", "shared": 0, "content": "images", "plugintype": "dir", "disk": used, "maxdisk": size, "status": "available"},
+				{"storage": "tank", "node": "pve1", "shared": 0, "content": "images", "plugintype": "zfspool", "disk": used, "maxdisk": size, "status": "available"},
+				{"storage": "thin", "node": "pve1", "shared": 0, "content": "images", "plugintype": "lvmthin", "disk": used, "maxdisk": size, "status": "available"},
+			}
+		case r.URL.Path == "/api2/json/storage":
+			data = []map[string]any{{"storage": "files", "preallocation": "falloc"}, {"storage": "tank", "sparse": 0}}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	t.Cleanup(srv.Close)
+	s, err := (&Proxmox{Client: proxmox.NewClient(srv.URL + "/api2/json")}).Sites(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]bool{"local-lvm": true, "files": true, "tank": true, "thin": false} {
+		free, thick := pve.FreeOn(s.Space, name, []string{"pve1"})
+		if free != 10<<30 || thick != want {
+			t.Errorf("%s: free %d GiB, reserves whole disks %v; want 10 GiB and %v", name, free>>30, thick, want)
+		}
 	}
 }
 

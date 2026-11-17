@@ -16,6 +16,8 @@ import {
   Status,
   age,
   browserZone,
+  type SiteZone,
+  useSiteZone,
   errorMessage,
   filled,
   pollCache,
@@ -25,6 +27,7 @@ import {
   sentence,
   sole,
   timeZones,
+  stageLabel,
   useChange,
   usePoll,
   Skeleton,
@@ -54,9 +57,14 @@ export const backupKeys: CredentialKey[] = [
 
 export const backupsHint = "Every namespace but system and add-on ones, with volume data";
 
-export const backupCredentialHint = "Limit it to this cluster's folder";
+/** backupCredentialHint names the folder of the bucket that a cluster's backups and etcd snapshots are written to, beneath the target's prefix. */
+export function backupCredentialHint(namespace: string | undefined, name: string, target?: OfferedTarget): string {
+  const prefix = target?.prefix?.replaceAll(/^\/+|\/+$/gu, "");
+  const own = `${filled(namespace) ? namespace : "<namespace>"}.${filled(name) ? name : "<name>"}/`;
+  return `Limit it to the folder ${filled(prefix) ? `${prefix}/` : ""}${own}`;
+}
 
-export const noTargets = "No backup targets. An administrator adds them in the appliance settings.";
+export const noTargets = "No backup targets until an administrator adds one";
 
 /** A cluster's backups variable. */
 export interface BackupsValue {
@@ -100,6 +108,8 @@ export interface OfferedTarget {
   name: string;
   bucket: string;
   endpoint?: string;
+  /** The folder every cluster's own folder sits beneath. */
+  prefix?: string;
 }
 
 /** classTargets lists the backup targets a class offers. */
@@ -121,6 +131,10 @@ export function classTargets(c: ClusterClass | undefined): OfferedTarget[] {
     const endpoint = text(r["endpoint"]);
     if (filled(endpoint)) {
       t.endpoint = endpoint;
+    }
+    const prefix = text(r["prefix"]);
+    if (filled(prefix)) {
+      t.prefix = prefix;
     }
     return [t];
   });
@@ -239,23 +253,23 @@ export interface BackupFields {
   readFrom: string[];
 }
 
-/** newBackupFields are a new cluster's settings: daily at 02:00 in the browser's time zone, kept a week. */
-export const newBackupFields = (): BackupFields => ({
+/** newBackupFields are a new cluster's settings: daily at 02:00 in the site's time zone, kept a week. */
+export const newBackupFields = (zone = browserZone()): BackupFields => ({
   target: "",
   schedule: defaultSchedule,
-  timeZone: browserZone(),
+  timeZone: zone,
   retention: String(defaultRetentionDays),
   volumes: "all",
   readFrom: [],
 });
 
 /** backupFieldsOf are the fields of a cluster's settings. What it leaves unset is the chart's default. */
-export function backupFieldsOf(b: BackupsValue): BackupFields {
+export function backupFieldsOf(b: BackupsValue, zone = browserZone(), inEffect = "UTC"): BackupFields {
   return {
     target: b.target ?? "",
     schedule: b.schedule ?? defaultSchedule,
-    // What is in effect: UTC when backups name none. Backups switched on start in the browser's zone.
-    timeZone: b.timeZone ?? (b.enabled ? "UTC" : browserZone()),
+    // What is in effect: inEffect when backups name none. Backups switched on start in zone.
+    timeZone: b.timeZone ?? (b.enabled ? inEffect : zone),
     retention: String(b.retentionDays ?? defaultRetentionDays),
     volumes: b.volumes ?? "all",
     readFrom: b.readFrom ?? [],
@@ -417,20 +431,38 @@ export function BackupSourcesField({
   );
 }
 
-/** BackupFieldset edits a cluster's backup settings. problems are those to show. */
-export function BackupFieldset({
+interface ScheduledTarget {
+  target: string;
+  schedule: string;
+  timeZone: string;
+}
+
+/**
+ * volumeTarget is a target field's value for the management cluster's backup volume, which a
+ * variable names by leaving its target out. No backup target's name can be it. An empty field is
+ * one not chosen yet.
+ */
+export const volumeTarget = "@volume";
+
+/** volumeName is what the interface calls the management cluster's backup volume. */
+export const volumeName = "Backup volume";
+
+/** TargetScheduleFields edits where a cluster's runs go and when they start. */
+export function TargetScheduleFields({
   value,
-  onChange,
+  update,
   targets,
   problems,
+  volume = false,
 }: {
-  value: BackupFields;
-  onChange: (f: BackupFields) => void;
+  value: ScheduledTarget;
+  update: (patch: Partial<ScheduledTarget>) => void;
   targets: OfferedTarget[];
-  problems: Partial<Record<BackupField, string | undefined>>;
+  problems: { target?: string | undefined; schedule?: string | undefined };
+  /** volume offers the management cluster's backup volume beside the targets. */
+  volume?: boolean;
 }): JSX.Element {
-  const update = (patch: Partial<BackupFields>): void => onChange({ ...value, ...patch });
-  const listed = targets.some((t) => t.name === value.target);
+  const listed = targets.some((t) => t.name === value.target) || (volume && value.target === volumeTarget);
   return (
     <>
       <Field label="Target" error={problems.target}>
@@ -439,6 +471,7 @@ export function BackupFieldset({
             <option value="" disabled>
               Choose…
             </option>
+            {volume && <option value={volumeTarget}>{volumeName}</option>}
             {targets.map((t) => (
               <option key={t.name} value={t.name}>
                 {t.name}: {targetText(t)}
@@ -471,6 +504,26 @@ export function BackupFieldset({
           </select>
         )}
       </Field>
+    </>
+  );
+}
+
+/** BackupFieldset edits a cluster's backup settings. problems are those to show. */
+export function BackupFieldset({
+  value,
+  onChange,
+  targets,
+  problems,
+}: {
+  value: BackupFields;
+  onChange: (f: BackupFields) => void;
+  targets: OfferedTarget[];
+  problems: Partial<Record<BackupField, string | undefined>>;
+}): JSX.Element {
+  const update = (patch: Partial<BackupFields>): void => onChange({ ...value, ...patch });
+  return (
+    <>
+      <TargetScheduleFields value={value} update={update} targets={targets} problems={problems} />
       <Field label="Days to keep" error={problems.retention}>
         {(id) => (
           <input
@@ -519,12 +572,25 @@ export function backupsRows(c: Cluster, offered: boolean): OptionRow<"backups">[
 }
 
 /** BackupsDialog switches a cluster's backups on or off and changes how they run. */
-export function BackupsDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+export function BackupsDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element | null {
+  const zone = useSiteZone();
+  return zone === undefined ? null : <BackupsForm cluster={c} zone={zone} onClose={onClose} />;
+}
+
+function BackupsForm({
+  cluster: c,
+  zone,
+  onClose,
+}: {
+  cluster: Cluster;
+  zone: SiteZone;
+  onClose: () => void;
+}): JSX.Element {
   const current = backupsOf(c.variables["backups"]);
   const offered = useClassTargets(c.class);
   const targets = offered ?? [];
   const [enabled, setEnabled] = useState(current.enabled);
-  const [typed, setTyped] = useState<BackupFields>(() => backupFieldsOf(current));
+  const [typed, setTyped] = useState<BackupFields>(() => backupFieldsOf(current, zone.start, zone.inEffect));
   const { busy, error, send } = useChange(c, onClose);
   const hint = useId();
   const fields = withTarget(typed, targets);
@@ -553,7 +619,7 @@ export function BackupsDialog({ cluster: c, onClose }: { cluster: Cluster; onClo
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed || Object.keys(problems).length > 0}>
-            Save
+            {stageLabel}
           </button>
         </>
       }
@@ -585,7 +651,13 @@ export function BackupsDialog({ cluster: c, onClose }: { cluster: Cluster; onClo
           onChange={(readFrom) => setTyped({ ...fields, readFrom })}
         />
       )}
-      {enabled && <BackupKey cluster={c} existingSecret={current.existingSecret} />}
+      {enabled && (
+        <BackupKey
+          cluster={c}
+          existingSecret={current.existingSecret}
+          target={targets.find((t) => t.name === fields.target)}
+        />
+      )}
       {current.enabled && !enabled && <p className="warning">Removes Velero. Backups stay in the target.</p>}
       <ErrorBox message={error} />
     </Dialog>
@@ -597,14 +669,22 @@ export function BackupsDialog({ cluster: c, onClose }: { cluster: Cluster; onClo
 function BackupKey({
   cluster: c,
   existingSecret,
+  target,
 }: {
   cluster: Cluster;
   existingSecret: string | undefined;
+  target: OfferedTarget | undefined;
 }): JSX.Element {
   return filled(existingSecret) ? (
     <p className="hint">Access key: Secret {existingSecret} in velero</p>
   ) : (
-    <CredentialField label="Access key" purpose="backup" cluster={c} keys={backupKeys} hint={backupCredentialHint} />
+    <CredentialField
+      label="Access key"
+      purpose="backup"
+      cluster={c}
+      keys={backupKeys}
+      hint={backupCredentialHint(c.namespace, c.name, target)}
+    />
   );
 }
 

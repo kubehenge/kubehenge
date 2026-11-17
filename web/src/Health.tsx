@@ -4,6 +4,7 @@ import { api } from "./api";
 import { useClusterHealth, pollUnwell } from "./cluster-health";
 import { attentionFix } from "./cluster-paths";
 import { standing } from "./fleet";
+import { poolLabel } from "./pool-machine";
 import { Link } from "./router";
 import type {
   AddonRelease,
@@ -248,12 +249,12 @@ function pressureTile(h: ClusterHealth): Tile {
 
 function podsTile(h: ClusterHealth): Tile {
   if (filled(h.workload) || (filled(h.pods.error) && h.pods.items.length === 0)) {
-    return { section: "pods", label: "Pods not well", ...notRead };
+    return { section: "pods", label: "Unhealthy pods", ...notRead };
   }
   const n = h.pods.items.length;
   return {
     section: "pods",
-    label: "Pods not well",
+    label: "Unhealthy pods",
     value: n === 0 ? "None" : `${n}${h.pods.truncated === true ? "+" : ""}`,
     state: worst(h.pods.items.map((p) => p.severity)),
   };
@@ -519,8 +520,7 @@ const share = (part: number, whole: number): string => `${Math.round((part / who
 
 // uptime is how long a VM has run, as the page says how long ago things happened.
 function uptime(seconds: number): string {
-  const now = Date.now();
-  return age(new Date(now - seconds * msPerSecond).toISOString(), now);
+  return age(new Date(Date.now() - seconds * msPerSecond).toISOString());
 }
 
 const cores = (millicores: number): string => (millicores / millicoresPerCore).toFixed(1);
@@ -603,7 +603,15 @@ function nodeNotes(n: HealthNode): string[] {
   return [...(n.pressure ?? []).map((p) => pressureText[p] ?? p), ...(n.unschedulable === true ? ["Cordoned"] : [])];
 }
 
-function NodeRow({ node: n, inside }: { node: HealthNode; inside: boolean }): JSX.Element {
+function NodeRow({
+  node: n,
+  inside,
+  pools,
+}: {
+  node: HealthNode;
+  inside: boolean;
+  pools: readonly { name: string }[];
+}): JSX.Element {
   const s = nodeStatus(n, inside);
   const { vm } = n;
   return (
@@ -611,7 +619,9 @@ function NodeRow({ node: n, inside }: { node: HealthNode; inside: boolean }): JS
       <td className="nowrap">
         {n.name}
         <div className="hint">
-          {n.role === "control-plane" ? "Control plane" : `Worker${filled(n.pool) ? `, pool ${n.pool}` : ""}`}
+          {n.role === "control-plane"
+            ? "Control plane"
+            : `Worker${filled(n.pool) ? `, pool ${poolLabel(n.pool, pools)}` : ""}`}
         </div>
         {(n.taints ?? []).length > 0 && (
           <ul className="node-tags" aria-label={`${n.name} taints`}>
@@ -683,7 +693,7 @@ function Nodes({ health: h }: { health: ClusterHealth }): JSX.Element {
             </tr>
           )}
           {h.nodes.items.map((n) => (
-            <NodeRow key={n.name} node={n} inside={!filled(h.workload)} />
+            <NodeRow key={n.name} node={n} inside={!filled(h.workload)} pools={h.pools.items} />
           ))}
         </tbody>
       </table>
@@ -697,7 +707,7 @@ function Pods({ health: h, actions }: { health: ClusterHealth; actions: PodActio
   }
   return (
     <div className="box scroll" id={anchor("pods")}>
-      <h3>Pods not well</h3>
+      <h3>Unhealthy pods</h3>
       <SectionNote section={h.pods} what="pods" />
       <table className="grid stack">
         <thead>
@@ -922,7 +932,7 @@ function Pools({ pools }: { pools: HealthSection<PoolState> }): JSX.Element | nu
             const s = poolStatus(p);
             return (
               <tr key={p.name} className={s.state === "ok" ? "" : "attention"}>
-                <td className="nowrap">{p.name}</td>
+                <td className="nowrap">{poolLabel(p.name, pools.items)}</td>
                 <td data-label="Status">
                   <Status state={s.state} text={s.text} />
                   {filled(p.message) && (

@@ -20,6 +20,27 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
+// A firewall that filters nothing is said beside the phase and what holds the cluster, never in
+// their place.
+func TestClusterListSaysTheFirewallIsInactive(t *testing.T) {
+	t.Parallel()
+	inactive := listedCondition{Type: provisioner.FirewallInactiveCondition, Status: "True"}
+	for _, tc := range []struct {
+		conditions []listedCondition
+		want       string
+	}{
+		{conditions: []listedCondition{inactive}, want: "Provisioned, firewall inactive (datacenter firewall off)"},
+		{conditions: []listedCondition{inactive, {Type: provisioner.TemplateNodeDownCondition, Status: "True"}}, want: "Provisioned, template node down, firewall inactive (datacenter firewall off)"},
+		{conditions: []listedCondition{{Type: provisioner.FirewallInactiveCondition, Status: "Unknown"}}, want: "Provisioned, firewall state unknown"},
+		{conditions: []listedCondition{{Type: provisioner.FirewallInactiveCondition, Status: "False"}}, want: "Provisioned"},
+	} {
+		c := listedCluster{Phase: "Provisioned", Conditions: tc.conditions}
+		if got := c.status(); got != tc.want {
+			t.Errorf("status = %q, want %q", got, tc.want)
+		}
+	}
+}
+
 // fakeClusterAPI answers the interface's cluster API for the token dev@pve!ci=secret, and records
 // each change it is sent.
 type fakeClusterAPI struct {
@@ -140,6 +161,9 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 	if _, err = runCluster(t, srv.URL, token, "delete", "web", "--yes"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = runCluster(t, srv.URL, token, "delete", "web", "--yes", "--delete-etcd-snapshots"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = runCluster(t, srv.URL, token, "machine", "delete", "web", "web-md-0-a"); err == nil {
 		t.Error("a machine was deleted without --yes")
 	}
@@ -171,6 +195,7 @@ func TestClusterCommandsTalkToTheInterfaceAsTheToken(t *testing.T) {
 		`PATCH /api/clusters/clusters/web {"controlPlaneReplicas":5,"workerPools":{"md-0":4}}`,
 		`PATCH /api/clusters/clusters/web {"controlPlaneTimeouts":{"nodeDeletionTimeoutSeconds":0,"nodeDrainTimeoutSeconds":1800,"nodeVolumeDetachTimeoutSeconds":600},"pools":{"gpu":{"timeouts":{"nodeVolumeDetachTimeoutSeconds":90}},"md-0":{"timeouts":{"nodeDrainTimeoutSeconds":3600}}}}`,
 		`DELETE /api/clusters/clusters/web {"confirm":"web"}`,
+		`DELETE /api/clusters/clusters/web {"confirm":"web","deleteEtcdSnapshots":true}`,
 		"PUT /api/clusters/clusters/web/machines/web-cp-1/replacement",
 		"DELETE /api/clusters/clusters/web/machines/web-cp-1/replacement",
 		"DELETE /api/clusters/clusters/web/machines/web-md-0-a",

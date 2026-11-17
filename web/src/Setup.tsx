@@ -5,6 +5,7 @@ import { backupKeys } from "./Backups";
 import { BackupTargets, cleanTargets, targetProblems, targetSummary } from "./BackupTargets";
 import { CredentialField } from "./CredentialField";
 import { FamiliesField } from "./Families";
+import { SameHostWarning } from "./ManagementHealth";
 import { ImportBox, TakeOver } from "./ManagementRecovery";
 import {
   bridgeLabel,
@@ -35,7 +36,8 @@ import {
   type FamilyChoice,
 } from "./network";
 import { OIDCProviders, cleanProviders, oidcProblems } from "./OIDCProviders";
-import { nodeNote } from "./Placement";
+import { certificateBundleProblem, sentence } from "./pem";
+import { nodeFault, nodeNote } from "./Placement";
 import type {
   BackupTarget,
   Bridge,
@@ -46,6 +48,7 @@ import type {
   PveNode,
   SetupFindings,
   SetupStatus,
+  SiteCARoll,
   Storage,
 } from "./types";
 import {
@@ -69,12 +72,14 @@ import {
   weekdays,
   Skeleton,
 } from "./ui";
+import { vmIDRangeOf, vmIDRangeProblem, vmIDRangeVariable } from "./VmidRange";
 
 const unique = (xs: string[]): string[] => [...new Set(xs)].toSorted();
 
-// A management cluster has one node, or three for high availability.
+// A management cluster has one node, or three or five for high availability.
 const highAvailability = 3;
-
+const largestCluster = 5;
+const nodeCounts = new Set<number>([1, highAvailability, largestCluster]);
 const msPerMinute = 60_000;
 
 const setWhenCreated = "Set when the management cluster was created";
@@ -113,6 +118,12 @@ export interface SetupForm {
   releaseMirror: string;
   // PEM certificates of the release mirror's authority.
   releaseMirrorCA: string;
+  // PEM certificates of the site's private CA, the default of every connection with none of its own.
+  siteCA: string;
+  // The IANA time zone of schedules that name none.
+  timeZone: string;
+  // The VM IDs of new clusters' VMs and the VM templates, as start-end.
+  vmIDRange: string;
   // The address alone, with no user name or password.
   proxyURL: string;
   proxyUser: string;
@@ -335,6 +346,15 @@ function outboundSettings(f: SetupForm): Partial<ManagementSettings> {
   const release = releaseMirror(f);
   if (release) {
     s.releaseMirror = release;
+  }
+  if (filled(f.siteCA)) {
+    s.siteCA = `${f.siteCA.trim()}\n`;
+  }
+  if (filled(f.timeZone)) {
+    s.timeZone = f.timeZone.trim();
+  }
+  if (filled(f.vmIDRange)) {
+    s.workloadVMIDRange = vmIDRangeVariable(f.vmIDRange);
   }
   const proxy = proxySettings(f);
   if (proxy) {
@@ -562,6 +582,9 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     mirrors: formatMirrors(saved.registryMirrors),
     ...chartFields(saved),
     ...releaseFields(saved),
+    siteCA: saved.siteCA ?? "",
+    timeZone: saved.timeZone ?? "",
+    vmIDRange: vmIDRangeOf(saved.workloadVMIDRange),
     ...proxyFields(saved),
     podSubnets: (saved.podSubnets ?? []).join(", "),
     serviceSubnets: (saved.serviceSubnets ?? []).join(", "),
@@ -609,6 +632,9 @@ export type SetupField =
   | "chartMirrorCA"
   | "releaseMirror"
   | "releaseMirrorCA"
+  | "siteCA"
+  | "timeZone"
+  | "vmIDRange"
   | "proxyURL"
   | "proxyUser"
   | "proxyPassword"
@@ -642,18 +668,21 @@ const stepFields: Record<SetupStep, SetupField[]> = {
     "dnsServers",
     "searchDomains",
     "timeServers",
+    "podSubnets",
+    "serviceSubnets",
     "mirrors",
     "chartMirrors",
     "chartMirrorCA",
     "releaseMirror",
     "releaseMirrorCA",
+    "siteCA",
+    "timeZone",
+    "vmIDRange",
     "proxyURL",
     "proxyUser",
     "proxyPassword",
     "proxyExceptions",
     "proxyCA",
-    "podSubnets",
-    "serviceSubnets",
   ],
   Clusters: ["workload", "refreshVLAN", "refreshAddress", "refreshGateway", "refreshDNS", "extraNamespaces"],
   Services: ["clusterOIDC", "backupTargets"],
@@ -662,20 +691,7 @@ const stepFields: Record<SetupStep, SetupField[]> = {
 
 const stepOf = (k: SetupField): SetupStep => setupSteps.find((s) => stepFields[s].includes(k)) ?? "Placement";
 
-const advancedFields: SetupField[] = [
-  "mirrors",
-  "chartMirrors",
-  "chartMirrorCA",
-  "releaseMirror",
-  "releaseMirrorCA",
-  "proxyURL",
-  "proxyUser",
-  "proxyPassword",
-  "proxyExceptions",
-  "proxyCA",
-  "podSubnets",
-  "serviceSubnets",
-];
+const advancedFields: SetupField[] = ["podSubnets", "serviceSubnets"];
 
 // preferredDisk is the storage for the management cluster's disks a first run starts from: a shared
 // one, which lets its VMs move between nodes, else the one with the most room.
@@ -684,6 +700,17 @@ function preferredDisk(storages: Storage[], offered: string[]): string {
     .filter((s) => offered.includes(s.storage) && s.content.includes("images"))
     .toSorted((a, b) => Number(b.shared) - Number(a.shared) || b.avail - a.avail);
   return best?.storage ?? "";
+}
+
+// sharesHost tells whether one Proxmox VE host's loss can take the backup volume, as the module
+// decides it: the VM disks' storage is a node's own, or the cluster has one node. It is false while
+// either is unread.
+function sharesHost(storages: Storage[] | undefined, nodes: PveNode[], vmDatastore: string): boolean {
+  const disk = (storages ?? []).filter((s) => s.storage === vmDatastore);
+  if (disk.length === 0 || nodes.length === 0) {
+    return false;
+  }
+  return nodes.length < 2 || !disk.some((s) => s.shared);
 }
 
 // uplink is the bridge a node reaches its gateway through, or else one it has an address on.
@@ -729,8 +756,8 @@ interface NodeNetwork {
 // appliance does: one network, the gateway in it, no address taken twice. It returns the network
 // or the problem.
 function nodeNetwork(addresses: string[], gateway: Address | undefined, family: Family): NodeNetwork | string {
-  const wrongCount = "Enter 1 or 3 addresses.";
-  if (addresses.length !== 1 && addresses.length !== highAvailability) {
+  const wrongCount = "Enter 1, 3 or 5 addresses.";
+  if (!nodeCounts.has(addresses.length)) {
     return wrongCount;
   }
   const taken: bigint[] = [];
@@ -773,7 +800,9 @@ export function setupFieldProblems(
     ...offerProblems(f),
     ...refreshProblems(f),
   };
-  if (passphraseShort(f.passphrase)) {
+  if (!firstRun && f.passphrase === "") {
+    p.passphrase = "Enter the state passphrase.";
+  } else if (passphraseShort(f.passphrase)) {
     p.passphrase = `Use at least ${minPassphrase} characters.`;
   } else if (firstRun && f.passphrase !== f.confirm) {
     p.confirm = "Passphrases do not match.";
@@ -950,12 +979,9 @@ function proxyProblems(f: SetupForm): SetupProblems {
   if (wrong !== undefined) {
     p.proxyExceptions = `${wrong} is no host, domain, address or network.`;
   }
-  if (filled(f.proxyCA)) {
-    if (f.proxyCA.includes("PRIVATE KEY")) {
-      p.proxyCA = "Paste certificates only, no private key.";
-    } else if (!f.proxyCA.includes("-----BEGIN CERTIFICATE-----")) {
-      p.proxyCA = "Paste PEM certificates.";
-    }
+  const caProblem = filled(f.proxyCA) ? bundleProblem(f.proxyCA, applianceAuthorityKiB) : undefined;
+  if (caProblem !== undefined) {
+    p.proxyCA = caProblem;
   }
   return p;
 }
@@ -999,12 +1025,12 @@ function chartMirrorProblems(f: SetupForm): SetupProblems {
     p.chartMirrors = `${bad} is not in the form host=oci://mirror.example/path.`;
   }
   if (filled(f.chartMirrorCA)) {
-    if (f.chartMirrorCA.includes("PRIVATE KEY")) {
-      p.chartMirrorCA = "Paste certificates only, no private key.";
-    } else if (!f.chartMirrorCA.includes("-----BEGIN CERTIFICATE-----")) {
-      p.chartMirrorCA = "Paste PEM certificates.";
-    } else if (mirrorLines(f.chartMirrors).length === 0) {
-      p.chartMirrorCA = "Add a chart mirror first.";
+    const problem =
+      mirrorLines(f.chartMirrors).length === 0
+        ? "Add a chart mirror first."
+        : bundleProblem(f.chartMirrorCA, applianceAuthorityKiB);
+    if (problem !== undefined) {
+      p.chartMirrorCA = problem;
     }
   }
   return p;
@@ -1021,10 +1047,9 @@ function releaseMirrorProblems(f: SetupForm): SetupProblems {
     p.releaseMirror = "Use an http:// or https:// address with no trailing slash, query or credentials.";
   }
   if (filled(f.releaseMirrorCA)) {
-    if (f.releaseMirrorCA.includes("PRIVATE KEY")) {
-      p.releaseMirrorCA = "Paste certificates only, no private key.";
-    } else if (!f.releaseMirrorCA.includes("-----BEGIN CERTIFICATE-----")) {
-      p.releaseMirrorCA = "Paste PEM certificates.";
+    const problem = bundleProblem(f.releaseMirrorCA);
+    if (problem !== undefined) {
+      p.releaseMirrorCA = problem;
     } else if (address === "") {
       p.releaseMirrorCA = "Add a release mirror first.";
     } else if (!address.startsWith("https://")) {
@@ -1032,6 +1057,115 @@ function releaseMirrorProblems(f: SetupForm): SetupProblems {
     }
   }
   return p;
+}
+
+// siteDefaultProblems are those of the site CA and the VM ID range. The server judges the time zone,
+// with its own time zone database, as useTimeZoneProblem asks it.
+function siteDefaultProblems(f: SetupForm): SetupProblems {
+  const p: SetupProblems = {};
+  const range = vmIDRangeProblem(f.vmIDRange);
+  if (range !== undefined) {
+    p.vmIDRange = range;
+  }
+  const problem = filled(f.siteCA) ? bundleProblem(f.siteCA) : undefined;
+  if (problem !== undefined) {
+    p.siteCA = problem;
+  }
+  return p;
+}
+
+// bundleProblem is what the server says of the layout of a bundle as it is saved, as an error.
+// The appliance's limit of the proxy's and the chart mirrors' authorities.
+const applianceAuthorityKiB = 256;
+
+function bundleProblem(bundle: string, maxKiB?: number): string | undefined {
+  const problem = certificateBundleProblem(`${bundle.trim()}\n`, maxKiB);
+  return problem === undefined ? undefined : `${sentence(problem)}.`;
+}
+
+// useTimeZoneProblem asks the server whether it knows the time zone, once the typing has paused.
+// Empty is no problem: the schedules then stay in UTC.
+export function useTimeZoneProblem(timeZone: string): string | undefined {
+  const zone = timeZone.trim();
+  const [verdict, setVerdict] = useState<{ zone: string; problem: string | undefined }>();
+  useEffect(() => {
+    let current = true;
+    async function ask(): Promise<void> {
+      if (zone === "") {
+        return;
+      }
+      try {
+        await api.timeZoneCheck(zone);
+        if (current) {
+          setVerdict({ zone, problem: undefined });
+        }
+      } catch (err) {
+        if (current) {
+          // A field error carries no request id, which only ErrorBox shows.
+          setVerdict({ zone, problem: err instanceof Error ? err.message : String(err) });
+        }
+      }
+    }
+    const timer = window.setTimeout(() => {
+      void ask();
+    }, timeZoneAskDelayMs);
+    return () => {
+      current = false;
+      window.clearTimeout(timer);
+    };
+  }, [zone]);
+  return verdict?.zone === zone ? verdict.problem : undefined;
+}
+
+const timeZoneAskDelayMs = 400;
+
+/** siteCARollText says what saving a site CA does to the clusters, empty where nothing changes. */
+export function siteCARollText(roll: SiteCARoll): string {
+  const total = roll.now + roll.windows + roll.waiting;
+  if (total === 0) {
+    return "";
+  }
+  const parts = [
+    ...(roll.now > 0 ? [`${roll.now} now`] : []),
+    ...(roll.windows > 0 ? [`${roll.windows} at window`] : []),
+    ...(roll.waiting > 0 ? [`${roll.waiting} queued`] : []),
+  ];
+  return `Replaces nodes (${parts.join(", ")}).`;
+}
+
+// SiteCARollNote tells, before the site CA is saved, how many clusters take it and when.
+function SiteCARollNote({ siteCA }: { siteCA: string }): JSX.Element | null {
+  const [text, setText] = useState("");
+  // Clearing a site CA that was there replaces the nodes of the clusters that hold it too.
+  const complete = siteCA.includes("-----END CERTIFICATE-----");
+  const blank = siteCA.trim() === "";
+  const [wasFilled, setWasFilled] = useState(!blank);
+  if (!blank && !wasFilled) {
+    setWasFilled(true);
+  }
+  const candidate = complete ? `${siteCA.trim()}\n` : "";
+  const asks = complete || (blank && wasFilled);
+  useEffect(() => {
+    let current = true;
+    async function load(): Promise<void> {
+      try {
+        const roll = asks ? await api.siteCARoll(candidate) : undefined;
+        if (current) {
+          setText(roll === undefined ? "" : siteCARollText(roll));
+        }
+      } catch {
+        // Saving says what is wrong with the authority.
+        if (current) {
+          setText("");
+        }
+      }
+    }
+    void load();
+    return () => {
+      current = false;
+    };
+  }, [asks, candidate]);
+  return text === "" ? null : <div>{text}</div>;
 }
 
 // offerProblems are those of what the management cluster offers the clusters it makes.
@@ -1054,7 +1188,7 @@ function offerProblems(f: SetupForm): SetupProblems {
   if (bad !== undefined) {
     p.mirrors = `${bad} is not in the form ghcr.io=https://mirror.example:5000.`;
   }
-  Object.assign(p, chartMirrorProblems(f), releaseMirrorProblems(f), proxyProblems(f));
+  Object.assign(p, chartMirrorProblems(f), releaseMirrorProblems(f), siteDefaultProblems(f), proxyProblems(f));
   for (const key of ["podSubnets", "serviceSubnets"] as const) {
     const wrong = list(f[key]).find((r) => rangeProblem(r) !== undefined);
     if (wrong !== undefined) {
@@ -1269,7 +1403,7 @@ function optInRows(s: ManagementSettings): [string, string][] {
     ["Proxmox VE HA", onOff(s.proxmoxHA === true)],
     ["HA rule placements", onOff(s.offerHARules === true)],
     ["Newest CSI release", onOff(s.clusterDatastoreAllocate === true)],
-    ["HA group labels", onOff(s.clusterSysAudit !== false)],
+    ["HA rule labels", onOff(s.clusterSysAudit !== false)],
     ["Nodes' boot logs", onOff(s.nodeBootLogs !== false)],
     ["kubectl changes", onOff(s.apiAuditLog === true)],
   ];
@@ -1954,7 +2088,7 @@ function SysAuditChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element 
   const hint = useId();
   return (
     <fieldset className="group">
-      <legend>HA group labels</legend>
+      <legend>HA rule labels</legend>
       <label className="check">
         <input
           type="checkbox"
@@ -1962,9 +2096,9 @@ function SysAuditChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element 
           aria-describedby={hint}
           onChange={(e) => set("clusterSysAudit", e.target.checked)}
         />{" "}
-        Add HA group labels
+        Add HA rule labels
       </label>
-      <Info about="HA group labels">
+      <Info about="HA rule labels">
         Clusters can read firewall rules, backup jobs and HA and corosync settings, not guests or storage. Each cluster
         can switch it off.
       </Info>
@@ -2155,32 +2289,11 @@ function ProxyPassword({ form, set }: FieldsProps): JSX.Element {
   );
 }
 
-export function AdvancedFields({
-  form,
-  set,
-  shown,
-  fixed,
-  open,
-  warnings,
-  onOpen,
-}: FieldsProps & {
-  fixed: boolean;
-  open: boolean;
-  warnings: string[];
-  onOpen: (open: boolean) => void;
-}): JSX.Element {
-  const rangeHint = fixed ? fixedHint : "Empty picks a free range";
-  const about = (label: string): JSX.Element[] =>
-    warnings
-      .filter((w) => w.startsWith(`The ${label} range`))
-      .map((w) => (
-        <output key={w} className="field-warning">
-          {w}
-        </output>
-      ));
+// SiteFields are what a proxied or offline site fills first: the site's CA and time zone, the mirrors
+// and the proxy.
+export function SiteFields({ form, set, shown }: FieldsProps): JSX.Element {
   return (
-    <details className="advanced" open={open} onToggle={(e) => onOpen(e.currentTarget.open)}>
-      <summary>Advanced</summary>
+    <>
       <Field
         label="Registry mirrors"
         hint="One per line, like ghcr.io=https://mirror.example:5000"
@@ -2211,6 +2324,35 @@ export function AdvancedFields({
             onChange={(e) => set("chartMirrorCA", e.target.value)}
           />
         )}
+      </Field>
+      <Field
+        label="Site CA"
+        hint={
+          <>
+            PEM
+            <SiteCARollNote siteCA={form.siteCA} />
+          </>
+        }
+        info="Every cluster's nodes, the release mirror, backup targets and identity providers trust it unless they name an authority of their own."
+        error={shown("siteCA")}
+      >
+        {(id) => <textarea id={id} rows={3} value={form.siteCA} onChange={(e) => set("siteCA", e.target.value)} />}
+      </Field>
+      <Field
+        label="Time zone"
+        hint="For schedules that name none"
+        info="New etcd snapshots, backups and upgrade windows start in it. A cluster's own zone wins."
+        error={shown("timeZone")}
+      >
+        {(id) => <input id={id} value={form.timeZone} onChange={(e) => set("timeZone", e.target.value)} />}
+      </Field>
+      <Field
+        label="VM ID range"
+        hint="Like 100000-100999"
+        info="New clusters' VMs and the VM templates take their IDs here. Keep it clear of the management VMs' IDs, 10000 to 99998 by default."
+        error={shown("vmIDRange")}
+      >
+        {(id) => <input id={id} value={form.vmIDRange} onChange={(e) => set("vmIDRange", e.target.value)} />}
       </Field>
       <Field
         label="Release mirror"
@@ -2255,6 +2397,37 @@ export function AdvancedFields({
       <Field label="Proxy certificate" hint="PEM, for a proxy that re-signs TLS" error={shown("proxyCA")}>
         {(id) => <textarea id={id} rows={3} value={form.proxyCA} onChange={(e) => set("proxyCA", e.target.value)} />}
       </Field>
+    </>
+  );
+}
+
+// AdvancedFields are what hardly anyone changes: the ranges of pods and Services.
+export function AdvancedFields({
+  form,
+  set,
+  shown,
+  fixed,
+  open,
+  warnings,
+  onOpen,
+}: FieldsProps & {
+  fixed: boolean;
+  open: boolean;
+  warnings: string[];
+  onOpen: (open: boolean) => void;
+}): JSX.Element {
+  const rangeHint = fixed ? fixedHint : "Empty picks a free range";
+  const about = (label: string): JSX.Element[] =>
+    warnings
+      .filter((w) => w.startsWith(`The ${label} range`))
+      .map((w) => (
+        <output key={w} className="field-warning">
+          {w}
+        </output>
+      ));
+  return (
+    <details className="advanced" open={open} onToggle={(e) => onOpen(e.currentTarget.open)}>
+      <summary>Advanced</summary>
       <Field label="Pod ranges" hint={rangeHint} error={shown("podSubnets")}>
         {(id) => (
           <input id={id} readOnly={fixed} value={form.podSubnets} onChange={(e) => set("podSubnets", e.target.value)} />
@@ -2390,8 +2563,14 @@ function SetupWizard({
   }, []);
 
   const fixed = manage && status.ready ? status.settings : undefined;
-  const found: Found = { storages, bridgesByNode, dnsByNode, fixed };
-  const { effective, offers, nodeNetworks } = withDefaults(form, touched, found);
+  const found: Found = {
+    storages,
+    bridgesByNode,
+    dnsByNode,
+    fixed,
+    unreachable: nodes.filter((n) => !n.online).map((n) => n.node),
+  };
+  const { effective, offers, nodeNetworks, gone } = withDefaults(form, touched, found);
   const toggle: Toggle = (k, v, on) => {
     setForm((f) => {
       const now = k === "nodes" ? f.nodes : effective[k];
@@ -2404,7 +2583,12 @@ function SetupWizard({
   };
   // A new passphrase is chosen, and repeated, only when no earlier run left a state to open.
   const firstRun = !manage && status.resumes !== true;
-  const byField = setupFieldProblems(effective, firstRun, fixed);
+  const zoneProblem = useTimeZoneProblem(effective.timeZone);
+  const byField = {
+    ...setupFieldProblems(effective, firstRun, fixed),
+    ...gone,
+    ...(zoneProblem === undefined ? {} : { timeZone: zoneProblem }),
+  };
   const problemsIn = (s: SetupStep): boolean => stepFields[s].some((k) => byField[k] !== undefined);
   const shown = (k: SetupField): string | undefined =>
     attempted.has(stepOf(k)) || touched.has(k) ? byField[k] : undefined;
@@ -2491,6 +2675,7 @@ function SetupWizard({
     handleAdvanced: setAdvancedOpen,
     handleAskRestore: () => setAskingRestore(true),
     missing,
+    sameHost: sharesHost(storages, nodes, form.vmDatastore),
   });
 
   return (
@@ -2532,12 +2717,21 @@ function SetupWizard({
             {fields[step]}
           </>
         ) : (
-          setupSteps.map((s) => (
-            <section key={s} className="setup-section" aria-label={s}>
-              <h4>{s}</h4>
-              {fields[s]}
-            </section>
-          ))
+          <>
+            <nav className="wizard-steps" aria-label="Sections">
+              {setupSteps.map((s) => (
+                <a key={s} className="tab" href={`#${sectionId(headingId, s)}`}>
+                  {s}
+                </a>
+              ))}
+            </nav>
+            {setupSteps.map((s) => (
+              <section key={s} id={sectionId(headingId, s)} className="setup-section" aria-label={s}>
+                <h4>{s}</h4>
+                {fields[s]}
+              </section>
+            ))}
+          </>
         )}
         <PreflightFindings findings={reviewing ? findings : undefined} />
         <ErrorBox message={error} />
@@ -2546,7 +2740,7 @@ function SetupWizard({
             Fix the errors above to apply.
           </p>
         )}
-        <div className="actions">
+        <div className={stepped ? "actions" : "actions actions-sticky"}>
           {onCancel && (
             <button type="button" onClick={onCancel}>
               Cancel
@@ -2581,6 +2775,9 @@ function SetupWizard({
     </section>
   );
 }
+
+// sectionId is the address of a section on the Administration page, unique among its forms.
+const sectionId = (formId: string, step: SetupStep): string => `${formId.replaceAll(":", "")}-${step}`;
 
 const searchDomainsOf = (s: ManagementSettings): string => s.searchDomains?.join(", ") ?? "None";
 const timeServersOf = (s: ManagementSettings): string => s.timeServers?.join(", ") ?? "Talos defaults";
@@ -2703,6 +2900,8 @@ interface Found {
   bridgesByNode: Record<string, Bridge[]>;
   dnsByNode: Record<string, NodeDNS>;
   fixed: ManagementSettings | undefined;
+  // The chosen nodes that do not answer. What they have cannot be read, so it cannot narrow the choices.
+  unreachable: string[];
 }
 
 // Where the management cluster may go: the storages and bridges every chosen node has.
@@ -2726,20 +2925,28 @@ function withDefaults(
   form: SetupForm,
   touched: ReadonlySet<string>,
   found: Found,
-): { effective: SetupForm; offers: Offers; nodeNetworks: Record<Family, string | undefined> } {
+): {
+  effective: SetupForm;
+  offers: Offers;
+  nodeNetworks: Record<Family, string | undefined>;
+  gone: Partial<Record<SetupField, string>>;
+} {
   const { fixed } = found;
   const all = found.storages ?? [];
   const known = found.storages !== undefined;
+  const reached = form.nodes.filter((n) => !found.unreachable.includes(n));
   const onEveryNode = (c: string): string[] =>
     unique(all.filter((s) => s.content.includes(c)).map((s) => s.storage)).filter((name) =>
-      form.nodes.every((n) => all.some((s) => s.node === n && s.storage === name && s.content.includes(c))),
+      reached.every((n) => all.some((s) => s.node === n && s.storage === name && s.content.includes(c))),
     );
   const bridges = unique(Object.values(found.bridgesByNode).flatMap((b) => b.map((x) => bridgeRef(x)))).filter((ref) =>
-    form.nodes.every((n) => (found.bridgesByNode[n] ?? []).some((b) => bridgeRef(b) === ref)),
+    reached.every((n) => (found.bridgesByNode[n] ?? []).some((b) => bridgeRef(b) === ref)),
   );
-  const bridgesKnown = form.nodes.every((n) => found.bridgesByNode[n] !== undefined);
+  const bridgesKnown = reached.every((n) => found.bridgesByNode[n] !== undefined);
+  // A management cluster that exists keeps what it was set up with. A choice that no longer fits is
+  // marked, never swapped for another.
   const fit = (value: string, choices: string[]): string =>
-    !known || choices.includes(value) ? value : (choices[0] ?? "");
+    !known || choices.includes(value) || (fixed !== undefined && value !== "") ? value : (choices[0] ?? "");
   const offers = { vmDisks: onEveryNode("images"), images: onEveryNode("import"), isos: onEveryNode("iso"), bridges };
 
   const [first = ""] = form.nodes;
@@ -2748,7 +2955,7 @@ function withDefaults(
     ? fixed.vmDatastore
     : keepOffered(orElse(form.vmDatastore, preferredDisk(all, offers.vmDisks)), offers.vmDisks, known);
   const uplinkBridge = uplink(home);
-  const bridge = keepOffered(orElse(form.bridge, uplinkBridge ? bridgeRef(uplinkBridge) : ""), bridges, bridgesKnown);
+  const bridge = chosenBridge(form.bridge, uplinkBridge, { bridges, known: bridgesKnown, kept: fixed !== undefined });
   const onBridge = home.find((b) => bridgeRef(b) === bridge);
   const detect = (k: "gateway" | "gateway6" | "dnsServers" | "searchDomains", value: string): string =>
     form[k] === "" && !touched.has(k) ? value : form[k];
@@ -2761,6 +2968,8 @@ function withDefaults(
       imageDatastore: fit(form.imageDatastore, offers.images),
       bootstrapDatastore: fit(form.bootstrapDatastore, offers.isos),
       bridge,
+      nodeAddresses: withPrefix(form.nodeAddresses, untagged(form.vlan, onBridge?.cidr)),
+      nodeAddresses6: withPrefix(form.nodeAddresses6, untagged(form.vlan, onBridge?.cidr6)),
       gateway: detect("gateway", onBridge?.gateway ?? ""),
       gateway6: detect("gateway6", onBridge?.gateway6 ?? ""),
       dnsServers: detect("dnsServers", ownFamilies(found.dnsByNode[first]?.servers ?? [], form.families).join(", ")),
@@ -2775,7 +2984,63 @@ function withDefaults(
       IPv4: onBridge?.cidr === undefined ? undefined : networkOf(onBridge.cidr),
       IPv6: onBridge?.cidr6 === undefined ? undefined : networkOf(onBridge.cidr6),
     },
+    gone: goneChoices({ form, offers, storagesKnown: known, bridgesKnown, kept: fixed !== undefined }),
   };
+}
+
+// untagged is the bridge's network for node addresses, which a VLAN's tagged network is not.
+function untagged(vlan: string, cidr: string | undefined): string | undefined {
+  return filled(vlan) ? undefined : cidr;
+}
+
+// chosenBridge is the bridge the management cluster uses. One that exists keeps its own, offered or
+// not. A first run keeps the one chosen while it is offered, else the node's uplink.
+function chosenBridge(
+  chosen: string,
+  uplinkBridge: Bridge | undefined,
+  found: { bridges: string[]; known: boolean; kept: boolean },
+): string {
+  if (found.kept) {
+    return chosen;
+  }
+  return keepOffered(orElse(chosen, uplinkBridge ? bridgeRef(uplinkBridge) : ""), found.bridges, found.known);
+}
+
+// goneChoices marks what a management cluster that exists was set up with and the nodes no longer
+// offer, by field.
+function goneChoices(o: {
+  form: SetupForm;
+  offers: Offers;
+  storagesKnown: boolean;
+  bridgesKnown: boolean;
+  kept: boolean;
+}): Partial<Record<SetupField, string>> {
+  const gone: Partial<Record<SetupField, string>> = {};
+  const check = (
+    field: "imageDatastore" | "bootstrapDatastore" | "bridge",
+    choices: string[],
+    known: boolean,
+  ): void => {
+    if (o.kept && known && o.form[field] !== "" && !choices.includes(o.form[field])) {
+      gone[field] = `${o.form[field]} is not offered here. Choose another.`;
+    }
+  };
+  check("imageDatastore", o.offers.images, o.storagesKnown);
+  check("bootstrapDatastore", o.offers.isos, o.storagesKnown);
+  check("bridge", o.offers.bridges, o.bridgesKnown);
+  return gone;
+}
+
+// withPrefix gives each node address typed without a prefix length the one of the network the bridge
+// has, as the create wizard does. Anything else stays as typed, for its own error.
+function withPrefix(addresses: string, cidr: string | undefined): string {
+  const bits = cidr?.split("/")[1];
+  if (bits === undefined) {
+    return addresses;
+  }
+  return list(addresses)
+    .map((a) => (parseAddress(a) === undefined ? a : `${a}/${bits}`))
+    .join("\n");
 }
 
 // ownFamilies are the servers of the families chosen, those a node lists of another left out.
@@ -2849,6 +3114,7 @@ function setupFields({
   handleAdvanced: (open: boolean) => void;
   handleAskRestore: () => void;
   missing: { images: string | undefined; isos: string | undefined };
+  sameHost: boolean;
 }): Record<SetupStep, ReactNode> {
   const { nodes, toggle, fixed } = more;
   return {
@@ -2857,7 +3123,7 @@ function setupFields({
         <fieldset className="group">
           <legend>Proxmox VE nodes</legend>
           {nodes.map((n) => (
-            <label key={n.node} className="check" title={n.fault}>
+            <label key={n.node} className="check" title={nodeFault(n.node, n.fault)}>
               <input
                 type="checkbox"
                 disabled={!n.online && !form.nodes.includes(n.node)}
@@ -2922,6 +3188,9 @@ function setupFields({
               <option value="" disabled>
                 Choose…
               </option>
+              {effective.bridge !== "" && !more.offers.bridges.includes(effective.bridge) && (
+                <option value={effective.bridge}>{effective.bridge}</option>
+              )}
               {more.offers.bridges.map((b) => (
                 <option key={b} value={b}>
                   {more.clusterBridges.find((c) => c.name === b)?.label ?? b}
@@ -3001,6 +3270,10 @@ function setupFields({
         >
           {(id) => <input id={id} value={effective.timeServers} onChange={(e) => set("timeServers", e.target.value)} />}
         </Field>
+        <fieldset className="group">
+          <legend>Site</legend>
+          <SiteFields form={form} set={set} shown={shown} />
+        </fieldset>
         <AdvancedFields
           form={form}
           set={set}
@@ -3041,15 +3314,13 @@ function setupFields({
         </fieldset>
         <fieldset className="group">
           <legend>Backup targets</legend>
-          <p className="muted">
-            Without etcd backups, every cluster&apos;s CAs, kubeconfigs and backup keys are lost with the management
-            cluster.
-          </p>
+          <p className="muted">etcd snapshots go to the backup volume. A target keeps a copy off its storage.</p>
           <BackupTargets
             initial={form.backupTargets}
             showAll={more.attempted}
             onChange={(v) => set("backupTargets", v)}
           />
+          {more.sameHost && form.backupTargets.length === 0 && <SameHostWarning />}
         </fieldset>
         <EtcdRestoreChoice form={form} set={set} onAsk={more.handleAskRestore} />
       </>
@@ -3064,9 +3335,9 @@ function setupFields({
 // known.
 function nodeAddressHint(fixed: boolean, family: Family, network: string | undefined): string {
   if (fixed) {
-    return "Add 2 addresses after the first to grow to 3";
+    return "Add addresses after the existing ones to grow to 3 or 5";
   }
-  return network === undefined ? `1 or 3, like ${familyFields[family].example}` : `1 or 3 in ${network}`;
+  return network === undefined ? `1, 3 or 5, like ${familyFields[family].example}` : `1, 3 or 5 in ${network}`;
 }
 
 // FamilyAddressFields are one family's node addresses and gateway. Their labels name the family

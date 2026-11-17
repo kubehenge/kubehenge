@@ -51,7 +51,7 @@ const createdBy = "kubehenge.dev/created-by"
 // here start with.
 const (
 	workerClass = "worker"
-	workerPool  = "md-0"
+	workerPool  = provisioner.DefaultPool
 )
 
 // The variables that size machines: the control planes', and the workers' of every pool that does
@@ -71,8 +71,9 @@ var changeableVariables = map[string]bool{
 	"headlamp": true, "monitoring": true, "logs": true, "backups": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true, provisioner.HostOutageGraceVariable: true, csiVariable: true, ccmVariable: true,
 	certificatesVariable: true, gitopsVariable: true, autoscalerVariable: true, egressVariable: true, "namespaceLabels": true,
 	etcdVariable: true,
-	// New security groups roll every node, whose VM firewall is written before it first starts.
-	provisioner.SecurityGroupsVariable: true,
+	// A new firewall or new security groups roll every node, whose VM firewall is written before it
+	// first starts.
+	provisioner.SecurityGroupsVariable: true, provisioner.FirewallVariable: true,
 	// A new node OS rolls every node onto its template, as a node image refresh does. A new size
 	// rolls the machines it sizes. New labels or taints roll the workers, and CIS hardening switched
 	// on rolls every node (the class refuses it switched off).
@@ -81,6 +82,9 @@ var changeableVariables = map[string]bool{
 	// Files, commands, arguments and audit settings reach the nodes' bootstrap, so a change replaces
 	// every node it reaches.
 	provisioner.NodeCustomisationVariable: true,
+	// A registry mirror, a trusted authority or a release mirror is in the nodes' boot script, so a
+	// change replaces every node, one at a time.
+	"registryMirrors": true, "trustedCAs": true, releaseMirrorVariable: true,
 }
 
 // autoUpgraded is where Kubehenge's controller records the last automatic upgrade.
@@ -117,6 +121,9 @@ type classView struct {
 
 // releaseMirrorVariable is the variable of a cluster's own release mirror.
 const releaseMirrorVariable = "releaseMirror"
+
+// siteTimeZoneAnnotation on a class names the site time zone.
+const siteTimeZoneAnnotation = "kubehenge.dev/time-zone"
 
 // nodeOSChoice is a node OS a cluster may run, and why none can be built on it yet.
 type nodeOSChoice struct {
@@ -197,6 +204,11 @@ func (s *Server) classView(ctx context.Context, c *clusterv1.ClusterClass, dist 
 		}
 	}
 	for k, val := range c.Annotations {
+		// A site time zone the controller cannot read leaves schedules in UTC, so the interface is not
+		// given it either.
+		if k == siteTimeZoneAnnotation && provisioner.CheckTimeZone(val) != nil {
+			continue
+		}
 		if strings.HasPrefix(k, "kubehenge.dev/") {
 			if v.Annotations == nil {
 				v.Annotations = map[string]string{}
@@ -239,6 +251,9 @@ type clusterView struct {
 	Pool         string                     `json:"pool"`
 	Allowed      allowedView                `json:"allowed"`
 	Machines     []machineView              `json:"machines,omitempty"`
+	// VolumeNodes are the Proxmox VE nodes that hold the cluster's volumes on storage local to each
+	// node, each of which needs a worker for its volumes' pods to start.
+	VolumeNodes []string `json:"volumeNodes,omitempty"`
 	// ControlPlaneTimeouts are the control planes' own waits for a removed machine's node, where
 	// they do not take the class's.
 	ControlPlaneTimeouts provisioner.NodeTimeouts `json:"controlPlaneTimeouts"`
@@ -425,6 +440,9 @@ func (s *Server) view(c *clusterv1.Cluster, pool string, privs pve.Privileges, m
 		Pods:         c.Spec.ClusterNetwork.Pods.CIDRBlocks,
 		Services:     c.Spec.ClusterNetwork.Services.CIDRBlocks,
 		Allowed:      allowedView{Change: ours && privs.Has(privChange), Kubeconfig: ours && privs.Has(privKubeconfig)},
+	}
+	if nodes := c.Annotations[provisioner.VolumeNodesAnnotation]; nodes != "" {
+		v.VolumeNodes = strings.Split(nodes, ",")
 	}
 	if s.Headlamp != nil && ours {
 		v.Headlamp = headlampContext(c.Namespace, c.Name)
@@ -804,9 +822,16 @@ type createRequest struct {
 	// clear of the nodes' network (provisioner.ClusterDefaulter).
 	Pods     []string `json:"pods,omitempty"`
 	Services []string `json:"services,omitempty"`
+	// BackupKey is the cluster's own access key for its backup target. It is stored before the
+	// cluster, which then owns it.
+	BackupKey map[string]string `json:"backupKey,omitempty"`
 }
 
 func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
+	ctx, cancel := context.WithTimeout(r.Context(), createTimeout)
+	defer cancel()
+	ctx = context.WithValue(ctx, nodesReadKey{}, &nodesRead{})
+	r = r.WithContext(ctx)
 	var req createRequest
 	if !readJSON(w, r, &req) {
 		return
@@ -837,16 +862,25 @@ func (s *Server) createCluster(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	c := s.newCluster(u, &req)
+	if !s.machinesFit(w, r, u, class, c) {
+		return
+	}
+	key, ok := s.storeKeyAhead(w, r, u, &req, pool, c)
+	if !ok {
+		return
+	}
 	if r.URL.Query().Get("dryRun") == metav1.DryRunAll {
 		s.checkCreate(w, r, u, c)
 		return
 	}
-	if err = u.kube.Create(r.Context(), c); err != nil {
+	if err = u.kube.Create(ctx, c); err != nil {
+		s.dropKeyAhead(r, u, key)
 		s.kubeError(w, r, err)
 		return
 	}
-	s.Log.InfoContext(r.Context(), "created cluster", "user", u.ticket.Username, "cluster", req.Namespace+"/"+req.Name, "class", req.Class, "version", req.Version)
-	privs, err := s.Accounts.Privileges(r.Context(), u.ticket, pool)
+	s.ownKeyAhead(r, u, key, c)
+	s.Log.InfoContext(ctx, "created cluster", "user", u.ticket.Username, "cluster", req.Namespace+"/"+req.Name, "class", req.Class, "version", req.Version)
+	privs, err := s.Accounts.Privileges(ctx, u.ticket, pool)
 	if err != nil {
 		privs = pve.Privileges{}
 	}
@@ -968,7 +1002,7 @@ func (s *Server) mayCreate(w http.ResponseWriter, r *http.Request, u user, class
 		return false
 	}
 	if !s.allowGitOps(w, r, u, s.workloadPoolPath(), req.Variables[gitopsVariable], nil) ||
-		!s.allowBackupSources(w, r, u, cmp.Or(req.Namespace, s.Namespace), req.Variables["backups"], nil) {
+		!s.allowBackupSources(w, r, u, req.Namespace, req.Variables["backups"], nil) {
 		return false
 	}
 	raw, ok := req.Variables[oidcVariable]
@@ -1014,19 +1048,41 @@ func (s *Server) mayUseNetwork(w http.ResponseWriter, r *http.Request, u user, c
 		return false
 	}
 	if vlan != "" && network.TagsTraffic() {
-		writeError(w, http.StatusUnprocessableEntity, vlanOnTaggedNetwork(bridge))
+		writeError(w, http.StatusUnprocessableEntity, pve.VLANOnTaggedNetwork(bridge))
 		return false
 	}
 	return s.require(w, r, u, bridgePath(network.Zone, bridge, vlan), privBridge)
 }
 
-// vlanOnTaggedNetwork is the refusal of a VLAN tag on a VNet whose zone tags its traffic already.
-func vlanOnTaggedNetwork(vnet string) string {
-	return "VNet " + vnet + " is in a VLAN zone and tags already. Leave the VLAN tag empty."
-}
-
 // allowedNodesVariable keeps a cluster's VMs to some of the Proxmox VE nodes.
 const allowedNodesVariable = "allowedNodes"
+
+// nodesReadKey holds, in a request's context, the one read of the nodes its checks share. A read
+// can wait on a node that does not answer, and a create's checks run against one deadline.
+type nodesReadKey struct{}
+
+type nodesRead struct {
+	done  bool
+	nodes []pve.Node
+	err   error
+}
+
+// visibleNodes lists the nodes the user sees, once per request where the request holds a nodesRead.
+// Each caller gets its own copy to narrow.
+func (s *Server) visibleNodes(r *http.Request, u user) ([]pve.Node, error) {
+	read, ok := r.Context().Value(nodesReadKey{}).(*nodesRead)
+	if !ok {
+		read = &nodesRead{}
+	}
+	if !read.done {
+		read.nodes, read.err = s.Accounts.Nodes(r.Context(), u.ticket)
+		read.done = true
+		if read.err != nil {
+			read.err = fmt.Errorf("listing the Proxmox VE nodes: %w", read.err)
+		}
+	}
+	return slices.Clone(read.nodes), read.err
+}
 
 // mayPlace checks the nodes a cluster's VMs are kept to: none twice, and each one the user sees or
 // one of kept, those the cluster already has, which the user may keep without seeing.
@@ -1038,24 +1094,24 @@ func (s *Server) mayPlace(w http.ResponseWriter, r *http.Request, u user, raw, k
 	// Without a list of nodes there are none to keep.
 	_ = json.Unmarshal(kept, &old)
 	var nodes []string
-	if err := json.Unmarshal(raw, &nodes); err != nil || len(nodes) == 0 {
-		writeError(w, http.StatusUnprocessableEntity, "allowed nodes: choose at least one Proxmox VE node")
-		return false
+	if json.Unmarshal(raw, &nodes) != nil {
+		nodes = nil
 	}
-	visible, err := s.Accounts.Nodes(r.Context(), u.ticket)
-	if err != nil {
-		s.proxmoxError(w, r, err)
-		return false
-	}
-	for i, node := range nodes {
-		if slices.Contains(nodes[:i], node) {
-			writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("allowed nodes: %s is listed twice", node))
+	var visible []pve.Node
+	// An empty list is refused without asking Proxmox VE which nodes there are.
+	if len(nodes) > 0 {
+		var err error
+		if visible, err = s.visibleNodes(r, u); err != nil {
+			s.proxmoxError(w, r, err)
 			return false
 		}
-		if !slices.Contains(old, node) && !slices.ContainsFunc(visible, func(n pve.Node) bool { return n.Node == node }) {
-			writeError(w, http.StatusUnprocessableEntity, "allowed nodes: no Proxmox VE node "+node)
-			return false
-		}
+	}
+	known := func(node string) bool {
+		return slices.ContainsFunc(visible, func(n pve.Node) bool { return n.Node == node })
+	}
+	if msg := provisioner.AllowedNodesRefusal(nodes, old, known); msg != "" {
+		writeError(w, http.StatusUnprocessableEntity, msg)
+		return false
 	}
 	return true
 }
@@ -1244,13 +1300,20 @@ func (s *Server) prepareChange(w http.ResponseWriter, r *http.Request, u user, r
 		return nil, false
 	}
 	if !c.DeletionTimestamp.IsZero() {
-		writeError(w, http.StatusConflict, "the cluster is being deleted")
+		writeError(w, http.StatusConflict, provisioner.ClusterBeingDeleted)
 		return nil, false
 	}
 	if !unchangedSince(w, r, c) {
 		return nil, false
 	}
 	before := c.DeepCopy()
+	// The names stand for the pools of this read, which a retry after a conflict reads afresh.
+	named := *req
+	req = &named
+	if msg := namePools(c, req); msg != "" {
+		writeError(w, http.StatusUnprocessableEntity, msg)
+		return nil, false
+	}
 	// Autoscaling goes first, so that a change switching a pool's off may also fix its workers.
 	msg, err := applyAutoscaling(r.Context(), u.kube, c, req.Autoscaling)
 	if err != nil {
@@ -1345,7 +1408,7 @@ func applyTopology(c *clusterv1.Cluster, req *changeRequest) string {
 			return provisioner.WorkersRule + " in each pool"
 		}
 		if isAutoscaled(c, name) {
-			return "pool " + name + " is autoscaled. Switch autoscaling off to set its workers"
+			return "pool " + provisioner.PoolLabel(name, provisioner.TopologyPools(c)) + " is autoscaled. Switch autoscaling off to set its workers"
 		}
 		if !setWorkerReplicas(c, name, n) {
 			return "the cluster has no worker pool " + name
@@ -1378,8 +1441,8 @@ func setWorkerReplicas(c *clusterv1.Cluster, name string, n int32) bool {
 // the request when one fails.
 func (s *Server) applyVariables(w http.ResponseWriter, r *http.Request, u user, c *clusterv1.Cluster, access poolAccess, vars map[string]json.RawMessage) bool {
 	for name, value := range vars {
-		if !changeableVariables[name] {
-			writeError(w, http.StatusUnprocessableEntity, name+" cannot change after the cluster is created")
+		if provisioner.VariableFixed(name) || !changeableVariables[name] {
+			writeError(w, http.StatusUnprocessableEntity, provisioner.FixedVariableRefusal(name))
 			return false
 		}
 		if !s.allowVariable(w, r, u, c, access, name, value) {
@@ -1460,11 +1523,8 @@ func variableValue(c *clusterv1.Cluster, name string) json.RawMessage {
 
 // allowOIDC checks a change of the cluster's oidc variable from old to value against its class.
 func (s *Server) allowOIDC(w http.ResponseWriter, r *http.Request, u user, c *clusterv1.Cluster, access poolAccess, value, old json.RawMessage) bool {
-	class, ref := &clusterv1.ClusterClass{}, c.Spec.Topology.ClassRef
-	if ref.Namespace == "" {
-		ref.Namespace = c.Namespace
-	}
-	if err := u.kube.Get(r.Context(), client.ObjectKey{Namespace: ref.Namespace, Name: ref.Name}, class); err != nil {
+	class := &clusterv1.ClusterClass{}
+	if err := u.kube.Get(r.Context(), client.ObjectKey{Namespace: s.ClassNamespace, Name: c.Spec.Topology.ClassRef.Name}, class); err != nil {
 		s.kubeError(w, r, err)
 		return false
 	}
@@ -1488,6 +1548,8 @@ func setVariable(c *clusterv1.Cluster, name string, value json.RawMessage) {
 // confirmRequest names the cluster a request that cannot be undone is for, as its user typed it.
 type confirmRequest struct {
 	Confirm string `json:"confirm"`
+	// DeleteEtcdSnapshots has a deletion take the cluster's snapshots on the backup volume too.
+	DeleteEtcdSnapshots bool `json:"deleteEtcdSnapshots,omitempty"`
 }
 
 // confirmed tells whether a request that cannot be undone names the cluster it is for, and answers
@@ -1508,6 +1570,17 @@ func (s *Server) deleteCluster(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	var req confirmRequest
 	if !readJSON(w, r, &req) || !confirmed(w, c, req.Confirm) {
+		return
+	}
+	// The typed name confirms the deletion as the annotation does for kubectl, so the chart's
+	// deletion guard is lifted here rather than asked of the user again.
+	allow := client.MergeFrom(c.DeepCopy())
+	metav1.SetMetaDataAnnotation(&c.ObjectMeta, provisioner.AllowDeletionAnnotation, u.ticket.Username)
+	if req.DeleteEtcdSnapshots {
+		metav1.SetMetaDataAnnotation(&c.ObjectMeta, provisioner.DeleteEtcdSnapshotsAnnotation, "true")
+	}
+	if err := u.kube.Patch(r.Context(), c, allow); err != nil && !apierrors.IsNotFound(err) {
+		s.kubeError(w, r, err)
 		return
 	}
 	if err := u.kube.Delete(r.Context(), c, client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil && !apierrors.IsNotFound(err) {
@@ -1610,7 +1683,9 @@ func (s *Server) applyAddonChanges(w http.ResponseWriter, r *http.Request, u use
 }
 
 // kubeError answers with what the management cluster refused. Validation messages are the user's
-// to read. Anything else is logged and kept vague.
+// to read, an admission policy's refusal among them, which the API server answers as Invalid.
+// Anything else is logged and kept vague: a Forbidden is the interface's own account lacking a
+// right, which only the deployment can fix.
 func (s *Server) kubeError(w http.ResponseWriter, r *http.Request, err error) {
 	var status apierrors.APIStatus
 	switch {
@@ -1621,11 +1696,9 @@ func (s *Server) kubeError(w http.ResponseWriter, r *http.Request, err error) {
 	case apierrors.IsConflict(err):
 		writeError(w, http.StatusConflict, clusterChanged)
 	case apierrors.IsInvalid(err) || apierrors.IsBadRequest(err):
-		if errors.As(err, &status) {
-			writeError(w, http.StatusUnprocessableEntity, status.Status().Message)
-			return
-		}
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		// Both predicates hold only for an error that carries an APIStatus.
+		_ = errors.As(err, &status)
+		writeError(w, http.StatusUnprocessableEntity, status.Status().Message)
 	default:
 		s.Log.ErrorContext(r.Context(), "management cluster request failed", "error", err)
 		writeError(w, http.StatusBadGateway, "the management cluster did not answer")

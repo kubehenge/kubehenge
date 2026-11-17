@@ -43,6 +43,15 @@ const buildingTag = "kubehenge-building"
 // Distributions lists every supported distribution.
 var Distributions = []Distribution{Talos, RKE2, K3s, Kubeadm}
 
+// DistributionNames are the distributions as they are typed.
+func DistributionNames() []string {
+	names := make([]string, len(Distributions))
+	for i, d := range Distributions {
+		names[i] = string(d)
+	}
+	return names
+}
+
 // DefaultTalosVersion is the Talos release templates are made from unless another is asked for.
 // renovate: datasource=github-releases depName=siderolabs/talos
 const DefaultTalosVersion = "v1.14.6"
@@ -143,11 +152,7 @@ func Plan(req *Request) (Template, error) {
 		return newTemplate(fmt.Sprintf("kubehenge-kubeadm-%s-%s", v, os), append([]string{kubehengeTag, "kubeadm", kubernetesTagPrefix + v}, os.Tags()...),
 			ImageRef{Kind: NodeOSImage, NodeOS: os.Base()}, &Bake{NodeOS: os, Distribution: Kubeadm, KubernetesVersion: v})
 	}
-	names := make([]string, len(Distributions))
-	for i, d := range Distributions {
-		names[i] = string(d)
-	}
-	return Template{}, fmt.Errorf("unknown distribution %q: %s", req.Distribution, orList(names))
+	return Template{}, fmt.Errorf("unknown distribution %q: %s", req.Distribution, orList(DistributionNames()))
 }
 
 // checkNodeOS is the node OS a request asks for, DefaultNodeOS when it names none, once it is one
@@ -188,7 +193,9 @@ func (d Distribution) Title() string {
 	switch d {
 	case RKE2:
 		return "RKE2"
-	case Talos, K3s, Kubeadm:
+	case Talos:
+		return "Talos"
+	case K3s, Kubeadm:
 	}
 	return string(d)
 }

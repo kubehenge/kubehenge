@@ -60,6 +60,15 @@ type Settings struct {
 	ChartRepositories *ChartRepositories `json:"chartRepositories,omitempty"`
 	// ReleaseMirror serves the RKE2 and k3s releases in place of GitHub.
 	ReleaseMirror *ReleaseMirror `json:"releaseMirror,omitempty"`
+	// SiteCA is the PEM authority of the site's private CA. Every connection that names no authority
+	// of its own trusts it: the clusters' nodes, the release mirror, the backup targets, the
+	// identity providers and the appliance's own outgoing connections. Empty, none.
+	SiteCA string `json:"siteCA,omitempty"`
+	// TimeZone is the IANA time zone of schedules that name none. Empty, UTC.
+	TimeZone string `json:"timeZone,omitempty"`
+	// WorkloadVMIDRange is the VM IDs a new cluster's VMs and the templates take, both ends included.
+	// Unset, Proxmox VE's next free ID.
+	WorkloadVMIDRange *provisioner.VMIDRange `json:"workloadVMIDRange,omitempty"`
 	// ControllerImage replaces the controller image the chart was released with.
 	ControllerImage string `json:"controllerImage,omitempty"`
 	// PodSubnets and ServiceSubnets are the management cluster's own ranges. When unset, the first
@@ -413,6 +422,9 @@ func (s *Settings) Families() []string {
 // HasIPv6 tells that the cluster has an IPv6 family, alone or beside IPv4.
 func (s *Settings) HasIPv6() bool { return slices.Contains(s.Families(), familyIPv6) }
 
+// nodeCounts are the node counts a management cluster may have.
+var nodeCounts = []int{1, 3, 5}
+
 // NodeCount is the number of management nodes, which the primary family's addresses give.
 func (s *Settings) NodeCount() int { return len(s.addressesOf(s.Families()[0])) }
 
@@ -444,6 +456,21 @@ type familyNet struct {
 // Validate checks what the module would otherwise only refuse after starting, or what would leave
 // the management cluster unreachable. The messages name the setup page's fields.
 func (s *Settings) Validate() error {
+	return validateSettings(s, time.Now())
+}
+
+// ValidateAgainst is Validate for settings that may keep the saved ones' site CA. A site CA that
+// has run out since it was saved stops nothing then, since the controller reports it on every
+// cluster and rolls it to none. One that is new or changed has to be valid now.
+func (s *Settings) ValidateAgainst(saved *Settings) error {
+	if saved != nil && saved.SiteCA != "" && strings.TrimSpace(saved.SiteCA) == strings.TrimSpace(s.SiteCA) {
+		return validateSettings(s, time.Time{})
+	}
+	return s.Validate()
+}
+
+// validateSettings is Validate with the site CA checked for validity at siteCANow, not at all when zero.
+func validateSettings(s *Settings, siteCANow time.Time) error {
 	var p problems
 	families := s.checkFamilies(&p)
 	s.checkNodes(&p)
@@ -457,13 +484,14 @@ func (s *Settings) Validate() error {
 	}
 	if len(nets) == maxFamilies && len(s.NodeAddresses) != len(s.NodeAddressesIPv6) {
 		label, _ := familyLabels(families[1], len(families))
-		p.addf("%s: as many as the %s ones, node i taking the i-th of each", label, families[0])
+		p.addf("%s: as many as the %s ones, in the same node order", label, families[0])
 	}
 	s.checkServers(&p, families)
 	s.checkSubnets(&p, families)
 	s.checkMirrors(&p)
 	s.ChartRepositories.check(&p)
 	s.ReleaseMirror.check(&p, time.Now())
+	s.checkSiteDefaults(&p, siteCANow)
 	if err := ValidOIDC(s.ClusterOIDC); err != nil {
 		p.addf("Identity providers: %s", err)
 	}
@@ -496,7 +524,7 @@ func (s *Settings) KeepsFixed(was *Settings) error {
 	for _, f := range [...]string{familyIPv4, familyIPv6} {
 		label, gateway := familyLabels(f, shown)
 		if changesAddresses(s.addressesOf(f), was.addressesOf(f)) {
-			p.addf("%s: the nodes there are keep theirs (%s), and more can only be added after them", label, strings.Join(was.addressesOf(f), ", "))
+			p.addf("%s: the nodes there keep theirs (%s), and more can only be added after them", label, strings.Join(was.addressesOf(f), ", "))
 		}
 		if s.gatewayOf(f) != was.gatewayOf(f) {
 			p.addf("%s: stays %s once the management cluster exists", gateway, was.gatewayOf(f))
@@ -626,8 +654,8 @@ func (s *Settings) checkFamilyAddresses(p *problems, family string) familyNet {
 	}
 	out := familyNet{family: family, gateway: gateway, nodes: map[netip.Addr]bool{}}
 	addresses := s.addressesOf(family)
-	if n := len(addresses); n != 1 && n != 3 {
-		p.addf("%s: one, or three for high availability", label)
+	if n := len(addresses); !slices.Contains(nodeCounts, n) {
+		p.addf("%s: one, three or five for high availability", label)
 	}
 	for _, a := range addresses {
 		prefix, err := netip.ParsePrefix(a)
@@ -873,7 +901,7 @@ func (s *Settings) ranges() (subnets, error) {
 					continue families
 				}
 			}
-			return nil, fmt.Errorf("every %s range Kubehenge tries overlaps the nodes' network; set the %s ranges under Advanced", what, what)
+			return nil, fmt.Errorf("every %s range Kubehenge tries overlaps the nodes' network. Set the %s ranges under Advanced", what, what)
 		}
 		return out, nil
 	}

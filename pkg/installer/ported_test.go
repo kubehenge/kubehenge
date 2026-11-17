@@ -523,7 +523,7 @@ func TestTemplateIndex(t *testing.T) {
 		t.Errorf("an index without a usable template: %v", err)
 	}
 	_ = os.Remove(filepath.Join(mirror, "aplinfo-pve-9.dat.asc"))
-	if _, err = f.TemplateFromIndex(context.Background(), h2.exec, t.TempDir(), srv.URL); err == nil || !strings.Contains(err.Error(), "could not download Proxmox's template index") {
+	if _, err = f.TemplateFromIndex(context.Background(), h2.exec, t.TempDir(), srv.URL); err == nil || !strings.Contains(err.Error(), "could not download Proxmox VE's template index") {
 		t.Errorf("an index without its signature: %v", err)
 	}
 }
@@ -596,6 +596,9 @@ func TestUpgradeRoads(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Kubehenge 9.9.9 is running in container 100") || h.exec.count("pct exec 100 -- flock -n -E 75") != 1 {
 		t.Fatalf("an upgrade that serves: %s", out)
+	}
+	if h.exec.count("pct set 100 --protection 1") != 1 {
+		t.Errorf("an upgrade leaves the appliance unprotected: %v", h.exec.calls)
 	}
 	for code, want := range map[int]string{
 		exitBusy:       "the management cluster is being applied or removed",

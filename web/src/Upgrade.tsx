@@ -1,10 +1,12 @@
 import { useEffect, useState, type JSX } from "react";
 
 import { api } from "./api";
-import { addressRoom } from "./Autoscaling";
+import { addedWorkersMiB, addressRoom, freeMemory, poolMost } from "./Autoscaling";
+import { sizeOf } from "./MachineFields";
+import { offlineOf, unreachable } from "./offline-nodes";
 import { Link } from "./router";
-import type { Cluster, ClusterHealth, Effect, Plan, UpgradeChecks } from "./types";
-import { Detail, Status, errorMessage, localDates } from "./ui";
+import type { Cluster, ClusterHealth, Effect, Plan, PveNode, UpgradeChecks } from "./types";
+import { Detail, Status, bytes, errorMessage, localDates } from "./ui";
 
 // What the machines go through, by the most a change does.
 const replaces: Record<Effect, string> = {
@@ -52,9 +54,11 @@ export function usePlan(c: Cluster, version: string): PlanRead | undefined {
   return read?.version === version ? read : undefined;
 }
 
-type CheckState = "ok" | "warning" | "error" | "progress";
+// info is a fact about the change that is neither a pass nor a problem, so it gets no green tick.
+type CheckState = "ok" | "info" | "warning" | "error" | "progress";
 
-interface Check {
+/** Check is one line of what to know before a change goes ahead. */
+export interface Check {
   what: string;
   state: CheckState;
   text: string;
@@ -63,29 +67,31 @@ interface Check {
 }
 
 /** useUpgradeChecks reads what the version would run into inside the cluster. */
-function useUpgradeChecks(c: Cluster, version: string): UpgradeChecks | string | undefined {
+function useUpgradeChecks(c: Cluster, version: string | undefined): UpgradeChecks | string | undefined {
   const [read, setRead] = useState<{ version: string; checks: UpgradeChecks | string }>();
   const { namespace, name } = c;
   useEffect(() => {
     let current = true;
-    async function load(): Promise<void> {
+    async function load(to: string): Promise<void> {
       try {
-        const checks = await api.upgradeChecks(namespace, name, version);
+        const checks = await api.upgradeChecks(namespace, name, to);
         if (current) {
-          setRead({ version, checks });
+          setRead({ version: to, checks });
         }
       } catch (err) {
         if (current) {
-          setRead({ version, checks: errorMessage(err) });
+          setRead({ version: to, checks: errorMessage(err) });
         }
       }
     }
-    void load();
+    if (version !== undefined) {
+      void load(version);
+    }
     return () => {
       current = false;
     };
   }, [namespace, name, version]);
-  return read?.version === version ? read.checks : undefined;
+  return version !== undefined && read?.version === version ? read.checks : undefined;
 }
 
 // isoDateLength is the part of a timestamp that names the day.
@@ -149,7 +155,7 @@ function changeCheck(read: PlanRead | undefined): Check {
     return { what: "Change", state: "error", text: read.error ?? "Refused" };
   }
   const effects = read.plan.changes.map((ch) => effectOrder.indexOf(ch.effect));
-  return { what: "Change", state: "ok", text: replaces[effectOrder[Math.max(0, ...effects)] ?? "none"] };
+  return { what: "Change", state: "info", text: replaces[effectOrder[Math.max(0, ...effects)] ?? "none"] };
 }
 
 // A rollout makes each new node before it removes the old one, so it needs one address spare.
@@ -158,7 +164,9 @@ function addressCheck(c: Cluster): Check | undefined {
   if (room === undefined) {
     return undefined;
   }
-  const spare = room - c.controlPlane.desired - c.workers.desired;
+  // The pools are what a plan changes, where the workers' status is what the cluster has now.
+  const workers = c.workerPools.reduce((sum, p) => sum + poolMost(p), 0);
+  const spare = room - c.controlPlane.desired - workers;
   return spare > 0
     ? { what: "Addresses", state: "ok", text: `${spare} spare` }
     : { what: "Addresses", state: "error", text: "None spare. Add one under Options." };
@@ -174,8 +182,9 @@ function healthCheck(health: ClusterHealth | string | undefined): Check {
   if (health.verdict === "unreachable") {
     return { what: "Health", state: "error", text: "Unreachable" };
   }
-  const errors = health.attention.filter((a) => a.severity === "error").length;
-  const warnings = health.attention.filter((a) => a.severity === "warning").length;
+  const found = health.attention;
+  const errors = found.filter((a) => a.severity === "error").length;
+  const warnings = found.filter((a) => a.severity === "warning").length;
   if (errors + warnings === 0) {
     return { what: "Health", state: "ok", text: "No problems" };
   }
@@ -187,25 +196,135 @@ function healthCheck(health: ClusterHealth | string | undefined): Check {
   };
 }
 
+const bytesPerMiB = 1_048_576;
+
+// The memory the machines a change adds need, in MiB.
+function addedMiB(before: Cluster, after: Cluster): number {
+  const controlPlane = sizeOf(after.variables["controlPlaneMachine"])?.memoryMiB ?? 0;
+  const added = Math.max(0, after.controlPlane.desired - before.controlPlane.desired) * controlPlane;
+  return after.workerPools.reduce((sum, p) => sum + addedWorkersMiB(before, after, p), added);
+}
+
+/** NodesRead is the Proxmox VE nodes, or why they could not be read, unset until they answer. */
+export type NodesRead = PveNode[] | string | undefined;
+
+// Said of the Nodes and Memory lines when the node list fails, its cause behind Detail.
+const notChecked = "Could not be checked";
+
+// memoryCheck compares the memory new machines need with what the nodes have free. It is advice:
+// memory frees and fills as other VMs come and go.
+function memoryCheck(before: Cluster, after: Cluster, read: NodesRead): Check | undefined {
+  const wanted = addedMiB(before, after) * bytesPerMiB;
+  if (typeof read === "string") {
+    return wanted > 0 ? { what: "Memory", state: "warning", text: notChecked, detail: [read] } : undefined;
+  }
+  const free = freeMemory(after, read ?? []);
+  if (!(wanted > 0) || free === undefined) {
+    return undefined;
+  }
+  return wanted > free
+    ? { what: "Memory", state: "warning", text: `Needs ${bytes(wanted)}, ${bytes(free)} free` }
+    : { what: "Memory", state: "ok", text: `${bytes(free)} free` };
+}
+
+// nodesCheck names the Proxmox VE nodes that run the cluster's machines and are offline, or are up
+// and out of the appliance's reach, which a change that deletes or makes a VM there runs into.
+function nodesCheck(c: Cluster, nodes: NodesRead): Check | undefined {
+  if (nodes === undefined) {
+    return { what: "Nodes", state: "progress", text: "Checking" };
+  }
+  if (typeof nodes === "string") {
+    return { what: "Nodes", state: "warning", text: notChecked, detail: [nodes] };
+  }
+  if (nodes.length === 0) {
+    return undefined;
+  }
+  const placed = c.machines ?? [];
+  const used = nodes.filter((n) => placed.some((m) => m.proxmoxNode === n.node));
+  const offline = offlineOf(used);
+  const down = used.filter((n) => offline.has(n.node));
+  if (down.length > 0) {
+    const machines = placed.filter((m) => offline.has(m.proxmoxNode ?? "")).length;
+    return {
+      what: "Nodes",
+      state: "error",
+      text: `${down.map((n) => n.node).join(", ")} offline, ${counted(machines, "machine")}`,
+    };
+  }
+  const away = used.filter((n) => unreachable(n));
+  if (away.length > 0) {
+    return {
+      what: "Nodes",
+      state: "warning",
+      text: `${away.map((n) => n.node).join(", ")} not reachable`,
+      detail: away.map((n) => `${n.node}: ${n.fault ?? ""}`),
+    };
+  }
+  return { what: "Nodes", state: "ok", text: "All online" };
+}
+
+const counted = (n: number, what: string): string => `${n} ${what}${n === 1 ? "" : "s"}`;
+
 /**
- * UpgradeChecksList is what to know before an upgrade: what the API server makes of it and what it
- * replaces, whether the rollout has the address it needs, the removed APIs and fail-closed webhooks
- * it meets, and what is wrong with the cluster already.
+ * volumesCheck warns when the cluster would have fewer workers than Proxmox VE nodes holding its
+ * volumes on node-local storage. An autoscaled pool counts at its minimum. A cluster that asks for
+ * no workers runs its pods on its control planes and gets no line.
  */
-export function UpgradeChecksList({
-  cluster: c,
+export function volumesCheck(after: Cluster): Check | undefined {
+  const held = after.volumeNodes ?? [];
+  if (held.length === 0 || !after.workerPools.some((p) => poolMost(p) > 0)) {
+    return undefined;
+  }
+  const workers = after.workerPools.reduce((sum, p) => sum + (p.autoscaling?.min ?? p.replicas), 0);
+  const text = `On ${counted(held.length, "node")}, ${counted(workers, "worker")}`;
+  if (workers >= held.length) {
+    return { what: "Volumes", state: "ok", text };
+  }
+  return {
+    what: "Volumes",
+    state: "warning",
+    text,
+    detail: ["A pod starts only on its volume's node.", `Nodes with volumes: ${held.join(", ")}`],
+  };
+}
+
+/**
+ * scaleChecks are the addresses and memory a change of the cluster's size needs, and the workers
+ * its volumes need, from the same figures in the Scale dialog as in Review plan.
+ */
+export function scaleChecks(before: Cluster, after: Cluster, nodes: NodesRead): Check[] {
+  return [addressCheck(after), memoryCheck(before, after, nodes), volumesCheck(after)].filter((ch) => ch !== undefined);
+}
+
+/**
+ * useChecks reads what to know before a change goes ahead: what it replaces, whether the nodes have
+ * the addresses and memory it needs, the removed APIs and fail-closed webhooks an upgrade meets,
+ * the offline nodes, and what is wrong with the cluster already. The dialog of a change and the
+ * plan that applies it show the same list. Nothing is read while it is off.
+ */
+export function useChecks({
+  before,
+  after = before,
   version,
   read,
-  healthPath,
+  change = false,
+  on = true,
 }: {
-  cluster: Cluster;
-  version: string;
-  read: PlanRead | undefined;
-  healthPath: string;
-}): JSX.Element {
-  const found = useUpgradeChecks(c, version);
+  before: Cluster;
+  /** The cluster as the change would leave it. */
+  after?: Cluster;
+  /** The version to read the removed APIs and webhooks for, unless the change sets none. */
+  version?: string | undefined;
+  /** What the API server makes of the version, for the Change line that a dialog shows. */
+  read?: PlanRead | undefined;
+  change?: boolean;
+  on?: boolean;
+}): Check[] {
+  const found = useUpgradeChecks(before, on ? version : undefined);
   const [health, setHealth] = useState<ClusterHealth | string>();
-  const { namespace, name } = c;
+  // Unread until the list answers, so that the plan waits for it.
+  const [nodes, setNodes] = useState<NodesRead>();
+  const { namespace, name } = before;
   useEffect(() => {
     let current = true;
     async function load(): Promise<void> {
@@ -219,28 +338,59 @@ export function UpgradeChecksList({
           setHealth(errorMessage(err));
         }
       }
+      try {
+        const listed = await api.nodes();
+        if (current) {
+          setNodes(listed);
+        }
+      } catch (err) {
+        // A list that fails leaves the offline nodes and the free memory unknown, which is a risk to accept.
+        if (current) {
+          setNodes(errorMessage(err));
+        }
+      }
     }
-    void load();
+    if (on) {
+      void load();
+    }
     return () => {
       current = false;
     };
-  }, [namespace, name]);
-  const address = addressCheck(c);
-  const webhooks = webhooksCheck(found);
-  const checks = [
-    changeCheck(read),
-    ...(address === undefined ? [] : [address]),
-    removedAPIsCheck(found),
-    ...(webhooks === undefined ? [] : [webhooks]),
+  }, [namespace, name, on]);
+  const optional = (check: Check | undefined): Check[] => (check === undefined ? [] : [check]);
+  return [
+    ...(change ? [changeCheck(read)] : []),
+    ...scaleChecks(before, after, nodes),
+    ...optional(nodesCheck(before, nodes)),
+    ...(version === undefined ? [] : [removedAPIsCheck(found), ...optional(webhooksCheck(found))]),
     healthCheck(health),
   ];
+}
+
+/** needsAccepting is whether a list holds a problem that goes ahead only on the admin's say. */
+export const needsAccepting = (checks: Check[]): boolean =>
+  checks.some((ch) => ch.state === "warning" || ch.state === "error");
+
+/** stillChecking is whether a check has not answered yet, so that nothing it may find is passed over. */
+export const stillChecking = (checks: Check[]): boolean => checks.some((ch) => ch.state === "progress");
+
+/** ChecksList shows the checks, a problem with its findings behind Detail. */
+export function ChecksList({
+  checks,
+  healthPath,
+  label,
+}: {
+  checks: Check[];
+  healthPath: string;
+  label: string;
+}): JSX.Element {
   return (
-    <dl className="preflight" aria-label="Before upgrading">
+    <dl className="preflight" aria-label={label}>
       {checks.map((ch) => (
         <div key={ch.what}>
           <dt>{ch.what === "Health" ? <Link to={healthPath}>Health</Link> : ch.what}</dt>
           <dd>
-            <Status state={ch.state} text={ch.text} />
+            <Status state={ch.state === "info" ? "idle" : ch.state} text={ch.text} />
             {ch.detail !== undefined && (
               <Detail>
                 <ul>
@@ -254,5 +404,29 @@ export function UpgradeChecksList({
         </div>
       ))}
     </dl>
+  );
+}
+
+/**
+ * Accept is the box to tick before a change goes ahead that met a problem or replaces nodes, as the
+ * command line asks.
+ */
+export function Accept({
+  required,
+  accepted,
+  onChange,
+}: {
+  required: boolean;
+  accepted: boolean;
+  onChange: (accepted: boolean) => void;
+}): JSX.Element | null {
+  if (!required) {
+    return null;
+  }
+  return (
+    <label className="accept">
+      <input type="checkbox" checked={accepted} onChange={(e) => onChange(e.target.checked)} />
+      Accept the risks
+    </label>
   );
 }

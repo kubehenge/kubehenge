@@ -61,7 +61,9 @@ describe("the management cluster's health", () => {
     });
     await expect(screen.findByText("Degraded")).resolves.toBeInTheDocument();
     const items = within(screen.getByRole("list", { name: "Proxmox VE nodes" })).getAllByRole("listitem");
-    expect(items.map((i) => i.textContent)).toStrictEqual(["Not reachablepve2: HTTP 596: certificate verify failed"]);
+    expect(items.map((i) => i.textContent)).toStrictEqual([
+      "Not reachablepve2: HTTP 596: certificate verify failed. Run pvecm updatecerts --force on pve2, then restart pveproxy.",
+    ]);
   });
 
   it("says when the cluster does not answer, with the reason behind Details", async () => {

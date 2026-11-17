@@ -4,9 +4,11 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -80,6 +82,50 @@ func expectRefused(t *testing.T, rec *httptest.ResponseRecorder, want string) {
 	}
 }
 
+// checkHandKeptBundles creates a cluster as the create form sends it whose trustedCAs, registry
+// mirror and release mirror hold a bundle laid out as curl's cacert.pem, which the form accepts as
+// the server does. Each is stored as its certificates alone, as from kubectl.
+func checkHandKeptBundles(t *testing.T, b *browser, admin client.Client) {
+	t.Helper()
+	ctx := context.Background()
+	raw, err := os.ReadFile("../provisioner/testdata/curl-cacert.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := provisioner.NormaliseCertificateBundle(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	quote := func(v any) string {
+		out, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+	curl := quote(string(raw))
+	vars := `"trustedCAs":[` + curl + `],` +
+		`"registryMirrors":[{"registry":"docker.io","endpoints":["https://mirror.example.org"],"caBundle":` + curl + `}],` +
+		`"releaseMirror":{"url":"https://mirror.example.org","caBundle":` + curl + `}`
+	if rec := b.do("POST", "/api/clusters", createRequestBody("hand-kept", "kubehenge-k3s", "v1.36.5+k3s1", 40, vars)); rec.Code != http.StatusCreated {
+		t.Fatalf("hand-kept bundles: %d %s", rec.Code, rec.Body)
+	}
+	got := &clusterv1.Cluster{}
+	if err := admin.Get(ctx, client.ObjectKey{Namespace: interfaceNamespace, Name: "hand-kept"}, got); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"trustedCAs":      quote([]string{plain}),
+		"registryMirrors": quote([]map[string]any{{"registry": "docker.io", "endpoints": []string{"https://mirror.example.org"}, "caBundle": plain}}),
+		"releaseMirror":   quote(map[string]string{"url": "https://mirror.example.org", "caBundle": plain}),
+	}
+	for _, v := range got.Spec.Topology.Variables {
+		if w, ok := want[v.Name]; ok && string(v.Value.Raw) != w {
+			t.Errorf("%s stored as %s, want the certificates alone", v.Name, v.Value.Raw)
+		}
+	}
+}
+
 // TestIntegrationInterfaceRequests sends the interface's requests to a real API server as the
 // interface's own account, with Cluster API's admission and Kubehenge's beside it: a cluster of
 // every class is created as the create form sends it and stored with Cluster API's defaults, and
@@ -148,6 +194,8 @@ func TestIntegrationInterfaceRequests(t *testing.T) { //nolint:paralleltest // s
 	if got := rangesOf(everything); got != "172.21.0.0/16 10.43.0.0/16" {
 		t.Errorf("a Cilium cluster beside the others got ranges %s", got)
 	}
+
+	checkHandKeptBundles(t, b, admin)
 
 	for _, tc := range []struct{ name, vars, want string }{
 		{"rule", `"backups":{"enabled":true}`, "Backups need a target."},

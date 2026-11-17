@@ -41,7 +41,7 @@ cleanup() {
     [ -z "${s3_pid}" ] || seaweedfs_stop "${s3_pid}"
     if [ "${status}" -ne 0 ]; then
         seaweedfs_errors "${work}"
-        printf '\nleaving the clusters in %s for inspection; delete them with: kubectl delete namespace %s\n' "${ns}" "${ns}"
+        printf '\nleaving the clusters in %s for inspection; delete them with: kubectl -n %s annotate clusters --all kubehenge.dev/allow-deletion=true && kubectl delete namespace %s\n' "${ns}" "${ns}" "${ns}"
     fi
     rm -rf "${work}"
 }
@@ -270,6 +270,7 @@ until_true 300 "east unmarked" unmarked
 kubectl -n "${ns}" get secret kubehenge-cluster-mesh-ca -o name > /dev/null || fail "the namespace's Cluster Mesh CA is gone while west still uses it"
 
 step "delete both clusters"
+webhook_retried kubectl -n "${ns}" annotate cluster/east cluster/west kubehenge.dev/allow-deletion=true > /dev/null
 kubectl -n "${ns}" delete cluster/east cluster/west --wait --timeout=30m
 vms=$(pve_get "cluster/resources?type=vm")
 printf '%s' "${vms}" | jq -e --arg p "/${ns}." '[.data[] | select(.pool // "" | contains($p))] | length == 0' > /dev/null ||

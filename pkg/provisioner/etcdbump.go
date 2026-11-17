@@ -42,6 +42,14 @@ const snapshotFileMode = 0o600
 // and a node's kube-proxy keeps the Services' endpoints from before. With it, every watch from
 // before ends as compacted, and its client lists again. The file is the caller's to remove.
 func bumpedEtcdSnapshot(dir string, r io.Reader) (string, error) {
+	return checkedEtcdSnapshot(dir, r, etcdRevisionBump)
+}
+
+// checkedEtcdSnapshot writes the snapshot read from r into a new file in dir, without the checksum
+// etcd appends, and checks it as `etcdutl snapshot status` does: the checksum, and every page of
+// the database. A bump above 0 moves its revision on by that much, as bumpedEtcdSnapshot says.
+// The file is the caller's to remove.
+func checkedEtcdSnapshot(dir string, r io.Reader, bump uint64) (string, error) {
 	f, err := os.CreateTemp(dir, "etcd-snapshot-*.db")
 	if err != nil {
 		return "", fmt.Errorf("making room for the snapshot: %w", err)
@@ -60,11 +68,49 @@ func bumpedEtcdSnapshot(dir string, r io.Reader) (string, error) {
 	if err = errors.Join(err, f.Close()); err != nil {
 		return "", err
 	}
-	if err = bumpEtcdRevision(path, etcdRevisionBump); err != nil {
+	if err = checkEtcdDatabase(path); err != nil {
 		return "", err
+	}
+	if bump > 0 {
+		if err = bumpEtcdRevision(path, bump); err != nil {
+			return "", err
+		}
 	}
 	done = true
 	return path, nil
+}
+
+// checkEtcdDatabase reads every page of the etcd database at path and checks that it holds etcd's
+// buckets. bbolt panics on some damaged pages, which this reports as the damage it is.
+func checkEtcdDatabase(path string) (err error) {
+	db, err := bolt.Open(path, snapshotFileMode, &bolt.Options{Timeout: time.Second, ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("opening the snapshot as etcd's database: %w", err)
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			err = fmt.Errorf("the snapshot's database is damaged: %v", p)
+		}
+		err = errors.Join(err, db.Close())
+	}()
+	err = db.View(func(tx *bolt.Tx) error {
+		if tx.Bucket(etcdKeyBucket) == nil || tx.Bucket(etcdMetaBucket) == nil {
+			return errors.New("the snapshot is no etcd database")
+		}
+		// Check reads the pages in its own goroutine until it closes the channel, so the channel is
+		// drained before View closes the transaction under it.
+		var damage error
+		for cerr := range tx.Check() {
+			if damage == nil {
+				damage = fmt.Errorf("the snapshot's database is damaged: %w", cerr)
+			}
+		}
+		return damage
+	})
+	if err != nil {
+		return fmt.Errorf("checking the snapshot: %w", err)
+	}
+	return nil
 }
 
 // stripEtcdChecksum checks the SHA-256 etcd appends to a snapshot and takes it off, leaving the

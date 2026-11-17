@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -28,6 +29,8 @@ const (
 	applianceRequestTimeout = time.Minute
 	// maxApplianceAnswer bounds what is read of one answer.
 	maxApplianceAnswer = 4 << 20
+	// mib is the bytes of a MiB, the unit sizes are shown in.
+	mib = 1 << 20
 	// appliancePoll is how often a command that waits asks again.
 	appliancePoll = 2 * time.Second
 	// snapshotWait and restoreWait bound how long take and restore wait for the result.
@@ -73,23 +76,24 @@ checks apply as on its pages.`,
 	f.StringVar(&o.check.CertFile, "cert", "/etc/kubehenge/tls.crt", "certificate the interface must present")
 	f.StringVar(&o.check.Address, "address", "127.0.0.1:443", "where the interface listens")
 	cmd.AddCommand(o.healthCommand(), o.upgradesCommand(), o.upgradeCommand(), o.etcdBackupsCommand(), o.notificationsCommand(),
-		o.activityCommand(), o.takeOverCommand(), o.readyForRebootCommand(), o.exportCommand(), o.importCommand())
+		o.activityCommand(), o.takeOverCommand(), o.readyForRebootCommand(), o.exportCommand(), o.importCommand(),
+		o.settingsCommand())
 	return cmd
 }
 
 // errNotReadyForReboot ends ready-for-reboot with a blocker, so that the exit status is not 0.
-var errNotReadyForReboot = errors.New("not ready for a host reboot")
+var errNotReadyForReboot = errors.New("not ready for a node reboot")
 
 func (o *applianceOptions) readyForRebootCommand() *cobra.Command {
 	var node string
 	cmd := &cobra.Command{
 		Use:   "ready-for-reboot",
-		Short: "Exit 0 only when a Proxmox VE host may be rebooted",
+		Short: "Exit 0 only when a Proxmox VE node may be rebooted",
 		Long: `Exit 0 only when every etcd member of the management cluster and of every workload cluster is
 healthy. With --node, the guests of that Proxmox VE node must also be able to go away without costing
 any etcd its quorum. Otherwise the first blocker is printed and the exit status is 1.
 
-Patch the hosts one at a time: run it, reboot one host, wait for it to pass again, then do the next.`,
+Patch the nodes one at a time. Run it, reboot one node, wait for it to pass again, then do the next.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
@@ -109,7 +113,7 @@ Patch the hosts one at a time: run it, reboot one host, wait for it to pass agai
 				if node != "" {
 					return say(cmd, "Ready to reboot "+node)
 				}
-				return say(cmd, "Ready for a host reboot")
+				return say(cmd, "Ready for a node reboot")
 			})
 		},
 	}
@@ -242,13 +246,45 @@ func (o *applianceOptions) etcdBackupsCommand() *cobra.Command {
 	o.signInFlags(cmd)
 	o.jsonFlag(cmd)
 	cmd.AddCommand(o.setUpBackupsCommand(), o.backupsOffCommand(), o.snapshotsCommand(), o.takeSnapshotCommand(), o.restoreEtcdCommand(),
-		o.recreateCommand(), o.dismissWarningCommand())
+		o.recreateCommand(), o.recoverCommand(), o.dismissWarningCommand())
 	return cmd
+}
+
+// printBackupPlaces writes where the backups are and what the backup volume holds.
+func printBackupPlaces(t *tabwriter.Writer, v *appliance.EtcdBackupStatus) {
+	if v.Where != nil {
+		row(t, "Backups in", strings.Join(v.Where.Where, ", "))
+		last := "none yet"
+		if v.Where.Last != nil {
+			last = v.Where.Last.UTC().Format(time.RFC3339)
+		}
+		row(t, "Last backup", last)
+		if v.Where.Error != "" {
+			row(t, "Failed", v.Where.Error)
+		}
+	}
+	vol := v.Volume
+	if vol == nil {
+		return
+	}
+	if vol.Last != nil {
+		row(t, "Volume snapshot", vol.Last.Name)
+	}
+	if vol.Export != nil {
+		row(t, "Volume export", vol.Export.Name)
+	}
+	if vol.Copy != nil {
+		row(t, "Appliance copy", fmt.Sprintf("%s, %d of %d MiB", cmp.Or(vol.Copy.Snapshot, "none"), vol.Copy.Bytes/mib, vol.Copy.Cap/mib))
+	}
 }
 
 func printBackups(cmd *cobra.Command, v *appliance.EtcdBackupStatus) error {
 	t := table(cmd)
+	printBackupPlaces(t, v)
 	if v.Settings == nil {
+		if v.Volume != nil {
+			return flush(t)
+		}
 		row(t, "Backups", "Off")
 		if v.Warning.Shown() {
 			row(t, "Warning", "The management cluster's etcd is not backed up. Every cluster's CAs, kubeconfigs and backup keys live only there.")
@@ -471,7 +507,7 @@ backup or a second appliance. Once taken over, the next apply undoes those chang
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if !overwrite {
-				return errors.New("take-over undoes the newer changes at the next apply; give --overwrite to go ahead")
+				return errors.New("take-over undoes the newer changes at the next apply. Give --overwrite to go ahead")
 			}
 			passphrase, err := secretFrom(passphraseFile, "KUBEHENGE_PASSPHRASE")
 			if err != nil {

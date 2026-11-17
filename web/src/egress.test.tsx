@@ -108,6 +108,7 @@ describe("the egress proxy settings", () => {
     const cls: ClusterClass = {
       name: "kubehenge-rke2",
       distribution: "rke2",
+      annotations: { "kubehenge.dev/management-proxy": "true" },
       versionFormat: { pattern: String.raw`^v1\.\d+\.\d+\+rke2r\d+$` },
       variables: [
         { name: "storage", required: true, schema: { type: "string" } },
@@ -132,9 +133,43 @@ describe("the egress proxy settings", () => {
     const ownRows = Object.fromEntries(summary(withOwn, cls));
     expect(ownRows).toMatchObject({ "Egress proxy": "http://proxy.example:3128, 1 exception" });
     expect(Object.fromEntries(summary(form, bare))).not.toHaveProperty("Egress proxy");
-    expect(fieldProblems("Add-ons", wrongUrl, cls)).toHaveProperty("egress.url");
-    expect(fieldProblems("Add-ons", tooMany, cls)).toHaveProperty("egress.noProxy");
+    expect(fieldProblems("Policies", wrongUrl, cls)).toHaveProperty("egress.url");
+    expect(fieldProblems("Policies", tooMany, cls)).toHaveProperty("egress.noProxy");
     expect(fieldProblems("Add-ons", wrongUrl, bare)).toStrictEqual({});
+  });
+});
+
+describe("the egress proxy without a management proxy", () => {
+  const cls: ClusterClass = {
+    name: "kubehenge-rke2",
+    distribution: "rke2",
+    versionFormat: { pattern: String.raw`^v1\.\d+\.\d+\+rke2r\d+$` },
+    variables: [{ name: "egressProxy", required: false, schema: { type: "object" } }],
+  };
+
+  it("is not offered, and the summary says no proxy", () => {
+    const form = { ...newForm(), rancherRegister: false };
+    expect(Object.fromEntries(summary(form, cls))["Egress proxy"]).toBe("No proxy");
+    const proxied = { ...cls, annotations: { "kubehenge.dev/management-proxy": "true" } };
+    expect(Object.fromEntries(summary(form, proxied))["Egress proxy"]).toBe("Management proxy");
+  });
+
+  it("offers no management proxy, and no proxy is the choice", async () => {
+    const changes: EgressChoice[] = [];
+    const user = userEvent.setup({ delay: null });
+    render(
+      <EgressFields
+        value={newEgress()}
+        managementProxy={false}
+        onChange={(e) => {
+          changes.push(e);
+        }}
+      />,
+    );
+    expect(screen.queryByRole("radio", { name: "Management proxy" })).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "No proxy" })).toBeChecked();
+    await user.click(screen.getByRole("radio", { name: "Own proxy" }));
+    expect(changes.at(-1)).toMatchObject({ mode: "own" });
   });
 });
 
@@ -197,7 +232,7 @@ describe("a cluster's egress proxy option", () => {
 
     await user.click(await screen.findByRole("button", { name: "Edit the egress proxy" }));
     const dialog = screen.getByRole("dialog", { name: "Edit egress proxy" });
-    const save = within(dialog).getByRole("button", { name: "Save" });
+    const save = within(dialog).getByRole("button", { name: "Add to plan" });
     expect(save).toBeDisabled();
     await user.click(within(dialog).getByRole("radio", { name: "Own proxy" }));
     expect(within(dialog).queryByText(/without credentials or path/u)).not.toBeInTheDocument();
@@ -237,7 +272,7 @@ describe("a cluster's egress proxy option", () => {
     expect(within(dialog).getByLabelText("Proxy address")).toHaveValue("http://proxy.example:3128");
     expect(within(dialog).getByLabelText("Exceptions")).toHaveValue(".corp");
     await user.click(within(dialog).getByRole("radio", { name: "Management proxy" }));
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
@@ -258,7 +293,7 @@ describe("a cluster's egress proxy option", () => {
     await user.click(await screen.findByRole("button", { name: "Edit the egress proxy" }));
     const dialog = screen.getByRole("dialog", { name: "Edit egress proxy" });
     await user.click(within(dialog).getByRole("radio", { name: "No proxy" }));
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.find((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({

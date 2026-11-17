@@ -236,7 +236,7 @@ func TestIntegrationDistributionTemplatesAndScaling(t *testing.T) { //nolint:par
 				t.Fatalf("the class was not marked for its templates: %v", err)
 			}
 
-			if err := c.Delete(ctx, cluster); err != nil {
+			if err := deleteCluster(ctx, c, cluster); err != nil {
 				t.Fatal(err)
 			}
 			reconcileClass(t, class)
@@ -322,7 +322,7 @@ func TestIntegrationClusterLifecycle(t *testing.T) { //nolint:paralleltest // st
 	if err := c.Create(ctx, machine); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Delete(ctx, got); err != nil {
+	if err := deleteCluster(ctx, c, got); err != nil {
 		t.Fatal(err)
 	}
 	reconcileCluster()
@@ -598,7 +598,7 @@ func checkAbandonAdmission(ctx context.Context, t *testing.T, c client.Client) {
 	if err := patch(`{"metadata":{"finalizers":["kubehenge.dev/test-hold"]}}`); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Delete(ctx, cluster); err != nil {
+	if err := deleteCluster(ctx, c, cluster); err != nil {
 		t.Fatal(err)
 	}
 	if err := annotate("not-first"); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "must be the cluster's name") {
@@ -1120,8 +1120,8 @@ func TestIntegrationChartVolumeSnapshots(t *testing.T) {
 		!regexp.MustCompile(`"snapshot-controller":\{"controller":\{"image":\{"tag":"v[0-9.]+@sha256:[0-9a-f]{64}"`).MatchString(args) {
 		t.Error("the controller is not given the snapshot controller's chart and image")
 	}
-	if !regexp.MustCompile(`--csi-proxy-image=ghcr\.io/kubehenge/kubehenge@sha256:[0-9a-f]{64}`).MatchString(args) {
-		t.Error("the controller is not given its own image for the proxy beside the CSI plugins")
+	if !regexp.MustCompile(`--image=ghcr\.io/kubehenge/kubehenge@sha256:[0-9a-f]{64}`).MatchString(args) {
+		t.Error("the controller is not given its own image for the proxy beside the CSI plugins and the etcd receiver")
 	}
 	if strings.Contains(args, "root@pam") || strings.Contains(args, "root-secret") {
 		t.Errorf("the controller is given something of root@pam's: %s", args)

@@ -26,14 +26,14 @@ const own = {
     script: [6, 80_000],
     stylesheet: [1, 25_400],
     font: [6, 95_000],
-    image: [1, 740],
+    image: [0, 0],
   },
   "/docs/install.html": {
-    document: [1, 46_700],
+    document: [1, 32_500],
     script: [6, 80_000],
     stylesheet: [1, 25_400],
     font: [1, 76_000],
-    image: [2, 21_500],
+    image: [1, 20_700],
   },
 };
 

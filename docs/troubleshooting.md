@@ -183,9 +183,10 @@ The task log shows what each Kubehenge account did. In an appliance's management
 | --- | --- | --- |
 | "run this as root on a Proxmox VE node", "this is not a Proxmox VE node" or "Kubehenge needs Proxmox VE 9" | The script ran as the wrong user or on the wrong node. | Run it as root, in the shell of a Proxmox VE 9 node. |
 | `"no enabled, active storage here takes container disks (content rootdir)"` | No storage allows containers. | Allow the `rootdir` content type on an enabled storage of the node ([install.md](install.md#storage)), or name one with `--storage`. The same goes for `vztmpl` and `--template-storage`, where the container template goes. |
-| "could not download … (curl exit …, HTTP status …)" | The node cannot reach GitHub, which it needs for Kubehenge's release and OpenTofu. The installer has already tried eight more times. Status 404 is a missing file and 407 a proxy that wants credentials. | Let the node reach GitHub ([install.md](install.md#internet-access)). |
+| "could not download … (curl exit …, HTTP status …)" | The node cannot reach GitHub, which it needs for Kubehenge's release and OpenTofu. The installer has already tried eight more times. Status 404 is a missing file and 407 a proxy that wants credentials. | Let the node reach GitHub ([architecture.md](architecture.md#hosts-each-part-reaches)). |
 | "… does not match its checksum" | The file is not the one this `install.sh` names. Nothing of it was installed. | Check that nothing between the node and GitHub changes downloads. Fetch `install.sh` again from the release you mean to install. With `--release <file>`, check the file and the checksum given with `--sha256`. |
-| The Proxmox VE API's certificate is not valid for the URL, or its CA is not trusted | The installer stops before it creates anything. | Give what the message names: `--proxmox-url`, or the CA with `--proxmox-ca` ([install.md](install.md#the-proxmox-ve-api)). |
+| "Proxmox VE's certificate is valid for …, not …" | The URL's name or address is not in the API's certificate. The installer stops before it creates anything. | Give `--proxmox-url` with a name or address the message lists, or [have the certificate list yours](install.md#an-address-the-certificate-lacks). |
+| The API's CA is not trusted | The installer stops before it creates anything. | Give the CA with `--proxmox-ca` ([install.md](install.md#the-ca)). |
 | "this node cannot connect to the Proxmox VE API at …" | The node could not open a connection to port 8006. This is no certificate problem. | Check the node's firewall, and `LISTEN_IP` in `/etc/default/pveproxy`. Or give a URL it reaches with `--proxmox-url`. |
 | "an appliance exists as container … on …" | The cluster has one already. "Container … runs on node …" means the same for `--upgrade` and `--certificate`. | Run `install.sh --upgrade --ctid <id>` on the node it names. |
 | "this node has no quorum" | Proxmox VE refuses container changes without it. | Start the other nodes of the cluster. |
@@ -207,14 +208,15 @@ The task log shows what each Kubehenge account did. In an appliance's management
 | No bridges to choose from | Proxmox VE lists a node's bridges only with `Sys.Audit` on the node. Type the bridge's name instead. A bridge marked "no SDN.Use" needs that privilege on `/sdn/zones/localnetwork/<bridge>`, or on `/sdn/zones/<zone>/<vnet>` for a VNet. |
 | "`<user>` needs `Pool.Audit` on `<pool>`" | Proxmox VE lists a pool's VMs only to a user with `Pool.Audit` on it. Without it a cluster shows no nodes, console links or reboot. `PVEPoolUser` and `PVEAuditor` hold it. A role of your own needs it added. |
 | "Proxmox VE refused: …" | Proxmox VE answered. The reason after the colon is its own, such as "VM is locked (backup)" or "cluster not ready - no quorum?". Fix that first. |
-| "Proxmox VE did not answer" | No connection, a timeout or a certificate error. |
+| "Proxmox VE did not answer" | No connection, a timeout or a certificate error. Check that the appliance reaches the Proxmox VE API on port 8006 and trusts its certificate ([install.md](install.md#the-proxmox-ve-api)). |
+| "Proxmox VE's certificate is valid for …, not …" | The API's certificate no longer lists the address the appliance reaches it at, such as after Proxmox VE renewed it. [Have it list the address again](install.md#an-address-the-certificate-lacks), or move the appliance to one it lists with `install.sh --upgrade --ctid <id> --proxmox-url <URL>`. |
 | "The user name and realm together are at most 64 characters" | Proxmox VE takes no longer sign-in name, `user@realm` counted whole. |
 | "Sign-in failed" with a right password | Proxmox VE gives one answer to a wrong password, an unknown or disabled user, and a realm that requires a second factor the user lacks. Ask an administrator to set up the factor. |
 | "Wrong code, a locked factor or a cluster without quorum" | Eight wrong TOTP codes lock TOTP until a recovery key is used. Proxmox VE says nothing of it. Sign in with a recovery key. Without one, an administrator resets the user's factors. A cluster without quorum refuses every code, a right one too, because Proxmox VE records each use in its cluster files. Sign in on a node's console until quorum returns. |
 | "Wrong recovery key, or the cluster has no quorum" | A recovery key is written to Proxmox VE's cluster files, which a cluster without quorum cannot change. Sign in on a node's console until quorum returns. |
 | `"Session ended. Sign in again."` | Proxmox VE no longer accepts the session. A session lasts eight hours at most. |
 | Sign-in refused after several tries | Five failures within 15 minutes lock a user out from that address until the 15 minutes are up. Twenty failures from one address, whichever users they name, lock the address out. |
-| Everyone is locked out after one person's typos | Behind a reverse proxy, every sign-in counts under the proxy's address. List the proxy with `--trusted-proxy` ([install.md](install.md#behind-a-reverse-proxy)). |
+| Everyone is locked out after one person's typos | Behind a reverse proxy, every sign-in counts under the proxy's address. List the proxy with `--trusted-proxy` ([architecture.md](architecture.md#behind-a-reverse-proxy)). |
 | "Security keys work only in Proxmox VE" | A WebAuthn key answers only on Proxmox VE's own page. Choose **Use API token** and give one of that user's Proxmox VE API tokens. |
 | An OpenID sign-in does not come back | Register `https://<appliance>/api/openid/callback` with the identity provider, and `https://<appliance>:8443/oidc-callback` for the shared Headlamp. A Headlamp sign-in can only be finished in the browser that started it. |
 
@@ -234,18 +236,22 @@ A run needs these:
 
 - **Storage.** The Talos image storage must allow the `import` content type.
 - **Addresses.** The node addresses and the API address must be free, in one subnet, and reachable from the appliance on ports 50000 and 6443.
-- **Internet access** from the appliance, the Proxmox VE node and the new nodes ([install.md](install.md#internet-access)), or registry mirrors for the nodes.
+- **Internet access** from the appliance, the Proxmox VE node and the new nodes ([architecture.md](architecture.md#hosts-each-part-reaches)), or registry mirrors for the nodes.
 - **Pod and service ranges** clear of the nodes' network, set under Advanced. Overlapping ones are refused.
 - **Time.** A run has to finish within two hours, the life of the Proxmox VE ticket it acts on. A run cut off there keeps what it made, so apply again.
 
 | Problem | Cause and fix |
 | --- | --- |
+| "The management cluster's nodes have no IPv6 address, so they cannot reach the Proxmox VE API at …" | The appliance reaches the API at an IPv6 address, often because [the certificate lacks the IPv4 one](install.md#an-address-the-certificate-lacks). Give the nodes IPv6 addresses, or move the appliance to an IPv4 address or name the certificate lists. The same holds for IPv4 and an IPv6-only cluster. |
+| `x509: certificate is valid for …, not …` in OpenTofu's, capmox's or the cloud controller manager's output | With the Terraform/OpenTofu module, `proxmox_endpoint` names an address the API's certificate lacks. Use a name or address it lists, or [have it list yours](install.md#an-address-the-certificate-lacks). |
 | "Bridge … has MTU …" | The MTU is above the bridge's. Its larger frames never pass. Use the bridge's MTU or less, or raise the bridge's under System, Network. |
 | "context deadline exceeded" for a `helm_release` | The release's pods did not get ready in time. Under "What the management cluster's pods wait for", the log names each pod and why, such as too little memory on the nodes. |
 | "The management cluster is being applied or removed" or "the appliance is being upgraded" | A run is going on. Wait for that to finish. |
 | A wrong passphrase | An apply cannot read the state. Repair access and removal answer "the passphrase does not open the management cluster's state". The passphrase has to be the one given when the management cluster was created. After five wrong ones within 15 minutes, repair access refuses further tries until those 15 minutes are up. A lost passphrase cannot be recovered ([what still works, and how to start over](install.md#the-state-passphrase)). |
 | "The appliance stopped during the run" | The appliance restarted while a run was going on. Apply again. |
-| "this appliance's state is from apply N, and the management cluster is at apply M" | A newer state changed the cluster since this one was saved. A snapshot rollback, an older backup or a second appliance does that. Restore the newest backup instead, or use the appliance that applied last. To go ahead with this state, [take the cluster over](install.md#a-state-older-than-the-management-cluster). The next apply undoes the newer changes. |
+| "got no worker upid - start worker failed" | Proxmox VE did not start a task, as happens when another task ends at that moment. A download runs again by itself, up to three runs. For a VM, remove the VM it left locked with `qm destroy <id>`, then apply again. |
+| `failed calling webhook` with `no route to host` or `connection refused` | The webhook's pod was not serving yet, as after a node restart. The apply runs again by itself, up to three runs. If the last one fails the same way, `kubectl get pods -A` shows which pod does not get ready. |
+| "this appliance's state is from apply N, and the management cluster is at apply M" | A newer state changed the cluster since this one was saved. A snapshot rollback, an older backup or a second appliance does that. Restore the newest backup instead, or use the appliance that applied last. To go ahead with this state, [take the cluster over](install-settings.md#a-state-older-than-the-management-cluster). The next apply undoes the newer changes. |
 | "another appliance started applying the management cluster at the same time" | Two appliances act on one cluster. Stop one of them, then apply again from the other. |
 | "job wait-for-providers failed" after ten minutes | A provider was not installed or did not roll out. `kubectl -n capi-operator-system logs job/wait-for-providers` names each one with the Cluster API Operator's reason. A lowered version is a case of its own ([below](#a-provider-version-was-lowered)). |
 | "job provider-manifests failed" | A provider's files could not be downloaded within ten minutes, or one did not match its digest. `kubectl -n capi-operator-system logs job/provider-manifests` names the file. A mismatch means the release's file is not the one the tested set names. Nothing of it was installed. |
@@ -259,6 +265,23 @@ A version lowered through `version_overrides` is refused ("Downgrade is not supp
 1. Set its `spec.version` back with `kubectl patch`.
 2. Delete its cache Secret in its namespace (`<type>-<name>-<version>-cache`, such as `bootstrap-k3s-v0.4.0-cache`). The operator then installs it again and renews its conditions.
 3. Apply again.
+
+### Backups onto the backup volume fail
+
+The management cluster's Health shows the failure, and **Administration, Backups** gives its error. The appliance tries again after 15 minutes.
+
+| Problem | Cause and fix |
+| --- | --- |
+| "the backup volume's token: …" or "the backup volume: …" | The store `kubehenge-system/kubehenge-backup-store` is not running. `kubectl -n kubehenge-system get pods,pvc` shows whether the claim `kubehenge-backups` is bound and the pod ready. A claim that stays pending means the VM `kubehenge-backups` or its disk is gone. Apply again to make a new one. |
+| "exporting Kubehenge's objects: …" | The snapshot was stored, but the export was not. The reason after the colon names the object the interface could not read. |
+| "the appliance's copy of snapshot … would take …, more than its cap of …" | The snapshot, its export and its key take more than 1 GiB. The snapshot went to the volume alone, and the copy before it stays. |
+| "the management cluster is being recovered" or "the management cluster is being removed" | A snapshot is refused while a restore, a recreation, a recovery or a removal runs. Take it once that has finished. |
+| A recovery says "the appliance's copy holds the backups of a management cluster removed since" | The copy is of the cluster removed before this one was set up, and is never restored onto it. Recover from the backup volume, or recreate from a backup target's snapshot. |
+| A recovery says "it did not answer within 10m0s" | The backup volume's store did not start. Check the claim and the pod as above. The recovery used the appliance's copy, when it held one. |
+| "reading where the management VMs run: …" | The appliance or the controller could not ask Proxmox VE where the management VMs run, so it did not attach the backup volume. The reason after the colon says why. The token is in `kubehenge-system/kubehenge-backup-store-zones`. Apply again to make a new one. |
+| "no node named under \"nodes\" in Secret kubehenge-system/kubehenge-backup-store-zones is in the management cluster" | The Secret names no management node that joined, so the backup volume has no node to attach to. Apply again, which sets the names from the management nodes. |
+| "no management VM runs on Proxmox VE node …, which holds the backup volume" | The volume's disk sits on node-local storage of that node and attaches only to a VM there. Migrate a management VM to that node, or apply again to make the lost ones. |
+| The store's pod stays pending on node-local storage | No management VM runs on the node that holds the disk. Migrate one back to that node. |
 
 ### Template missing
 
@@ -323,7 +346,9 @@ A build from the interface or the weekly build is tried three times, 2 and then 
 | "the datacenter option user-tag-access refuses …" or "registered-tags lists …" | The datacenter options keep the builder's token from setting the template's tags. Under Datacenter, Options, add them to **User Tag Access** (list) or remove them from **Registered Tags**. Tags match with their case. With **User Tag Access** set to existing, a tag already on a guest the token can audit also passes. Only `Sys.Modify` on `/` bypasses the options. |
 | "task … failed" for the downloaded image | Proxmox VE downloads the image itself and checks it against its checksum. The message names its reason. The task's log is under the node's **Task History**. The storage under **Downloaded image** (`--import-storage`) must allow the `import` content type ([templates.md](templates.md#requirements)). |
 | "not signed by …'s key", "… serves a key other than …" or "… is not listed in its checksum file" | The publisher's checksum file, or a package repository's key, is not the one Kubehenge knows by its fingerprint. Nothing was imported. Check that nothing between the appliance and the publisher changes downloads, and try again later. A publisher that moved to a new key needs a Kubehenge release that carries it. |
-| A command in the build VM failed, such as the package manager, with the end of the build's log below the error | The VM has to reach its node OS's package mirrors and the other addresses the build needs ([install.md](install.md#internet-access)). It gets its address by DHCP on its bridge, or the static address given for it. A package whose signature does not check out stops the build the same way. |
+| "… lists … with the SHA-256 …, not the pinned …" | The publisher's signed checksum for the node OS's cloud image is not the one this Kubehenge release pins. Nothing was imported. Update Kubehenge. If the newest release fails the same way, report it. |
+| "the publisher keeps … in none of its folders" | Neither the publisher's mirror nor its vault holds the cloud image this Kubehenge release pins ([templates.md](templates.md#image-checks)). Check that the appliance reaches both, then try again. If they answer and the image is gone, update Kubehenge. |
+| A command in the build VM failed, such as the package manager, with the end of the build's log below the error | The VM has to reach its node OS's package mirrors and the other addresses the build needs ([architecture.md](architecture.md#hosts-each-part-reaches)). It gets its address by DHCP on its bridge, or the static address given for it. A package whose signature does not check out stops the build the same way. |
 
 ### Node addresses run out
 
@@ -367,9 +392,9 @@ Persistent volumes that stay pending point the same way. The CSI plugin's contro
 
 #### HA group errors in the cloud controller manager's log
 
-The cloud controller manager logs `failed to get HA group for the node` with `403 Permission check failed (/, Sys.Audit)` for every node now and then. It means only that the nodes go without the HA group labels. Reading Proxmox VE's HA groups needs `Sys.Audit` on `/`. A cluster's token holds it only with **Add HA group labels** on (the `ccm` variable's `haGroups`, on by default, [clusters.md](clusters.md#machines)).
+The cloud controller manager logs `failed to get HA group for the node` with `403 Permission check failed (/, Sys.Audit)` for every node now and then. It means only that the nodes go without the HA rule labels. Reading Proxmox VE's HA groups needs `Sys.Audit` on `/`. A cluster's token holds it only with **Add HA rule labels** on (the `ccm` variable's `haGroups`, on by default, [clusters.md](clusters.md#machines)).
 
-Either the cluster switched it off, or an administrator switched off **HA group labels** for every cluster in the setup ([install-settings.md](install-settings.md#ha-group-labels)). With it on again, the messages stop within a few minutes. If they do not, `kubectl describe cluster` shows a `SysAuditRefused` event saying why.
+Either the cluster switched it off, or an administrator switched off **HA rule labels** for every cluster in the setup ([install-settings.md](install-settings.md#ha-rule-labels)). With it on again, the messages stop within a few minutes. If they do not, `kubectl describe cluster` shows a `SysAuditRefused` event saying why.
 
 ### A node's clock is off
 
@@ -419,7 +444,7 @@ The webhook refuses `nodeCustomisation` with one message per problem, and kubect
 | `Talos writes machine files under /var and /etc/cri/conf.d only` | Move the file there. |
 | `Secret <name> is not in namespace <ns>` | Create the Secret beside the Cluster. A Secret in another namespace is not read. |
 | `Secret <name> has no key <key>` and `ConfigMap <name> has no key policy.yaml` | Add the key, or name the one that exists. |
-| `the audit policy has no rules` or `has to be a Policy of audit.k8s.io/v1` | The API server would not start with it. |
+| `the audit policy has no rules` or `has to be a Policy of audit.k8s.io/v1` | The API server would not start with it. Give a Policy of `audit.k8s.io/v1` with at least one rule. |
 
 The class schema refuses a bad `permissions`, a path with `..` or a double slash, or both `content` and `secret`.
 
@@ -615,7 +640,7 @@ The proxy's errors:
 
 | Error | Cause and fix |
 | --- | --- |
-| `is not one of the cluster's own` or `is not named after the cluster's volume owner VM` | Something in the cluster asked to copy a volume that is not the cluster's. The proxy copies only the volumes the CSI plugin made for the cluster. |
+| `is not one of the cluster's own` or `is not named after the cluster's volume owner VM` | Something in the cluster asked to copy a volume that is not the cluster's. The proxy copies only the volumes the CSI plugin made for the cluster. Snapshot or clone a volume of this cluster. |
 | `cannot land on node` | The plugin asked for a copy on another node than its volume's. A copy stays on its volume's node. Schedule the pod that uses it there. |
 | `no holder VM on node … has room for another copy yet` | This is temporary. Kubehenge's controller adds a holder VM on that node within a reconcile. The sidecar asks again. |
 | `Permission check failed` naming `VM.Clone` | The cluster's role lacks it. Apply the management cluster's module again. |
@@ -630,7 +655,7 @@ The proxy's errors:
     - `root`'s key is not among the keys it lets in
     - the node has no SSH host key under its name in that file
   - `pvecm updatecerts` puts the keys back where Proxmox VE expects them. The task's log shows the full error.
-- **A large volume's snapshot or restore fails, or holds less than it should.** The plugin waits up to 4 minutes for Proxmox VE's copy.
+- **A large volume's snapshot or restore fails, or holds less than it should.** The plugin waits up to 5 minutes for Proxmox VE's copy.
   - A longer copy can leave a snapshot reported ready before all its data is written ([clusters.md](clusters.md#volume-snapshots)). Delete it and take snapshots of smaller volumes.
 
 ### The CSI plugin's newest release
@@ -648,6 +673,8 @@ Kubehenge's controller holds a cluster's backups back, neither installing nor re
 | `BackupsInvalid` | The backup settings are ones Velero would not take, such as a schedule it cannot read. The event says which. Correct them under **Options**, or in the `backups` variable. |
 | `BackupCredentialMissing`, `"no credential of the cluster's own for the backup target, for which the one for every cluster never stands in: type one in for it in the interface, or name a Secret of the cluster's velero namespace in existingSecret"` | Store the cluster's own key, or name such a Secret. Backups wait until then. |
 | "Secret … holds no accessKeyID and secretAccessKey" | The credential named lacks one or both of its keys. Store it again. |
+
+A create that carries a backup key can answer "another create of cluster … is under way". An earlier create of that name was cut short. Create again once 30 seconds have passed.
 
 ### Log outputs
 
@@ -718,7 +745,7 @@ Shut that VM down in Proxmox VE before the node goes down. Start it again once t
 | `TalosUpgradeAbandoned`, "node … to Talos …: its machine is being deleted" | The cluster scaled down or replaced the node while it was upgraded. Nothing to do. Its successor is upgraded as any other node. |
 | `TalosDrainBlocked`, "node … is held while it drains: Pod … cannot evict pod …" | A PodDisruptionBudget keeps a pod on the node and the upgrade waits. The text names the pod and the budget. **Upgrade held by** on the cluster shows it too. `kubectl get pdb -A` shows why the budget allows no disruption. A workload short of ready replicas explains most. Once it is healthy the pod leaves and the upgrade goes on. A budget that can never be met, such as `minAvailable` equal to a single replica, holds until the drain timeout. Lower the budget, or shorten the drain timeout of the control plane or the pool under **Machines**, **Timeouts…**. |
 | `TalosStatefulSetsWaiting`, "node … waits to drain: StatefulSet … replicas ready" | A StatefulSet with a ready pod on the node is short of replicas. Bring it back, or wait for the drain timeout (`TalosStatefulSetsNotReady`). |
-| `TalosDrain`, "node … reboots without all its pods moved: the drain timeout of … ran out" | The pods named were still on the node at the timeout. It rebooted anyway. |
+| `TalosDrain`, "node … reboots without all its pods moved: the drain timeout of … ran out" | The pods named were still on the node at the timeout. It rebooted anyway. `kubectl get pdb -A` shows what held them. Raise the drain timeout if they only needed longer ([clusters.md](clusters.md#node-timeouts)). |
 
 ### Upgrades held back
 
@@ -757,6 +784,10 @@ An automatic upgrade that is due waits while the Cluster has the condition `Auto
 | `RemovedAPIs` | A client requested an API the new version removes within the last 7 days. The message names it and the date. Move the client to the current API and the note ends 7 days after the last request. Or accept it, below. |
 | `FailClosedWebhooks` | A webhook that rejects requests when it is down has fewer than two ready endpoints, or all on one node. Run two replicas on different nodes, or set `failurePolicy: Ignore` on the webhook. Or accept it, below. |
 | `ChecksUnavailable` | The cluster could not be read. The message says why. Often the cluster's read access is not set up yet or has expired, and the next controller pass fixes it. |
+| `RancherKubernetes` | The Rancher release Kubehenge installs does not run on the version. Upgrade by hand to a version Rancher runs, or wait for a Kubehenge release with a newer Rancher. |
+| `RancherElsewhere` | Another cluster runs Rancher already. Only one cluster may. |
+| `TalosRelease` | The cluster's Talos release does not run the version. Upgrade Talos by hand first ([clusters.md](clusters.md#talos-upgrades)). |
+| `TalosUpgrade` | A node is moving to another Talos release. The upgrade goes on once it is done. |
 
 `kubectl -n <namespace> get cluster <name> -o jsonpath='{.status.conditions[?(@.type=="AutoUpgradeSkipped")].message}'` prints it. An upgrade by hand goes past the warning.
 
@@ -807,7 +838,7 @@ A Helm error such as `admission webhook … denied the request` in an add-on's n
 ### Add-ons behind a proxy
 
 - **A dial timeout** keeps Certificates `Pending`, Velero's `BackupStorageLocation` `Unavailable` or Argo CD at `ComparisonError`.
-  - Check **Proxy** under the cluster's Options. With the default, the management side needs a proxy ([install.md](install.md#behind-a-proxy)).
+  - Check **Proxy** under the cluster's Options. With the default, the management side needs a proxy ([clusters.md](clusters.md#behind-a-proxy)).
   - The controller's log says "add-ons go direct" when the management side's proxy holds a user name or password in its address. Set an own proxy address on the cluster, without credentials.
   - `kubectl -n <namespace> get pod <pod> -o yaml` shows `HTTPS_PROXY` and `NO_PROXY` when the setting reached the pod.
 - **A host inside the network times out or answers 503 from the proxy.** The proxy was asked for something it cannot reach. Add the host to the cluster's proxy **Exceptions** (`egressProxy.noProxy`).
@@ -817,7 +848,7 @@ A Helm error such as `admission webhook … denied the request` in an add-on's n
 ### Helm charts that cannot be fetched
 
 - **The cloud controller manager and CSI plugin stay not ready and the nodes keep the `uninitialized` taint.** The Add-on Provider for Helm's log has a dial or `x509` error, as the chart repositories are out of reach. Registry mirrors do not cover charts.
-  - Set [chart mirrors](install.md#mirroring-the-charts) for the hosts in the log, and copy the charts `kubehenge charts` lists.
+  - Set [chart mirrors](clusters.md#mirroring-the-charts) for the hosts in the log, and copy the charts `kubehenge charts` lists.
   - For `x509: certificate signed by unknown authority` from a mirror, add the mirror's authority under **Chart mirror certificate**.
   - `chart … has digest sha256:…, not …` means the mirror holds a re-packed chart. Copy it again with the same digest.
 
@@ -893,6 +924,14 @@ New machines of an upgrade or replacement wait at "Cloning", and the cluster has
 
 Kubehenge judges a node by the memory Proxmox VE reports free, not by what the guests on it are configured with. Free memory, or stop guests. Allow more nodes under **Placement**, or give the machines less memory. The placement stays as it was meanwhile. The condition clears once a node has room.
 
+### Not enough space on thick storage
+
+New machines wait at "Cloning", and the cluster has a `StorageLacksSpace` condition. Its message names the storage, its nodes, the free space and the space the machines still to be made need. Thick LVM, ZFS without sparse volumes and file storages with `falloc` or `full` preallocation reserve each disk's whole size. Disks of machines whose VM is already cloned count as used.
+
+Free space on the storage, lower the disk size or the node count, or move the cluster to thin storage. The condition clears once the disks fit.
+
+An autoscaled pool counts at its minimum and at the workers the autoscaler has asked for. Where only its maximum does not fit, the cluster gets no condition. Its events show `AutoscalerNoRoom` with the space the maximum needs.
+
 ### Pods Pending with "volume node affinity conflict"
 
 The pod's volume is on storage local to one node. No worker runs there. It happens after an upgrade, a node image refresh or a repair replaced the worker that stood on that node.
@@ -965,7 +1004,7 @@ A node in maintenance, or without the cluster's storage, gets no new VMs. When n
 
 ### Autoscaling
 
-- **`AutoscalerNoRoom`**, "Proxmox VE has no node with the memory for a new worker of pool …: …", means the new worker waits for room. After 30 minutes the autoscaler gives the machine up and tries again.
+- **`AutoscalerNoRoom`**, "Proxmox VE has no node with the memory for a new worker of pool …: …", means the new worker waits for room. After 30 minutes the autoscaler gives the machine up and tries again. "Storage … reserves each disk's whole size …" means the storage cannot hold the pools at their maximum.
   - Free memory on the Proxmox VE nodes the cluster may use, or let it use more nodes ([clusters.md](clusters.md#autoscaling)).
 - **`AutoscalerNotPlaced`**, `"the autoscaler cannot run inside the cluster: Kubehenge was installed without the management cluster's address (managementEndpoint)"`, means the autoscaler is set to run on the cluster's own control planes, which needs the address. Until it is set, no autoscaler runs.
   - Apply the management cluster again, whose module sets it, or set `managementEndpoint` in the chart's values. Or have the autoscaler run in the management cluster.
@@ -1017,11 +1056,11 @@ kubectl -n <namespace> get events --field-selector reason=LeftBehind
 
 | Problem | Cause and fix |
 | --- | --- |
-| Newer releases shows "Couldn't check" | The reason follows it. The appliance could not fetch the release index from kubehenge.dev, its signature did not check out, or it has expired. |
+| Newer releases shows "Couldn't check" | The reason follows it. The appliance could not fetch the release index from kubehenge.dev, its signature did not check out, or it has expired. Check that the container reaches kubehenge.dev. |
 | "the release index has expired" | The index it reached was not signed again within two weeks. With a mirror (`KUBEHENGE_RELEASE_INDEX`), copy the index and its signatures to it again. A clock far ahead makes a fresh index look expired too. `timedatectl` in the container shows it. |
 | The last upgrade failed | The reason is on the Administration page, and in `journalctl -u kubehenge-update` inside the appliance. The release installed before runs again in every case but one, below. |
 | `"release … did not start: …; rolled back to …"` | The new release was installed, but its interface did not answer within 2 minutes, or stopped and was restarted soon after. The updater, or `install.sh --upgrade`, put the old release back. `journalctl -u kubehenge` shows why the new one did not start. Report it with that log ([below](#reporting-a-problem)). |
-| `"…; rolling back to … failed too"`, or the interface does not come back after an upgrade | Neither release serves. See `journalctl -u kubehenge`, and upgrade or reinstall the release from the shell with `install.sh --upgrade` ([upgrading.md](upgrading.md#from-the-proxmox-ve-shell)). |
+| `"…. Rolling back to … failed too"`, or the interface does not come back after an upgrade | Neither release serves. See `journalctl -u kubehenge`, and upgrade or reinstall the release from the shell with `install.sh --upgrade` ([upgrading.md](upgrading.md#from-the-proxmox-ve-shell)). |
 | "Appliance disk N % full" or "the upgrade needs M MiB" | The container's disk is too small. Grow it on the Proxmox VE node with `pct resize <id> rootfs +4G`, while it runs. |
 | "Distribution: not installed on the management cluster" or "Cluster class … has no setting …" when creating a cluster | The upgraded appliance offers a distribution or setting whose ClusterClass the management cluster does not have yet. Apply the management cluster again (**Upgrade…** at the top of the Administration page) to install the new release's ClusterClasses ([upgrading.md](upgrading.md#in-the-appliance)). |
 
@@ -1029,7 +1068,7 @@ kubectl -n <namespace> get events --field-selector reason=LeftBehind
 
 **Administration, Backups** shows the last snapshot's error, as does `kubehenge appliance etcd-backups` in the appliance's shell. The appliance tries again 15 minutes later. `journalctl -u kubehenge` inside the appliance logs each one.
 
-- **"reaching etcd: … etcd snapshot: …"** or **"reaching the Talos API of …"** means no control-plane node's Talos API (port 50000), or etcd behind it, answered.
+- **"reaching etcd: … etcd snapshot: …"** or **"reaching the Talos API of …"** means no control-plane node's Talos API (port 50000), or etcd behind it, answered. Check that the VMs run and that port 50000 is open from the appliance.
 - **"the snapshots' talosconfig: …"** or a refusal by the Talos API means the talosconfig kept for snapshots expired or no longer matches the management cluster's CA. Apply the management cluster again, which makes a new one, or **Change…** the backups.
 - **"target …: …"** or **"deleting older snapshots: …"** means the target refused the access key, or the key may not delete there. In the second case the snapshot was taken and only the removal of the oldest failed.
 - **"the passphrase does not open the target's key for the management cluster's snapshots"** means the target holds a key stored under another state's passphrase. See [details](install-settings.md#management-cluster-etcd-backups).
@@ -1094,10 +1133,10 @@ The appliance, the management cluster and every cluster check the Proxmox VE API
 ### The interface is unreachable
 
 - Check the container runs (`pct status <ctid>`) and the service is active (`pct exec <ctid> -- systemctl status kubehenge`).
-- The appliance's certificate and its sign-in redirects name the address (or `--name`) it was given. After a DHCP change, give it back that address or make a certificate for the new one ([install.md](install.md#the-appliances-certificate)).
+- The appliance's certificate and its sign-in redirects name the address (or `--name`) it was given. After a DHCP change, give it back that address or make a certificate for the new one ([upgrading.md](upgrading.md#the-appliances-certificate)).
 - **"The appliance stopped during the upgrade"** means a reboot or a migration cut the upgrade off. The old release is back.
   - Ask for the upgrade again, or run `install.sh --upgrade` again.
-- **The browser says the certificate expired.** Renew it with `install.sh --certificate --ctid <ctid>` ([install.md](install.md#the-appliances-certificate)). The interface warns administrators 30 days ahead.
+- **The browser says the certificate expired.** Renew it with `install.sh --certificate --ctid <ctid>` ([upgrading.md](upgrading.md#the-appliances-certificate)). The interface warns administrators 30 days ahead.
 - The interface keeps working while the management cluster is unwell. Pages that need it say the management cluster did not answer.
   - Use **Repair access**, or apply the management cluster again from the Administration page.
 

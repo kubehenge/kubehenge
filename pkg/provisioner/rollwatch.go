@@ -127,7 +127,7 @@ func (w *RollWatch) stalled(ctx context.Context, c *clusterv1.Cluster) (*metav1.
 		return &metav1.Condition{
 			Status: metav1.ConditionTrue, Reason: RollStalledUnreachable,
 			Message: head + fmt.Sprintf(rollStallRest+" runs on the etcd members of both until it is, and its API does not answer, so one of them does not run. "+
-				"Start what stopped if it can be; otherwise reset etcd to %s's own and replace %s, with Recover on the cluster's page or: %s",
+				"Start what stopped if it can be. Otherwise reset etcd to %s's own and replace %s, with Recover on the cluster's page or: %s",
 				r.kept.Name, r.successor.Name, command),
 		}, nil
 	}

@@ -401,7 +401,7 @@ func (s *Server) createTemplate(w http.ResponseWriter, r *http.Request, u user) 
 			return
 		}
 		if network.TagsTraffic() {
-			writeError(w, http.StatusUnprocessableEntity, vlanOnTaggedNetwork(b.Bridge))
+			writeError(w, http.StatusUnprocessableEntity, pve.VLANOnTaggedNetwork(b.Bridge))
 			return
 		}
 	}

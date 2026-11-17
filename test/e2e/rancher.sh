@@ -40,7 +40,7 @@ ns=e2e-rancher-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')
 cleanup() {
     status=$?
     if [ "${status}" -ne 0 ]; then
-        printf '\nleaving the clusters in %s for inspection; delete them with: kubectl delete namespace %s\n' "${ns}" "${ns}"
+        printf '\nleaving the clusters in %s for inspection; delete them with: kubectl -n %s annotate clusters --all kubehenge.dev/allow-deletion=true && kubectl delete namespace %s\n' "${ns}" "${ns}" "${ns}"
     fi
     rm -rf "${work}"
 }
@@ -219,6 +219,7 @@ kubelet=$(rancher get nodes -o jsonpath='{.items[0].status.nodeInfo.kubeletVersi
 [ "${kubelet}" = "${KUBEHENGE_E2E_RANCHER_VERSION}" ] || fail "Rancher's cluster was upgraded past the versions Rancher runs on"
 
 step "deleting the k3s cluster removes it from Rancher first"
+webhook_retried kubectl -n "${ns}" annotate cluster/downstream cluster/rancher kubehenge.dev/allow-deletion=true > /dev/null
 kubectl -n "${ns}" delete cluster/downstream --wait=false
 until_true 900 "removed from Rancher" gone_from_rancher
 kubectl -n "${ns}" wait --for=delete cluster/downstream --timeout=30m

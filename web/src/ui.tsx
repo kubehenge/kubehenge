@@ -2,8 +2,10 @@ import {
   Component,
   Fragment,
   cloneElement,
+  createContext,
   isValidElement,
   useCallback,
+  useContext,
   useEffect,
   useId,
   useLayoutEffect,
@@ -354,6 +356,9 @@ const negativePolarity = new Set([
   "NodeImageHeld",
   "NodesSkipped",
   "NodesLackMemory",
+  "StorageLacksSpace",
+  "VMIDRangeFull",
+  "FirewallInactive",
   "HARulesPending",
   "StorageUnavailable",
   "RemediationHeld",
@@ -424,8 +429,8 @@ export function localDates(text: string): string {
   );
 }
 
-export function age(iso: string, now = Date.now()): string {
-  const s = Math.max(0, Math.floor((now - new Date(iso).getTime()) / msPerSecond));
+export function age(iso: string): string {
+  const s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / msPerSecond));
   if (s < secondsPerMinute) {
     return `${s}s`;
   }
@@ -558,6 +563,45 @@ export function saveFile(blob: Blob, name: string): void {
 
 /** browserZone is the browser's IANA time zone, UTC when it names none. */
 export const browserZone = (): string => new Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+
+/** siteZoneOf is the time zone the site set for schedules, which every class carries. Empty when it set none. */
+export const siteZoneOf = (classes: { annotations?: Record<string, string> | undefined }[]): string =>
+  classes.map((c) => c.annotations?.["kubehenge.dev/time-zone"] ?? "").find((zone) => zone !== "") ?? "";
+
+/** SiteZone is where a cluster's schedules start and run when they name no zone. */
+export interface SiteZone {
+  /** start is the zone a new schedule starts in: the site's, else the browser's. */
+  start: string;
+  /** inEffect is the zone a schedule naming none runs in: the site's, else UTC. */
+  inEffect: string;
+}
+
+/**
+ * useSiteZone reads the site time zone from the server. It is undefined until the server has
+ * answered, so that a form never starts in a zone it has to leave.
+ */
+export function useSiteZone(): SiteZone | undefined {
+  const [zone, setZone] = useState<SiteZone>();
+  useEffect(() => {
+    let current = true;
+    async function load(): Promise<void> {
+      let zoneRead = "";
+      try {
+        zoneRead = siteZoneOf(await api.classes());
+      } catch {
+        // The browser's zone serves where the classes cannot be read.
+      }
+      if (current) {
+        setZone({ start: zoneRead || browserZone(), inEffect: zoneRead || "UTC" });
+      }
+    }
+    void load();
+    return () => {
+      current = false;
+    };
+  }, []);
+  return zone;
+}
 
 /** timeZones lists the IANA time zones, with UTC and the current one, which the browser may not list. */
 export function timeZones(current: string): string[] {
@@ -743,6 +787,12 @@ export function Views({ label, open, children }: { label: string; open: string; 
 // Field labels one control. The control is the single child and gets the generated id, and with an
 // error the attributes that tie it to the message shown under it. A hint is a few words that stay
 // in view. info is the rare longer explanation, shown on request.
+/**
+ * CopiedFrom names the cluster a form started from and the labels of the fields whose values it
+ * copied, so that each such field says so. A label also matches the same label with a family after it.
+ */
+export const CopiedFrom = createContext<{ from: string; labels: readonly string[] } | undefined>(undefined);
+
 export function Field({
   label,
   hint,
@@ -758,6 +808,8 @@ export function Field({
 }): JSX.Element {
   const id = useId();
   const [open, setOpen] = useState(false);
+  const copied = useContext(CopiedFrom);
+  const marked = copied?.labels.some((l) => label === l || label.startsWith(`${l} `)) === true;
   const message = error ?? "";
   const hinted = shows(hint);
   const informed = shows(info);
@@ -780,6 +832,7 @@ export function Field({
       <div className="field-label">
         <label htmlFor={id}>{label}</label>
         {informed && <InfoToggle about={label} open={open} target={`${id}-info`} onToggle={() => setOpen(!open)} />}
+        {marked && <span className="hint">Copied from {copied?.from}</span>}
       </div>
       <div className="field-control">
         {withAria(children(id, aria), aria)}
@@ -826,6 +879,8 @@ export function Choice({
       <option value="" disabled={optional === undefined}>
         {optional ?? "Choose…"}
       </option>
+      {/* A value kept from before that is no longer offered shows as it is, for its own error. */}
+      {value !== "" && !options.includes(value) && <option value={value}>{labels?.[value] ?? value}</option>}
       {options.map((o) => (
         <option key={o} value={o}>
           {labels?.[o] ?? o}
@@ -907,6 +962,9 @@ export function Dialog({
     </dialog>
   );
 }
+
+/** stageLabel is the confirm button of every dialog that only adds its change to the page's plan. */
+export const stageLabel = "Add to plan";
 
 // useChange stages one change on a page that stages them, or else makes it, and closes the dialog
 // once the server accepts it.

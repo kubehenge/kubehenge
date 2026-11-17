@@ -125,7 +125,7 @@ func validateLogOutputs(outputs []LogOutput) error {
 	for i := range outputs {
 		o := &outputs[i]
 		if len(o.Name) > maxLogOutputName || len(validation.IsDNS1123Label(o.Name)) > 0 {
-			return fmt.Errorf("log output name %q must be a lower-case label of at most %d characters", o.Name, maxLogOutputName)
+			return fmt.Errorf("log output name %q must be a lowercase label of at most %d characters", o.Name, maxLogOutputName)
 		}
 		if seen[o.Name] {
 			return fmt.Errorf("two log outputs are named %s", o.Name)

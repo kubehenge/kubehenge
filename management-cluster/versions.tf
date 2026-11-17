@@ -181,10 +181,11 @@ locals {
   # delete does, is requeued every 10 seconds until the Cluster is deleted. Upstream returns without
   # a requeue, and the Cluster watch never passes a Cluster that gains its deletion timestamp, so
   # the deletion waited for the 10-hour resync. A machine annotated with Proxmox VE security groups
-  # gets its VM firewall before the first start: an IPSet of the cluster's own addresses and the
-  # ProxmoxCluster's further sources, a rule accepting it, the groups, the firewall flag on every
-  # interface and the VM's firewall on. A change of the ProxmoxCluster rewrites the IPSet of every
-  # running VM. Upstream has no setting for the interface's firewall flag. The build runs on the
+  # or serving ports gets its VM firewall before the first start, with input policy DROP: an IPSet
+  # of the cluster's own addresses and the ProxmoxCluster's further sources, an IPSet of its
+  # load-balancer addresses, and rules in that order: its own sources, the groups, its load-balancer
+  # addresses, a rule per port. Then the firewall flag on every interface and the VM's firewall on. A change of the ProxmoxCluster rewrites both IPSets of
+  # every running VM. Upstream has no setting for the interface's firewall flag. The build runs on the
   # release's own manifests.
   # scripts/provider-image.sh builds it reproducibly, and a release publishes it only when it comes out with this digest. It applies
   # only while capmox is at `release`.
@@ -196,7 +197,7 @@ locals {
     # capmox's own image is built with Go 1.26 on distroless static.
     go         = "go1.26.10"
     base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
-    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:43fb02325db12d0b8bc8689027eadae89b13f1859ffb26ea7405ec2213715273"
+    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:d3742946ec101d4c541ab43157660f5e305d83bb1880348eab0ac1e798071042"
   }
 
   # The Add-on Provider for Helm creates a cluster's HelmReleaseProxy under a generated name and
@@ -215,5 +216,23 @@ locals {
     go         = "go1.25.14"
     base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
     image      = "ghcr.io/kubehenge/cluster-api-addon-provider-helm@sha256:6c78cee77e4be012c3960954fb823688724992858b9d5d876ac3bb374267baef"
+  }
+
+  # Proxmox VE refuses to remove a drive from a protected VM, and every management node VM is
+  # protected, so the CSI plugin's controller could detach no volume from one.
+  # scripts/proxmox-csi-patches lifts the protection for each detach and sets it again. The
+  # management cluster's controller is built as capmox's is; it applies only while the workload
+  # clusters' add-on pins the controller at `release`.
+  proxmox_csi_build = {
+    upstream = "sergelogvinov/proxmox-csi-plugin"
+    package  = "./cmd/controller"
+    release  = "v0.20.0"
+    commit   = "a7aacee7a2144a43be08503068fe0b9caf3d0b4e"
+    # The plugin's own image is built with Go 1.26 on distroless static.
+    go         = "go1.26.10"
+    base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
+    image      = "ghcr.io/kubehenge/proxmox-csi-controller@sha256:174ef40d3c90ef425114b76719c5a2cc6c5201bf65162d57828293803485272a"
+    # The patched package's tests, which the build runs first. They build on Linux only.
+    tests = "./pkg/csi/"
   }
 }

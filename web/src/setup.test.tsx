@@ -1,4 +1,13 @@
-import { act, render, screen, waitFor, within, type BoundFunctions, type queries } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+  type BoundFunctions,
+  type queries,
+} from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -12,6 +21,7 @@ import {
   settings,
   setupFieldProblems,
   setupProblems,
+  siteCARollText,
   type SetupForm,
 } from "./Setup";
 
@@ -39,6 +49,9 @@ const form: SetupForm = {
   chartMirrorCA: "",
   releaseMirror: "",
   releaseMirrorCA: "",
+  siteCA: "",
+  timeZone: "",
+  vmIDRange: "",
   proxyURL: "",
   proxyUser: "",
   proxyPassword: "",
@@ -140,6 +153,11 @@ const dualStack: Partial<SetupForm> = {
 };
 const ipv6Only: Partial<SetupForm> = { ...dualStack, families: "ipv6", dnsServers: "2001:db8::53" };
 
+// n node addresses from the given prefix, one after the other.
+const addressesOf = (n: number, prefix: string): string =>
+  Array.from({ length: n }, (_, i) => `${prefix}${11 + i}/24`).join(" ");
+const six = (n: number): string => Array.from({ length: n }, (_, i) => `2001:db8::${11 + i}/64`).join(" ");
+
 type NetworkKey = "nodes" | "nodeAddresses" | "nodeAddresses6" | "gateway" | "gateway6" | "apiAddress" | "dnsServers";
 const networkKeys: NetworkKey[] = [
   "nodes",
@@ -195,6 +213,19 @@ const certificateIn = (days: number): void => {
 };
 
 const problems = (over: Partial<SetupForm>) => setupFieldProblems({ ...form, ...over });
+
+// editStored opens Edit settings on an appliance whose stored settings are the ones given.
+async function editStored(stored: object): Promise<void> {
+  fakeServer({
+    ...administrator,
+    ...administration,
+    ...oneNode,
+    "GET /api/setup": { body: { appliance: true, ready: true, allowed: true, settings: stored } },
+  });
+  const user = userEvent.setup({ delay: null });
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "Edit settings" }));
+}
 
 describe("setup", () => {
   it("builds the settings", () => {
@@ -342,11 +373,21 @@ describe("setup", () => {
     expect(accepted).toStrictEqual([]);
     expect(problems({ chartMirrors: `${ok}\nbroken` }).chartMirrors).toMatch(/^broken is not/u);
     expect(problems({ chartMirrors: ok, chartMirrorCA: pem })).toStrictEqual({});
-    expect(problems({ chartMirrors: ok, chartMirrorCA: "junk" }).chartMirrorCA).toBe("Paste PEM certificates.");
+    expect(problems({ chartMirrors: ok, chartMirrorCA: "junk" }).chartMirrorCA).toBe("Holds no PEM certificate.");
     expect(problems({ chartMirrors: ok, chartMirrorCA: "-----BEGIN PRIVATE KEY-----\nx" }).chartMirrorCA).toBe(
-      "Paste certificates only, no private key.",
+      "Block 1 is not a complete PEM block.",
     );
     expect(problems({ chartMirrorCA: pem }).chartMirrorCA).toBe("Add a chart mirror first.");
+    // The appliance's rule: the layout of a cluster's bundles, up to 256 KiB.
+    const authority = (chartMirrorCA: string): string | undefined =>
+      problems({ chartMirrors: ok, chartMirrorCA }).chartMirrorCA;
+    expect(
+      authority(`##\n## Bundle of CA Root Certificates\n##\n\nISRG Root X1\n============\n${pem}`),
+    ).toBeUndefined();
+    expect(authority(`${pem}\n`.repeat(2000))).toBeUndefined();
+    expect(authority(`${pem}\n`.repeat(5000))).toBe("At most 256 KiB.");
+    expect(authority(`${pem.slice(1)}\n${pem}`)).toBe("Has a damaged BEGIN or END line on line 1.");
+    expect(authority("# -----BEGIN CERTIFICATE----- follows")).toBe("Block 1 is not a complete PEM block.");
   });
 
   it("sends the release mirror and its authority only when set, and reads them back", () => {
@@ -378,12 +419,64 @@ describe("setup", () => {
     expect(accepted).toStrictEqual([]);
     expect(problems({ releaseMirror: "https://m.example", releaseMirrorCA: pem })).toStrictEqual({});
     expect(problems({ releaseMirror: "https://m.example", releaseMirrorCA: "junk" }).releaseMirrorCA).toBe(
-      "Paste PEM certificates.",
+      "Holds no PEM certificate.",
     );
     expect(problems({ releaseMirror: "http://m.example", releaseMirrorCA: pem }).releaseMirrorCA).toBe(
       "A certificate needs an https:// mirror.",
     );
     expect(problems({ releaseMirrorCA: pem }).releaseMirrorCA).toBe("Add a release mirror first.");
+  });
+
+  it("sends the site CA and time zone only when set, and reads them back", () => {
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    expect(settings(form)).not.toHaveProperty("siteCA");
+    expect(settings(form)).not.toHaveProperty("timeZone");
+    const sent = settings({ ...form, siteCA: ` ${pem}\n\n`, timeZone: " Europe/Zurich " });
+    expect(sent.siteCA).toBe(`${pem}\n`);
+    expect(sent.timeZone).toBe("Europe/Zurich");
+    const again = formOf(sent);
+    expect(again.siteCA).toBe(`${pem}\n`);
+    expect(again.timeZone).toBe("Europe/Zurich");
+    expect(formOf(settings(form)).siteCA).toBe("");
+  });
+
+  it("checks the site CA and time zone", () => {
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    expect(problems({ siteCA: pem, timeZone: "Europe/Zurich" })).toStrictEqual({});
+    expect(problems({ timeZone: "UTC" })).toStrictEqual({});
+    expect(problems({ siteCA: "junk" }).siteCA).toBe("Holds no PEM certificate.");
+    // A key block made from the certificate's, so that no key text sits in the source.
+    const keyBlock = pem.replaceAll("CERTIFICATE", "PRIVATE KEY");
+    const keyHead = keyBlock.slice(0, keyBlock.indexOf("\n"));
+    expect(problems({ siteCA: keyHead }).siteCA).toBe("Block 1 is not a complete PEM block.");
+    expect(problems({ siteCA: keyBlock }).siteCA).toBe("Holds a private key. Give certificates only.");
+    // What the server accepts and refuses, curl's cacert.pem layout among it.
+    const curl = `##\n## Bundle of CA Root Certificates\n##\n\nISRG Root X1\n============\n${pem}\n# ---------- Example Root CA ----------\n${pem}`;
+    expect(problems({ siteCA: curl })).toStrictEqual({});
+    expect(problems({ releaseMirror: "https://m.example", releaseMirrorCA: curl })).toStrictEqual({});
+    expect(problems({ siteCA: `${pem}\nextra` }).siteCA).toBe("Has text after its last PEM block on line 4.");
+    expect(problems({ siteCA: pem.replace("-----BEGIN", "----BEGIN") }).siteCA).toBe(
+      "Has a damaged BEGIN or END line on line 1.",
+    );
+    // The server's time zone database judges a zone, so no name is refused here.
+    for (const zone of ["Mars/Olympus", "Europe/zurich", "Factory", "Europe/Kyiv", "Etc/GMT+1"]) {
+      expect(problems({ timeZone: zone })).toStrictEqual({});
+    }
+  });
+
+  it("says how many clusters a site CA replaces, and when, in one short sentence", () => {
+    expect(siteCARollText({ inherits: 3, now: 0, windows: 0, waiting: 0 })).toBe("");
+    expect(siteCARollText({ inherits: 3, now: 2, windows: 1, waiting: 0 })).toBe(
+      "Replaces nodes (2 now, 1 at window).",
+    );
+    expect(siteCARollText({ inherits: 6, now: 4, windows: 1, waiting: 1 })).toBe(
+      "Replaces nodes (4 now, 1 at window, 1 queued).",
+    );
+    expect(siteCARollText({ inherits: 1, now: 0, windows: 1, waiting: 0 })).toBe("Replaces nodes (1 at window).");
+    const longest = siteCARollText({ inherits: 99, now: 99, windows: 99, waiting: 99 });
+    expect(longest.split(/\s+/u).length).toBeLessThanOrEqual(10);
+    // WRITING.md allows five words after a colon, and the note has none.
+    expect(longest).not.toContain(":");
   });
 
   it("sends a proxy only when it has an address", () => {
@@ -450,10 +543,17 @@ describe("setup", () => {
     expect(problems({ proxyURL: "http://p.example", proxyExceptions: ".corp, 10.0.0.0/8, [::1]" })).not.toHaveProperty(
       "proxyExceptions",
     );
-    expect(problems({ proxyURL: "http://p.example", proxyCA: "junk" }).proxyCA).toBe("Paste PEM certificates.");
+    expect(problems({ proxyURL: "http://p.example", proxyCA: "junk" }).proxyCA).toBe("Holds no PEM certificate.");
     expect(problems({ proxyURL: "http://p.example", proxyCA: "-----BEGIN PRIVATE KEY-----\nx" }).proxyCA).toBe(
-      "Paste certificates only, no private key.",
+      "Block 1 is not a complete PEM block.",
     );
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n";
+    const authority = (proxyCA: string): string | undefined =>
+      problems({ proxyURL: "http://p.example", proxyCA }).proxyCA;
+    expect(authority(`subject=CN=proxy\n${pem}`)).toBeUndefined();
+    expect(authority(pem.repeat(2000))).toBeUndefined();
+    expect(authority(pem.repeat(5000))).toBe("At most 256 KiB.");
+    expect(authority(`${pem.slice(1)}${pem}`)).toBe("Has a damaged BEGIN or END line on line 1.");
   });
 
   it("asks for Proxmox VE HA only when it is switched on", () => {
@@ -484,7 +584,7 @@ describe("setup", () => {
     ]);
   });
 
-  it("gives clusters the HA group labels unless it is switched off", () => {
+  it("gives clusters the HA rule labels unless it is switched off", () => {
     const off = settings({ ...form, clusterSysAudit: false });
     expect(off).toHaveProperty("clusterSysAudit", false);
     expect(settings(form)).not.toHaveProperty("clusterSysAudit");
@@ -588,6 +688,167 @@ describe("setup", () => {
     expect(setupProblems({ ...form, nodes: ["pve1", "pve2"] })).toStrictEqual(["Choose no more nodes than addresses."]);
   });
 
+  it("asks for the existing passphrase, not a new one, when none is typed", () => {
+    expect(setupFieldProblems(form, false)).not.toHaveProperty("passphrase");
+    expect(setupFieldProblems({ ...form, passphrase: "", confirm: "" }, false).passphrase).toBe(
+      "Enter the state passphrase.",
+    );
+    expect(setupFieldProblems({ ...form, passphrase: "", confirm: "" }, true).passphrase).toBe(
+      "Use at least 16 characters.",
+    );
+  });
+
+  it("takes node addresses without a prefix length and sends the bridge network's", async () => {
+    const routes: Record<string, Route> = {
+      ...administrator,
+      ...oneNode,
+      "GET /api/setup": { body: { appliance: true, ready: false, allowed: true } },
+      "POST /api/setup": { status: 202, body: { user: "root@pam", started: "2026-01-01T00:00:00Z", state: "running" } },
+    };
+    const calls = fakeServer(routes);
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const disks = await screen.findByLabelText("VM disks");
+    await waitFor(() => expect(disks).toHaveValue("local-lvm"));
+    await next(user);
+    await waitFor(() => expect(screen.getByLabelText("DNS servers")).toHaveValue("192.0.2.53, 198.51.100.53"));
+    await user.type(screen.getByLabelText("Node addresses"), "192.0.2.11");
+    await user.type(screen.getByLabelText("API address"), "192.0.2.10");
+    await next(user);
+    expect(screen.getByRole("button", { name: "Clusters" })).toHaveAttribute("aria-current", "step");
+    await next(user);
+    await next(user);
+    await user.type(screen.getByLabelText("State passphrase"), "correct horse battery staple");
+    await user.type(screen.getByLabelText("Repeat passphrase"), "correct horse battery staple");
+    await user.click(screen.getByRole("button", { name: "Create management cluster" }));
+    await waitFor(() => expect(calls.find((c) => c.key === "POST /api/setup")).toBeDefined());
+    expect(calls.find((c) => c.key === "POST /api/setup")?.body).toMatchObject({
+      settings: { nodeAddresses: ["192.0.2.11/24"] },
+    });
+  });
+
+  it("gives a bare node address on a VLAN no prefix from the untagged bridge", async () => {
+    fakeServer({
+      ...administrator,
+      ...oneNode,
+      "GET /api/setup": { body: { appliance: true, ready: false, allowed: true } },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await waitFor(() => expect(screen.getByLabelText("VM disks")).toHaveValue("local-lvm"));
+    await next(user);
+    await waitFor(() => expect(screen.getByLabelText("Gateway")).toHaveValue("192.0.2.1"));
+    await user.type(screen.getByLabelText("VLAN tag"), "20");
+    await user.clear(screen.getByLabelText("Gateway"));
+    await user.type(screen.getByLabelText("Gateway"), "10.20.0.1");
+    await user.type(screen.getByLabelText("Node addresses"), "10.20.0.11");
+    await next(user);
+    expect(screen.getByLabelText("Node addresses")).toHaveAccessibleDescription(
+      /is not in the form 192\.0\.2\.11\/24/u,
+    );
+    expect(screen.getByRole("button", { name: "Network" })).toHaveAttribute("aria-current", "step");
+  });
+
+  it("shows a stored management cluster as it is saved, past a node that does not answer", async () => {
+    window.history.replaceState(null, "", "/administration");
+    fakeServer({
+      ...administrator,
+      ...administration,
+      ...oneNode,
+      "GET /api/proxmox/nodes": {
+        body: [
+          { node: "pve1", online: true },
+          { node: "pve3", online: false, fault: "HTTP 596: certificate verify failed" },
+        ],
+      },
+      "GET /api/setup": {
+        body: {
+          appliance: true,
+          ready: true,
+          allowed: true,
+          settings: {
+            nodes: ["pve1", "pve3"],
+            imageDatastore: "local-lvm",
+            vmDatastore: "local-lvm",
+            bridge: "vmbr0",
+            nodeAddresses: ["192.0.2.11/24", "192.0.2.12/24", "192.0.2.13/24"],
+            apiAddress: "192.0.2.10",
+            gateway: "192.0.2.1",
+            dnsServers: ["192.0.2.1"],
+            workloadDatastores: ["local-lvm"],
+            workloadBridges: ["vmbr0"],
+            bootstrapDatastore: "local",
+          },
+        },
+      },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Edit settings" }));
+    const wizard = within(screen.getByRole("region", { name: "Management cluster" }));
+    await waitFor(() => expect(wizard.getByLabelText("Bridge")).toHaveValue("vmbr0"));
+    // The saved Talos image stays, and Apply says it is no longer offered.
+    expect(wizard.getByLabelText("Talos image")).toHaveValue("local-lvm");
+    // The node that does not answer does not take "local" off the list.
+    expect(within(wizard.getByLabelText("Talos image")).getByRole("option", { name: "local" })).toBeInTheDocument();
+    await user.click(wizard.getByRole("button", { name: "Apply" }));
+    expect(wizard.getByText("local-lvm is not offered here. Choose another.")).toBeInTheDocument();
+  });
+
+  it("reaches Apply and every section from anywhere on the Administration page", async () => {
+    window.history.replaceState(null, "", "/administration");
+    await editStored({
+      nodes: ["pve1"],
+      imageDatastore: "local",
+      vmDatastore: "local-lvm",
+      bridge: "vmbr0",
+      nodeAddresses: ["192.0.2.11/24"],
+      apiAddress: "192.0.2.10",
+      gateway: "192.0.2.1",
+      dnsServers: ["192.0.2.1"],
+      workloadDatastores: ["local-lvm"],
+      workloadBridges: ["vmbr0"],
+      bootstrapDatastore: "local",
+    });
+    const sections = within(await screen.findByRole("navigation", { name: "Sections" }));
+    expect(sections.getAllByRole("link").map((l) => l.textContent)).toStrictEqual([
+      "Placement",
+      "Network",
+      "Clusters",
+      "Services",
+      "Passphrase",
+    ]);
+    expect(sections.getByRole("link", { name: "Services" })).toHaveAttribute(
+      "href",
+      expect.stringMatching(/-Services$/u),
+    );
+    expect(screen.getByRole("button", { name: "Apply" }).parentElement).toHaveClass("actions-sticky");
+    // What a proxied or offline site fills first is not folded away.
+    expect(screen.getByLabelText("Proxy address")).toBeVisible();
+    expect(screen.getByLabelText("Registry mirrors")).toBeVisible();
+    expect(screen.getByLabelText("Site CA")).toBeVisible();
+  });
+
+  it("says in the Services section that snapshots go to the backup volume", async () => {
+    window.history.replaceState(null, "", "/administration");
+    await editStored({
+      nodes: ["pve1"],
+      imageDatastore: "local",
+      vmDatastore: "local-lvm",
+      bridge: "vmbr0",
+      nodeAddresses: ["192.0.2.11/24"],
+      apiAddress: "192.0.2.10",
+      gateway: "192.0.2.1",
+      dnsServers: ["192.0.2.1"],
+      workloadDatastores: ["local-lvm"],
+      workloadBridges: ["vmbr0"],
+      bootstrapDatastore: "local",
+    });
+    await expect(
+      screen.findByText("etcd snapshots go to the backup volume. A target keeps a copy off its storage."),
+    ).resolves.toBeInTheDocument();
+  });
+
   it("tells users without the rights that an administrator has to set it up", async () => {
     fakeServer({
       "GET /api/session": { body: { user: "dev@pve", csrf: "c1" } },
@@ -634,11 +895,11 @@ describe("setup", () => {
     expect(screen.getByLabelText("Bridge")).toHaveValue("vmbr0");
     expect(screen.getByLabelText("Gateway")).toHaveValue("192.0.2.1");
     const addresses = screen.getByLabelText("Node addresses");
-    expect(addresses).toHaveAccessibleDescription("1 or 3 in 192.0.2.0/24");
+    expect(addresses).toHaveAccessibleDescription("1, 3 or 5 in 192.0.2.0/24");
     // Next on a step with something missing stays there, says what, and goes to it.
     await next(user);
     expect(screen.getByRole("button", { name: "Network" })).toHaveAttribute("aria-current", "step");
-    expect(addresses).toHaveAccessibleDescription("Enter 1 or 3 addresses. 1 or 3 in 192.0.2.0/24");
+    expect(addresses).toHaveAccessibleDescription("Enter 1, 3 or 5 addresses. 1, 3 or 5 in 192.0.2.0/24");
     expect(addresses).toHaveFocus();
     expect(screen.getByRole("button", { name: "Services" })).toBeDisabled();
     await user.type(addresses, "192.0.2.11/24");
@@ -649,9 +910,12 @@ describe("setup", () => {
     expect(forClusters("Storages").getByRole("checkbox", { name: "local-lvm" })).toBeChecked();
     expect(forClusters("Storages").getByRole("checkbox", { name: "local" })).not.toBeChecked();
     expect(forClusters("Bridges").getByRole("checkbox", { name: "vmbr0" })).toBeChecked();
+    expect(forClusters("HA rule labels").getByRole("checkbox", { name: "Add HA rule labels" })).toBeChecked();
     // A storage added keeps the one offered to start with.
     await user.click(forClusters("Storages").getByRole("checkbox", { name: "local" }));
     expect(forClusters("Storages").getByRole("checkbox", { name: "local-lvm" })).toBeChecked();
+    // The appliance-wide setting goes by the name each cluster's own switch has.
+    expect(forClusters("HA rule labels").getByRole("checkbox", { name: "Add HA rule labels" })).toBeChecked();
     await next(user);
 
     const signIn = screen.getByLabelText("Sign in as cluster-admin");
@@ -1060,6 +1324,53 @@ describe("setup", () => {
     ).toBeUndefined();
   });
 
+  it("takes 1, 3 or 5 node addresses and refuses other counts", () => {
+    for (const n of [1, 3, 5]) {
+      expect(
+        setupFieldProblems({ ...form, nodeAddresses: addressesOf(n, "192.0.2.") }, true).nodeAddresses,
+      ).toBeUndefined();
+    }
+    for (const n of [0, 2, 4, 6]) {
+      expect(setupFieldProblems({ ...form, nodeAddresses: addressesOf(n, "192.0.2.") }, true).nodeAddresses).toBe(
+        "Enter 1, 3 or 5 addresses.",
+      );
+    }
+  });
+
+  it("takes 5 IPv6 node addresses and holds them to IPv4's count", () => {
+    const five = {
+      ...form,
+      ...dualStack,
+      nodeAddresses: addressesOf(5, "192.0.2."),
+      nodeAddresses6: six(5),
+      nodes: ["pve1"],
+    };
+    expect(setupFieldProblems(five, true).nodeAddresses6).toBeUndefined();
+    expect(setupFieldProblems({ ...five, nodeAddresses6: six(3) }, true).nodeAddresses6).toBe(
+      "Enter as many IPv6 as IPv4 addresses.",
+    );
+    expect(setupFieldProblems({ ...five, nodeAddresses6: six(4) }, true).nodeAddresses6).toBe(
+      "Enter 1, 3 or 5 addresses.",
+    );
+  });
+
+  it("lets an existing management cluster grow to 3 or 5 after its nodes", () => {
+    for (const [was, now] of [
+      [1, 3],
+      [1, 5],
+      [3, 5],
+    ] as const) {
+      const kept = settings({ ...form, nodeAddresses: addressesOf(was, "192.0.2.") });
+      expect(
+        setupFieldProblems({ ...form, nodeAddresses: addressesOf(now, "192.0.2.") }, false, kept).nodeAddresses,
+      ).toBeUndefined();
+    }
+    const kept = settings({ ...form, nodeAddresses: addressesOf(5, "192.0.2.") });
+    expect(
+      setupFieldProblems({ ...form, nodeAddresses: addressesOf(3, "192.0.2.") }, false, kept).nodeAddresses,
+    ).toMatch(/^Keep 192.0.2.11\/24, /u);
+  });
+
   it("sends and reads back the network of each family choice", () => {
     expect(settings(form)).not.toHaveProperty("ipFamilies");
     expect(settings(form)).not.toHaveProperty("nodeAddressesIPv6");
@@ -1154,13 +1465,13 @@ describe("setup", () => {
     expect(screen.queryByLabelText("IPv6 node addresses")).toBeNull();
     expect(screen.queryByLabelText("IPv4 node addresses")).toBeNull();
     await user.selectOptions(families, "IPv6 and IPv4");
-    expect(screen.getByLabelText("IPv6 node addresses")).toHaveAccessibleDescription("1 or 3 in 2001:db8::/64");
+    expect(screen.getByLabelText("IPv6 node addresses")).toHaveAccessibleDescription("1, 3 or 5 in 2001:db8::/64");
     expect(screen.getByLabelText("IPv6 gateway")).toHaveValue("2001:db8::1");
     expect(screen.getByLabelText("IPv4 gateway")).toHaveValue("192.0.2.1");
     expect(screen.queryByLabelText("Gateway")).toBeNull();
     // One family takes the plain labels, IPv6 included.
     await user.selectOptions(families, "IPv6");
-    expect(screen.getByLabelText("Node addresses")).toHaveAccessibleDescription("1 or 3 in 2001:db8::/64");
+    expect(screen.getByLabelText("Node addresses")).toHaveAccessibleDescription("1, 3 or 5 in 2001:db8::/64");
     expect(screen.getByLabelText("Gateway")).toHaveValue("2001:db8::1");
     expect(screen.queryByLabelText("IPv4 gateway")).toBeNull();
     expect(screen.queryByLabelText("IPv6 gateway")).toBeNull();
@@ -1391,6 +1702,34 @@ describe("setup", () => {
     expect(screen.getByRole("button", { name: "Apply again…" })).toBeInTheDocument();
   });
 
+  it("warns that one host's loss can take every backup until a bucket target is set", async () => {
+    window.history.replaceState(null, "", "/administration");
+    const saved = {
+      nodes: ["pve1"],
+      imageDatastore: "local",
+      vmDatastore: "local-lvm",
+      bridge: "vmbr0",
+      nodeAddresses: ["192.0.2.11/24"],
+      apiAddress: "192.0.2.10",
+      gateway: "192.0.2.1",
+      dnsServers: ["192.0.2.1"],
+      workloadDatastores: ["local-lvm"],
+      workloadBridges: ["vmbr0"],
+      bootstrapDatastore: "local",
+    };
+    const lostWithHost = /Losing one Proxmox VE node can lose every backup/u;
+    await editStored(saved);
+    await expect(screen.findByText(lostWithHost)).resolves.toBeVisible();
+    cleanup();
+
+    await editStored({
+      ...saved,
+      backupTargets: [{ name: "store", bucket: "backups", endpoint: "https://s3.example.org" }],
+    });
+    await screen.findByRole("heading", { name: "Services" });
+    expect(screen.queryByText(lostWithHost)).not.toBeInTheDocument();
+  });
+
   it("shows a saved proxy password as set, and replaces or removes it without ever holding it", async () => {
     window.history.replaceState(null, "", "/administration");
     const saved = {
@@ -1424,7 +1763,7 @@ describe("setup", () => {
 
     await user.click(screen.getByRole("button", { name: "Edit settings" }));
     const wizard = within(screen.getByRole("region", { name: "Management cluster" }));
-    await user.click(wizard.getByText("Advanced"));
+    expect(wizard.getByLabelText("Proxy user")).toBeVisible();
     expect(wizard.getByLabelText("Proxy user")).toHaveValue("alice");
     expect(wizard.getByLabelText("Proxy password")).not.toHaveAttribute("type", "password");
     expect(wizard.getByRole("button", { name: "Replace proxy password" })).toBeInTheDocument();
@@ -1476,7 +1815,6 @@ describe("setup", () => {
 
     await user.click(screen.getByRole("button", { name: "Edit settings" }));
     const wizard = within(screen.getByRole("region", { name: "Management cluster" }));
-    await user.click(wizard.getByText("Advanced"));
     const mirrors = wizard.getByLabelText("Chart mirrors");
     expect(mirrors).toHaveValue("ghcr.io=oci://registry.example.org/ghcr");
     expect(wizard.getByLabelText("Chart mirror certificate")).toHaveValue(pem);

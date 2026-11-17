@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -57,8 +58,20 @@ func (v *ClusterValidator) validateOf(ctx context.Context, old, c *clusterv1.Clu
 	if !Owns(c, v.Hooks.ClassNamespace) {
 		return nil, nil
 	}
-	if err := validateAbandon(old, c); err != nil || !c.DeletionTimestamp.IsZero() {
+	if err := validateAbandon(old, c); err != nil {
 		return nil, err
+	}
+	if errs := validateDeleteSnapshots(c); len(errs) > 0 {
+		return nil, invalid(c, errs)
+	}
+	if !c.DeletionTimestamp.IsZero() {
+		return nil, validateDeleting(ctx, old, c, classOf)
+	}
+	// The spec checks read the clock, Proxmox VE and the class, so a cluster can fall short of them
+	// without a change. Annotations, labels and finalizers must still go through: deleting a cluster
+	// starts with an annotation.
+	if old != nil && equality.Semantic.DeepEqual(old.Spec, c.Spec) {
+		return nil, invalid(c, validateCiliumClusterID(old, c))
 	}
 	r, err := rancherOf(c)
 	if err != nil {
@@ -90,7 +103,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	errs = append(errs, v.validateFirewall(pveCtx, old, c)...)
 	errs = append(errs, v.validateNodeOS(pveCtx, reads, old, c)...)
 	errs = append(errs, v.validateNUMA(pveCtx, reads, old, c, class)...)
-	errs = append(errs, v.validatePlacement(pveCtx, reads, old, c, class)...)
+	errs = append(errs, v.validateSettings(pveCtx, reads, old, c, class)...)
 	if err := checkControlPlaneSize(old, c, class); err != nil {
 		errs = append(errs, field.Forbidden(topology, err.Error()))
 	}
@@ -103,6 +116,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	errs = append(errs, validateClusterMesh(old, c)...)
 	errs = append(errs, validateFamilies(old, c)...)
 	errs = append(errs, validateRanges(old, c, class)...)
+	errs = append(errs, v.validateVMIDRange(pveCtx, reads, old, c, class)...)
 	errs = append(errs, validateTimeServers(c)...)
 	if err := checkLogs(c); err != nil {
 		errs = append(errs, field.Forbidden(topology.Child("variables").Key(logsAddon), err.Error()))
@@ -116,7 +130,8 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	errs = append(errs, validateMonitoring(c)...)
 	errs = append(errs, validateGitOps(c)...)
 	errs = append(errs, validateEgress(c)...)
-	errs = append(errs, validateNodeSite(c, time.Now())...)
+	errs = append(errs, validateNodeSite(old, c, time.Now())...)
+	errs = append(errs, validateUpgradeWindow(old, c)...)
 	errs = append(errs, validateAddonSettings(old, c)...)
 	errs = append(errs, v.validateNodeCustomisation(ctx, old, c)...)
 	errs = append(errs, validateAutoscaling(c)...)
@@ -139,18 +154,38 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 		}
 	}
 	errs = append(errs, v.validateGrants(ctx, old, c, class)...)
+	return invalid(c, errs)
+}
+
+// invalid is Invalid, not the plain denial a validator's error becomes, so that the interface shows
+// the reason as it does the API server's own validation.
+func invalid(c *clusterv1.Cluster, errs field.ErrorList) error {
 	if len(errs) == 0 {
 		return nil
 	}
-	// Invalid, not the plain denial a validator's error becomes, so that the interface shows the
-	// reason as it does the API server's own validation.
 	return apierrors.NewInvalid(clusterv1.GroupVersion.WithKind("Cluster").GroupKind(), c.Name, errs) //nolint:wrapcheck // made here, not passed on
 }
 
-// validateRanges holds a new cluster's pod and service ranges to checkRanges. Unset, the network is
-// the class's schema's to refuse.
+// rangesFixed is the refusal of a change to a cluster's pod or service ranges.
+const rangesFixed = "set when the cluster is created, and cannot change"
+
+// validateRanges holds a new cluster's pod and service ranges to checkRanges, and refuses any change
+// to them later: the distributions take them as the nodes start, so new ranges would replace every
+// node and leave the running pods on the old ones. Unset, the network is the class's schema's to
+// refuse.
 func validateRanges(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) field.ErrorList {
-	if _, set, _ := optionalVariable[nodeNetwork](c, networkVariable); old != nil || !set {
+	if old != nil {
+		var errs field.ErrorList
+		network := field.NewPath("spec", "clusterNetwork")
+		if !slices.Equal(old.Spec.ClusterNetwork.Pods.CIDRBlocks, c.Spec.ClusterNetwork.Pods.CIDRBlocks) {
+			errs = append(errs, field.Forbidden(network.Child("pods", "cidrBlocks"), rangesFixed))
+		}
+		if !slices.Equal(old.Spec.ClusterNetwork.Services.CIDRBlocks, c.Spec.ClusterNetwork.Services.CIDRBlocks) {
+			errs = append(errs, field.Forbidden(network.Child("services", "cidrBlocks"), rangesFixed))
+		}
+		return errs
+	}
+	if _, set, _ := optionalVariable[nodeNetwork](c, networkVariable); !set {
 		return nil
 	}
 	if err := checkRanges(c, class); err != nil {
@@ -191,6 +226,15 @@ func (v *ClusterValidator) validateNodeOS(ctx context.Context, reads *pveReads, 
 		return field.ErrorList{field.Forbidden(field.NewPath("spec", "topology", "variables").Key(NodeOSVariable), err.Error())}
 	}
 	return nil
+}
+
+// validateSettings holds a cluster's placement, and the settings that say where its VMs and API
+// address are, to the rules the interface holds them to.
+func (v *ClusterValidator) validateSettings(ctx context.Context, reads *pveReads, old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) field.ErrorList {
+	errs := validateFixed(old, c)
+	errs = append(errs, v.validatePlacement(ctx, reads, old, c, class)...)
+	errs = append(errs, v.validateAllowedNodes(ctx, reads, old, c)...)
+	return append(errs, v.validateVLAN(ctx, reads, old, c)...)
 }
 
 // validatePlacement holds a cluster to a storage the management cluster gives rights on, and to
@@ -296,13 +340,20 @@ func validateClusterMesh(old, c *clusterv1.Cluster) field.ErrorList {
 	case slices.Contains(mesh.Peers, c.Name):
 		errs = append(errs, field.Invalid(variables.Child("peers"), c.Name, "a cluster cannot list itself"))
 	}
-	if old != nil {
-		if was, ok := old.Annotations[CiliumClusterIDAnnotation]; ok && c.Annotations[CiliumClusterIDAnnotation] != was {
-			errs = append(errs, field.Forbidden(field.NewPath("metadata", "annotations").Key(CiliumClusterIDAnnotation),
-				"the Cilium cluster id cannot change once set"))
-		}
+	return append(errs, validateCiliumClusterID(old, c)...)
+}
+
+// validateCiliumClusterID keeps a Cilium cluster id once given, since Cluster Mesh peers know the
+// cluster by it.
+func validateCiliumClusterID(old, c *clusterv1.Cluster) field.ErrorList {
+	if old == nil {
+		return nil
 	}
-	return errs
+	if was, ok := old.Annotations[CiliumClusterIDAnnotation]; ok && c.Annotations[CiliumClusterIDAnnotation] != was {
+		return field.ErrorList{field.Forbidden(field.NewPath("metadata", "annotations").Key(CiliumClusterIDAnnotation),
+			"the Cilium cluster id cannot change once set")}
+	}
+	return nil
 }
 
 // validateEgress holds a cluster's egressProxy to checkEgress.

@@ -101,10 +101,11 @@ decide what it may do, as they do for a user signed in to the interface.`,
 		},
 	}
 	scale.Flags().Int32Var(&controlPlanes, "control-planes", 0, "control-plane nodes: 1, 3, 5 or 7")
-	scale.Flags().StringArrayVar(&workers, "workers", nil, "a pool's workers as POOL=N, such as md-0=3, repeated for more pools")
+	scale.Flags().StringArrayVar(&workers, "workers", nil, "a pool's workers as POOL=N, such as workers=3 for the default pool, repeated for more pools")
 	o.namespaceFlag(scale.Flags())
 
 	var yes bool
+	removal := clusterRemoval{}
 	deleteCmd := &cobra.Command{
 		Use:   "delete NAME --yes",
 		Short: "Delete a cluster, its VMs and its persistent volumes",
@@ -113,15 +114,17 @@ decide what it may do, as they do for a user signed in to the interface.`,
 			if !yes {
 				return errors.New("deleting a cluster cannot be undone: add --yes")
 			}
-			return o.delete(cmd.Context(), cmd.OutOrStdout(), args[0])
+			removal.Confirm = args[0]
+			return o.delete(cmd.Context(), cmd.OutOrStdout(), removal)
 		},
 	}
 	deleteCmd.Flags().BoolVar(&yes, "yes", false, "confirm the deletion, which cannot be undone")
+	deleteCmd.Flags().BoolVar(&removal.DeleteEtcdSnapshots, "delete-etcd-snapshots", false, "delete its etcd snapshots on the backup volume too")
 	o.namespaceFlag(deleteCmd.Flags())
 
 	cmd.AddCommand(slices.Concat([]*cobra.Command{
 		list, get, kubeconfig, o.createCommand(), o.exportCommand(), scale, o.upgradeCommand(), o.acceptUpgradeCommand(), o.timeoutsCommand(), deleteCmd,
-		o.poolCommand(), o.updateCommand(), o.machineCommand(), o.etcdCommand(),
+		o.poolCommand(), o.updateCommand(), o.machineCommand(), o.etcdCommand(), o.etcdSnapshotsCommand(), o.removedEtcdSnapshotsCommand(),
 	}, o.addonCommands())...)
 	return cmd
 }
@@ -138,7 +141,7 @@ A value is drain, detach or deletion, set to a duration such as 30m, or to 0 for
 drain is the eviction of the node's pods, and a pod it cannot evict is deleted with the machine. The
 detach is the wait for the node's volumes. The deletion is the removal of the node's Node object.
 A value left out is the cluster class's.`,
-		Example: `  kubehenge cluster timeouts web --control-planes drain=30m,detach=10m --pool md-0=drain=1h`,
+		Example: `  kubehenge cluster timeouts web --control-planes drain=30m,detach=10m --pool workers=drain=1h`,
 		Args:    argsSay(cobra.ExactArgs(1), clusterNameArg),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req, err := timeoutsRequest(controlPlanes, pools)
@@ -214,7 +217,8 @@ func (o *clusterOptions) createCommand() *cobra.Command {
 
 The request is what the interface's wizard sends: name, class, version, controlPlaneReplicas,
 workerReplicas, variables, and namespace where the interface has more than one. It is checked as
-the wizard's request is.
+the wizard's request is. The variables are the class's own, the ones its ClusterClass lists. The
+wizard's "Copy as YAML" button on the last step writes a complete file to start from.
 
 With -f, --` + graceFlag + ` sets hostOutageGraceMinutes over the file's value. The --node-*,
 --kubelet-arg, --apiserver-arg, --controller-manager-arg, --scheduler-arg and --audit-* flags set the
@@ -228,6 +232,9 @@ opened the command stops and names it. --without-secrets creates the cluster wit
 
 --identity takes an age identity file that opens the Secrets sealed to one of the extra recipients
 set in the backup settings. It opens them on this machine, so a new appliance needs no recovery key.`,
+		Example: `  kubehenge cluster create -f web.yaml
+  kubehenge cluster create -f - --host-outage-grace-minutes 60 < web.yaml
+  kubehenge cluster create --from web-export.yaml`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if (file == "") == (from == "") {
@@ -347,7 +354,8 @@ type listedCondition struct {
 	Reason string `json:"reason"`
 }
 
-// status is the cluster's phase, and the reason its upgrade is held where it is.
+// status is the cluster's phase, and the reason its upgrade is held where it is. A firewall that
+// filters nothing is said beside it, since it holds nothing up.
 func (c *listedCluster) status() string {
 	held := func(kind string) *listedCondition {
 		for i := range c.Conditions {
@@ -356,6 +364,12 @@ func (c *listedCluster) status() string {
 			}
 		}
 		return nil
+	}
+	if i := slices.IndexFunc(c.Conditions, func(l listedCondition) bool { return l.Type == provisioner.FirewallInactiveCondition }); i >= 0 {
+		said := map[string]string{"True": ", firewall inactive (datacenter firewall off)", "Unknown": ", firewall state unknown"}[c.Conditions[i].Status]
+		phase := *c
+		phase.Conditions = slices.Delete(slices.Clone(c.Conditions), i, i+1)
+		return phase.status() + said
 	}
 	switch {
 	case held(provisioner.UpgradeHeldCondition) != nil:
@@ -596,7 +610,7 @@ func scaleRequest(controlPlanes *int32, workers []string) (map[string]any, error
 			pool, n, ok := strings.Cut(w, "=")
 			count, err := strconv.ParseInt(n, 10, 32)
 			if !ok || pool == "" || err != nil {
-				return nil, fmt.Errorf("--workers %q: give POOL=N, such as md-0=3", w)
+				return nil, fmt.Errorf("--workers %q: give POOL=N, such as workers=3", w)
 			}
 			pools[pool] = int32(count)
 		}
@@ -696,7 +710,7 @@ func timeoutsRequest(controlPlanes string, pools []string) (map[string]any, erro
 		for _, p := range pools {
 			pool, spec, ok := strings.Cut(p, "=")
 			if !ok || pool == "" {
-				return nil, fmt.Errorf("--pool %q: give POOL=drain=30m, such as md-0=drain=30m,detach=10m", p)
+				return nil, fmt.Errorf("--pool %q: give POOL=drain=30m, such as workers=drain=30m,detach=10m for the default pool", p)
 			}
 			t, err := timeoutValues(spec)
 			if err != nil {
@@ -724,15 +738,22 @@ func (o *clusterOptions) change(ctx context.Context, out io.Writer, name string,
 	return nil
 }
 
-func (o *clusterOptions) delete(ctx context.Context, out io.Writer, name string) error {
-	path, err := o.clusterPath(ctx, name)
+// clusterRemoval is a deletion's request: the cluster's name, and whether its etcd snapshots on the
+// backup volume go too.
+type clusterRemoval struct {
+	Confirm             string `json:"confirm"`
+	DeleteEtcdSnapshots bool   `json:"deleteEtcdSnapshots,omitempty"`
+}
+
+func (o *clusterOptions) delete(ctx context.Context, out io.Writer, removal clusterRemoval) error {
+	path, err := o.clusterPath(ctx, removal.Confirm)
 	if err != nil {
 		return err
 	}
-	if _, err := o.call(ctx, http.MethodDelete, path, map[string]string{"confirm": name}); err != nil {
+	if _, err := o.call(ctx, http.MethodDelete, path, removal); err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(out, "cluster %s deleting\n", name)
+	_, _ = fmt.Fprintf(out, "cluster %s deleting\n", removal.Confirm)
 	return nil
 }
 
@@ -770,6 +791,21 @@ func (o *clusterOptions) clusterPath(ctx context.Context, name string) (string, 
 // call sends a request to the interface as the token's user and returns the answer's body, or the
 // interface's error.
 func (o *clusterOptions) call(ctx context.Context, method, path string, body any) ([]byte, error) {
+	res, err := o.open(ctx, method, path, body)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = res.Body.Close() }()
+	answer, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading the interface's answer: %w", err)
+	}
+	return answer, nil
+}
+
+// open sends a request and returns the answer, its body unread, once it says the request went
+// through. The caller closes the body.
+func (o *clusterOptions) open(ctx context.Context, method, path string, body any) (*http.Response, error) {
 	if o.url == "" {
 		return nil, errors.New("give the interface's address with --url or KUBEHENGE_URL")
 	}
@@ -800,12 +836,12 @@ func (o *clusterOptions) call(ctx context.Context, method, path string, body any
 	if err != nil {
 		return nil, fmt.Errorf("reaching the interface: %w", err)
 	}
-	defer func() { _ = res.Body.Close() }()
-	answer, err := io.ReadAll(res.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading the interface's answer: %w", err)
-	}
 	if res.StatusCode >= http.StatusBadRequest {
+		defer func() { _ = res.Body.Close() }()
+		answer, err := io.ReadAll(res.Body)
+		if err != nil {
+			return nil, fmt.Errorf("reading the interface's answer: %w", err)
+		}
 		var e struct {
 			Error string `json:"error"`
 		}
@@ -814,7 +850,7 @@ func (o *clusterOptions) call(ctx context.Context, method, path string, body any
 		}
 		return nil, fmt.Errorf("the interface answered %s", res.Status)
 	}
-	return answer, nil
+	return res, nil
 }
 
 func (o *clusterOptions) httpClient() (*http.Client, error) {

@@ -111,6 +111,8 @@ type Server struct {
 	// Probe tells which of the addresses a host answers on, for the addresses a new cluster is
 	// offered. Nil probes them from where the interface runs.
 	Probe func(ctx context.Context, addrs []netip.Addr) map[netip.Addr]bool
+	// DNSPort is the port the setup's DNS servers listen on. Empty is 53.
+	DNSPort string
 	// Appliance is set when the interface runs in Kubehenge's appliance, which creates and looks
 	// after the management cluster.
 	Appliance *appliance.Appliance
@@ -183,6 +185,9 @@ type Server struct {
 	ConnectWorkload func(server string, ca []byte, token string) (*Workload, error)
 	// OpenStore reaches the backup targets clusters' etcd snapshots are in. Unset, over HTTPS.
 	OpenStore provisioner.OpenStore
+	// Volume is the backup volume, for the snapshots of clusters without a target. Unset, the
+	// appliance's.
+	Volume provisioner.BackupVolume
 	// NewClientset reaches the management cluster for what its controller-runtime client cannot
 	// read, the providers' logs a support bundle carries. Nil leaves bundles without them.
 	NewClientset func() (kubernetes.Interface, error)
@@ -234,6 +239,9 @@ const (
 // Run prepares the server and keeps its sessions, upgrades and Headlamp up to date until ctx ends.
 // It returns once each of them has stopped.
 func (s *Server) Run(ctx context.Context) {
+	if s.Appliance != nil {
+		s.Appliance.ExportObjects = s.exportObjects
+	}
 	s.init()
 	var wg sync.WaitGroup
 	wg.Go(func() { s.autoUpgrade(ctx) })
@@ -270,6 +278,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/proxmox/nodes/{node}/dns", s.signedIn(s.dns))
 	mux.HandleFunc("POST /api/proxmox/nodes/{node}/bridges/{bridge}/free", s.signedIn(s.freeAddresses))
 	mux.HandleFunc("GET /api/proxmox/ha-rules", s.signedIn(s.haRules))
+	mux.HandleFunc("GET /api/proxmox/datacenter-firewall", s.signedIn(s.datacenterFirewall))
 
 	s.applianceRoutes(mux)
 
@@ -314,6 +323,8 @@ func (s *Server) applianceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/setup", s.signedIn(s.setupStatus))
 	mux.HandleFunc("POST /api/setup", s.signedIn(s.setup))
 	mux.HandleFunc("POST /api/setup/check", s.signedIn(s.setupCheck))
+	mux.HandleFunc("POST /api/setup/site-ca-roll", s.signedIn(s.siteCARollPreview))
+	mux.HandleFunc("POST /api/setup/time-zone", s.signedIn(s.timeZoneCheck))
 	mux.HandleFunc("POST /api/setup/credential", s.signedIn(s.credential))
 	mux.HandleFunc("POST /api/setup/remove", s.signedIn(s.remove))
 	mux.HandleFunc("POST /api/setup/take-over", s.signedIn(s.takeOver))
@@ -332,6 +343,7 @@ func (s *Server) applianceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/appliance/etcd-backups/snapshots/{name}/restore", s.signedIn(s.restoreManagementEtcd))
 	mux.HandleFunc("POST /api/appliance/etcd-backups/warning/dismissal", s.signedIn(s.dismissBackupWarning))
 	mux.HandleFunc("POST /api/appliance/etcd-backups/snapshots/{name}/recreate", s.signedIn(s.recreateManagement))
+	mux.HandleFunc("POST /api/appliance/etcd-backups/recover", s.signedIn(s.recoverManagement))
 	mux.HandleFunc("POST /api/appliance/export", s.signedIn(s.exportManagement))
 	mux.HandleFunc("POST /api/appliance/import", s.signedIn(s.importManagement))
 	mux.HandleFunc("GET /api/templates", s.signedIn(s.listTemplates))
@@ -382,6 +394,8 @@ func (s *Server) clusterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/restores/{restore}/log", s.managed(s.showRestoreLog))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/backups/{backup}/log", s.managed(s.showBackupLog))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/certificates/ca", s.managed(s.ingressCA))
+	mux.HandleFunc("GET /api/removed-etcd-snapshots/{namespace}", s.managed(s.removedEtcdSnapshots))
+	mux.HandleFunc("DELETE /api/removed-etcd-snapshots/{namespace}/{name}", s.managed(s.deleteRemovedEtcdSnapshots))
 	mux.HandleFunc("GET /api/clusters/{namespace}/{name}/etcd-snapshots", s.managed(s.etcdSnapshots))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/etcd-snapshots", s.managed(s.takeEtcdSnapshot))
 	mux.HandleFunc("POST /api/clusters/{namespace}/{name}/etcd-defrag", s.managed(s.defragEtcd))
@@ -693,6 +707,13 @@ func (s *Server) proxmoxError(w http.ResponseWriter, r *http.Request, err error)
 // anonymousProxmoxError answers a request whose call to Proxmox VE was made for someone not yet
 // signed in. It tells a stranger nothing of Proxmox VE's reasons.
 func (s *Server) anonymousProxmoxError(w http.ResponseWriter, r *http.Request, err error) {
+	// Proxmox VE shows its certificate to anyone who connects, so its names tell a stranger nothing
+	// new, and an administrator who cannot sign in has nowhere else to read them.
+	if mismatch, ok := errors.AsType[*pve.CertificateNameError](err); ok {
+		s.Log.ErrorContext(r.Context(), "proxmox VE's certificate is not valid for its URL", "error", err)
+		writeError(w, http.StatusBadGateway, mismatch.Error())
+		return
+	}
 	switch {
 	case errors.Is(err, pve.ErrNodesDisagree):
 		writeError(w, http.StatusUnauthorized, nodesDisagree)

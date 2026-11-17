@@ -67,7 +67,7 @@ func TestValidatorHoldsTheFirewallToProxmoxVEsSecurityGroups(t *testing.T) {
 }
 
 // A cluster whose group was deleted later is not refused for an unrelated edit, but a change to its
-// groups is held to those Proxmox VE has.
+// groups or its firewall, which replaces the nodes, is held to those Proxmox VE has.
 func TestValidatorHoldsARunningClusterToItsSecurityGroupsOnlyWhenTheyChange(t *testing.T) {
 	t.Parallel()
 	hooks, _ := hooksFor(t)
@@ -86,6 +86,12 @@ func TestValidatorHoldsARunningClusterToItsSecurityGroupsOnlyWhenTheyChange(t *t
 	changed := withSecurityGroups(networkCluster("192.168.1.1", 24), `["k8s","gone"]`)
 	if _, err := v.ValidateUpdate(context.Background(), running, changed); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "no security group gone") {
 		t.Errorf("a change to a missing group: %v", err)
+	}
+	ported := running.DeepCopy()
+	addVariable(running, FirewallVariable, `{"enabled": true}`)
+	addVariable(ported, FirewallVariable, `{"enabled": true, "ports": [{"protocol": "tcp", "port": 8443}]}`)
+	if _, err := v.ValidateUpdate(context.Background(), running, ported); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "no security group gone") {
+		t.Errorf("a firewall change with a missing group: %v", err)
 	}
 }
 

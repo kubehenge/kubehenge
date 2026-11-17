@@ -86,6 +86,29 @@ func TestAddressFamiliesStayAsCreated(t *testing.T) {
 	}
 }
 
+func TestBridgeAndVLANStayAsCreated(t *testing.T) {
+	t.Parallel()
+	old := familyCluster(ipv4Network, ipv4Endpoint)
+	for name, tc := range map[string]struct {
+		network, want string
+	}{
+		"another bridge": {strings.Replace(ipv4Network, `"vmbr0"`, `"vmbr1"`, 1), "the bridge is chosen when the cluster is created"},
+		"a VLAN":         {strings.Replace(ipv4Network, `"bridge":"vmbr0",`, `"bridge":"vmbr0","vlan":30,`, 1), "the VLAN is chosen when the cluster is created"},
+		"other DNS":      {strings.Replace(ipv4Network, `"dnsServers":["10.0.0.1"]`, `"dnsServers":["10.0.0.2"]`, 1), ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			errs := validateFamilies(old, familyCluster(tc.network, ipv4Endpoint)).ToAggregate()
+			switch {
+			case tc.want == "" && errs != nil:
+				t.Errorf("refused: %v", errs)
+			case tc.want != "" && (errs == nil || !strings.Contains(errs.Error(), tc.want)):
+				t.Errorf("got %v, want %q", errs, tc.want)
+			}
+		})
+	}
+}
+
 func TestCheckAddressesOfEachFamily(t *testing.T) {
 	t.Parallel()
 	withLB := func(c *clusterv1.Cluster, lb string) *clusterv1.Cluster {

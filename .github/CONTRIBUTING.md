@@ -57,7 +57,24 @@ Details and reasons: `docs/architecture.md`.
 - **Upstream first.** Kubehenge assembles and tests the maintained upstream Cluster API providers, charts and images rather than forking them. Fixes that belong upstream go upstream.
 - **Forks and own builds.** Talos's bootstrap and control-plane providers come from Kubehenge's own forks, whose releases `make verify-providers` checks. Sidero Labs' releases are on a Cluster API contract the core has removed, and lack the `TalosControlPlaneTemplate` a ClusterClass needs.
   - Until upstream releases carry their fixes, `capmox` and the Add-on Provider for Helm run Kubehenge's own builds (`scripts/capmox-patches/`, `scripts/helm-addon-patches/`). Details: `docs/architecture.md`.
+- **Every kind of Proxmox VE setup.** Where a change cannot work on one of these, the interface or installer says so before it creates anything:
+  - one node, or a cluster
+  - directory, LVM, LVM-thin, ZFS, Ceph or NFS storage
+  - no DHCP, VLANs, SDN, IPv6 or dual-stack
+  - a proxy, no internet, or an API certificate from a private CA
 - **Wording.** British English. Write "Terraform/OpenTofu", never either alone.
+
+## Interface rules
+
+These hold for the web interface, the installer and the CLI alike. The text rules are in `web/WRITING.md`.
+
+- **Safeguards are on by default.** That covers etcd snapshots, backups, protection against deletion and certificate checks. When a safeguard needs input, fix that need and keep the safeguard on.
+- **A default never stops the user.** No step blocks on a field the user did not touch.
+- **Defaults come from the site.** Copying another cluster is the user's choice, and copied values are marked.
+- **Input is checked where it is entered,** with the same figures as the final check.
+- **What it says is what happens.** A button says whether it applies or only stages. A summary row matches what will be created. A count matches the items shown.
+- **A risk never looks like a pass.** A change that replaces nodes or skips a check is shown as such and asks to be confirmed.
+- **The interface and kubectl agree.** Every rule and check runs on the server, so it holds the same through the interface, kubectl, GitOps and the CLI.
 
 ## Code checks
 

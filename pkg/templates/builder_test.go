@@ -44,6 +44,9 @@ type fakeCluster struct {
 	// configuration is a 595, whatever the resource view says.
 	unreachable map[int]bool
 	reads       int // configuration reads served
+	// late are VM IDs that /cluster/nextid?vmid= still calls free although a VM holds them, as when
+	// another client takes the ID between the check and the create.
+	late map[int]bool
 }
 
 func (f *fakeCluster) configReads() int {
@@ -106,6 +109,13 @@ func (f *fakeCluster) serve(w http.ResponseWriter, r *http.Request) {
 	switch m := qemuPath.FindStringSubmatch(path); {
 	case path == "/cluster/status":
 		data = []any{}
+	case path == "/cluster/nextid" && r.URL.Query().Get("vmid") != "":
+		id, _ := strconv.Atoi(r.URL.Query().Get("vmid"))
+		if _, taken := f.configs[id]; taken && !f.late[id] {
+			f.refuse(w, fmt.Sprintf("VM %d already exists", id))
+			return
+		}
+		data = nil
 	case path == "/cluster/nextid" && len(f.nextIDs) > 0:
 		data = strconv.Itoa(f.nextIDs[0])
 		f.nextIDs = f.nextIDs[1:]

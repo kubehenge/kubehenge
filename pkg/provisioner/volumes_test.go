@@ -3,11 +3,16 @@ package provisioner
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/kubehenge/kubehenge/pkg/csiproxy"
+	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
 func TestParseVolumeHandle(t *testing.T) {
@@ -103,6 +109,15 @@ type fakePVE struct {
 	userMissing bool
 	groups      []string
 	userWrites  []map[string]any
+	// password is the cluster user's, which signs it in. tokenCreator is who created its token: the
+	// user itself, or the controller. Like Proxmox VE from libpve-access-control 9.2.1, the fake
+	// refuses the controller a token without privilege separation for another user, as it lacks
+	// Permissions.Modify on /.
+	password     string
+	tokenCreator string
+	// accounts sign in through the fake, and srv serves it, as serve sets them.
+	accounts *pve.Accounts
+	srv      *httptest.Server
 	// storageList, when set, replaces the cluster's storages. inactive are "<node>/<storage>" pairs
 	// that a node reports as not active, or disabled.
 	storageList []map[string]any
@@ -125,11 +140,7 @@ func (f *fakePVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	a := answer{w}
-	body := map[string]any{}
-	if r.Body != nil {
-		raw, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(raw, &body)
-	}
+	body := requestBody(r)
 	path := strings.Split(strings.TrimPrefix(r.URL.Path, "/api2/json/"), "/")
 	f.requests = append(f.requests, r.Method+" "+strings.TrimPrefix(r.URL.Path, "/api2/json"))
 	f.vmidQuery = r.URL.Query().Get("vmid")
@@ -152,7 +163,7 @@ func (f *fakePVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/api2/json/access/acl":
 		a.reply(f.acl)
 	case len(path) == 5 && path[0] == "access" && path[3] == "token":
-		f.tokenRequest(a, r.Method, path[2])
+		f.tokenRequest(a, r, path[2], body)
 	case r.URL.Path == "/api2/json/access/users" && r.Method == http.MethodPost,
 		len(path) == 3 && path[0] == "access" && path[1] == "users":
 		f.user(a, r.Method, body)
@@ -167,6 +178,24 @@ func (f *fakePVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// requestBody is a request's form or JSON body: go-proxmox sends JSON, a sign-in a form.
+func requestBody(r *http.Request) map[string]any {
+	body := map[string]any{}
+	if r.Body == nil {
+		return body
+	}
+	raw, _ := io.ReadAll(r.Body)
+	if r.Header.Get("Content-Type") != "application/x-www-form-urlencoded" {
+		_ = json.Unmarshal(raw, &body)
+		return body
+	}
+	form, _ := url.ParseQuery(string(raw))
+	for k := range form {
+		body[k] = form.Get(k)
+	}
+	return body
 }
 
 // nodeStorageRoutes answers a node's list of storages and the content of one. It reports whether
@@ -223,9 +252,20 @@ func (f *fakePVE) user(a answer, method string, body map[string]any) {
 			return
 		}
 		a.reply(map[string]any{"groups": f.groups})
+	case http.MethodDelete:
+		f.userMissing, f.groups, f.token, f.password = true, nil, false, ""
+		f.acl = slices.DeleteFunc(f.acl, func(e map[string]any) bool { return e["ugid"] == webNames.User })
+		a.reply(nil)
 	case http.MethodPost, http.MethodPut:
+		if method == http.MethodPost && !f.userMissing {
+			a.fail("create user failed: user '" + webNames.User + "' already exists")
+			return
+		}
 		f.userWrites = append(f.userWrites, body)
 		f.userMissing = false
+		if password, ok := body["password"].(string); ok {
+			f.password = password
+		}
 		if body["append"] == nil {
 			f.groups = nil
 		}
@@ -286,10 +326,30 @@ func (f *fakePVE) writeACL(body map[string]any) {
 	}
 }
 
-func (f *fakePVE) tokenRequest(a answer, method, user string) {
-	switch method {
+// fakeTicket is the ticket the fake signs the cluster's user in with.
+const fakeTicket = "PVE:fake-ticket"
+
+// ticket signs the cluster's user in with its password.
+func (f *fakePVE) ticket(a answer, body map[string]any) {
+	if f.password == "" || body["username"] != webNames.User || body["password"] != f.password {
+		a.failWith(http.StatusUnauthorized, "authentication failure")
+		return
+	}
+	a.reply(map[string]any{"username": webNames.User, "ticket": fakeTicket, "CSRFPreventionToken": "csrf"})
+}
+
+func (f *fakePVE) tokenRequest(a answer, r *http.Request, user string, body map[string]any) {
+	switch r.Method {
 	case http.MethodPost:
-		f.token = true
+		creator := "controller"
+		if r.Header.Get("Cookie") == "PVEAuthCookie="+fakeTicket && r.Header.Get("Csrfpreventiontoken") == "csrf" {
+			creator = user
+		}
+		if privsep := fmt.Sprint(body["privsep"]); (privsep == "0" || privsep == "false") && creator != user {
+			a.refuse("Permission check failed (/, Permissions.Modify)")
+			return
+		}
+		f.token, f.tokenCreator = true, creator
 		f.tokens++
 		a.reply(map[string]any{"value": fmt.Sprintf("secret-%d", f.tokens)})
 	case http.MethodDelete:
@@ -315,9 +375,11 @@ func (f *fakePVE) content(storage, vmid string) []map[string]any {
 }
 
 // creation answers what creating a cluster's objects reads beyond its own VM: the cluster's status,
-// the next free VMID and the create itself. It reports whether it answered.
+// the user's sign-in, the next free VMID and the create itself. It reports whether it answered.
 func (f *fakePVE) creation(a answer, r *http.Request, path []string, body map[string]any) bool {
 	switch {
+	case r.URL.Path == "/api2/json/access/ticket" && r.Method == http.MethodPost:
+		f.ticket(a, body)
 	case r.URL.Path == "/api2/json/cluster/status" && f.clusterName != "":
 		a.reply([]map[string]any{{"type": "cluster", "name": f.clusterName}})
 	case r.URL.Path == "/api2/json/cluster/nextid" && len(f.nextIDs) > 0:
@@ -455,7 +517,12 @@ func (a answer) reply(data any) {
 }
 
 // fail gives the reason for a failure in the status line, the only part go-proxmox reads.
-func (a answer) fail(msg string) {
+func (a answer) fail(msg string) { a.failWith(http.StatusInternalServerError, msg) }
+
+// refuse is Proxmox VE's answer to a request its caller lacks the privileges for.
+func (a answer) refuse(msg string) { a.failWith(http.StatusForbidden, msg) }
+
+func (a answer) failWith(code int, msg string) {
 	hijacker, ok := a.w.(http.Hijacker)
 	if !ok {
 		panic("the test server's connections cannot be taken over")
@@ -465,7 +532,7 @@ func (a answer) fail(msg string) {
 		panic(err)
 	}
 	defer func() { _ = conn.Close() }()
-	_, _ = fmt.Fprintf(buf, "HTTP/1.1 500 %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", msg)
+	_, _ = fmt.Fprintf(buf, "HTTP/1.1 %d %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", code, msg)
 	_ = buf.Flush()
 }
 
@@ -489,10 +556,46 @@ func (m moved) Unprotect(ctx context.Context, node string, vmid int) error {
 
 func serve(t *testing.T, f *fakePVE) *proxmox.Client {
 	t.Helper()
-	srv := httptest.NewServer(f)
+	srv := httptest.NewTLSServer(f)
 	t.Cleanup(srv.Close)
-	return proxmox.NewClient(srv.URL + "/api2/json")
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	accounts, err := pve.NewAccounts(pve.Config{URL: srv.URL, CAFile: ca})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.accounts, f.srv = accounts, srv
+	return proxmox.NewClient(srv.URL+"/api2/json", proxmox.WithHTTPClient(srv.Client()))
 }
+
+// roundTripper is a transport made of a function.
+type roundTripper func(*http.Request) (*http.Response, error)
+
+func (f roundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// tokenReadsAnswered has answer reply to the cluster client's reads of the token in place of the
+// fake, through the checks pve.Connect's client makes.
+func tokenReadsAnswered(f *fakePVE, p *Proxmox, answer func(*http.Request) (*http.Response, error)) {
+	next := f.srv.Client().Transport
+	p.Client = proxmox.NewClient(f.srv.URL+"/api2/json", proxmox.WithHTTPClient(&http.Client{Transport: pve.CheckStatus(roundTripper(func(r *http.Request) (*http.Response, error) {
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/token/") {
+			return answer(r)
+		}
+		return next.RoundTrip(r)
+	}))}))
+}
+
+// serveCloud is a Proxmox on the fake, which signs in as the cluster's user through the fake too.
+func serveCloud(t *testing.T, f *fakePVE) *Proxmox {
+	t.Helper()
+	c := serve(t, f)
+	return &Proxmox{Client: c, Accounts: f.accounts}
+}
+
+// cloudSettings are those of a cluster in the clusters' group, with the region given.
+var cloudSettings = Settings{Group: "kubehenge-clusters", Role: "kubehenge-cluster", Region: "lab"}
 
 func TestVolumeOwnerDescribedOnlyWhenItDiffers(t *testing.T) {
 	t.Parallel()
@@ -554,9 +657,9 @@ func TestDeleteThroughOwner(t *testing.T) {
 	t.Parallel()
 	f := newFakePVE("a", map[string][]string{"a/local": {"local:4242/vm-4242-other.raw", "local:4242/vm-4242-pvc-1.raw"}})
 	f.config["unused0"] = "local:4242/vm-4242-other.raw"
-	pve := serve(t, f)
+	api := serve(t, f)
 
-	if err := deleteThroughOwner(context.Background(), pve, "a", 4242, "local:4242/vm-4242-pvc-1.raw"); err != nil {
+	if err := deleteThroughOwner(context.Background(), api, "a", 4242, "local:4242/vm-4242-pvc-1.raw"); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(f.volumes["a/local"], []string{"local:4242/vm-4242-other.raw"}) {
@@ -570,8 +673,8 @@ func TestDeleteThroughOwner(t *testing.T) {
 func TestDeleteVolumeMovesTheOwnerToANodeLocalVolume(t *testing.T) {
 	t.Parallel()
 	f := newFakePVE("a", map[string][]string{"b/local": {"local:4242/vm-4242-pvc-1.raw"}})
-	pve := serve(t, f)
-	o := &ownerVM{pve: pve, mover: moved{pve}, vmid: 4242, created: "a"}
+	api := serve(t, f)
+	o := &ownerVM{pve: api, mover: moved{api}, vmid: 4242, created: "a"}
 
 	v, err := parseVolumeHandle("lab/b/local/4242/vm-4242-pvc-1.raw")
 	if err != nil {
@@ -588,8 +691,8 @@ func TestDeleteVolumeMovesTheOwnerToANodeLocalVolume(t *testing.T) {
 func TestDeleteVolumeOnSharedStorageLeavesTheOwnerWhereItIs(t *testing.T) {
 	t.Parallel()
 	f := newFakePVE("a", map[string][]string{"*/ceph": {"ceph:vm-4242-pvc-1"}})
-	pve := serve(t, f)
-	o := &ownerVM{pve: pve, vmid: 4242, created: "a"}
+	api := serve(t, f)
+	o := &ownerVM{pve: api, vmid: 4242, created: "a"}
 
 	if err := o.deleteVolume(context.Background(), volume{node: "b", storage: "ceph", volid: "ceph:vm-4242-pvc-1", owner: 4242}); err != nil {
 		t.Fatal(err)
@@ -606,8 +709,8 @@ func TestOwnerWithUnusedDisksDoesNotMove(t *testing.T) {
 		"b/local": {"local:4242/vm-4242-pvc-1.raw"},
 	})
 	f.config["unused0"] = "local:4242/vm-4242-pvc-0.raw"
-	pve := serve(t, f)
-	o := &ownerVM{pve: pve, mover: moved{pve}, vmid: 4242, created: "a"}
+	api := serve(t, f)
+	o := &ownerVM{pve: api, mover: moved{api}, vmid: 4242, created: "a"}
 
 	if err := o.deleteVolume(context.Background(), volume{node: "b", storage: "local", volid: "local:4242/vm-4242-pvc-1.raw", owner: 4242}); err == nil {
 		t.Fatal("moved an owner VM with an unused disk")
@@ -705,7 +808,7 @@ func TestRemoveWaitsForAnOwnerNotListedYet(t *testing.T) {
 func TestReclaimLeavesAnAttachedVolume(t *testing.T) {
 	t.Parallel()
 	f := newFakePVE("a", map[string][]string{"a/local": {"local:4242/vm-4242-pvc-1.raw", "local:4242/vm-4242-pvc-2.raw"}})
-	pve := serve(t, f)
+	api := serve(t, f)
 	released := func(name string) *corev1.PersistentVolume {
 		return &corev1.PersistentVolume{
 			Name: name,
@@ -742,7 +845,7 @@ func TestReclaimLeavesAnAttachedVolume(t *testing.T) {
 			Spec: storagev1.VolumeAttachmentSpec{Attacher: csiDriver, NodeName: "gone", Source: storagev1.VolumeAttachmentSource{PersistentVolumeName: &pv1}},
 		},
 	).Build()
-	r := &Reclaimer{Connect: func(string) (*proxmox.Client, error) { return pve, nil }}
+	r := &Reclaimer{Connect: func(string) (*proxmox.Client, error) { return api, nil }}
 
 	creds := Credentials{TokenID: webNames.TokenID(), TokenSecret: "s3cret", VolumeOwner: 4242, VolumeOwnerNode: "a"}
 	if err := r.reclaimIn(context.Background(), cluster(), creds, workload); err != nil {
@@ -787,9 +890,9 @@ func TestSteadyReconcileReadsOnlyTheClustersOwn(t *testing.T) {
 	want := []string{
 		"GET /pools",
 		"GET /access/users/" + webNames.User,
+		"GET /access/users/" + webNames.User + "/token/" + webNames.Token,
 		"GET /access/acl",
 		"GET /nodes/a/qemu/4242/config",
-		"GET /access/users/" + webNames.User + "/token/" + webNames.Token,
 	}
 	if !slices.Equal(f.requests, want) {
 		t.Fatalf("asked\n%s\nwant\n%s", strings.Join(f.requests, "\n"), strings.Join(want, "\n"))
@@ -855,7 +958,7 @@ func TestNewTokenKeptBeforeALaterFailure(t *testing.T) {
 	t.Parallel()
 	f := newFakePVE("a", nil)
 	// No /cluster/status in the fake: reading the region fails after the token is created.
-	p := &Proxmox{Client: serve(t, f)}
+	p := serveCloud(t, f)
 	var recorded Credentials
 	record := func(c Credentials) error { recorded = c; return nil }
 
@@ -872,6 +975,136 @@ func TestNewTokenKeptBeforeALaterFailure(t *testing.T) {
 	}
 	if f.tokens != 1 {
 		t.Errorf("%d tokens created; the kept secret was not used", f.tokens)
+	}
+}
+
+// Proxmox VE refuses the controller a token without privilege separation for the cluster's user,
+// as it lacks Permissions.Modify on /. The user signs in with a password nobody keeps and creates
+// its token itself, and then gets its rights on the pool.
+func TestClusterTokenMadeByItsOwnUser(t *testing.T) {
+	t.Parallel()
+	f := newFakePVE("a", nil)
+	f.userMissing = true
+	p := serveCloud(t, f)
+	p.Settings = cloudSettings
+	var recorded Credentials
+	c, err := p.Ensure(t.Context(), webNames, Access{}, Credentials{VolumeOwner: 4242, VolumeOwnerNode: "a"}, func(c Credentials) error { recorded = c; return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.tokenCreator != webNames.User || f.tokens != 1 {
+		t.Errorf("token created by %q (%d tokens), want %s", f.tokenCreator, f.tokens, webNames.User)
+	}
+	if c.TokenSecret != "secret-1" || recorded.TokenSecret != "secret-1" || recorded.TokenID != webNames.TokenID() {
+		t.Errorf("kept %+v, recorded %+v", c, recorded)
+	}
+	if password, ok := f.userWrites[0]["password"].(string); !ok || len(password) < 20 || strings.Contains(fmt.Sprintf("%+v", recorded), password) {
+		t.Errorf("the user's password %q is too short or kept", password)
+	}
+	if !slices.ContainsFunc(f.acl, func(e map[string]any) bool { return e["path"] == "/pool/"+webNames.Pool && e["ugid"] == webNames.User }) {
+		t.Errorf("the new user holds no role on its pool: %v", f.acl)
+	}
+}
+
+// A token whose secret is lost cannot be made again by the controller, and only the user's
+// creation knows its password, so the user is made again with a new token and its rights.
+func TestTokenWithoutItsSecretReplacesTheUser(t *testing.T) {
+	t.Parallel()
+	f := newFakePVE("a", nil)
+	f.token, f.groups = true, []string{"kubehenge-clusters"}
+	f.acl = []map[string]any{{"path": "/pool/" + webNames.Pool, "type": "user", "ugid": webNames.User, "roleid": "kubehenge-cluster", "propagate": 1}}
+	p := serveCloud(t, f)
+	p.Settings = cloudSettings
+	held := Credentials{TokenID: webNames.TokenID(), VolumeOwner: 4242, VolumeOwnerNode: "a"}
+	c, err := p.Ensure(t.Context(), webNames, Access{}, held, func(Credentials) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(f.requests, "DELETE /access/users/"+webNames.User) || c.TokenSecret != "secret-1" || f.tokenCreator != webNames.User {
+		t.Fatalf("secret %q by %q after\n%s", c.TokenSecret, f.tokenCreator, strings.Join(f.requests, "\n"))
+	}
+	if !slices.Equal(f.groups, []string{"kubehenge-clusters"}) || len(f.acl) != 1 || f.acl[0]["ugid"] != webNames.User {
+		t.Errorf("the new user is in %v and holds %v", f.groups, f.acl)
+	}
+}
+
+// existingCluster is a fake holding the cluster's user, its token and its grant on the pool, and a
+// Proxmox on it that knows the token's secret.
+func existingCluster(t *testing.T) (*fakePVE, *Proxmox, Credentials) {
+	t.Helper()
+	f := newFakePVE("a", nil)
+	f.token, f.groups = true, []string{"kubehenge-clusters"}
+	f.acl = []map[string]any{{"path": "/pool/" + webNames.Pool, "type": "user", "ugid": webNames.User, "roleid": "kubehenge-cluster", "propagate": 1}}
+	p := serveCloud(t, f)
+	p.Settings = cloudSettings
+	return f, p, Credentials{TokenID: webNames.TokenID(), TokenSecret: "s3cret", VolumeOwner: 4242, VolumeOwnerNode: "a"}
+}
+
+// Only Proxmox VE's own answer says the token is gone. A read that got none, as when the name
+// lookup failed, fails the reconcile to retry it and deletes nothing.
+func TestTokenReadWithoutAnAnswerDeletesNothing(t *testing.T) {
+	t.Parallel()
+	f, p, held := existingCluster(t)
+	tokenReadsAnswered(f, p, func(*http.Request) (*http.Response, error) {
+		return nil, &net.DNSError{Err: "no such host", Name: "pve", IsNotFound: true}
+	})
+	if _, err := p.Ensure(t.Context(), webNames, Access{}, held, func(Credentials) error { return nil }); err == nil || !strings.Contains(err.Error(), "reading token") {
+		t.Fatalf("Ensure = %v, want the failed read", err)
+	}
+	if slices.Contains(f.requests, "DELETE /access/users/"+webNames.User) || f.tokens != 0 {
+		t.Errorf("a read without an answer replaced the user:\n%s", strings.Join(f.requests, "\n"))
+	}
+}
+
+// A token Proxmox VE says is gone, by a 404 or by its message, is made again with its user.
+func TestTokenGoneRenewsTheUser(t *testing.T) {
+	t.Parallel()
+	for name, answer := range map[string]func(*http.Request) (*http.Response, error){
+		"404": func(r *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusNotFound, Status: "404 Not Found", Body: http.NoBody, Request: r}, nil
+		},
+		"no such token": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f, p, held := existingCluster(t)
+			if answer != nil {
+				tokenReadsAnswered(f, p, answer)
+			} else {
+				f.token = false
+			}
+			c, err := p.Ensure(t.Context(), webNames, Access{}, held, func(Credentials) error { return nil })
+			if err != nil || c.TokenSecret != "secret-1" || f.tokenCreator != webNames.User {
+				t.Fatalf("Ensure = %+v, %v; token by %q", c, err, f.tokenCreator)
+			}
+		})
+	}
+}
+
+// A user with a group or a permission Kubehenge did not give it is not replaced for a new token,
+// which would drop them, and the error names them.
+func TestRenewalKeepsWhatAnAdministratorAdded(t *testing.T) {
+	t.Parallel()
+	for name, add := range map[string]func(*fakePVE){
+		"group": func(f *fakePVE) { f.groups = append(f.groups, "operators") },
+		"ACL": func(f *fakePVE) {
+			f.acl = append(f.acl, map[string]any{"path": "/vms/9999", "type": "user", "ugid": webNames.User, "roleid": "PVEVMUser", "propagate": 1})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f, p, held := existingCluster(t)
+			add(f)
+			groups, acl := slices.Clone(f.groups), slices.Clone(f.acl)
+			held.TokenSecret = ""
+			_, err := p.Ensure(t.Context(), webNames, Access{}, held, func(Credentials) error { return nil })
+			if err == nil || !strings.Contains(err.Error(), "group operators") && !strings.Contains(err.Error(), "PVEVMUser on /vms/9999") {
+				t.Fatalf("Ensure = %v, want the refusal naming what the user holds", err)
+			}
+			if slices.Contains(f.requests, "DELETE /access/users/"+webNames.User) || !slices.Equal(f.groups, groups) || len(f.acl) != len(acl) {
+				t.Errorf("the user was replaced: groups %v, acl %v", f.groups, f.acl)
+			}
+		})
 	}
 }
 

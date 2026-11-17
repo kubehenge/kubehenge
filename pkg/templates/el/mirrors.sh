@@ -5,6 +5,34 @@
 # fails. And the families' mirror services keep giving the builder its mirrors in the same order,
 # so a step tried again on the same list reads the same broken file.
 
+# pin_release <repositories> <minor>: the family's repository files name their release by dnf's
+# $releasever, which is the major release alone, so they read the newest minor release. Each step
+# reads the one of the bake's image instead (el/release). $releasever_major and the like stay.
+pin_release() {
+    sed -i "s/\\\$releasever\\b/$2/g" "$1"/*.repo
+}
+
+# use_vault <folders> <lists>: a family moves a minor release to its vault once a newer one replaces
+# it. Rocky Linux's mirror service then still names mirrors that dropped it. A repository whose own
+# server no longer holds the minor release reads the vault, as the one mirror of its list in
+# <lists>. Each line of <folders> (el/vault) is a repository's id, its folder on its own server and
+# its folder in the vault. Any answer but 404 leaves the repository on its mirrors. One but 200
+# is named in the log, as a dnf that fails on those mirrors later would not say why.
+use_vault() {
+    while read -r id folder vault; do
+        code=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 20 --max-time 30 --retry 3 --retry-delay 10 \
+            "${folder}repodata/repomd.xml") || true
+        case "${code}" in
+            200) ;;
+            404)
+                echo "${id}: ${folder} is gone, reading ${vault}" >&2
+                printf '%s\n' "${vault}" > "$2/${id}"
+                ;;
+            *) echo "${id}: ${folder} answered ${code}, staying on its mirrors" >&2 ;;
+        esac
+    done < "$1"
+}
+
 # use_metalinks <repositories>: Rocky Linux's mirror service, MirrorManager, serves each mirror
 # list as a metalink too, which carries the checksums of the repository's current and recent
 # repomd.xml. dnf and rpm-ostree refuse a repomd.xml that matches none, broken or stale alike, and
@@ -42,11 +70,12 @@ EOF
     done < "$1/.repositories"
 }
 
-# point_at_mirrors <repositories> <lists>: each repository with a list in <lists> reads it there.
+# point_at_mirrors <repositories> <lists>: each repository with a list in <lists> reads it there,
+# in place of its mirror list, metalink or folder.
 point_at_mirrors() {
     for list in "$2"/*; do
         [ -f "${list}" ] || continue
-        sed -i "/^\[${list##*/}\]\$/,/^\[/s|^mirrorlist=.*|mirrorlist=file://${list}|" "$1"/*.repo
+        sed -i "/^\[${list##*/}\]\$/,/^\[/s#^\(mirrorlist\|metalink\|baseurl\)=.*#mirrorlist=file://${list}#" "$1"/*.repo
     done
 }
 

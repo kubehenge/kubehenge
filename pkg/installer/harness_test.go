@@ -32,7 +32,10 @@ import (
 type rule struct {
 	prefix string
 	out    string
+	stderr string
 	code   int
+	// stall holds the command until its context ends, as a hung pmxcfs or a long extraction does.
+	stall bool
 }
 
 // fakeExec scripts the node's commands. The rule registered last that prefixes a command wins.
@@ -40,22 +43,53 @@ type fakeExec struct {
 	mu    sync.Mutex
 	rules []rule
 	calls []string
+	// pushed holds what each pct push sent, by its path in the container.
+	pushed map[string][]byte
 }
 
-func (f *fakeExec) Run(_ context.Context, name string, args ...string) (string, error) {
+func (f *fakeExec) Run(ctx context.Context, name string, args ...string) (string, error) {
 	cmd := strings.Join(append([]string{name}, args...), " ")
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, cmd)
+	if name == "pct" && len(args) >= 4 && args[0] == "push" {
+		data, _ := os.ReadFile(args[2])
+		if f.pushed == nil {
+			f.pushed = map[string][]byte{}
+		}
+		f.pushed[args[3]] = data
+	}
+	var match *rule
 	for _, v := range slices.Backward(f.rules) {
 		if strings.HasPrefix(cmd, v.prefix) {
-			if v.code != 0 {
-				return "", &CmdError{Command: cmd, Code: v.code, Err: fmt.Errorf("exit status %d", v.code)}
-			}
-			return v.out, nil
+			match = &v
+			break
 		}
 	}
-	return "", nil
+	f.mu.Unlock()
+	switch {
+	case match == nil:
+		return "", nil
+	case match.stall:
+		<-ctx.Done()
+		return "", &CmdError{Command: cmd, Stderr: match.stderr, Code: -1, Err: ctx.Err()}
+	case match.code != 0:
+		return "", &CmdError{Command: cmd, Stderr: match.stderr, Code: match.code, Err: fmt.Errorf("exit status %d", match.code)}
+	}
+	return match.out, nil
+}
+
+// failWith makes the command fail with Proxmox VE's message and pct's exit status for an error.
+func (f *fakeExec) failWith(prefix, stderr string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rules = append(f.rules, rule{prefix: prefix, code: 255, stderr: stderr})
+}
+
+// stall holds the command until its context ends, then fails it with the message, if any.
+func (f *fakeExec) stall(prefix string, stderr ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rules = append(f.rules, rule{prefix: prefix, stall: true, stderr: strings.Join(stderr, "")})
 }
 
 func (f *fakeExec) on(prefix, out string) {

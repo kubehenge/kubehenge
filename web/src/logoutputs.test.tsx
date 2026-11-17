@@ -121,10 +121,10 @@ describe("the log outputs fields", () => {
     await user.click(screen.getByText("Log outputs"));
     await user.click(screen.getByRole("button", { name: "Add output" }));
     const first = screen.getByRole("group", { name: "Output 1" });
-    expect(within(first).queryByText(/Lower-case letters/u)).not.toBeInTheDocument();
+    expect(within(first).queryByText(/Lowercase letters/u)).not.toBeInTheDocument();
     expect(within(first).queryByText("Enter an endpoint")).not.toBeInTheDocument();
     await user.type(within(first).getByLabelText("Name"), "Bad Name");
-    expect(within(first).getByText(/Lower-case letters/u)).toBeInTheDocument();
+    expect(within(first).getByText(/Lowercase letters/u)).toBeInTheDocument();
     expect(within(first).queryByText("Enter an endpoint")).not.toBeInTheDocument();
     expect(within(first).queryByLabelText("Authentication")).not.toBeInTheDocument();
 
@@ -187,7 +187,7 @@ describe("a cluster's log outputs", () => {
     await user.selectOptions(within(first).getByLabelText("Authentication"), "bearer");
     await user.click(within(first).getByLabelText("Audit"));
     await expect(within(first).findByText("Not set")).resolves.toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     expect(calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body).toStrictEqual({
@@ -223,6 +223,6 @@ describe("a cluster's log outputs", () => {
     const dialog = screen.getByRole("dialog", { name: "Edit logs" });
     await user.click(within(dialog).getByText("Log outputs"));
     await user.click(within(dialog).getByRole("button", { name: "Add output" }));
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
   });
 });

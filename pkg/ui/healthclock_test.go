@@ -2,7 +2,9 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
@@ -14,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
+	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
 func attentionWhats(v *healthView) []string {
@@ -64,6 +67,56 @@ func TestHealthWarnsOfAProxmoxNodeAheadAndKeepsTheVerdictDegraded(t *testing.T) 
 	i := slices.IndexFunc(v.Attention, func(a attentionView) bool { return strings.HasPrefix(a.What, "Proxmox VE node") })
 	if v.Attention[i].Severity != severityWarning || !strings.Contains(v.Attention[i].Message, "ahead of") {
 		t.Errorf("row = %+v", v.Attention[i])
+	}
+}
+
+func TestAMachineOnAnOfflineNodeDegradesItsCluster(t *testing.T) {
+	t.Parallel()
+	two := cluster("default", "two")
+	two.UID = "uid-two"
+	h, _ := healthHarness(t, two)
+	const offline = "Proxmox VE node pve2 is offline"
+	read := func() (healthView, fleetHealthView) {
+		t.Helper()
+		b := h.browser()
+		b.signIn("admin@pve")
+		rec := b.do("GET", "/api/clusters/default/two/health", "")
+		expect(t, rec, http.StatusOK)
+		var page healthView
+		if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		rec = b.do("GET", "/api/fleet/health", "")
+		expect(t, rec, http.StatusOK)
+		var fleet []fleetHealthView
+		if err := json.Unmarshal(rec.Body.Bytes(), &fleet); err != nil {
+			t.Fatal(err)
+		}
+		i := slices.IndexFunc(fleet, func(f fleetHealthView) bool { return f.Name == "two" })
+		if i < 0 {
+			t.Fatalf("fleet %+v lacks cluster two", fleet)
+		}
+		return page, fleet[i]
+	}
+	listsOffline := func(a []attentionView) bool {
+		return slices.ContainsFunc(a, func(a attentionView) bool { return a.What == offline && a.Severity == severityError })
+	}
+
+	page, summary := read()
+	if page.Verdict == verdictDegraded || summary.Verdict == verdictDegraded || listsOffline(page.Attention) || listsOffline(summary.Attention) {
+		t.Fatalf("with every node online: page %s %q, fleet %s %+v", page.Verdict, attentionWhats(&page), summary.Verdict, summary.Attention)
+	}
+
+	// pve2 runs a worker of the cluster and is down, which Cluster API notices only later.
+	h.accounts.mu.Lock()
+	h.accounts.nodes = []pve.Node{{Node: "pve1", Online: true, MaxMemory: 64 << 30}, {Node: "pve2"}}
+	h.accounts.mu.Unlock()
+	page, summary = read()
+	if page.Verdict != verdictDegraded || !listsOffline(page.Attention) {
+		t.Errorf("page: %s %q, want degraded with %q", page.Verdict, attentionWhats(&page), offline)
+	}
+	if summary.Verdict != verdictDegraded || !listsOffline(summary.Attention) {
+		t.Errorf("fleet: %s %+v, want degraded with %q", summary.Verdict, summary.Attention, offline)
 	}
 }
 

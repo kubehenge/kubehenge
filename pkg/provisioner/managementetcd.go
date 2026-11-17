@@ -6,9 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"path"
-	"strconv"
 	"time"
 
 	"github.com/siderolabs/talos/pkg/machinery/api/machine"
@@ -161,16 +159,11 @@ func (m *ManagementTalos) Restore(ctx context.Context, admin []byte, nodes []str
 }
 
 func (*ManagementTalos) client(ctx context.Context, raw []byte, address string) (*talosclient.Client, error) {
-	cfg, err := talosconfig.FromBytes(raw)
+	n, err := connectTalos(ctx, raw, address)
 	if err != nil {
-		return nil, fmt.Errorf("reading the talosconfig: %w", err)
+		return nil, err
 	}
-	c, err := talosclient.New(ctx, talosclient.WithConfig(cfg),
-		talosclient.WithEndpoints(net.JoinHostPort(address, strconv.Itoa(talosAPIPort))))
-	if err != nil {
-		return nil, fmt.Errorf("reaching the Talos API of %s: %w", address, err)
-	}
-	return c, nil
+	return n.c, nil
 }
 
 // answering is those of the nodes whose Talos API answers. The others are logged as left out.

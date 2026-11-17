@@ -1,0 +1,18 @@
+{
+  "name": "kubehenge-lint",
+  "private": true,
+  "description": "The Node linters `make lint` runs, installed from package-lock.json with every package's hash checked.",
+  "devDependencies": {
+    "renovate": "44.239.1"
+  },
+  "overrides": {
+    "glob@>=9.0.0 <14.0.2": "^14.0.2",
+    "minimatch@>=7.0.0 <11.0.1": "^11.0.1"
+  },
+  "allowScripts": {
+    "re2": true,
+    "protobufjs": false,
+    "core-js-pure": false,
+    "dtrace-provider": false
+  }
+}

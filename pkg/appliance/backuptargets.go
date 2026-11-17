@@ -41,7 +41,7 @@ const (
 func (t *BackupTarget) Validate() error {
 	switch {
 	case len(t.Name) > maxTargetName || !targetName.MatchString(t.Name):
-		return fmt.Errorf("target %q: a name of lower-case letters, digits and dashes", t.Name)
+		return fmt.Errorf("target %q: a name of lowercase letters, digits and dashes", t.Name)
 	case !targetBucket.MatchString(t.Bucket):
 		return fmt.Errorf("target %s: bucket %q is not an S3 bucket name", t.Name, t.Bucket)
 	case t.Region != "" && !targetRegion.MatchString(t.Region):

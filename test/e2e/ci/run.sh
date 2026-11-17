@@ -102,7 +102,7 @@ if [ "${test}" = two-nodes ]; then
     TF_VAR_proxmox_nodes=$(printf '%s' "${KUBEHENGE_E2E_NODES}" | jq -Rc 'split(",")')
     export TF_VAR_proxmox_nodes TF_VAR_datastore="${KUBEHENGE_E2E_SHARED_STORAGE}"
 fi
-: "${KUBEHENGE_PROXMOX_TOKEN:?}" "${KUBEHENGE_PROXMOX_CA:?}" "${KUBEHENGE_E2E_NODE:?}" "${KUBEHENGE_E2E_ADDRESS:?}"
+: "${KUBEHENGE_PROXMOX_URL:?}" "${KUBEHENGE_PROXMOX_TOKEN:?}" "${KUBEHENGE_PROXMOX_CA:?}" "${KUBEHENGE_E2E_NODE:?}" "${KUBEHENGE_E2E_ADDRESS:?}"
 : "${KUBEHENGE_E2E_GATEWAY:?}" "${KUBEHENGE_E2E_DNS:?}" "${KUBEHENGE_E2E_REGISTRY:?}"
 
 # shellcheck source=templates.sh
@@ -156,7 +156,7 @@ make -s -C "${repo}" capi-operator-chart providers
 export TF_CLI_CONFIG_FILE="${repo}/dist/cache/providers/tofu.tfrc"
 # OpenTofu reads only the root module's lock, so the module's own checks the providers.
 cp "${repo}/test/e2e/ci/main.tf" "${repo}/management-cluster/.terraform.lock.hcl" "${work}/mgmt/"
-export TF_VAR_repository="${repo}" TF_VAR_proxmox_api_token="${KUBEHENGE_PROXMOX_TOKEN}"
+export TF_VAR_repository="${repo}" TF_VAR_proxmox_api_token="${KUBEHENGE_PROXMOX_TOKEN}" TF_VAR_proxmox_endpoint="${KUBEHENGE_PROXMOX_URL}"
 TF_VAR_refresh_weekday=$(LC_ALL=C date -u -d '+3 days' +%a)
 export TF_VAR_refresh_weekday
 TF_VAR_proxmox_ca_certificate=$(cat "${KUBEHENGE_PROXMOX_CA}")
@@ -261,12 +261,14 @@ case "${TF_VAR_controller_image}" in
     # Anything else ends in the pushed image's digest.
     *) ;;
 esac
-# capmox and the Add-on Provider for Helm as a release publishes them, by the digests the module
-# names; the mirror serves them as ghcr.io's.
+# capmox, the Add-on Provider for Helm and the CSI plugin's controller as a release publishes them,
+# by the digests the module names; the mirror serves them as ghcr.io's.
 if [ "${built}" != true ]; then
     make -s -C "${repo}" capmox-image CAPMOX_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-provider-proxmox" \
         KO_FLAGS=--insecure-registry > /dev/null
     make -s -C "${repo}" helm-addon-image HELM_ADDON_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/cluster-api-addon-provider-helm" \
+        KO_FLAGS=--insecure-registry > /dev/null
+    make -s -C "${repo}" proxmox-csi-image PROXMOX_CSI_IMAGE="${KUBEHENGE_E2E_REGISTRY}/kubehenge/proxmox-csi-controller" \
         KO_FLAGS=--insecure-registry > /dev/null
 fi
 
@@ -343,6 +345,9 @@ case "${test}" in
         docker cp "${repo}/test/e2e" "${pve}:/root/kubehenge/test/e2e"
         docker cp "${repo}/scripts/fetch.sh" "${pve}:/root/kubehenge/scripts/fetch.sh"
         docker cp "${repo}/appliance" "${pve}:/root/kubehenge/appliance"
+        # The test reads the backup volume's store over a port-forward, as the appliance reaches it.
+        runner_kubectl=$(command -v kubectl)
+        docker cp "${runner_kubectl}" "${pve}:/usr/local/bin/kubectl"
         for version in 0.0.1 0.0.2 0.0.3; do
             docker cp "${repo}/dist/kubehenge_${version}_linux_amd64.tar.gz" "${pve}:/root/kubehenge/"
         done
@@ -351,7 +356,9 @@ case "${test}" in
         exec docker exec -e KUBEHENGE_E2E_APPLIANCE_ID=900 -e KUBEHENGE_E2E_APPLIANCE_ADDRESS=172.20.99.40/24 \
             -e KUBEHENGE_E2E_GATEWAY="${KUBEHENGE_E2E_GATEWAY}" -e KUBEHENGE_E2E_DNS="${KUBEHENGE_E2E_DNS}" \
             -e KUBEHENGE_E2E_STORAGE=local -e KUBEHENGE_E2E_S3_ADDRESS=172.20.99.1 \
+            -e KUBEHENGE_E2E_RECREATE="${KUBEHENGE_E2E_RECREATE:-}" \
             -e KUBEHENGE_E2E_RELEASE_KEY=/root/kubehenge/release.key \
+            -e KUBEHENGE_E2E_KEEP=/root/kubehenge/management \
             "${pve}" sh /root/kubehenge/test/e2e/appliance.sh \
             /root/kubehenge/kubehenge_0.0.1_linux_amd64.tar.gz /root/kubehenge/kubehenge_0.0.2_linux_amd64.tar.gz \
             /root/kubehenge/kubehenge_0.0.3_linux_amd64.tar.gz /root/kubehenge/settings.json

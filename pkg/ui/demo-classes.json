@@ -166,6 +166,34 @@
                   "op": "add",
                   "path": "/spec",
                   "valueFrom": {
+                    "template": "{{ .firewall }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-firewall"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
                     "template": "{{ .loadBalancer }}"
                   }
                 }
@@ -366,6 +394,34 @@
             }
           ],
           "name": "reach-storage"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .vmIDRange }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-vmIDRange"
         },
         {
           "definitions": [
@@ -624,6 +680,38 @@
               ],
               "minLength": 1,
               "type": "string"
+            }
+          }
+        },
+        {
+          "name": "vmIDRange",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "The VM IDs the cluster's VMs take, both ends included. A new cluster that sets none takes the site's, else Proxmox VE's next free ID.",
+              "properties": {
+                "end": {
+                  "maximum": 999999999,
+                  "minimum": 100,
+                  "type": "integer"
+                },
+                "start": {
+                  "maximum": 999999999,
+                  "minimum": 100,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "start",
+                "end"
+              ],
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "The range starts above its end.",
+                  "rule": "self.start \u003c= self.end"
+                }
+              ]
             }
           }
         },
@@ -1163,8 +1251,7 @@
                   "type": "string"
                 },
                 "timeZone": {
-                  "default": "UTC",
-                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin.",
+                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                   "type": "string"
                 },
                 "volumes": {
@@ -1192,7 +1279,10 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Snapshots of the cluster's etcd, which holds every object of the cluster but its volumes' data, on a schedule to one of the S3 targets an administrator set, beside the cluster's Velero backups in an etcd folder of its own. Kubehenge's controller takes each snapshot through the cluster's API server with a client certificate it signs for itself, encrypts it with age to a key of the cluster's own in the \u003ccluster\u003e-backup-keys Secret, and stores it with the credential typed into the interface for the cluster, or else the one for every cluster; no key or credential enters the cluster. Restoring one brings back the cluster's objects as they were, for a cluster that lost its etcd quorum or had its objects deleted or damaged.",
+              "default": {
+                "enabled": true
+              },
+              "description": "Snapshots of the cluster's etcd, which holds every object of the cluster but its volumes' data, on a schedule. They go to one of the S3 targets an administrator set, beside the cluster's Velero backups in an etcd folder of its own, or without a target to the management cluster's backup volume. Kubehenge's controller takes each snapshot through the cluster's API server with a client certificate it signs for itself, encrypts it with age to a key of the cluster's own in the \u003ccluster\u003e-backup-keys Secret, and stores it, in a target with the credential typed into the interface for the cluster, or else the one for every cluster; no key or credential enters the cluster. Restoring one brings back the cluster's objects as they were, for a cluster that lost its etcd quorum or had its objects deleted or damaged.",
               "properties": {
                 "distributionUpload": {
                   "default": false,
@@ -1200,7 +1290,7 @@
                   "type": "boolean"
                 },
                 "enabled": {
-                  "default": false,
+                  "default": true,
                   "type": "boolean"
                 },
                 "keep": {
@@ -1218,22 +1308,21 @@
                   "type": "string"
                 },
                 "target": {
-                  "description": "The administrator's target to store the snapshots in, by name.",
+                  "description": "The administrator's target to store the snapshots in, by name. Without one they go to the management cluster's backup volume.",
                   "maxLength": 63,
                   "minLength": 1,
                   "type": "string"
                 },
                 "timeZone": {
-                  "default": "UTC",
-                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin.",
+                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                   "type": "string"
                 }
               },
               "type": "object",
               "x-kubernetes-validations": [
                 {
-                  "message": "etcd snapshots need a target.",
-                  "rule": "!self.enabled || has(self.target)"
+                  "message": "The distribution's own upload needs a target, as the servers upload to a bucket.",
+                  "rule": "!has(self.distributionUpload) || !self.distributionUpload || has(self.target)"
                 },
                 {
                   "message": "The distribution's own upload takes the target, schedule and keep of etcd snapshots, which are off.",
@@ -2000,7 +2089,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order. They turn on the firewall of each node's VM and network interface. Inbound traffic no rule accepts is dropped, so the groups must accept the cluster's own traffic. Unset, the firewall is left alone. A change replaces the nodes.",
+              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order, after the cluster's own traffic and before the serving ports, so a group can drop or narrow those. They need the firewall on. A change replaces the nodes.",
               "items": {
                 "maxLength": 18,
                 "minLength": 2,
@@ -2011,6 +2100,74 @@
               "minItems": 1,
               "type": "array",
               "uniqueItems": true
+            }
+          }
+        },
+        {
+          "name": "firewall",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": {
+                "enabled": true
+              },
+              "description": "The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound traffic except the cluster's own, the management side's, what the security groups let in, the serving ports and the ports listed here. It acts only while Proxmox VE's datacenter firewall is on. A change replaces the nodes.",
+              "properties": {
+                "enabled": {
+                  "default": true,
+                  "type": "boolean"
+                },
+                "ports": {
+                  "description": "Further ports the nodes accept from anywhere.",
+                  "items": {
+                    "properties": {
+                      "endPort": {
+                        "description": "The last port of a range from port.",
+                        "maximum": 65535,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "port": {
+                        "maximum": 65535,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "protocol": {
+                        "enum": [
+                          "tcp",
+                          "udp"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "protocol",
+                      "port"
+                    ],
+                    "type": "object",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "A range ends above its first port.",
+                        "rule": "!has(self.endPort) || self.endPort \u003e self.port"
+                      }
+                    ]
+                  },
+                  "maxItems": 32,
+                  "type": "array"
+                },
+                "servingPorts": {
+                  "default": true,
+                  "description": "Whether the nodes accept the Kubernetes API (6443), the Talos API (50000, Talos only), ingress (80 and 443), the load-balancer addresses, the NodePorts (30000 to 32767) and ICMP echo from anywhere. Off, only the security groups and the ports listed let them in.",
+                  "type": "boolean"
+                }
+              },
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "Ports need the firewall on.",
+                  "rule": "!has(self.ports) || !has(self.enabled) || self.enabled"
+                }
+              ]
             }
           }
         },
@@ -2108,8 +2265,7 @@
                       "type": "string"
                     },
                     "timeZone": {
-                      "default": "UTC",
-                      "description": "IANA time zone of start, such as Europe/Berlin.",
+                      "description": "IANA time zone of start, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                       "type": "string"
                     },
                     "weekdays": {
@@ -2834,7 +2990,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read.",
+              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read. A cluster that sets none trusts the site CA.",
               "items": {
                 "maxLength": 65536,
                 "minLength": 64,
@@ -2842,6 +2998,23 @@
                 "type": "string"
               },
               "maxItems": 8,
+              "type": "array"
+            }
+          }
+        },
+        {
+          "name": "siteCAs",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "The site CA the controller gives a cluster that sets no trustedCAs.",
+              "items": {
+                "maxLength": 65536,
+                "minLength": 64,
+                "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                "type": "string"
+              },
+              "maxItems": 1,
               "type": "array"
             }
           }
@@ -3023,6 +3196,34 @@
             }
           ],
           "name": "reach-controlPlaneMachine"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .firewall }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-firewall"
         },
         {
           "definitions": [
@@ -3232,6 +3433,34 @@
             }
           ],
           "name": "reach-storage"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .vmIDRange }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-vmIDRange"
         },
         {
           "definitions": [
@@ -3490,6 +3719,38 @@
               ],
               "minLength": 1,
               "type": "string"
+            }
+          }
+        },
+        {
+          "name": "vmIDRange",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "The VM IDs the cluster's VMs take, both ends included. A new cluster that sets none takes the site's, else Proxmox VE's next free ID.",
+              "properties": {
+                "end": {
+                  "maximum": 999999999,
+                  "minimum": 100,
+                  "type": "integer"
+                },
+                "start": {
+                  "maximum": 999999999,
+                  "minimum": 100,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "start",
+                "end"
+              ],
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "The range starts above its end.",
+                  "rule": "self.start \u003c= self.end"
+                }
+              ]
             }
           }
         },
@@ -4029,8 +4290,7 @@
                   "type": "string"
                 },
                 "timeZone": {
-                  "default": "UTC",
-                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin.",
+                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                   "type": "string"
                 },
                 "volumes": {
@@ -4058,7 +4318,10 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Snapshots of the cluster's etcd, which holds every object of the cluster but its volumes' data, on a schedule to one of the S3 targets an administrator set, beside the cluster's Velero backups in an etcd folder of its own. Kubehenge's controller takes each snapshot through the cluster's API server with a client certificate it signs for itself, encrypts it with age to a key of the cluster's own in the \u003ccluster\u003e-backup-keys Secret, and stores it with the credential typed into the interface for the cluster, or else the one for every cluster; no key or credential enters the cluster. Restoring one brings back the cluster's objects as they were, for a cluster that lost its etcd quorum or had its objects deleted or damaged.",
+              "default": {
+                "enabled": true
+              },
+              "description": "Snapshots of the cluster's etcd, which holds every object of the cluster but its volumes' data, on a schedule. They go to one of the S3 targets an administrator set, beside the cluster's Velero backups in an etcd folder of its own, or without a target to the management cluster's backup volume. Kubehenge's controller takes each snapshot through the cluster's API server with a client certificate it signs for itself, encrypts it with age to a key of the cluster's own in the \u003ccluster\u003e-backup-keys Secret, and stores it, in a target with the credential typed into the interface for the cluster, or else the one for every cluster; no key or credential enters the cluster. Restoring one brings back the cluster's objects as they were, for a cluster that lost its etcd quorum or had its objects deleted or damaged.",
               "properties": {
                 "distributionUpload": {
                   "default": false,
@@ -4066,7 +4329,7 @@
                   "type": "boolean"
                 },
                 "enabled": {
-                  "default": false,
+                  "default": true,
                   "type": "boolean"
                 },
                 "keep": {
@@ -4084,22 +4347,21 @@
                   "type": "string"
                 },
                 "target": {
-                  "description": "The administrator's target to store the snapshots in, by name.",
+                  "description": "The administrator's target to store the snapshots in, by name. Without one they go to the management cluster's backup volume.",
                   "maxLength": 63,
                   "minLength": 1,
                   "type": "string"
                 },
                 "timeZone": {
-                  "default": "UTC",
-                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin.",
+                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                   "type": "string"
                 }
               },
               "type": "object",
               "x-kubernetes-validations": [
                 {
-                  "message": "etcd snapshots need a target.",
-                  "rule": "!self.enabled || has(self.target)"
+                  "message": "The distribution's own upload needs a target, as the servers upload to a bucket.",
+                  "rule": "!has(self.distributionUpload) || !self.distributionUpload || has(self.target)"
                 },
                 {
                   "message": "The distribution's own upload takes the target, schedule and keep of etcd snapshots, which are off.",
@@ -4866,7 +5128,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order. They turn on the firewall of each node's VM and network interface. Inbound traffic no rule accepts is dropped, so the groups must accept the cluster's own traffic. Unset, the firewall is left alone. A change replaces the nodes.",
+              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order, after the cluster's own traffic and before the serving ports, so a group can drop or narrow those. They need the firewall on. A change replaces the nodes.",
               "items": {
                 "maxLength": 18,
                 "minLength": 2,
@@ -4877,6 +5139,74 @@
               "minItems": 1,
               "type": "array",
               "uniqueItems": true
+            }
+          }
+        },
+        {
+          "name": "firewall",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": {
+                "enabled": true
+              },
+              "description": "The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound traffic except the cluster's own, the management side's, what the security groups let in, the serving ports and the ports listed here. It acts only while Proxmox VE's datacenter firewall is on. A change replaces the nodes.",
+              "properties": {
+                "enabled": {
+                  "default": true,
+                  "type": "boolean"
+                },
+                "ports": {
+                  "description": "Further ports the nodes accept from anywhere.",
+                  "items": {
+                    "properties": {
+                      "endPort": {
+                        "description": "The last port of a range from port.",
+                        "maximum": 65535,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "port": {
+                        "maximum": 65535,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "protocol": {
+                        "enum": [
+                          "tcp",
+                          "udp"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "protocol",
+                      "port"
+                    ],
+                    "type": "object",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "A range ends above its first port.",
+                        "rule": "!has(self.endPort) || self.endPort \u003e self.port"
+                      }
+                    ]
+                  },
+                  "maxItems": 32,
+                  "type": "array"
+                },
+                "servingPorts": {
+                  "default": true,
+                  "description": "Whether the nodes accept the Kubernetes API (6443), the Talos API (50000, Talos only), ingress (80 and 443), the load-balancer addresses, the NodePorts (30000 to 32767) and ICMP echo from anywhere. Off, only the security groups and the ports listed let them in.",
+                  "type": "boolean"
+                }
+              },
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "Ports need the firewall on.",
+                  "rule": "!has(self.ports) || !has(self.enabled) || self.enabled"
+                }
+              ]
             }
           }
         },
@@ -4974,8 +5304,7 @@
                       "type": "string"
                     },
                     "timeZone": {
-                      "default": "UTC",
-                      "description": "IANA time zone of start, such as Europe/Berlin.",
+                      "description": "IANA time zone of start, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                       "type": "string"
                     },
                     "weekdays": {
@@ -5700,7 +6029,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read.",
+              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read. A cluster that sets none trusts the site CA.",
               "items": {
                 "maxLength": 65536,
                 "minLength": 64,
@@ -5708,6 +6037,23 @@
                 "type": "string"
               },
               "maxItems": 8,
+              "type": "array"
+            }
+          }
+        },
+        {
+          "name": "siteCAs",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "The site CA the controller gives a cluster that sets no trustedCAs.",
+              "items": {
+                "maxLength": 65536,
+                "minLength": 64,
+                "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                "type": "string"
+              },
+              "maxItems": 1,
               "type": "array"
             }
           }
@@ -5898,6 +6244,34 @@
             }
           ],
           "name": "reach-etcdSnapshots"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .firewall }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-firewall"
         },
         {
           "definitions": [
@@ -6107,6 +6481,34 @@
             }
           ],
           "name": "reach-storage"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .vmIDRange }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-vmIDRange"
         },
         {
           "definitions": [
@@ -6365,6 +6767,38 @@
               ],
               "minLength": 1,
               "type": "string"
+            }
+          }
+        },
+        {
+          "name": "vmIDRange",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "The VM IDs the cluster's VMs take, both ends included. A new cluster that sets none takes the site's, else Proxmox VE's next free ID.",
+              "properties": {
+                "end": {
+                  "maximum": 999999999,
+                  "minimum": 100,
+                  "type": "integer"
+                },
+                "start": {
+                  "maximum": 999999999,
+                  "minimum": 100,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "start",
+                "end"
+              ],
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "The range starts above its end.",
+                  "rule": "self.start \u003c= self.end"
+                }
+              ]
             }
           }
         },
@@ -6904,8 +7338,7 @@
                   "type": "string"
                 },
                 "timeZone": {
-                  "default": "UTC",
-                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin.",
+                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                   "type": "string"
                 },
                 "volumes": {
@@ -6933,7 +7366,10 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Snapshots of the cluster's etcd, which holds every object of the cluster but its volumes' data, on a schedule to one of the S3 targets an administrator set, beside the cluster's Velero backups in an etcd folder of its own. Kubehenge's controller takes each snapshot through the cluster's API server with a client certificate it signs for itself, encrypts it with age to a key of the cluster's own in the \u003ccluster\u003e-backup-keys Secret, and stores it with the credential typed into the interface for the cluster, or else the one for every cluster; no key or credential enters the cluster. Restoring one brings back the cluster's objects as they were, for a cluster that lost its etcd quorum or had its objects deleted or damaged.",
+              "default": {
+                "enabled": true
+              },
+              "description": "Snapshots of the cluster's etcd, which holds every object of the cluster but its volumes' data, on a schedule. They go to one of the S3 targets an administrator set, beside the cluster's Velero backups in an etcd folder of its own, or without a target to the management cluster's backup volume. Kubehenge's controller takes each snapshot through the cluster's API server with a client certificate it signs for itself, encrypts it with age to a key of the cluster's own in the \u003ccluster\u003e-backup-keys Secret, and stores it, in a target with the credential typed into the interface for the cluster, or else the one for every cluster; no key or credential enters the cluster. Restoring one brings back the cluster's objects as they were, for a cluster that lost its etcd quorum or had its objects deleted or damaged.",
               "properties": {
                 "distributionUpload": {
                   "default": false,
@@ -6941,7 +7377,7 @@
                   "type": "boolean"
                 },
                 "enabled": {
-                  "default": false,
+                  "default": true,
                   "type": "boolean"
                 },
                 "keep": {
@@ -6959,22 +7395,21 @@
                   "type": "string"
                 },
                 "target": {
-                  "description": "The administrator's target to store the snapshots in, by name.",
+                  "description": "The administrator's target to store the snapshots in, by name. Without one they go to the management cluster's backup volume.",
                   "maxLength": 63,
                   "minLength": 1,
                   "type": "string"
                 },
                 "timeZone": {
-                  "default": "UTC",
-                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin.",
+                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                   "type": "string"
                 }
               },
               "type": "object",
               "x-kubernetes-validations": [
                 {
-                  "message": "etcd snapshots need a target.",
-                  "rule": "!self.enabled || has(self.target)"
+                  "message": "The distribution's own upload needs a target, as the servers upload to a bucket.",
+                  "rule": "!has(self.distributionUpload) || !self.distributionUpload || has(self.target)"
                 },
                 {
                   "message": "The distribution's own upload takes the target, schedule and keep of etcd snapshots, which are off.",
@@ -7741,7 +8176,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order. They turn on the firewall of each node's VM and network interface. Inbound traffic no rule accepts is dropped, so the groups must accept the cluster's own traffic. Unset, the firewall is left alone. A change replaces the nodes.",
+              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order, after the cluster's own traffic and before the serving ports, so a group can drop or narrow those. They need the firewall on. A change replaces the nodes.",
               "items": {
                 "maxLength": 18,
                 "minLength": 2,
@@ -7752,6 +8187,74 @@
               "minItems": 1,
               "type": "array",
               "uniqueItems": true
+            }
+          }
+        },
+        {
+          "name": "firewall",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": {
+                "enabled": true
+              },
+              "description": "The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound traffic except the cluster's own, the management side's, what the security groups let in, the serving ports and the ports listed here. It acts only while Proxmox VE's datacenter firewall is on. A change replaces the nodes.",
+              "properties": {
+                "enabled": {
+                  "default": true,
+                  "type": "boolean"
+                },
+                "ports": {
+                  "description": "Further ports the nodes accept from anywhere.",
+                  "items": {
+                    "properties": {
+                      "endPort": {
+                        "description": "The last port of a range from port.",
+                        "maximum": 65535,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "port": {
+                        "maximum": 65535,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "protocol": {
+                        "enum": [
+                          "tcp",
+                          "udp"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "protocol",
+                      "port"
+                    ],
+                    "type": "object",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "A range ends above its first port.",
+                        "rule": "!has(self.endPort) || self.endPort \u003e self.port"
+                      }
+                    ]
+                  },
+                  "maxItems": 32,
+                  "type": "array"
+                },
+                "servingPorts": {
+                  "default": true,
+                  "description": "Whether the nodes accept the Kubernetes API (6443), the Talos API (50000, Talos only), ingress (80 and 443), the load-balancer addresses, the NodePorts (30000 to 32767) and ICMP echo from anywhere. Off, only the security groups and the ports listed let them in.",
+                  "type": "boolean"
+                }
+              },
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "Ports need the firewall on.",
+                  "rule": "!has(self.ports) || !has(self.enabled) || self.enabled"
+                }
+              ]
             }
           }
         },
@@ -7849,8 +8352,7 @@
                       "type": "string"
                     },
                     "timeZone": {
-                      "default": "UTC",
-                      "description": "IANA time zone of start, such as Europe/Berlin.",
+                      "description": "IANA time zone of start, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                       "type": "string"
                     },
                     "weekdays": {
@@ -8571,7 +9073,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read.",
+              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read. A cluster that sets none trusts the site CA.",
               "items": {
                 "maxLength": 65536,
                 "minLength": 64,
@@ -8579,6 +9081,23 @@
                 "type": "string"
               },
               "maxItems": 8,
+              "type": "array"
+            }
+          }
+        },
+        {
+          "name": "siteCAs",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "The site CA the controller gives a cluster that sets no trustedCAs.",
+              "items": {
+                "maxLength": 65536,
+                "minLength": 64,
+                "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                "type": "string"
+              },
+              "maxItems": 1,
               "type": "array"
             }
           }
@@ -8787,6 +9306,34 @@
                   "op": "add",
                   "path": "/spec",
                   "valueFrom": {
+                    "template": "{{ .firewall }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-firewall"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
                     "template": "{{ .network }}"
                   }
                 }
@@ -8936,6 +9483,34 @@
             }
           ],
           "name": "reach-storage"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
+                    "template": "{{ .vmIDRange }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-vmIDRange"
         },
         {
           "definitions": [
@@ -9194,6 +9769,38 @@
               ],
               "minLength": 1,
               "type": "string"
+            }
+          }
+        },
+        {
+          "name": "vmIDRange",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "The VM IDs the cluster's VMs take, both ends included. A new cluster that sets none takes the site's, else Proxmox VE's next free ID.",
+              "properties": {
+                "end": {
+                  "maximum": 999999999,
+                  "minimum": 100,
+                  "type": "integer"
+                },
+                "start": {
+                  "maximum": 999999999,
+                  "minimum": 100,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "start",
+                "end"
+              ],
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "The range starts above its end.",
+                  "rule": "self.start \u003c= self.end"
+                }
+              ]
             }
           }
         },
@@ -9733,8 +10340,7 @@
                   "type": "string"
                 },
                 "timeZone": {
-                  "default": "UTC",
-                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin.",
+                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                   "type": "string"
                 },
                 "volumes": {
@@ -9762,7 +10368,10 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Snapshots of the cluster's etcd, which holds every object of the cluster but its volumes' data, on a schedule to one of the S3 targets an administrator set, beside the cluster's Velero backups in an etcd folder of its own. Kubehenge's controller takes each snapshot through the cluster's API server with a client certificate it signs for itself, encrypts it with age to a key of the cluster's own in the \u003ccluster\u003e-backup-keys Secret, and stores it with the credential typed into the interface for the cluster, or else the one for every cluster; no key or credential enters the cluster. Restoring one brings back the cluster's objects as they were, for a cluster that lost its etcd quorum or had its objects deleted or damaged.",
+              "default": {
+                "enabled": true
+              },
+              "description": "Snapshots of the cluster's etcd, which holds every object of the cluster but its volumes' data, on a schedule. They go to one of the S3 targets an administrator set, beside the cluster's Velero backups in an etcd folder of its own, or without a target to the management cluster's backup volume. Kubehenge's controller takes each snapshot through the cluster's API server with a client certificate it signs for itself, encrypts it with age to a key of the cluster's own in the \u003ccluster\u003e-backup-keys Secret, and stores it, in a target with the credential typed into the interface for the cluster, or else the one for every cluster; no key or credential enters the cluster. Restoring one brings back the cluster's objects as they were, for a cluster that lost its etcd quorum or had its objects deleted or damaged.",
               "properties": {
                 "distributionUpload": {
                   "default": false,
@@ -9770,7 +10379,7 @@
                   "type": "boolean"
                 },
                 "enabled": {
-                  "default": false,
+                  "default": true,
                   "type": "boolean"
                 },
                 "keep": {
@@ -9788,22 +10397,21 @@
                   "type": "string"
                 },
                 "target": {
-                  "description": "The administrator's target to store the snapshots in, by name.",
+                  "description": "The administrator's target to store the snapshots in, by name. Without one they go to the management cluster's backup volume.",
                   "maxLength": 63,
                   "minLength": 1,
                   "type": "string"
                 },
                 "timeZone": {
-                  "default": "UTC",
-                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin.",
+                  "description": "IANA time zone the schedule is read in, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                   "type": "string"
                 }
               },
               "type": "object",
               "x-kubernetes-validations": [
                 {
-                  "message": "etcd snapshots need a target.",
-                  "rule": "!self.enabled || has(self.target)"
+                  "message": "The distribution's own upload needs a target, as the servers upload to a bucket.",
+                  "rule": "!has(self.distributionUpload) || !self.distributionUpload || has(self.target)"
                 },
                 {
                   "message": "The distribution's own upload takes the target, schedule and keep of etcd snapshots, which are off.",
@@ -10570,7 +11178,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order. They turn on the firewall of each node's VM and network interface. Inbound traffic no rule accepts is dropped, so the groups must accept the cluster's own traffic. Unset, the firewall is left alone. A change replaces the nodes.",
+              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order, after the cluster's own traffic and before the serving ports, so a group can drop or narrow those. They need the firewall on. A change replaces the nodes.",
               "items": {
                 "maxLength": 18,
                 "minLength": 2,
@@ -10581,6 +11189,74 @@
               "minItems": 1,
               "type": "array",
               "uniqueItems": true
+            }
+          }
+        },
+        {
+          "name": "firewall",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": {
+                "enabled": true
+              },
+              "description": "The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound traffic except the cluster's own, the management side's, what the security groups let in, the serving ports and the ports listed here. It acts only while Proxmox VE's datacenter firewall is on. A change replaces the nodes.",
+              "properties": {
+                "enabled": {
+                  "default": true,
+                  "type": "boolean"
+                },
+                "ports": {
+                  "description": "Further ports the nodes accept from anywhere.",
+                  "items": {
+                    "properties": {
+                      "endPort": {
+                        "description": "The last port of a range from port.",
+                        "maximum": 65535,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "port": {
+                        "maximum": 65535,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "protocol": {
+                        "enum": [
+                          "tcp",
+                          "udp"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "protocol",
+                      "port"
+                    ],
+                    "type": "object",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "A range ends above its first port.",
+                        "rule": "!has(self.endPort) || self.endPort \u003e self.port"
+                      }
+                    ]
+                  },
+                  "maxItems": 32,
+                  "type": "array"
+                },
+                "servingPorts": {
+                  "default": true,
+                  "description": "Whether the nodes accept the Kubernetes API (6443), the Talos API (50000, Talos only), ingress (80 and 443), the load-balancer addresses, the NodePorts (30000 to 32767) and ICMP echo from anywhere. Off, only the security groups and the ports listed let them in.",
+                  "type": "boolean"
+                }
+              },
+              "type": "object",
+              "x-kubernetes-validations": [
+                {
+                  "message": "Ports need the firewall on.",
+                  "rule": "!has(self.ports) || !has(self.enabled) || self.enabled"
+                }
+              ]
             }
           }
         },
@@ -10678,8 +11354,7 @@
                       "type": "string"
                     },
                     "timeZone": {
-                      "default": "UTC",
-                      "description": "IANA time zone of start, such as Europe/Berlin.",
+                      "description": "IANA time zone of start, such as Europe/Berlin. Without one, the site time zone, else UTC.",
                       "type": "string"
                     },
                     "weekdays": {
@@ -11355,7 +12030,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read.",
+              "description": "Authorities the nodes trust besides their OS's own, as PEM bundles. They go into the node OS's trust store, which the container runtime and the distribution read. A cluster that sets none trusts the site CA.",
               "items": {
                 "maxLength": 65536,
                 "minLength": 64,
@@ -11363,6 +12038,23 @@
                 "type": "string"
               },
               "maxItems": 8,
+              "type": "array"
+            }
+          }
+        },
+        {
+          "name": "siteCAs",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "description": "The site CA the controller gives a cluster that sets no trustedCAs.",
+              "items": {
+                "maxLength": 65536,
+                "minLength": 64,
+                "pattern": "^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$",
+                "type": "string"
+              },
+              "maxItems": 1,
               "type": "array"
             }
           }

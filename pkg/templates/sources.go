@@ -109,7 +109,7 @@ func (s *Sources) Resolve(ctx context.Context, ref ImageRef) (Resolved, error) {
 	if err != nil {
 		return Resolved{}, err
 	}
-	resolved, err := f.Image(ctx, s, r)
+	resolved, err := f.Image(ctx, s, &r)
 	if err != nil {
 		return Resolved{}, fmt.Errorf("the image of %s %s: %w", f.Title(), r.Name, err)
 	}
@@ -230,27 +230,66 @@ func (s *Sources) get(ctx context.Context, address string) ([]byte, error) {
 	return s.do(ctx, http.MethodGet, s.at(address), nil)
 }
 
-// signedImage resolves an image whose publisher lists its SHA-256 in a checksum file it signs with
-// a detached signature at sigURL: the signature is checked against the embedded key, which must be
-// the one with the pinned fingerprint, before the checksum is read. The template's disk is
-// downloaded under fileName.
-func (s *Sources) signedImage(ctx context.Context, signer signingKey, imageURL, sumsURL, sigURL, fileName string) (Resolved, error) {
-	sums, err := s.signedPair(ctx, signer, sumsURL, sigURL)
-	if err != nil {
-		return Resolved{}, err
-	}
-	file := imageURL[strings.LastIndex(imageURL, "/")+1:]
-	sum, err := findChecksum(sums, file)
-	if err != nil {
-		return Resolved{}, err
-	}
-	return Resolved{
-		URL:               s.at(imageURL),
-		FileName:          fmt.Sprintf("template-%s-%s.qcow2", fileName, sum[:12]),
-		Checksum:          sum,
-		ChecksumAlgorithm: "sha256",
-	}, nil
+// pinnedImage is a publisher's image, pinned by its SHA-256.
+type pinnedImage struct {
+	signer signingKey
+	// dirs are the folders the publisher keeps the image in over its life, in the order they are
+	// tried: a publisher moves a release's images from its mirror to its vault.
+	dirs []string
+	file string
+	// sums is the checksum file that lists the image, in the image's folder. Its detached signature
+	// is beside it, named sums and .asc.
+	sums   string
+	sha256 string
+	// saveAs names the template's disk in the import storage.
+	saveAs string
 }
+
+// signedImage resolves an image to the first of its folders that holds its signed checksum file
+// and the image. The signature is checked against the embedded key, which must be the one with the
+// pinned fingerprint, before the checksum is read. A checksum other than the pinned one is refused.
+func (s *Sources) signedImage(ctx context.Context, img *pinnedImage) (Resolved, error) {
+	var err error
+	for _, dir := range img.dirs {
+		var sum string
+		sum, err = s.signedSum(ctx, img, dir)
+		if err == nil && sum != img.sha256 {
+			return Resolved{}, fmt.Errorf("%s/%s lists %s with the SHA-256 %s, not the pinned %q", dir, img.sums, img.file, sum, img.sha256)
+		}
+		if err == nil {
+			// A publisher's cache can still hand out a dropped folder's checksum files.
+			_, err = s.do(ctx, http.MethodHead, s.at(dir+"/"+img.file), nil)
+		}
+		if _, absent := errors.AsType[absentError](err); absent {
+			continue
+		}
+		if err != nil {
+			return Resolved{}, err
+		}
+		return Resolved{
+			URL:               s.at(dir + "/" + img.file),
+			FileName:          fmt.Sprintf("template-%s-%s.qcow2", img.saveAs, sum[:12]),
+			Checksum:          sum,
+			ChecksumAlgorithm: "sha256",
+		}, nil
+	}
+	return Resolved{}, fmt.Errorf("the publisher keeps %s in none of its folders: %w", img.file, err)
+}
+
+// signedSum reads the image's SHA-256 from the signed checksum file of one of its folders.
+func (s *Sources) signedSum(ctx context.Context, img *pinnedImage, dir string) (string, error) {
+	sums, err := s.signedPair(ctx, img.signer, dir+"/"+img.sums, dir+"/"+img.sums+".asc")
+	if err != nil {
+		return "", err
+	}
+	return findChecksum(sums, img.file)
+}
+
+// absentError is a file its publisher does not keep at an address. An image's checksum file may
+// then be in the publisher's next folder.
+type absentError struct{ error }
+
+func (e absentError) Unwrap() error { return e.error }
 
 // signedPair returns a checksum file whose signature verifies. Both files are fetched again together
 // while they disagree, because a cache can hand out one new file beside the other's old copy. A
@@ -403,8 +442,11 @@ func (s *Sources) once(ctx context.Context, method, address string, body []byte)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		err = fmt.Errorf("%s %s: %s", method, address, resp.Status)
-		if TransientStatus(resp.StatusCode) {
+		switch {
+		case TransientStatus(resp.StatusCode):
 			err = Transient(err)
+		case resp.StatusCode == http.StatusNotFound:
+			err = absentError{err}
 		}
 		return nil, err
 	}

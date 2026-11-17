@@ -27,7 +27,7 @@ func (o *serveOptions) savedReleaseMirror() provisioner.ReleaseMirror {
 	if saved == nil {
 		return provisioner.ReleaseMirror{}
 	}
-	return saved.ReleaseMirror.Mirror()
+	return saved.EffectiveReleaseMirror()
 }
 
 // savedGuestProxy is the proxy the appliance's template builds give their guests, nil without one.

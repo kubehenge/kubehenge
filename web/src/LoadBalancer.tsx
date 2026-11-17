@@ -8,6 +8,7 @@ import {
   hasFamily,
   isRouterID,
   list,
+  offNetworkText,
   overlapping,
   parseAddress,
   reservedAddresses,
@@ -16,7 +17,7 @@ import {
   type NodeNetwork,
 } from "./network";
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, Field, useChange } from "./ui";
+import { Dialog, ErrorBox, Field, stageLabel, useChange } from "./ui";
 import { flag, quantity, record, text, texts } from "./values";
 
 /** The load balancers a cluster chooses from, by their names in its loadBalancer variable; "" is none. */
@@ -26,11 +27,29 @@ export type Implementation = "" | "metallb" | "kube-vip";
 // cluster has a load balancer of its own.
 const noneText = (distribution: string | undefined): string => (distribution === "k3s" ? "k3s's own" : "None");
 
-const implementationOptions = (distribution: string | undefined): { value: Implementation; label: string }[] => [
-  { value: "", label: noneText(distribution) },
-  { value: "metallb", label: "MetalLB (recommended)" },
-  { value: "kube-vip", label: "kube-vip" },
-];
+/**
+ * recommendedImplementation is the load balancer a form with these addresses is best served by:
+ * MetalLB once it has a range to hand out, and the distribution's own (or none) before.
+ */
+export const recommendedImplementation = (addresses: string): Implementation =>
+  addresses.trim() === "" ? "" : "metallb";
+
+const recommendedMark = " (recommended)";
+
+const implementationOptions = (
+  distribution: string | undefined,
+  addresses: string,
+): { value: Implementation; label: string }[] => {
+  const recommended = recommendedImplementation(addresses);
+  // None is no recommendation, but the distribution's own load balancer is one.
+  const mark = (value: Implementation, label: string): string =>
+    value === recommended && (value !== "" || distribution === "k3s") ? label + recommendedMark : label;
+  return [
+    { value: "", label: mark("", noneText(distribution)) },
+    { value: "metallb", label: mark("metallb", "MetalLB") },
+    { value: "kube-vip", label: "kube-vip" },
+  ];
+};
 
 /** How a cluster's load balancer announces addresses: ARP on the nodes' network, or BGP to routers. */
 export type Mode = "l2" | "bgp";
@@ -126,12 +145,18 @@ export function loadBalancerText(lb: LoadBalancer, distribution: string | undefi
   return `${lb.implementation === "kube-vip" ? "kube-vip" : "MetalLB"}, on ${lb.addresses.join(", ")}${bgp}`;
 }
 
-const loadBalancerInfo = "Gives each LoadBalancer Service its own address.";
+/** loadBalancerInfo says what each choice gives a LoadBalancer Service. */
+const loadBalancerInfo = (distribution: string | undefined): string =>
+  `MetalLB or kube-vip gives each LoadBalancer Service an address from the range below. ${
+    distribution === "k3s"
+      ? "With k3s's own, a Service answers on the nodes' own addresses."
+      : "With none, a Service gets no address."
+  }`;
 
-const addressesHint = (families: FamilyChoice): string =>
-  hasFamily(families, "IPv4")
-    ? "Free addresses on the nodes' network, like 10.0.0.100-10.0.0.120"
-    : "Free addresses on the nodes' network, like 2001:db8::100-2001:db8::120";
+const addressesHint = (families: FamilyChoice, example?: string): string => {
+  const like = example ?? (hasFamily(families, "IPv4") ? "10.0.0.100-10.0.0.120" : "2001:db8::100-2001:db8::120");
+  return `Free addresses on the nodes' network, like ${like}`;
+};
 
 const routedHint = (families: FamilyChoice): string =>
   hasFamily(families, "IPv4")
@@ -266,9 +291,7 @@ export function addressesProblem(entries: string[], network: NodesNetwork, route
   const networks = networksOf(network).map((n) => ({ gateway: n.gateway, prefix: routed ? 0 : n.prefix }));
   const { bad } = addressCountIn(entries, networks);
   if (bad !== undefined) {
-    return routed
-      ? `${bad} is not an address, range or network`
-      : `${bad} is not an address, range or network on the gateway's network`;
+    return routed ? `${bad} is not an address, range or network` : offNetworkText(bad);
   }
   const reserved = holdingReserved(entries, network);
   if (reserved !== undefined) {
@@ -312,9 +335,6 @@ export interface LoadBalancerErrors {
   routerID?: string | undefined;
 }
 
-/** The fields of a value that can change. */
-export type LoadBalancerKey = keyof LoadBalancerValue;
-
 /** bgpOffered tells whether a cluster may announce over BGP: with MetalLB, and not on Talos. */
 export const bgpOffered = (distribution: string | undefined, implementation: Implementation): boolean =>
   implementation === "metallb" && distribution !== "talos";
@@ -327,8 +347,14 @@ export function LoadBalancerFields({
   errors,
   onChange,
   password,
+  example,
+  rangeOffered = false,
 }: {
   distribution: string | undefined;
+  /** Whether the address range shows with no load balancer chosen, where typing one chooses MetalLB. */
+  rangeOffered?: boolean;
+  /** A range on the nodes' network to show as the example, where the network is known. */
+  example?: string | undefined;
   families: FamilyChoice;
   value: LoadBalancerValue;
   errors: LoadBalancerErrors;
@@ -336,11 +362,11 @@ export function LoadBalancerFields({
   /** Where the routers' password is entered: a field in the wizard, the stored credential on a running cluster. */
   password: ReactNode;
 }): JSX.Element {
-  const options = implementationOptions(distribution);
+  const options = implementationOptions(distribution, value.addresses);
   const bgp = value.mode === "bgp" && bgpOffered(distribution, value.implementation);
   return (
     <>
-      <Field label="Load balancer" info={loadBalancerInfo}>
+      <Field label="Load balancer" info={loadBalancerInfo(distribution)}>
         {(id) => (
           <select
             id={id}
@@ -372,10 +398,10 @@ export function LoadBalancerFields({
           )}
         </Field>
       )}
-      {value.implementation !== "" && (
+      {(value.implementation !== "" || rangeOffered) && (
         <Field
           label="Load-balancer addresses"
-          hint={bgp ? routedHint(families) : addressesHint(families)}
+          hint={bgp ? routedHint(families) : addressesHint(families, example)}
           error={errors.addresses}
         >
           {(id) => (
@@ -474,7 +500,7 @@ export function LoadBalancerDialog({ cluster: c, onClose }: { cluster: Cluster; 
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed || invalid}>
-            Save
+            {stageLabel}
           </button>
         </>
       }

@@ -101,7 +101,7 @@ export function outputProblems(outputs: LogOutput[]): Record<string, string> {
   }
   outputs.forEach((o, i) => {
     if (!namePattern.test(o.name) || o.name.length > maxOutputName) {
-      p[`${i}.name`] = `Lower-case letters, digits and hyphens, at most ${maxOutputName}`;
+      p[`${i}.name`] = `Lowercase letters, digits and hyphens, at most ${maxOutputName}`;
     } else if (outputs.some((other, j) => j < i && other.name === o.name)) {
       p[`${i}.name`] = "Already used";
     }
@@ -120,6 +120,3 @@ export function outputProblems(outputs: LogOutput[]): Record<string, string> {
   });
   return p;
 }
-
-/** outputsProblem is the first problem of a set of outputs, for a step that holds them. */
-export const outputsProblem = (outputs: LogOutput[]): string | undefined => Object.values(outputProblems(outputs))[0];

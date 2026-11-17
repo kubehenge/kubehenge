@@ -128,7 +128,7 @@ func (s *Server) restoreSource(ctx context.Context, w http.ResponseWriter, r *ht
 		return "", false
 	}
 	if req.volumeData() && l.GetAnnotations()[provisioner.VolumeDataAnnotation] != "true" {
-		writeError(w, http.StatusConflict, fmt.Sprintf("this cluster's Velero cannot read the volumes' data of %s's backups; restore without it", from))
+		writeError(w, http.StatusConflict, fmt.Sprintf("this cluster's Velero cannot read the volumes' data of %s's backups. Restore without it", from))
 		return "", false
 	}
 	return from, true

@@ -3,6 +3,7 @@ package installer
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"os"
 	"slices"
 	"strings"
@@ -17,6 +18,12 @@ type Session struct {
 	CA    *CAChoice
 	// Notices are the one-line decisions made without asking, such as the storage picked.
 	Notices []string
+	// Cautions are what the person has to know before installing, shown in the summary as well as
+	// in the plain output: a choice that leaves part of what they run unable to reach the API.
+	Cautions []string
+
+	// vlanAware holds what routeVLANError read of each bridge, as a form checks on every key.
+	vlanAware map[string]bool
 }
 
 // Needs lists the questions still open.
@@ -47,16 +54,19 @@ func (s *Session) Prepare(ctx context.Context) error {
 		e := facts.Existing[0]
 		return userErr(fmt.Sprintf("an appliance exists as container %s on %s", e.ID, e.Node), "Run this with --upgrade on that node")
 	}
-	list := strings.Join(facts.Bridges, ", ")
-	if list == "" {
-		list = optNone
+	if len(facts.Bridges) == 0 {
+		return userErr("this node lists no bridge, Open vSwitch bridge or SDN VNet for the container's network", "Create one in the node's network settings, apply them, then run this again")
 	}
+	list := strings.Join(facts.Bridges, ", ")
 	if s.Cfg.Bridge != "" {
 		if !contains(facts.Bridges, s.Cfg.Bridge) {
 			return userErr(s.Cfg.Bridge+" is no bridge, Open vSwitch bridge or SDN VNet of this node", "Name one of "+list+" with --bridge")
 		}
 	} else if facts.DefaultBridge != "" {
 		s.Cfg.Bridge = facts.DefaultBridge
+	}
+	if err = s.checkRouteVLAN(ctx); err != nil {
+		return err
 	}
 	if s.Cfg.CTID == "" {
 		s.Cfg.CTID = facts.NextID
@@ -74,7 +84,7 @@ func (s *Session) CheckStaticFree(ctx context.Context) error {
 		return nil
 	}
 	addr, _, _ := strings.Cut(c.IP, "/")
-	if s.Node.AddressInUse(ctx, c.Bridge, addr) {
+	if s.Node.AddressInUse(ctx, s.Facts.addressDevice(c.Bridge, c.VLAN), addr) {
 		return userErr(addr+" answers on the network of "+c.Bridge, "Give a free address with --ip")
 	}
 	return nil
@@ -88,13 +98,14 @@ func contains(list []string, want string) bool {
 // the user picked another bridge.
 func (s *Session) RefreshForBridge(ctx context.Context, bridge string) {
 	s.Cfg.Bridge = bridge
-	s.Facts.Prefix = s.Node.bridgeAddress4(ctx, bridge)
-	s.Facts.NodeDHCP = s.Node.bridgeIsDHCP(bridge)
+	dev := s.Facts.addressDevice(bridge, s.Cfg.VLAN)
+	s.Facts.Prefix = s.Node.bridgeAddress4(ctx, dev)
+	s.Facts.NodeDHCP = s.Node.bridgeIsDHCP(dev)
 	s.Facts.SuggestedIP = ""
 	if s.Facts.Prefix.IsValid() {
-		s.Facts.SuggestedIP = s.Node.SuggestAddress(ctx, bridge, s.Facts)
+		s.Facts.SuggestedIP = s.Node.SuggestAddress(ctx, dev, s.Facts)
 	}
-	s.Facts.Candidates = s.Node.APICandidates(ctx, s.Facts, bridge)
+	s.Facts.Candidates = s.Node.APICandidates(ctx, s.Facts, dev)
 }
 
 // Questions says which questions the options and the node leave open.
@@ -135,7 +146,7 @@ func (s *Session) FillStorages(ties Ties) error {
 			return userErr("no enabled, active storage here takes container disks", "Enable one, or name one with --storage")
 		case len(list) == 1 || ties == PickBest:
 			c.Storage = list[0].Name
-			s.noticef("storage %s (%s) for the appliance's disks, %s", list[0].Name, list[0].Type, why(len(list)))
+			s.noticef("storage %s (%s) for the appliance's disks, %s", list[0].Name, list[0].Type, why(len(list), false))
 		}
 	} else if !hasStorage(s.Facts.RootStorages, c.Storage) {
 		return userErr(fmt.Sprintf("storage %s is disabled, inactive, takes no container disks here or has under 9 GiB free for them", c.Storage), "Name another with --storage")
@@ -146,22 +157,31 @@ func (s *Session) FillStorages(ties Ties) error {
 		case s.Facts.TemplateHeld != "":
 			c.TemplateStorage = s.Facts.TemplateHeld
 		case len(list) == 0:
-			return userErr("no enabled, active storage here takes container templates", "Enable one, or name one with --template-storage")
+			return userErr("no enabled, active storage here takes container templates", "Give a directory, NFS or CIFS storage the content type Container template, or name one with --template-storage")
 		case len(list) == 1 || ties == PickBest:
 			c.TemplateStorage = list[0].Name
-			s.noticef("storage %s (%s) for the container template, %s", list[0].Name, list[0].Type, why(len(list)))
+			room := ""
+			if s.Facts.TemplateShort {
+				room = fmt.Sprintf(", though under %d MiB and short of room for it", templateKiB/kibPerMiB)
+			}
+			s.noticef("storage %s (%s) for the container template, %s%s", list[0].Name, list[0].Type, why(len(list), s.Facts.TemplateShort), room)
 		}
-	} else if !hasStorage(s.Facts.TemplateStorages, c.TemplateStorage) {
+	} else if !hasStorage(s.Facts.TemplateStorages, c.TemplateStorage) && !hasStorage(s.Facts.TemplateTight, c.TemplateStorage) {
 		return userErr(fmt.Sprintf("storage %s is disabled, inactive or takes no container templates here", c.TemplateStorage), "Name another with --template-storage")
 	}
 	return nil
 }
 
-func why(count int) string {
-	if count > 1 {
-		return fmt.Sprintf("the best of %d by type and free space", count)
+// why says how the storage was picked from the count that take the content. With all of them
+// short of room, the pick is the one with the most free, not the best.
+func why(count int, short bool) string {
+	switch {
+	case count == 1:
+		return "the only one here that takes it"
+	case short:
+		return fmt.Sprintf("the most free of %d", count)
 	}
-	return "the only one here that takes it"
+	return fmt.Sprintf("the best of %d by type and free space", count)
 }
 
 func hasStorage(list []Storage, name string) bool {
@@ -178,11 +198,13 @@ func hasStorage(list []Storage, name string) bool {
 func (s *Session) ResolveAPI(ctx context.Context, ties Ties) error {
 	c := &s.Cfg
 	if c.ProxmoxURL == "" {
+		s.Cautions = nil
 		asked, err := s.pickAPIHost(ties)
 		if err != nil || asked {
 			return err
 		}
 		c.ProxmoxURL = APIURL(c.APIHost)
+		s.noteAPIFamily()
 	}
 	ca, err := s.Node.DecideCA(ctx, c, c.ProxmoxURL)
 	if err != nil {
@@ -193,7 +215,7 @@ func (s *Session) ResolveAPI(ctx context.Context, ties Ties) error {
 		s.noticef("the Proxmox VE API at %s is reached without checking its certificate", c.ProxmoxURL)
 	}
 	if ca.Kind == CASystem {
-		s.noticef("the Proxmox VE API's certificate rests on %s in this node's trust store", ca.Subject)
+		s.noticef("the Proxmox VE API's certificate is signed by %s, from this node's trust store", ca.Subject)
 	}
 	return nil
 }
@@ -224,8 +246,12 @@ func (s *Session) UnattendedCheck() error {
 		c.IP = optDHCP
 	}
 	if s.CA != nil && s.CA.NeedsTrust && !c.TrustServedCA && c.ProxmoxCA == "" {
+		fix := "Check that it is your CA, then give it with --proxmox-ca <file>"
+		if s.CA.Pinned {
+			fix = "The API serves no CA certificate, so only its own certificate could be trusted. The appliance would then fail when that is renewed. Give the CA that signed it with --proxmox-ca <file>"
+		}
 		return userErr(fmt.Sprintf("the Proxmox VE API at %s serves a certificate from %s (SHA-256 fingerprint %s) that this node does not trust",
-			c.ProxmoxURL, s.CA.Subject, s.CA.Fingerprint), "Check that it is your CA, then give it with --proxmox-ca <file>")
+			c.ProxmoxURL, s.CA.Subject, s.CA.Fingerprint), fix)
 	}
 	return nil
 }
@@ -248,9 +274,75 @@ func (s *Session) pickAPIHost(ties Ties) (bool, error) {
 	}
 	c.APIHost = cands[0].Host
 	if len(cands) > 1 {
-		s.noticef("the Proxmox VE API at %s, its certificate is also valid for %s", c.APIHost, joinHosts(cands[1:]))
+		s.noticef("the Proxmox VE API at %s has a certificate that is also valid for %s", c.APIHost, joinHosts(cands[1:]))
 	}
 	return false, nil
+}
+
+// noteAPIFamily notes that the API is reached at an IPv6 address because Proxmox VE's own
+// certificate lacks this node's IPv4 address on the bridge, as on a dual-stack node whose name
+// resolves to its IPv6 address first. Clusters without IPv6 cannot reach it there. A certificate of
+// the administrator's is theirs to choose.
+func (s *Session) noteAPIFamily() {
+	bridge := s.Facts.Prefix.Addr()
+	host, err := netip.ParseAddr(s.Cfg.APIHost)
+	if err != nil || !host.Unmap().Is6() || !bridge.Is4() {
+		return
+	}
+	cert, file, err := s.Node.servedCertificate()
+	if err != nil || file != pveNodePEM {
+		return
+	}
+	if _, ips := certNames(cert); slices.Contains(ips, bridge.String()) {
+		return
+	}
+	s.Cautions = append(s.Cautions, apiFamilyCaution(bridge.String(), s.Cfg.APIHost))
+}
+
+// apiFamilyCaution is the text of that note, short enough for three lines of the summary at 80
+// columns.
+func apiFamilyCaution(ipv4, ipv6 string) string {
+	return fmt.Sprintf("The certificate lacks %[1]s, so clusters without IPv6 cannot reach the API at %[2]s. Add it to the certificate, then pass --proxmox-url https://%[1]s:8006", ipv4, ipv6)
+}
+
+// checkRouteVLAN refuses the VLAN of the node's default route on its bridge, taken from the route
+// or named by hand, unless the bridge is VLAN aware. On any other bridge the tag makes Proxmox VE
+// create a second bridge and take over the port's VLAN device, which would cut the node's own
+// network.
+func (s *Session) checkRouteVLAN(ctx context.Context) error {
+	f := s.Facts
+	b, v := f.DefaultBridge, f.DefaultVLAN
+	if err := s.routeVLANError(ctx, s.Cfg.Bridge, s.Cfg.VLAN); err != nil || v == "" || s.Cfg.Bridge != b || s.Cfg.VLAN != v {
+		return err
+	}
+	if f.VLANFromRoute {
+		s.noticef("VLAN %s on %s, since the node's default route leaves by %s.%s (name --bridge %s for no VLAN)", v, b, b, v, b)
+	}
+	return nil
+}
+
+// routeVLANError is the refusal of a bridge and VLAN that are the node's default route device on
+// a bridge that is not VLAN aware, nil for any other pair. The flags, the detected route and the
+// terminal's VLAN field all go through it. Each bridge is read once.
+func (s *Session) routeVLANError(ctx context.Context, bridge, vlan string) error {
+	f := s.Facts
+	b, v := f.DefaultBridge, f.DefaultVLAN
+	if v == "" || bridge != b || vlan != v {
+		return nil
+	}
+	aware, read := s.vlanAware[b]
+	if !read {
+		aware = s.Node.bridgeVLANAware(ctx, b)
+		if s.vlanAware == nil {
+			s.vlanAware = map[string]bool{}
+		}
+		s.vlanAware[b] = aware
+	}
+	if aware {
+		return nil
+	}
+	return userErr(fmt.Sprintf("the node's default route leaves by %s.%s, but %s is not VLAN aware. A tag on it would cut the node's own network", b, v, b),
+		fmt.Sprintf("Make %s VLAN aware in the node's network settings, or name another bridge or VLAN with --bridge and --vlan", b))
 }
 
 func (s *Session) noticef(format string, args ...any) {

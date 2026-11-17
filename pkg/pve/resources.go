@@ -59,13 +59,17 @@ type Node struct {
 	// Online is set only for a node that is a cluster member and answers calls forwarded to it.
 	Online bool `json:"online"`
 	// Fault says why a node that is a cluster member does not answer them, as Reason words it. It is
-	// empty for every other node.
+	// empty for every other node. Such a node is up and runs its VMs: it is not Offline.
 	Fault string `json:"fault,omitempty"`
 	// Memory is what the node uses and MaxMemory what it has, in bytes, 0 where Proxmox VE does not
 	// say, as for a node that is down.
 	Memory    int64 `json:"memory,omitempty"`
 	MaxMemory int64 `json:"maxMemory,omitempty"`
 }
+
+// Offline is whether Proxmox VE itself lists the node as down. A node that failed only a forwarded
+// call is not offline.
+func (n *Node) Offline() bool { return !n.Online && n.Fault == "" }
 
 // Bridge is a Linux or Open vSwitch bridge on a node.
 type Bridge struct {
@@ -131,6 +135,11 @@ type Network struct {
 // TagsTraffic tells whether the network puts every frame in a VLAN of its own, so that a VLAN tag on
 // a VM's device would add a second one. A VLAN-aware VNet leaves the tag to the device.
 func (n Network) TagsTraffic() bool { return n.ZoneType == "vlan" && !n.VLANAware }
+
+// VLANOnTaggedNetwork is the refusal of a VLAN tag on a VNet whose zone tags its traffic already.
+func VLANOnTaggedNetwork(vnet string) string {
+	return "VNet " + vnet + " is in a VLAN zone and tags already. Leave the VLAN tag empty."
+}
 
 // flag is a Proxmox VE boolean, which its API writes as 1 or true.
 type flag bool
@@ -252,12 +261,6 @@ func (a *Accounts) Realms(ctx context.Context) ([]Realm, error) {
 // storage is sparse.
 func isZFS(plugin string) bool { return plugin == "zfspool" || plugin == "zfs" }
 
-// Disk formats a VM disk is made in on a storage that keeps files.
-const (
-	FormatRaw   = "raw"
-	FormatQCOW2 = "qcow2"
-)
-
 // AllocatesOnWrite tells whether a disk takes its space as the guest writes, which Proxmox VE lets
 // exceed the free space. LVM-thin and Ceph RBD always do. A ZFS volume does when the storage is
 // sparse, and otherwise reserves its whole size. Thick LVM reserves it too. On storage that keeps
@@ -282,30 +285,62 @@ func (s *Storage) AllocatesOnWrite() (bool, bool) {
 	}
 }
 
-// Storages lists the storages on every node the user may see, with the content types each takes.
-func (a *Accounts) Storages(ctx context.Context, t *Ticket) ([]Storage, error) {
-	var res []struct {
-		Storage string `json:"storage"`
-		Node    string `json:"node"`
-		Shared  int    `json:"shared"`
-		Content string `json:"content"`
-		Type    string `json:"plugintype"`
-		Disk    int64  `json:"disk"`
-		MaxDisk int64  `json:"maxdisk"`
-		Status  string `json:"status"`
+// StorageResourcesPath lists the storages of every node, as StorageResource.
+const StorageResourcesPath = "/cluster/resources?type=storage"
+
+// StorageConfigPath lists the storage configuration, as StorageConfig.
+const StorageConfigPath = "/storage"
+
+// StorageResource is one storage on one node, as the cluster's resources list it.
+type StorageResource struct {
+	Storage string `json:"storage"`
+	Node    string `json:"node"`
+	Shared  int    `json:"shared"`
+	Content string `json:"content"`
+	Type    string `json:"plugintype"`
+	Disk    int64  `json:"disk"`
+	MaxDisk int64  `json:"maxdisk"`
+	Status  string `json:"status"`
+}
+
+// StorageConfig is what the storage configuration says of how a storage allocates, which the
+// cluster's resources leave out.
+type StorageConfig struct {
+	Storage       string `json:"storage"`
+	Sparse        any    `json:"sparse"`
+	Preallocation string `json:"preallocation"`
+}
+
+// sparse reads the sparse option, which Proxmox VE gives as a number, a boolean or a string, and
+// leaves out of a pool that never set it, which means thick.
+func (c *StorageConfig) sparse() bool {
+	switch v := c.Sparse.(type) {
+	case float64:
+		return v != 0
+	case bool:
+		return v
+	case string:
+		return v == "1" || v == "true"
 	}
-	if err := a.get(ctx, t, "/cluster/resources?type=storage", &res); err != nil {
-		return nil, err
+	return false
+}
+
+// StoragesOf joins the storages' resources and their configuration, which the interface and the
+// controller read with their own credentials. Configuration that could not be read is nil, and
+// leaves whether a storage allocates on write unknown where its type alone does not tell.
+func StoragesOf(res []StorageResource, configs []StorageConfig) []Storage {
+	byName := make(map[string]*StorageConfig, len(configs))
+	for i := range configs {
+		byName[configs[i].Storage] = &configs[i]
 	}
-	configs := a.storageConfigs(ctx, t)
-	var storages []Storage
+	storages := make([]Storage, 0, len(res))
 	for _, r := range res {
-		content := strings.Split(r.Content, ",")
-		s := Storage{Storage: r.Storage, Node: r.Node, Shared: r.Shared != 0, Content: content, Type: r.Type}
-		if c, ok := configs[r.Storage]; ok {
-			s.Preallocation = c.preallocation
+		s := Storage{Storage: r.Storage, Node: r.Node, Shared: r.Shared != 0, Content: strings.Split(r.Content, ","), Type: r.Type}
+		if c, ok := byName[r.Storage]; ok {
+			s.Preallocation = c.Preallocation
 			if isZFS(r.Type) {
-				s.Sparse = &c.sparse
+				sparse := c.sparse()
+				s.Sparse = &sparse
 			}
 		}
 		if r.Status == "available" {
@@ -314,42 +349,45 @@ func (a *Accounts) Storages(ctx context.Context, t *Ticket) ([]Storage, error) {
 		}
 		storages = append(storages, s)
 	}
-	return storages, nil
+	return storages
 }
 
-// storageConfig is what the storage configuration says of how a storage allocates, which the
-// cluster's resources leave out.
-type storageConfig struct {
-	sparse        bool
-	preallocation string
-}
-
-// storageConfigs reads the storage configuration. A read that fails, as for a user without the right
-// to it, leaves every storage's answer unknown.
-func (a *Accounts) storageConfigs(ctx context.Context, t *Ticket) map[string]storageConfig {
-	var res []struct {
-		Storage       string `json:"storage"`
-		Sparse        any    `json:"sparse"`
-		Preallocation string `json:"preallocation"`
-	}
-	if err := a.get(ctx, t, "/storage", &res); err != nil {
-		return nil
-	}
-	out := make(map[string]storageConfig, len(res))
-	for _, r := range res {
-		c := storageConfig{preallocation: r.Preallocation}
-		// Proxmox VE leaves the key out of a pool that never set it, which means thick.
-		switch v := r.Sparse.(type) {
-		case float64:
-			c.sparse = v != 0
-		case bool:
-			c.sparse = v
-		case string:
-			c.sparse = v == "1" || v == "true"
+// FreeOn is the free space of a storage on the nodes named, once where it is shared, and whether it
+// reserves a disk's whole size there. The space is -1 where none of the nodes reports it. A storage
+// whose way of allocating is not known counts as one that does not reserve.
+func FreeOn(storages []Storage, name string, nodes []string) (int64, bool) {
+	free, thick, seen := int64(0), true, false
+	for i := range storages {
+		st := &storages[i]
+		if st.Storage != name || st.Total == 0 || !st.Shared && !slices.Contains(nodes, st.Node) {
+			continue
 		}
-		out[r.Storage] = c
+		onWrite, known := st.AllocatesOnWrite()
+		thick = thick && known && !onWrite
+		if st.Shared {
+			return st.Avail, thick
+		}
+		free += st.Avail
+		seen = true
 	}
-	return out
+	if !seen {
+		return -1, false
+	}
+	return free, thick
+}
+
+// Storages lists the storages on every node the user may see, with the content types each takes.
+func (a *Accounts) Storages(ctx context.Context, t *Ticket) ([]Storage, error) {
+	var res []StorageResource
+	if err := a.get(ctx, t, StorageResourcesPath, &res); err != nil {
+		return nil, err
+	}
+	var configs []StorageConfig
+	// A read that fails, as for a user without the right to it, leaves the configuration unknown.
+	if err := a.get(ctx, t, StorageConfigPath, &configs); err != nil {
+		configs = nil
+	}
+	return StoragesOf(res, configs), nil
 }
 
 // Nodes lists the nodes the user may see.
@@ -395,7 +433,7 @@ func (a *Accounts) forwardFault(ctx context.Context, t *Ticket, node string) str
 	err := a.get(ctx, t, "/nodes/"+url.PathEscape(node)+"/status", &json.RawMessage{})
 	var api *APIError
 	switch {
-	case err == nil, errors.Is(err, ErrForbidden), errors.Is(err, ErrAuthentication), errors.Is(err, ErrNodesDisagree):
+	case err == nil, errors.Is(err, ErrForbidden), errors.Is(err, ErrAuthentication):
 		return ""
 	case errors.As(err, &api) && !strings.HasPrefix(api.Status, "5"):
 		return ""

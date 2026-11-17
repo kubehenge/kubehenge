@@ -202,11 +202,11 @@ func TestDemoAnswersEveryRead(t *testing.T) { //nolint:paralleltest // swaps Go'
 	}
 }
 
-// The demo's Talos cluster has an upgrade a disruption budget holds, with the event in its activity,
-// and no other cluster has either.
+// The demo's Talos cluster, with its drain held, has an upgrade a disruption budget holds, with the
+// event in its activity, and no other cluster has either.
 func TestDemoHoldsTheTalosUpgradeOfPlatform(t *testing.T) {
 	t.Parallel()
-	_, b := newDemo(t)
+	b := newDemoWith(t, map[string]func(*demoCluster){"platform": platformDrainHeld})
 	b.signIn()
 	var clusters []clusterView
 	decodeDemo(t, b.do("GET", "/api/clusters", ""), &clusters)
@@ -251,6 +251,38 @@ func TestDemoHasANodeThatIsOnlineAndNotReachable(t *testing.T) {
 	if !skipped {
 		t.Error("the demo's staging cluster does not show NodesSkipped for the node")
 	}
+	// The node is staging's alone, so the rest of the fleet shows healthy beside it.
+	for i := range clusters {
+		var detail struct {
+			Machines []machineView `json:"machines"`
+		}
+		decodeDemo(t, b.do("GET", "/api/clusters/"+clusters[i].Namespace+"/"+clusters[i].Name, ""), &detail)
+		on := slices.ContainsFunc(detail.Machines, func(m machineView) bool { return m.ProxmoxNode == nodes[faulty].Node })
+		if on != (clusters[i].Name == "staging") {
+			t.Errorf("cluster %s has machines on %s: %v, want only staging's there", clusters[i].Name, nodes[faulty].Node, on)
+		}
+	}
+}
+
+func TestDemoManagementAgreesWithItsClusters(t *testing.T) {
+	t.Parallel()
+	_, b := newDemo(t)
+	b.signIn()
+	var health managementHealthView
+	decodeDemo(t, b.do("GET", "/api/setup/health", ""), &health)
+	if len(health.Controllers) == 0 {
+		t.Error("the management cluster runs no controller")
+	}
+	for _, c := range health.Controllers {
+		if c.Ready != c.Wanted {
+			t.Errorf("controller %s/%s has %d of %d ready", c.Namespace, c.Name, c.Ready, c.Wanted)
+		}
+	}
+	var setup setupView
+	decodeDemo(t, b.do("GET", "/api/setup", ""), &setup)
+	if setup.Settings == nil || len(setup.Settings.BackupTargets) != 1 || setup.Settings.BackupTargets[0].Name != "offsite" {
+		t.Errorf("Administration lists backup targets %+v, want the offsite target the create wizard offers", setup.Settings)
+	}
 }
 
 func TestDemoShowsItsFleet(t *testing.T) {
@@ -259,30 +291,32 @@ func TestDemoShowsItsFleet(t *testing.T) {
 	b.signIn()
 	var clusters []clusterView
 	decodeDemo(t, b.do("GET", "/api/clusters", ""), &clusters)
-	fleet, err := newDemoFleet(demoAt)
+	fleet, err := newDemoFleet(demoAt, demoFleetJSON)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(clusters) != len(fleet.data.Clusters) {
 		t.Fatalf("%d clusters, want %d", len(clusters), len(fleet.data.Clusters))
 	}
-	var health []fleetHealthView
-	decodeDemo(t, b.do("GET", "/api/fleet/health", ""), &health)
-	verdicts := map[string]string{}
-	for _, h := range health {
-		verdicts[h.Name] = h.Verdict
+	verdicts := demoVerdicts(t, b)
+	// Most of the fleet is healthy, beside a few clusters with something to show.
+	want := map[string]string{
+		"web": verdictHealthy, "ci": verdictHealthy, "data": verdictHealthy, "platform": verdictHealthy,
+		"edge": verdictChanging, "payments": verdictDegraded, "staging": verdictDegraded, "legacy": verdictDegraded,
 	}
-	if verdicts["payments"] != "degraded" || verdicts["web"] != "healthy" || verdicts["edge"] != "changing" {
-		t.Errorf("verdicts %v", verdicts)
+	if len(verdicts) != len(want) {
+		t.Errorf("verdicts %v, want one for each of %d clusters", verdicts, len(want))
 	}
-	lacking := false
-	for i := range clusters {
-		for _, cond := range clusters[i].Conditions {
-			lacking = lacking || clusters[i].Name == "ci" && cond.Type == provisioner.NodesLackMemoryCondition && cond.Status == "True"
+	for name, verdict := range want {
+		if verdicts[name] != verdict {
+			t.Errorf("%s is %s, want %s", name, verdicts[name], verdict)
 		}
 	}
-	if !lacking {
-		t.Error("the demo's ci cluster does not show NodesLackMemory")
+	// Staging is the cluster that shows what the node the appliance cannot reach means.
+	var staging healthView
+	decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/staging/health", ""), &staging)
+	if !slices.ContainsFunc(staging.Attention, func(a attentionView) bool { return a.What == "Proxmox VE node not reachable" }) {
+		t.Errorf("staging lists %q, want the node it cannot reach", attentionWhats(&staging))
 	}
 	var runs []runView
 	decodeDemo(t, b.do("GET", "/api/runs", ""), &runs)
@@ -320,21 +354,33 @@ func (l *lockedBuffer) String() string {
 	return l.buf.String()
 }
 
+// Every cluster's health reads without an error, in the demo and with each problem the demo can show.
 func TestDemoReadsEveryClustersHealth(t *testing.T) {
 	t.Parallel()
+	for name, edits := range demoProblems {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			readsEveryClustersHealth(t, edits)
+		})
+	}
+}
+
+func readsEveryClustersHealth(t *testing.T, edits map[string]func(*demoCluster)) {
+	t.Helper()
 	logged := &lockedBuffer{}
 	s := &Server{
 		Assets: fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>Kubehenge</title>")}},
 		Log:    slog.New(slog.NewTextHandler(logged, nil)),
 	}
-	cleanup, err := SetUpDemo(s, func() time.Time { return demoAt })
+	raw := demoFleetEdited(t, edits)
+	cleanup, err := demoFrom(s, func() time.Time { return demoAt }, raw)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(cleanup)
 	b := &demoBrowser{t: t, handler: s.Handler()}
 	b.signIn()
-	fleet, err := newDemoFleet(demoAt)
+	fleet, err := newDemoFleet(demoAt, raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +419,7 @@ func TestDemoShowsPoolLabelsTaintsAndPodChecks(t *testing.T) {
 			notes = append(notes, a.What+" "+a.Message)
 		}
 	}
-	if len(notes) != 1 || !strings.Contains(notes[0], "pool "+workerPool) || !strings.Contains(notes[0], "maintenance") {
+	if len(notes) != 1 || !strings.Contains(notes[0], "pool "+provisioner.DefaultPoolLabel) || !strings.Contains(notes[0], "maintenance") {
 		t.Errorf("taint notes %q, want one naming the pool and the taint", notes)
 	}
 	var check struct {
@@ -439,6 +485,16 @@ func TestDemoShowsTemplatesAndPins(t *testing.T) {
 	}
 }
 
+// Setup's checks of a time zone and of what a site CA replaces only read, so the demo answers them.
+func TestDemoAnswersTheSiteChecksOfSetup(t *testing.T) {
+	t.Parallel()
+	_, b := newDemo(t)
+	b.signIn()
+	expect(t, b.do("POST", "/api/setup/time-zone", `{"timeZone":"Europe/Kyiv"}`), http.StatusOK)
+	expect(t, b.do("POST", "/api/setup/time-zone", `{"timeZone":"Mars/Olympus"}`), http.StatusUnprocessableEntity)
+	expect(t, b.do("POST", "/api/setup/site-ca-roll", `{"siteCA":""}`), http.StatusOK)
+}
+
 // A Talos cluster's machines report the Talos release their nodes run, so that column is never empty.
 func TestDemoShowsTheTalosReleaseOfTalosMachines(t *testing.T) {
 	t.Parallel()
@@ -460,7 +516,7 @@ func TestDemoShowsTheTalosReleaseOfTalosMachines(t *testing.T) {
 
 func TestDemoHoldsOneMachinesReplacement(t *testing.T) {
 	t.Parallel()
-	_, b := newDemo(t)
+	b := newDemoWith(t, map[string]func(*demoCluster){"platform": platformDrainHeld})
 	b.signIn()
 	var detail struct {
 		Machines []machineView `json:"machines"`

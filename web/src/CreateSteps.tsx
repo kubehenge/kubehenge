@@ -7,10 +7,13 @@ import {
   controlPlaneSizes,
   formLoadBalancerValue,
   formReleaseMirror,
+  firewallFieldsOf,
   machineLeast,
+  createRoom,
   memoryNodeWarning,
   mostWorkers,
   setLoadBalancer,
+  volumeWorkersWarning,
   templateMissing,
   variable,
   versionExamples,
@@ -21,7 +24,7 @@ import {
 import { CSIField, SnapshotsField } from "./CsiPlugin";
 import { maxEtcdQuotaGiB, minEtcdQuotaGiB } from "./EtcdSize";
 import { FamiliesField } from "./Families";
-import { SecurityGroupsField } from "./Firewall";
+import { FirewallField, type DatacenterFirewallState } from "./Firewall";
 import { HostOutageField, graceVariable } from "./HostOutage";
 import { LoadBalancerFields, passwordInfo, passwordLabel } from "./LoadBalancer";
 import { MachineFields } from "./MachineFields";
@@ -78,6 +81,7 @@ import {
   shownNumber,
   typedNumber,
 } from "./ui";
+import { VMIDRangeStep } from "./VmidRange";
 
 const kubeadmVersion = /^v1\.\d+\.\d+$/u;
 
@@ -312,6 +316,7 @@ function TemplateAsk({
     <fieldset className="group">
       <legend>Build a VM template</legend>
       <p className="muted">{askText(kind, os)}</p>
+      <p className="muted">The build VM takes its address from DHCP, unless the settings give a build address.</p>
       {builds.building.length > 0 && <p className="muted">{`Building: ${builds.building.join(", ")}`}</p>}
       {builds.requested.length > 0 && (
         <p className="muted">{`Requested: ${builds.requested.map((k) => requestName(k, oses)).join(", ")}`}</p>
@@ -540,6 +545,7 @@ export function GeneralStep({
   onChooseNamespace,
   starts,
   onChooseFrom,
+  growthWarning,
 }: StepProps & {
   classes: ClusterClass[];
   cls: ClusterClass | undefined;
@@ -552,6 +558,8 @@ export function GeneralStep({
   /** The clusters a new one may start from, the newest first. */
   starts: Cluster[];
   onChooseFrom: (key: string) => void;
+  /** Thick storage too small for the autoscaled pool at its most, said on the most workers. */
+  growthWarning?: string | undefined;
 }): JSX.Element {
   const runs = forRelease(offered, talos, form.talosVersion);
   const typed = typedVersion(cls, runs);
@@ -619,7 +627,10 @@ export function GeneralStep({
         missing={templateMissing(form, cls)}
         oses={classes.flatMap((c) => c.nodeOSes ?? [])}
       />
-      <Field label="Control-plane nodes">
+      <Field
+        label="Control-plane nodes"
+        hint={form.controlPlaneReplicas === 1 ? "One has no high availability" : undefined}
+      >
         {(id) => (
           <select
             id={id}
@@ -634,7 +645,7 @@ export function GeneralStep({
           </select>
         )}
       </Field>
-      <WorkerFields form={form} set={set} shown={shown} cls={cls} />
+      <WorkerFields form={form} set={set} shown={shown} cls={cls} growthWarning={growthWarning} />
       <details className="advanced" open={shown("timeouts") === undefined ? undefined : true}>
         <summary>Node timeouts</summary>
         <h4 className="subsection">Control planes</h4>
@@ -658,9 +669,10 @@ export function GeneralStep({
 const ownNetworks: Record<string, string> = { talos: "flannel" };
 
 // Where in the bridge's network the examples of the API and node addresses lie.
-const exampleEndpoint = 20;
 const exampleFirst = 21;
 const exampleLast = 29;
+const exampleRangeFirst = 100;
+const exampleRangeLast = 120;
 
 // The ranges the controller takes for an IPv6 family when none is asked for.
 const defaultPodsIPv6 = "fd5e:4b1c:9a20::/56";
@@ -725,30 +737,30 @@ function FamilyFields({
 }
 
 /** InterfaceFields are the options of the nodes' interface the class offers. */
-function InterfaceFields({ form, set, shown, cls }: StepProps & { cls: ClusterClass | undefined }): JSX.Element {
+function InterfaceFields({
+  form,
+  set,
+  shown,
+  cls,
+  datacenter,
+}: StepProps & { cls: ClusterClass | undefined; datacenter: DatacenterFirewallState | undefined }): JSX.Element {
   const network = variable(cls, "network")?.properties;
   return (
     <>
-      <Field label="VLAN tag" hint="Optional" error={shown("vlan")}>
+      <Field label="VLAN tag" hint={shown("vlan") === undefined ? "Optional" : undefined} error={shown("vlan")}>
         {(id) => (
           <input id={id} inputMode="numeric" value={form.vlan} onChange={(e) => set("vlan", e.target.value.trim())} />
         )}
       </Field>
       {network?.["mtu"] === undefined ? null : (
-        <Field label="MTU" hint="Optional" error={shown("mtu")}>
+        <Field label="MTU" hint={shown("mtu") === undefined ? "Optional" : undefined} error={shown("mtu")}>
           {(id) => (
-            <input
-              id={id}
-              inputMode="numeric"
-              value={form.mtu}
-              onChange={(e) => set("mtu", e.target.value.trim())}
-              placeholder="1500"
-            />
+            <input id={id} inputMode="numeric" value={form.mtu} onChange={(e) => set("mtu", e.target.value.trim())} />
           )}
         </Field>
       )}
       {network?.["queues"] === undefined ? null : (
-        <Field label="Queues" hint="Optional" error={shown("queues")}>
+        <Field label="Queues" hint={shown("queues") === undefined ? "Optional" : undefined} error={shown("queues")}>
           {(id) => (
             <input
               id={id}
@@ -759,11 +771,19 @@ function InterfaceFields({ form, set, shown, cls }: StepProps & { cls: ClusterCl
           )}
         </Field>
       )}
-      {variable(cls, "securityGroups") === undefined ? null : (
-        <SecurityGroupsField
-          value={form.securityGroups}
-          onChange={(s) => set("securityGroups", s)}
-          error={shown("securityGroups")}
+      {variable(cls, "firewall") === undefined ? null : (
+        <FirewallField
+          value={firewallFieldsOf(form)}
+          onChange={(f) => {
+            set("firewall", f.on);
+            set("firewallServing", f.serving);
+            set("firewallPorts", f.ports);
+          }}
+          groups={form.securityGroups}
+          onGroups={(s) => set("securityGroups", s)}
+          portsError={shown("firewallPorts")}
+          groupsError={shown("securityGroups")}
+          datacenter={datacenter}
         />
       )}
     </>
@@ -780,6 +800,7 @@ export function NetworkStep({
   network6,
   free,
   checked,
+  datacenter,
 }: StepProps & {
   cls: ClusterClass | undefined;
   bridgeOptions: Bridge[];
@@ -791,6 +812,8 @@ export function NetworkStep({
   free?: FreeAddresses | undefined;
   /** What probing the addresses typed found. */
   checked?: FreeAddresses | undefined;
+  /** Whether Proxmox VE's datacenter firewall is on, where it was read. */
+  datacenter?: DatacenterFirewallState | undefined;
 }): JSX.Element {
   const fullIn = (family: Family): string | undefined => {
     const [full, searched] = family === "IPv6" ? [free?.full6, free?.network6] : [free?.full, free?.network];
@@ -832,7 +855,7 @@ export function NetworkStep({
           )
         }
       </Field>
-      <InterfaceFields form={form} set={set} shown={shown} cls={cls} />
+      <InterfaceFields form={form} set={set} shown={shown} cls={cls} datacenter={datacenter} />
       {offersFamilies && (
         <FamiliesField
           value={form.families}
@@ -847,14 +870,7 @@ export function NetworkStep({
         hint={endpointInUse ?? "A free address outside the node addresses"}
         error={shown("endpoint")}
       >
-        {(id) => (
-          <input
-            id={id}
-            value={form.endpoint}
-            onChange={(e) => set("endpoint", e.target.value.trim())}
-            placeholder={sample(primary, exampleEndpoint)}
-          />
-        )}
+        {(id) => <input id={id} value={form.endpoint} onChange={(e) => set("endpoint", e.target.value.trim())} />}
       </Field>
       {families.map((family) => (
         <FamilyFields
@@ -874,14 +890,7 @@ export function NetworkStep({
         {(id) => <input id={id} value={form.dnsServers} onChange={(e) => set("dnsServers", e.target.value)} />}
       </Field>
       <Field label="Search domains" error={shown("searchDomains")}>
-        {(id) => (
-          <input
-            id={id}
-            value={form.searchDomains}
-            placeholder="corp.example"
-            onChange={(e) => set("searchDomains", e.target.value)}
-          />
-        )}
+        {(id) => <input id={id} value={form.searchDomains} onChange={(e) => set("searchDomains", e.target.value)} />}
       </Field>
       <Field label="Time servers" hint="Optional, separated by commas" error={shown("ntpServers")}>
         {(id) => <input id={id} value={form.ntpServers} onChange={(e) => set("ntpServers", e.target.value)} />}
@@ -914,6 +923,8 @@ export function NetworkStep({
       {variable(cls, "loadBalancer") && (
         <LoadBalancerFields
           distribution={cls?.distribution}
+          rangeOffered={!form.loadBalancerPicked}
+          example={`${sample(primary, exampleRangeFirst)}-${sample(primary, exampleRangeLast)}`}
           families={form.families}
           value={formLoadBalancerValue(form)}
           errors={{
@@ -923,7 +934,7 @@ export function NetworkStep({
             routerID: shown("loadBalancerRouterID"),
           }}
           onChange={(patch) => {
-            setLoadBalancer(set, patch);
+            setLoadBalancer(set, patch, form.loadBalancerPicked);
           }}
           password={
             <Field label={passwordLabel} hint={passwordInfo} error={shown("loadBalancerPassword")}>
@@ -1059,11 +1070,7 @@ export function MachinesStep({
       <Field
         label="Storage"
         error={shown("storage")}
-        hint={
-          usableStorages.some((s) => s.storage === form.storage && !s.shared)
-            ? "Volumes on node-local storage stay on one node."
-            : undefined
-        }
+        hint={createRoom(form, nodes, usableStorages).diskWarning ?? volumeWorkersWarning(form, nodes, usableStorages)}
       >
         {(id) => (
           <select id={id} value={form.storage} onChange={(e) => set("storage", e.target.value)}>
@@ -1096,6 +1103,12 @@ export function MachinesStep({
           problem={shown("hostOutageGrace")}
         />
       )}
+      <VMIDRangeStep
+        cls={cls}
+        value={form.vmIDRange}
+        onChange={(range) => set("vmIDRange", range)}
+        problem={shown("vmIDRange")}
+      />
       {haOffered && <HAField checked={form.proxmoxHA} onChange={(on) => set("proxmoxHA", on)} />}
       {csi.offered && (
         <CSIField

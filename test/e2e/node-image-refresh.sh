@@ -35,7 +35,7 @@ ns=e2e-refresh-$(head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n')
 cleanup() {
     status=$?
     if [ "${status}" -ne 0 ]; then
-        printf '\nleaving the cluster in %s for inspection; delete it with: kubectl delete namespace %s\n' "${ns}" "${ns}"
+        printf '\nleaving the cluster in %s for inspection; delete it with: kubectl -n %s annotate clusters --all kubehenge.dev/allow-deletion=true && kubectl delete namespace %s\n' "${ns}" "${ns}" "${ns}"
     fi
 }
 trap cleanup EXIT
@@ -284,6 +284,7 @@ esac
 printf '%s' "${result}" | jq -e '.data.exitcode == 0' > /dev/null || fail 'SELinux denied something on the node'
 
 step "nothing of the cluster is left"
+webhook_retried kubectl -n "${ns}" annotate cluster/node-image kubehenge.dev/allow-deletion=true > /dev/null
 kubectl -n "${ns}" delete cluster/node-image --wait --timeout=30m
 vms=$(pve_get cluster/resources?type=vm)
 printf '%s' "${vms}" | jq -e --arg p "/${ns}." '[.data[] | select(.pool // "" | contains($p))] | length == 0' > /dev/null ||

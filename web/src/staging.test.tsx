@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
-import { applyStaged, fakeServer, type Route } from "./fake-server";
+import { acceptProblems, applyStaged, fakeServer, type Route } from "./fake-server";
 import { merged } from "./Staging";
 import type { Cluster, Effect, Plan } from "./types";
 import { record } from "./values";
@@ -58,7 +58,7 @@ describe("staged changes", () => {
     await user.click(await screen.findByRole("button", { name: "Edit Headlamp" }));
     await user.click(within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByLabelText("Install Headlamp"));
     await user.click(
-      within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByRole("button", { name: "Save" }),
+      within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByRole("button", { name: "Add to plan" }),
     );
     const bar = within(await screen.findByRole("region", { name: "Staged changes" }));
     expect(bar.getByText("1 change not applied")).toBeInTheDocument();
@@ -68,7 +68,7 @@ describe("staged changes", () => {
     await user.click(screen.getByRole("button", { name: "Edit monitoring" }));
     const monitoring = within(screen.getByRole("dialog", { name: "Edit monitoring" }));
     await user.click(monitoring.getByLabelText("Install monitoring"));
-    await user.click(monitoring.getByRole("button", { name: "Save" }));
+    await user.click(monitoring.getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(bar.getByText("2 changes not applied")).toBeInTheDocument());
     expect(bar.getByText("Replaces workers one by one")).toBeInTheDocument();
     expect(calls.map((c) => c.key)).not.toContain(`PATCH ${path}`);
@@ -79,6 +79,9 @@ describe("staged changes", () => {
     expect(plan.getByRole("row", { name: /^Monitoring/u })).toHaveTextContent(
       "MonitoringOffOnReplaces workers one by one",
     );
+    // Monitoring replaces workers, so applying waits for the admin to confirm it.
+    expect(plan.getByRole("button", { name: "Apply" })).toBeDisabled();
+    await acceptProblems(user);
     await user.click(plan.getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(screen.queryByRole("region", { name: "Staged changes" })).not.toBeInTheDocument());
     expect(calls.filter((c) => c.key === `PATCH ${path}`).map((c) => c.body)).toStrictEqual([
@@ -108,7 +111,7 @@ describe("staged changes", () => {
     await user.click(await screen.findByRole("button", { name: "Edit Headlamp" }));
     await user.click(within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByLabelText("Install Headlamp"));
     await user.click(
-      within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByRole("button", { name: "Save" }),
+      within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByRole("button", { name: "Add to plan" }),
     );
     await screen.findByRole("region", { name: "Staged changes" });
     shown = { ...cluster, generation: 2, variables: { headlamp: { enabled: true } } };
@@ -126,7 +129,7 @@ describe("staged changes", () => {
     await user.click(screen.getByRole("button", { name: "Edit monitoring" }));
     const monitoring = within(screen.getByRole("dialog", { name: "Edit monitoring" }));
     await user.click(monitoring.getByLabelText("Install monitoring"));
-    await user.click(monitoring.getByRole("button", { name: "Save" }));
+    await user.click(monitoring.getByRole("button", { name: "Add to plan" }));
     await screen.findByRole("region", { name: "Staged changes" });
     expect(calls.findLast((c) => c.key === `POST ${path}/plan`)?.headers.get("X-Kubehenge-Generation")).toBe("2");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -145,13 +148,85 @@ describe("staged changes", () => {
     await user.click(await screen.findByRole("button", { name: "Edit Headlamp" }));
     await user.click(within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByLabelText("Install Headlamp"));
     await user.click(
-      within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByRole("button", { name: "Save" }),
+      within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByRole("button", { name: "Add to plan" }),
     );
     const bar = within(await screen.findByRole("region", { name: "Staged changes" }));
     await user.click(bar.getByRole("button", { name: "Discard" }));
     expect(screen.queryByRole("region", { name: "Staged changes" })).not.toBeInTheDocument();
     expect(screen.getByRole("row", { name: /^Headlamp/u })).not.toHaveTextContent(/Staged/u);
     expect(calls.map((c) => c.key)).not.toContain(`PATCH ${path}`);
+  });
+
+  it("list what an upgrade meets, and apply only once its problems are accepted", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web");
+    const upgraded: Cluster = { ...cluster, version: "v1.37.1+k3s1" };
+    const calls = fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      [`GET ${path}`]: { body: cluster },
+      "GET /api/versions/k3s": { body: { versions: ["v1.37.1+k3s1"] } },
+      [`GET ${path}/health`]: {
+        body: {
+          verdict: "degraded",
+          attention: [{ severity: "error", section: "nodes", what: "Node web-md-0-a not ready" }],
+          nodes: { items: [] },
+        },
+      },
+      [`GET ${path}/upgrade-checks?version=v1.37.1%2Bk3s1`]: {
+        body: {
+          removedAPIs: [{ api: "flowcontrol.apiserver.k8s.io/v1beta3 flowschemas", removedIn: "1.32" }],
+          webhooks: [],
+          unchecked: [],
+          lines: [],
+          basis: "requests",
+        },
+      },
+      [`POST ${path}/plan`]: { body: { cluster: upgraded, changes: [{ setting: "version", effect: "all" }] } },
+      [`PATCH ${path}`]: { body: upgraded },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Upgrade" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Upgrade web" }));
+    const change = await dialog.findByText("Replaces every node, one at a time");
+    expect(change).toHaveClass("status-idle");
+    expect(change).not.toHaveClass("status-ok");
+    await dialog.findByText("1 problem");
+    await user.click(dialog.getByRole("button", { name: "Add to plan" }));
+
+    await user.click(await screen.findByRole("button", { name: "Review plan" }));
+    const plan = within(screen.getByRole("dialog", { name: "Review plan" }));
+    await plan.findByText("1 in use");
+    expect(plan.getByText("1 problem")).toBeInTheDocument();
+    expect(plan.getByRole("button", { name: "Apply" })).toBeDisabled();
+    await user.click(plan.getByRole("checkbox", { name: "Accept the risks" }));
+    expect(plan.getByRole("button", { name: "Apply" })).toBeEnabled();
+    await user.click(plan.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(calls.map((c) => c.key)).toContain(`PATCH ${path}`));
+  });
+
+  it("hold Apply for the acknowledgement when the workers outgrow the addresses", async () => {
+    window.history.replaceState(null, "", "/clusters/clusters/web");
+    const network = { addresses: ["10.0.0.21-10.0.0.28"], prefix: 24, gateway: "10.0.0.1" };
+    const before: Cluster = { ...cluster, variables: { ...cluster.variables, network } };
+    const grown: Cluster = { ...before, workerPools: [{ name: "md-0", class: "worker", replicas: 20 }] };
+    fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      [`GET ${path}`]: { body: before },
+      [`POST ${path}/plan`]: { body: { cluster: grown, changes: [{ setting: "workerPools", effect: "scales" }] } },
+      [`PATCH ${path}`]: { body: grown },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Scale" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Scale web" }));
+    await user.clear(dialog.getByLabelText("Workers"));
+    await user.type(dialog.getByLabelText("Workers"), "6");
+    await user.click(dialog.getByRole("button", { name: "Add to plan" }));
+    await user.click(await screen.findByRole("button", { name: "Review plan" }));
+    const plan = within(screen.getByRole("dialog", { name: "Review plan" }));
+    await expect(plan.findByText(/^None spare/u)).resolves.toHaveClass("status-error");
+    expect(plan.getByRole("button", { name: "Apply" })).toBeDisabled();
   });
 
   it("merge, a later change of a setting winning", () => {

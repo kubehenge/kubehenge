@@ -68,7 +68,7 @@ func (r *Reclaimer) reclaimAll(ctx context.Context) {
 	}
 	for i := range clusters.Items {
 		c := &clusters.Items[i]
-		if !Owns(c, r.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
+		if !ownedAndLive(c, r.ClassNamespace) {
 			continue
 		}
 		if err := r.reclaim(ctx, c); err != nil && ctx.Err() == nil {

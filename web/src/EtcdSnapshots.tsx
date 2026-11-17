@@ -5,17 +5,18 @@ import {
   backupCredentialHint,
   backupKeys,
   backupsOf,
-  noTargets,
-  scheduleHint,
   scheduleProblem,
   scheduleText,
   targetProblem,
-  targetText,
+  TargetScheduleFields,
   useClassTargets,
+  volumeName,
+  volumeTarget,
   type OfferedTarget,
 } from "./Backups";
 import type { OptionRow } from "./ClusterOptions";
 import { CredentialField } from "./CredentialField";
+import { RemovedSnapshots } from "./RemovedSnapshots";
 import type { Cluster, ClusterEtcdSnapshots, EtcdRestorePlan, EtcdRestoreStatus, EtcdSnapshot } from "./types";
 import {
   Detail,
@@ -26,6 +27,8 @@ import {
   Status,
   age,
   browserZone,
+  type SiteZone,
+  useSiteZone,
   bytes,
   distributionName,
   errorMessage,
@@ -35,8 +38,7 @@ import {
   pollRunning,
   Said,
   sentence,
-  sole,
-  timeZones,
+  stageLabel,
   useChange,
   usePoll,
   Skeleton,
@@ -101,12 +103,12 @@ export interface EtcdSnapshotFields {
 }
 
 /** etcdFieldsOf are the fields of a cluster's settings. What it leaves unset is the chart's default. */
-export function etcdFieldsOf(v: EtcdSnapshotsValue): EtcdSnapshotFields {
+export function etcdFieldsOf(v: EtcdSnapshotsValue, zone = browserZone(), inEffect = "UTC"): EtcdSnapshotFields {
   return {
-    target: v.target ?? "",
+    target: v.target ?? (v.enabled ? volumeTarget : ""),
     schedule: v.schedule ?? defaultEtcdSchedule,
-    // What is in effect: UTC when snapshots name none. Snapshots switched on start in the browser's zone.
-    timeZone: v.timeZone ?? (v.enabled ? "UTC" : browserZone()),
+    // What is in effect: inEffect when snapshots name none. Snapshots switched on start in zone.
+    timeZone: v.timeZone ?? (v.enabled ? inEffect : zone),
     keep: String(v.keep ?? defaultEtcdKeep),
     upload: v.distributionUpload === true,
   };
@@ -127,10 +129,11 @@ export function etcdProblems(
   held: { kept?: string | undefined; backups?: string | undefined } = {},
 ): Partial<Record<EtcdSnapshotField, string>> {
   const p: Partial<Record<EtcdSnapshotField, string>> = {};
-  const target = targetProblem(f.target, targets, held.kept);
+  // The backup volume takes no access key, so it shares none with the backups.
+  const target = f.target === volumeTarget ? undefined : targetProblem(f.target, targets, held.kept);
   if (target !== undefined) {
     p.target = target;
-  } else if (filled(held.backups) && f.target !== held.backups) {
+  } else if (f.target !== volumeTarget && filled(held.backups) && f.target !== held.backups) {
     p.target = sameTargetProblem;
   }
   const schedule = scheduleProblem(f.schedule);
@@ -144,10 +147,13 @@ export function etcdProblems(
   return p;
 }
 
-/** etcdSnapshotsVariable is the variable the fields set. */
+/** toTarget says whether a chosen target is a bucket, which needs an access key. */
+export const toTarget = (target: string): boolean => filled(target) && target !== volumeTarget;
+
+/** etcdSnapshotsVariable is the variable the fields set. No target is the backup volume. */
 export const etcdSnapshotsVariable = (f: EtcdSnapshotFields): EtcdSnapshotsValue => ({
   enabled: true,
-  target: f.target,
+  ...(toTarget(f.target) ? { target: f.target } : {}),
   schedule: f.schedule.trim(),
   timeZone: f.timeZone,
   keep: Number(f.keep),
@@ -161,7 +167,8 @@ export function etcdSnapshotsText(v: EtcdSnapshotsValue, distribution = ""): str
   }
   const f = etcdFieldsOf(v);
   const upload = f.upload ? `, plus ${distributionName(distribution)}'s own` : "";
-  return `${scheduleText(f.schedule)} (${f.timeZone}), keeps ${f.keep}, to ${f.target}${upload}`;
+  const to = toTarget(f.target) ? f.target : "the backup volume";
+  return `${scheduleText(f.schedule)} (${f.timeZone}), keeps ${f.keep}, to ${to}${upload}`;
 }
 
 /** etcdSnapshotsRows is the Options view's row of a cluster's etcd snapshots, where its class offers a target. */
@@ -181,7 +188,10 @@ export function etcdSnapshotsRows(c: Cluster, offered: boolean): OptionRow<"etcd
   ];
 }
 
-/** withEtcdTarget starts from the target the cluster's backups use, or the one there is. */
+/**
+ * withEtcdTarget starts from the target the cluster's backups use, or the one there is, or else the
+ * backup volume. A target chosen, the volume too, stays.
+ */
 export function withEtcdTarget(
   f: EtcdSnapshotFields,
   targets: OfferedTarget[],
@@ -190,9 +200,8 @@ export function withEtcdTarget(
   if (filled(f.target)) {
     return f;
   }
-  const chosen =
-    backups !== undefined && targets.some((t) => t.name === backups) ? backups : sole(targets.map((t) => t.name));
-  return { ...f, target: chosen ?? "" };
+  const chosen = backups !== undefined && targets.some((t) => t.name === backups) ? backups : targets[0]?.name;
+  return { ...f, target: chosen ?? volumeTarget };
 }
 
 /** EtcdSnapshotFieldset edits a cluster's etcd snapshot settings. problems are those to show. */
@@ -211,47 +220,9 @@ export function EtcdSnapshotFieldset({
 }): JSX.Element {
   const uploadHintId = useId();
   const update = (patch: Partial<EtcdSnapshotFields>): void => onChange({ ...value, ...patch });
-  const listed = targets.some((t) => t.name === value.target);
   return (
     <>
-      <Field label="Target" error={problems.target}>
-        {(id) => (
-          <select id={id} value={value.target} onChange={(e) => update({ target: e.target.value })}>
-            <option value="" disabled>
-              Choose…
-            </option>
-            {targets.map((t) => (
-              <option key={t.name} value={t.name}>
-                {t.name}: {targetText(t)}
-              </option>
-            ))}
-            {filled(value.target) && !listed && (
-              <option value={value.target}>{value.target} (no longer offered)</option>
-            )}
-          </select>
-        )}
-      </Field>
-      <Field label="Schedule" hint={scheduleHint(value.schedule)} error={problems.schedule}>
-        {(id) => (
-          <input
-            id={id}
-            value={value.schedule}
-            spellCheck={false}
-            onChange={(e) => update({ schedule: e.target.value })}
-          />
-        )}
-      </Field>
-      <Field label="Time zone">
-        {(id) => (
-          <select id={id} value={value.timeZone} onChange={(e) => update({ timeZone: e.target.value })}>
-            {timeZones(value.timeZone).map((z) => (
-              <option key={z} value={z}>
-                {z}
-              </option>
-            ))}
-          </select>
-        )}
-      </Field>
+      <TargetScheduleFields value={value} update={update} targets={targets} problems={problems} volume />
       <Field label="Snapshots to keep" error={problems.keep}>
         {(id) => (
           <input
@@ -289,14 +260,32 @@ export function EtcdSnapshotFieldset({
 }
 
 /** EtcdSnapshotsDialog switches a cluster's etcd snapshots on or off and changes how they run. */
-export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+export function EtcdSnapshotsDialog({
+  cluster: c,
+  onClose,
+}: {
+  cluster: Cluster;
+  onClose: () => void;
+}): JSX.Element | null {
+  const zone = useSiteZone();
+  return zone === undefined ? null : <EtcdSnapshotsForm cluster={c} zone={zone} onClose={onClose} />;
+}
+
+function EtcdSnapshotsForm({
+  cluster: c,
+  zone,
+  onClose,
+}: {
+  cluster: Cluster;
+  zone: SiteZone;
+  onClose: () => void;
+}): JSX.Element {
   const current = etcdSnapshotsOf(c.variables["etcdSnapshots"]);
   const offered = useClassTargets(c.class);
   const targets = offered ?? [];
   const [enabled, setEnabled] = useState(current.enabled);
-  const [typed, setTyped] = useState<EtcdSnapshotFields>(() => etcdFieldsOf(current));
+  const [typed, setTyped] = useState<EtcdSnapshotFields>(() => etcdFieldsOf(current, zone.start, zone.inEffect));
   const { busy, error, send } = useChange(c, onClose);
-  const hint = useId();
   const backups = backupsOf(c.variables["backups"]);
   const fields = withEtcdTarget(typed, targets, backups.enabled ? backups.target : undefined);
   const kept = current.enabled ? current.target : undefined;
@@ -308,7 +297,6 @@ export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster;
   const next: EtcdSnapshotsValue = enabled ? etcdSnapshotsVariable(fields) : { ...rest, enabled: false };
   const before: EtcdSnapshotsValue = current.enabled ? etcdSnapshotsVariable(etcdFieldsOf(current)) : current;
   const changed = JSON.stringify(next) !== JSON.stringify(before);
-  const none = offered !== undefined && targets.length === 0 && !current.enabled;
   return (
     <Dialog
       title="Edit etcd snapshots"
@@ -322,27 +310,15 @@ export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster;
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed || Object.keys(problems).length > 0}>
-            Save
+            {stageLabel}
           </button>
         </>
       }
     >
       <label className="check">
-        <input
-          type="checkbox"
-          checked={enabled}
-          disabled={none}
-          aria-describedby={none ? hint : undefined}
-          onChange={(e) => setEnabled(e.target.checked)}
-        />{" "}
-        Take etcd snapshots
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Take etcd snapshots
       </label>
       <Info about="etcd snapshots">{etcdSnapshotsInfo}</Info>
-      {none && (
-        <p className="hint" id={hint}>
-          {noTargets}
-        </p>
-      )}
       {enabled && (
         <>
           <EtcdSnapshotFieldset
@@ -357,7 +333,11 @@ export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster;
             purpose="backup"
             cluster={c}
             keys={backupKeys}
-            hint={backupCredentialHint}
+            hint={backupCredentialHint(
+              c.namespace,
+              c.name,
+              targets.find((t) => t.name === fields.target),
+            )}
           />
         </>
       )}
@@ -509,6 +489,8 @@ export function EtcdSnapshotsView({
         <SnapshotsTable cluster={c} view={v} noRestore={noRestore} onRestore={setRestoring} />
       )}
 
+      <RemovedSnapshots namespace={c.namespace} />
+
       {restoring !== undefined && (
         <EtcdRestoreDialog
           cluster={c}
@@ -532,8 +514,8 @@ function SnapshotsSummary({ cluster: c, view: v }: { cluster: Cluster; view: Clu
   const s = snapshotState(v);
   return (
     <dl className="summary">
-      <dt>Target</dt>
-      <dd>{v.target ?? ""}</dd>
+      <dt>Kept on</dt>
+      <dd>{filled(v.target) ? v.target : volumeName}</dd>
       <dt>Schedule</dt>
       <dd>{etcdSnapshotsText({ ...etcdSnapshotsOf(c.variables["etcdSnapshots"]), distributionUpload: false })}</dd>
       {v.distributionUpload === true && (
@@ -542,12 +524,12 @@ function SnapshotsSummary({ cluster: c, view: v }: { cluster: Cluster; view: Clu
           <dd>In {c.distribution}-etcd, same schedule in UTC, restored by hand</dd>
         </>
       )}
-      <dt>Last snapshot</dt>
+      <dt>Last taken</dt>
       <dd>
-        <Status state={s.state} text={s.text} />
+        {v.last === undefined || s.state === "error" ? <Status state={s.state} text={s.text} /> : null}
         {v.last !== undefined && (
-          <span className="muted">
-            {" "}
+          <span className={s.state === "error" ? "muted" : undefined}>
+            {s.state === "error" ? " " : ""}
             {when(v.last.time)} ({age(v.last.time)} ago)
           </span>
         )}

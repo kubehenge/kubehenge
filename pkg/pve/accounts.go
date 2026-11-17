@@ -114,12 +114,6 @@ type Challenge struct {
 	// Recovery holds the indices of the recovery keys still unused. Nil means none were set up.
 	Recovery []int
 	ticket   string
-	issued   time.Time
-}
-
-// Expired tells whether the challenge can no longer be answered.
-func (c *Challenge) Expired(now time.Time) bool {
-	return now.Sub(c.issued) >= TicketLifetime
 }
 
 type ticketResponse struct {
@@ -155,7 +149,7 @@ func (a *Accounts) SignIn(ctx context.Context, username, password string) (*Tick
 	if err != nil {
 		return nil, nil, err
 	}
-	c.Username, c.ticket, c.issued = res.Username, res.Ticket, now
+	c.Username, c.ticket = res.Username, res.Ticket
 	return nil, c, nil
 }
 
@@ -298,7 +292,11 @@ func (a *Accounts) get(ctx context.Context, t *Ticket, path string, out any) err
 		return err
 	}
 	t.authorise(req)
-	err = a.do(req, out)
+	return t.refused(a.do(req, out))
+}
+
+// refused is err, or ErrNodesDisagree where Proxmox VE refused a ticket just issued.
+func (t *Ticket) refused(err error) error {
 	if t.Token == "" && errors.Is(err, ErrAuthentication) && time.Since(t.Issued) < freshTicket {
 		return ErrNodesDisagree
 	}

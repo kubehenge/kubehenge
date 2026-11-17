@@ -365,6 +365,27 @@ jobs:
       - name: The guests' load
         if: ${{ !cancelled() && env.E2E_RUN == 'true' }}
         run: test/e2e/ci/guests.sh summary "$RUNNER_TEMP/guests.txt"
+      # The management cluster's etcd on this runner's disk, pass or fail: its slow syncs and slow
+      # requests, to judge its timing against the disk's load. A lane that removed the cluster has
+      # nothing to read.
+      - name: The management cluster's etcd
+        if: ${{ !cancelled() && env.E2E_RUN == 'true' }}
+        run: |
+          test/e2e/ci/guests.sh etcd "$RUNNER_TEMP/etcd.txt" || true
+          cat "$RUNNER_TEMP/etcd.txt"
+          {
+            echo "### The management cluster's etcd"
+            echo '```text'
+            cat "$RUNNER_TEMP/etcd.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() && env.E2E_RUN == 'true' }}
+        with:
+          name: e2e-etcd-${{ inputs.test }}
+          path: ${{ runner.temp }}/etcd.txt
+          if-no-files-found: ignore
+          retention-days: 7
       # How near the guard's floors the test came, which is where to look before they are moved.
       - name: The runner's room
         if: ${{ !cancelled() && env.E2E_RUN == 'true' }}
@@ -440,7 +461,8 @@ jobs:
           cp "$RUNNER_TEMP/e2e/apply.log" "$RUNNER_TEMP/vmstat.txt" "$RUNNER_TEMP/kvm.txt" \
             "$RUNNER_TEMP/guests.txt" "$RUNNER_TEMP/guests.txt.trims" \
             "$RUNNER_TEMP/guests-record.log" "$RUNNER_TEMP/guard.txt" \
-            "$RUNNER_TEMP/guard.txt.fail" "$RUNNER_TEMP/guard.log" "$out/" 2>/dev/null || true
+            "$RUNNER_TEMP/guard.txt.fail" "$RUNNER_TEMP/guard.log" "$RUNNER_TEMP/etcd.txt" \
+            "$out/" 2>/dev/null || true
           # From inside the VMs, which answers even when a cluster's API does not.
           test/e2e/ci/guests.sh collect "$out/guests" || true
           # The management-cluster tests keep their kubeconfig only while they run, and leave the
@@ -596,9 +618,12 @@ jobs:
                 } > "$dir/kube-proxy.log" 2>&1 || true
                 # The run before a restart says why the container ended; when it cannot be had, the
                 # error says why. It is asked for container by container, since with all of them
-                # kubectl stops at the first one that never restarted.
+                # kubectl stops at the first one that never restarted. The cloud controller manager
+                # and the CSI plugin are read running too: a node they never initialise keeps the
+                # uninitialized taint, and only their logs say what Proxmox VE answered.
                 k get pods -A -o json 2>/dev/null | jq -r '.items[] |
                   select((.metadata.namespace | startswith("cattle-"))
+                    or (.metadata.name | startswith("proxmox-"))
                     or (.status.phase | IN("Running", "Succeeded") | not)
                     or any(.status.containerStatuses[]?; .restartCount > 0)) |
                   "\(.metadata.namespace) \(.metadata.name) "

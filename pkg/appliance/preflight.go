@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
@@ -53,8 +54,13 @@ type Inventory struct {
 	// read.
 	APIReach *pve.APIReach
 	// Route is how traffic reaches the API endpoint from the appliance. The management cluster's
-	// nodes reach it in the endpoint's families.
+	// nodes reach it in the endpoint's families. Its Endpoints are what the appliance itself resolves
+	// the URL's host to.
 	Route APIRoute
+	// DNSPort and DNSTimeout are the port the DNS servers listen on and how long each has to answer.
+	// The zero values are 53 and three seconds.
+	DNSPort    string
+	DNSTimeout time.Duration
 }
 
 // Findings are what a preflight found. Errors stop the run, warnings do not. Each names the node,
@@ -128,11 +134,37 @@ func (s *Settings) Preflight(inv *Inventory, owned bool) Findings { //nolint:rev
 		s.checkAddressesFree(inv, &f)
 		s.checkNamesFree(inv, &f)
 		s.checkVMIDs(inv, &f)
+		s.checkWorkloadVMIDs(inv, &f)
 	}
+	s.checkAPIFamily(inv, &f)
 	s.checkAPIReach(inv, &f)
+	s.checkURLResolves(inv, &f)
+	s.checkISOStorageShared(inv, &f)
 	s.warnPlacement(inv, &f)
 	s.warnRanges(inv, &f)
 	return f
+}
+
+// checkAPIFamily refuses a Proxmox VE API address of a family the management cluster's nodes have
+// no address in, which they could never reach. The installer picks an address Proxmox VE's own
+// certificate lists, and on a dual-stack node that may be the IPv6 one alone.
+func (s *Settings) checkAPIFamily(inv *Inventory, f *Findings) {
+	u, err := url.Parse(inv.ProxmoxURL)
+	if err != nil {
+		return
+	}
+	ip, err := netip.ParseAddr(u.Hostname())
+	if err != nil {
+		return
+	}
+	family, other := familyIPv4, familyIPv6
+	if ip.Unmap().Is6() {
+		family, other = familyIPv6, familyIPv4
+	}
+	if slices.Contains(s.Families(), family) {
+		return
+	}
+	f.Errors = append(f.Errors, fmt.Sprintf("The management cluster's nodes have no %s address, so they cannot reach the Proxmox VE API at %s. Give them %s addresses, or move the appliance to an %s address or name of the API that its certificate lists: sh install.sh --upgrade --ctid <id> --proxmox-url <URL>.", family, ip.Unmap(), family, other))
 }
 
 // checkAPIReach checks that the datacenter firewall, once on, still lets the appliance and the
@@ -169,7 +201,7 @@ func (s *Settings) checkNodesExist(inv *Inventory, f *Findings) {
 		return
 	}
 	for _, name := range s.Nodes {
-		checkNodeExists(inv, f, name, "Choose a node that is.", "Start it, or choose another node.")
+		checkNodeExists(inv, f, name, "Choose a node that exists.", "Start it, or choose another node.")
 	}
 }
 
@@ -206,6 +238,34 @@ func (s *Settings) checkStorages(inv *Inventory, f *Findings) {
 			checkStorageOn(inv, f, c.name, c.content, node, "choose another storage")
 		}
 	}
+}
+
+// checkISOStorageShared warns when the clusters' VM disks can sit on shared storage that a VM can
+// move or restart from, but the cloud-init ISOs are on node-local storage. A cluster VM that Proxmox
+// VE HA or a migration puts on another node then cannot find its ISO. The management VMs keep their
+// own cloud-init drive on the VM storage and need neither this storage nor the image storage once
+// created, so setup itself works and the finding is a warning. Cluster VMs may run on any node of
+// the Proxmox VE cluster, so its nodes are counted, or the settings' nodes where it could not be read.
+func (s *Settings) checkISOStorageShared(inv *Inventory, f *Findings) {
+	nodes := len(inv.Nodes)
+	if inv.Nodes == nil {
+		nodes = len(s.Nodes)
+	}
+	if inv.Storages == nil || nodes < 2 {
+		return
+	}
+	shared := func(name string) bool {
+		return slices.ContainsFunc(inv.Storages, func(x pve.Storage) bool { return x.Storage == name && x.Shared })
+	}
+	if shared(s.BootstrapDatastore) || !slices.ContainsFunc(inv.Storages, func(x pve.Storage) bool { return x.Storage == s.BootstrapDatastore }) {
+		return
+	}
+	disks := slices.Concat([]string{s.VMDatastore}, s.WorkloadDatastores)
+	i := slices.IndexFunc(disks, shared)
+	if i < 0 {
+		return
+	}
+	f.Warnings = append(f.Warnings, fmt.Sprintf("The cloud-init images are on storage %s, which is local to a node, while disks are on shared storage %s. A cluster VM that restarts or migrates to another node cannot find its ISO. Choose a shared storage with the iso content type as Cloud-init images.", s.BootstrapDatastore, disks[i]))
 }
 
 // checkStorageOn checks one storage on one node: enabled there, active and with the content type.
@@ -279,7 +339,7 @@ func (s *Settings) checkBridge(inv *Inventory, f *Findings) {
 			f.Errors = append(f.Errors, fmt.Sprintf("Bridge %s is in zone %s. Write it as %s/%s.", ref, network.Zone, network.Zone, n))
 		}
 		if i == 0 && s.VLAN != nil && *s.VLAN > 0 && network.TagsTraffic() {
-			f.Errors = append(f.Errors, fmt.Sprintf("VNet %s is in a VLAN zone and tags already. Leave the VLAN tag empty.", n))
+			f.Errors = append(f.Errors, pve.VLANOnTaggedNetwork(n))
 		}
 	}
 	for _, node := range s.Nodes {
@@ -354,7 +414,7 @@ func (s *Settings) checkBuildPlace(inv *Inventory, f *Findings) {
 	if site.node == "" {
 		return
 	}
-	if !checkNodeExists(inv, f, site.node, "Set the template build node to one that is, or leave it empty.", "Start it, or set another template build node.") {
+	if !checkNodeExists(inv, f, site.node, "Set the template build node to one that exists, or leave it empty.", "Start it, or set another template build node.") {
 		return
 	}
 	if inv.Storages != nil && site.storage != "" {
@@ -388,7 +448,7 @@ func (s *Settings) checkAddressesFree(inv *Inventory, f *Findings) {
 	}
 	for _, a := range addrs {
 		if ip, err := netip.ParseAddr(a); err == nil && inv.Answering[ip] {
-			f.Errors = append(f.Errors, fmt.Sprintf("Address %s answers to ping or a connection already. Choose an address no host uses.", a))
+			f.Errors = append(f.Errors, fmt.Sprintf("Address %s already answers to ping or a connection. Choose an address nothing uses.", a))
 		}
 	}
 }
@@ -403,6 +463,19 @@ func (s *Settings) checkVMIDs(inv *Inventory, f *Findings) {
 	r := ChooseVMIDRange(inv.NextID, need)
 	if free := r.Free(inv.UsedVMIDs); free < need {
 		f.Errors = append(f.Errors, fmt.Sprintf("VM IDs %d to %d, the range Proxmox VE offers new VMs from, have %s free, and the management cluster needs %d. Widen next-id under Datacenter, Options.", r.Start, r.End-1, plural(max(free, 0), "ID"), need))
+	}
+}
+
+// checkWorkloadVMIDs refuses a site VM ID range that overlaps the range the management VMs' IDs are
+// drawn from, since a management VM could take an ID the clusters' VMs or the templates are meant for.
+func (s *Settings) checkWorkloadVMIDs(inv *Inventory, f *Findings) {
+	w := s.WorkloadVMIDRange
+	if w == nil {
+		return
+	}
+	r := ChooseVMIDRange(inv.NextID, s.NodeCount())
+	if w.Start < int64(r.End) && w.End >= int64(r.Start) {
+		f.Errors = append(f.Errors, fmt.Sprintf("VM ID range %s overlaps %d to %d, where the management VMs' IDs are drawn from. Choose IDs outside it, such as 100000-100999.", w, r.Start, r.End-1))
 	}
 }
 

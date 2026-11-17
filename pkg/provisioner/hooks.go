@@ -107,6 +107,8 @@ type Hooks struct {
 	SysAuditGroup string
 	// VolumeSnapshots is what lets a cluster's CSI plugin take volume snapshots.
 	VolumeSnapshots VolumeSnapshots
+	// SiteCA is the site CA a new cluster is given. Nil, a new cluster gets none.
+	SiteCA func() string
 }
 
 // BeforeClusterUpgrade holds Rancher's cluster at the Kubernetes versions Rancher runs on, holds
@@ -288,6 +290,7 @@ func (h *Hooks) refusal(ctx context.Context, cluster *clusterv1.Cluster, class *
 		func() error { return h.checkPlacement(ctx, reads, cluster) },
 		func() error { return checkStorageListed(cluster, class) },
 		func() error { return checkRanges(cluster, class) },
+		func() error { return checkVMIDRange(cluster) },
 		func() error { return h.checkAddresses(ctx, cluster) },
 		func() error { return h.checkRancher(ctx, cluster, cluster.Spec.Topology.Version) },
 		func() error { return checkRancherNodes(cluster, class) },

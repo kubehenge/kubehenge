@@ -37,18 +37,23 @@ func (leap) Releases() []Release {
 }
 
 // Image is the Immutable Base image in qcow2, with its own signed checksum file beside it.
-func (leap) Image(ctx context.Context, s *Sources, r Release) (Resolved, error) {
+func (leap) Image(ctx context.Context, s *Sources, r *Release) (Resolved, error) {
 	if r.Build == "" {
 		return Resolved{}, errors.New("no build of openSUSE Leap " + r.Name + " is named yet")
 	}
-	dir := "https://download.opensuse.org/distribution/leap/" + r.Name + "/appliances"
 	file := fmt.Sprintf("Leap-%s-Immutable.x86_64-Base-qcow-%s.qcow2", r.Name, r.Build)
-	key := signingKey{name: "openSUSE", armoured: openSUSEKey, fingerprint: OpenSUSEKeyFingerprint}
-	return s.signedImage(ctx, key, dir+"/"+file, dir+"/"+file+".sha256", dir+"/"+file+".sha256.asc", "leap-"+r.Name+"-"+r.Build)
+	return s.signedImage(ctx, &pinnedImage{
+		signer: signingKey{name: "openSUSE", armoured: openSUSEKey, fingerprint: OpenSUSEKeyFingerprint},
+		dirs:   []string{"https://download.opensuse.org/distribution/leap/" + r.Name + "/appliances"},
+		file:   file,
+		sums:   file + ".sha256",
+		sha256: r.SHA256,
+		saveAs: "leap-" + r.Name + "-" + r.Build,
+	})
 }
 
-func (leap) Keys(_ Release, b *Bake) []RepositoryKey { return keysOf(leapRepositories(b)) }
+func (leap) Keys(_ *Release, b *Bake) []RepositoryKey { return keysOf(leapRepositories(b)) }
 
-func (leap) Recipe(_ Release, b *Bake, keys map[string]string) (Recipe, error) {
+func (leap) Recipe(_ *Release, b *Bake, keys map[string]string) (Recipe, error) {
 	return leapRecipe(b, keys)
 }

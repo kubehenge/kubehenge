@@ -180,6 +180,7 @@ describe("talos clusters", () => {
     await user.click(screen.getByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(screen.getByRole("button", { name: "Next" }));
 
     expect(term("Talos release")).toHaveTextContent("v1.14.4");
     expect(term("Kubernetes version")).toHaveTextContent("v1.36.5");

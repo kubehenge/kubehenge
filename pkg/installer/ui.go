@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // The actions of the summary.
@@ -71,6 +72,8 @@ type (
 	probeMsg    struct {
 		address string
 		used    bool
+		// refused is the VLAN check's refusal of the bridge and VLAN, empty when they pass.
+		refused string
 	}
 	eventMsg Event
 	doneMsg  struct {
@@ -113,7 +116,9 @@ type Model struct {
 	detail map[string]string
 	frac   map[string]float64
 	events chan any
-	res    *Result
+	// running closes when the runner's goroutine has returned.
+	running chan struct{}
+	res     *Result
 
 	urlGiven  bool
 	noAddr    *NoAddressError
@@ -139,6 +144,37 @@ func (m *Model) Err() error { return m.fail }
 
 // Cancelled reports whether the user left before the run.
 func (m *Model) Cancelled() bool { return m.cancelled }
+
+// Outcome says what a stopped run undid and what it left, empty when no run started.
+func (m *Model) Outcome() string {
+	if m.runner == nil {
+		return ""
+	}
+	return m.runner.Outcome()
+}
+
+// Finished reports whether the run installed the appliance, which the end screen shows.
+func (m *Model) Finished() bool { return m.res != nil }
+
+// Left says what a stopped run left behind that the user must look after, empty for nothing.
+func (m *Model) Left() string {
+	if m.runner == nil {
+		return ""
+	}
+	return m.runner.Left()
+}
+
+// Shutdown ends a run still going and removes what it made. A signal or a lost terminal ends the
+// program without its own cleanup, which would leave a half-made container behind.
+func (m *Model) Shutdown(ctx context.Context) {
+	m.cancel()
+	if m.running != nil {
+		<-m.running
+	}
+	if m.runner != nil {
+		m.runner.Cleanup(ctx)
+	}
+}
 
 // Init starts the detection behind one spinner.
 func (m *Model) Init() tea.Cmd {
@@ -201,10 +237,11 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	case msg.String() == "ctrl+c" && m.stage == stRun:
 		m.cancel()
 		return nil, true
+	case m.stage == stEnd || m.stage == stFail:
+		// Even Ctrl+C only closes the screen: the run is over, and its failure stays the result.
+		return tea.Quit, true
 	case msg.String() == "ctrl+c":
 		return m.leave(), true
-	case m.stage == stEnd || m.stage == stFail:
-		return tea.Quit, true
 	}
 	return nil, false
 }
@@ -220,6 +257,12 @@ func (m *Model) afterDetect(err error) (*Model, tea.Cmd) {
 
 // afterProbe asks for another address when the one typed answers on the network.
 func (m *Model) afterProbe(msg probeMsg) (*Model, tea.Cmd) {
+	if msg.refused != "" {
+		m.netErr = msg.refused
+		m.stage = stNetwork
+		cmd := m.networkForm()
+		return m, cmd
+	}
 	if msg.used {
 		m.netErr = msg.address + " answers on this network"
 		m.S.Cfg.IP = ""
@@ -316,10 +359,23 @@ func (m *Model) networkForm() tea.Cmd {
 		huh.NewInput().Title("IPv6").Placeholder("auto, dhcp or 2001:db8::40/64").Value(&a.ip6).Validate(validateIPv6),
 		huh.NewInput().Title("IPv6 gateway").Value(&a.gateway6).Validate(validateIPv6Gateway),
 		huh.NewSelect[string]().Title("Bridge").Options(huh.NewOptions(f.Bridges...)...).Value(&a.bridge),
-		huh.NewInput().Title("VLAN").Placeholder("none").Value(&a.vlan).Validate(validateRange("1 to 4094", 1, vlanMax)),
+		huh.NewInput().Title("VLAN").Placeholder("none").Value(&a.vlan).Validate(m.validateVLAN),
 		huh.NewInput().Title("MTU").Placeholder("bridge default").Value(&a.mtu).Validate(validateRange("576 to 65535", mtuMin, mtuMax)),
 	).WithHideFunc(func() bool { return !a.more })
 	return m.startForm(huh.NewGroup(modeGroup...), static, dhcpDNS, more, adv)
+}
+
+// validateVLAN checks the VLAN field against the bridge picked above it, with the check the flags
+// get.
+func (m *Model) validateVLAN(vlan string) error {
+	if err := validateRange("1 to 4094", 1, vlanMax)(vlan); err != nil {
+		return err
+	}
+	bridge := m.a.bridge
+	if bridge == "" {
+		bridge = m.S.Cfg.Bridge
+	}
+	return m.S.routeVLANError(m.ctx, bridge, vlan)
 }
 
 // prefillNetwork fills the network answers from what was detected, the first time.
@@ -414,8 +470,12 @@ func (m *Model) choicesForm(n Needs) tea.Cmd {
 func (m *Model) trustForm() tea.Cmd {
 	ca := m.S.CA
 	m.a.trust = false
+	note := ""
+	if ca.Pinned {
+		note = "\nThe API serves no CA, so only this certificate is trusted. The appliance fails when it is renewed."
+	}
 	return m.startForm(huh.NewGroup(huh.NewConfirm().Title("Trust this CA for the Proxmox VE API?").
-		Description("Subject  " + ca.Subject + "\nIssuer   " + ca.Issuer + "\nSHA-256  " + ca.Fingerprint[:47] + "\n         " + ca.Fingerprint[48:]).
+		Description("Subject  " + ca.Subject + "\nIssuer   " + ca.Issuer + "\nSHA-256  " + ca.Fingerprint[:47] + "\n         " + ca.Fingerprint[48:] + note).
 		Affirmative("Trust").Negative("Refuse").Value(&m.a.trust)))
 }
 
@@ -448,12 +508,17 @@ func (m *Model) networkDone() tea.Cmd {
 		bridge = a.bridge
 	}
 	return func() tea.Msg {
+		// The field checked the VLAN against the bridge as it stood then. The bridge can change
+		// after it.
+		if err := m.S.routeVLANError(m.ctx, bridge, c.VLAN); err != nil {
+			return probeMsg{refused: err.Error()}
+		}
 		if bridge != c.Bridge || c.Bridge == "" {
 			m.S.RefreshForBridge(m.ctx, bridge)
 		}
 		if a.mode == optStatic {
 			addr, _, _ := strings.Cut(c.IP, "/")
-			return probeMsg{address: addr, used: m.S.Node.AddressInUse(m.ctx, c.Bridge, addr)}
+			return probeMsg{address: addr, used: m.S.Node.AddressInUse(m.ctx, m.S.Facts.addressDevice(c.Bridge, c.VLAN), addr)}
 		}
 		return probeMsg{}
 	}
@@ -560,8 +625,11 @@ func (m *Model) startRun() tea.Cmd {
 			m.state[st.ID] = StepPending
 		}
 	}
+	running := make(chan struct{})
+	m.running = running
 	go func() {
 		res, err := m.runner.Run(m.ctx)
+		close(running)
 		m.events <- doneMsg{res, err}
 	}()
 	return tea.Batch(m.wait(), m.spin.Tick)
@@ -698,9 +766,16 @@ func (m *Model) header() string {
 	return b.String()
 }
 
+// The columns of the summary: two spaces, a label of this width, then the value.
+const (
+	summaryLabelWidth = 18
+	summaryMargin     = 2
+	minNoteWidth      = 30
+)
+
 // row renders a label and a value in two columns.
 func row(label, value string) string {
-	return "  " + dim.Render(fmt.Sprintf("%-18s", label)) + value + "\n"
+	return strings.Repeat(" ", summaryMargin) + dim.Render(fmt.Sprintf("%-*s", summaryLabelWidth, label)) + value + "\n"
 }
 
 func (m *Model) summary() string {
@@ -745,6 +820,14 @@ func (m *Model) summary() string {
 		entry = optYes
 	}
 	b.WriteString(row("Proxmox VE entry", entry))
+	for _, n := range m.S.Cautions {
+		// The renderer clips a line at the terminal's width, so a long note wraps under its label.
+		lines := strings.Split(ansi.Wrap(n, max(m.width-summaryLabelWidth-summaryMargin, minNoteWidth), ""), "\n")
+		b.WriteString(row("Note", lines[0]))
+		for _, l := range lines[1:] {
+			b.WriteString(row("", l))
+		}
+	}
 	b.WriteString("\n")
 	return b.String()
 }
@@ -839,8 +922,9 @@ func (m *Model) failView() string {
 	}
 	if m.runner != nil {
 		b.WriteString(row("Log", m.runner.LogPath))
-		if m.cleaned {
-			b.WriteString(row("Container", "removed"))
+		// An unprotected appliance is the failure itself, and the Do row has its fix.
+		if out := m.runner.Outcome(); m.cleaned && out != m.runner.Left() {
+			b.WriteString(row("Left", out))
 		}
 	} else {
 		b.WriteString(row("Changed", "nothing"))

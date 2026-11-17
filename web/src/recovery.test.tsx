@@ -12,7 +12,7 @@ const command = `kubectl --namespace clusters annotate cluster web kubehenge.dev
 const down =
   "control-plane machine web-cp-b, which replaces web-cp-a, has not become ready in 25m0s: * NodeHealthy: Waiting for a Node. " +
   "The cluster runs on the etcd members of both until it is, and its API does not answer, so one of them does not run. " +
-  `Start what stopped if it can be; otherwise reset etcd to web-cp-a's own and replace web-cp-b, with Recover on the cluster's page or: ${command}`;
+  `Start what stopped if it can be. Otherwise reset etcd to web-cp-a's own and replace web-cp-b, with Recover on the cluster's page or: ${command}`;
 
 const machine = (name: string, created: string, ready: boolean): Machine => ({
   name,
@@ -274,7 +274,7 @@ describe("a plan that rolls the only control plane", () => {
       await within(dialog).findByRole("combobox", { name: "Kubernetes version" }),
       "v1.36.6+rke2r1",
     );
-    await user.click(within(dialog).getByRole("button", { name: "Upgrade" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await user.click(await screen.findByRole("button", { name: "Review plan" }));
     expect(screen.getByRole("dialog", { name: "Review plan" })).toHaveTextContent(warning);
   });

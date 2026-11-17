@@ -433,3 +433,46 @@ func TestUIRunScreen(t *testing.T) {
 		golden.RequireEqual(t, sanitise(m.render()))
 	})
 }
+
+// The Advanced form's VLAN field refuses the default route's bridge and VLAN on a bridge that is not
+// VLAN aware, with the flags' message, and holds the user on the field.
+func TestUIVLANFieldRefusesTheRouteVLAN(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{})
+	h.exec.on("pvesh get /nodes/pve1/network", `[{"type":"bridge","iface":"vmbr0"},{"type":"bridge","iface":"vmbr1"},{"type":"vlan","iface":"vmbr1.20"}]`)
+	h.exec.on("ip -4 route show default", "default via 192.0.2.1 dev vmbr1.20\n")
+	u := startUI(t, h, Config{Bridge: "vmbr0", PVEEntry: "no"})
+	u.waitFor("Static")
+	u.enter(4)
+	u.waitFor("Advanced")
+	u.key('y')
+	u.waitFor("IPv6 gateway")
+	u.enter(2)
+	u.down(1)
+	u.enter(1)
+	u.key('2')
+	u.key('0')
+	u.enter(1)
+	screen := u.rec.screen()
+	if !strings.Contains(screen, "vmbr1 is not VLAN aware") || !strings.Contains(screen, "MTU") {
+		t.Fatalf("the VLAN field let the route's VLAN on vmbr1 through:\n%s", screen)
+	}
+	u.press(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	u.finish()
+	if h.exec.changed() != 0 {
+		t.Fatalf("the node was changed: %v", h.exec.calls)
+	}
+
+	// A bridge changed back above a VLAN the field had passed is checked when the form ends.
+	s := prepared(t, h, Config{Bridge: "vmbr0", PVEEntry: "no"})
+	m := NewModel(s, nil)
+	m.a.mode, m.a.bridge, m.a.vlan = optDHCP, "vmbr1", "20"
+	msg, ok := m.networkDone()().(probeMsg)
+	if !ok || !strings.Contains(msg.refused, "vmbr1 is not VLAN aware") {
+		t.Fatalf("the form ended with the route's VLAN on vmbr1: %+v", msg)
+	}
+	m.afterProbe(msg)
+	if m.stage != stNetwork || !strings.Contains(m.render(), "vmbr1 is not VLAN aware") {
+		t.Fatalf("the refusal is not shown on the network form:\n%s", m.render())
+	}
+}

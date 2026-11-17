@@ -3,6 +3,7 @@ import "./home.css";
 import { onBeforeUnmount, onMounted, useTemplateRef } from "vue";
 
 import { bare, start } from "./henge.js";
+import Logo from "./Logo.vue";
 
 const root = useTemplateRef("root");
 let stop = () => {};
@@ -15,7 +16,7 @@ onBeforeUnmount(() => stop());
     <header class="top">
       <div class="wrap">
         <!-- target="_self" keeps VitePress from prefetching a page the reader may never open: it skips links with a target. -->
-        <a class="brand" href="/" target="_self"><img src="/logo.svg" alt="" /><span>Kubehenge</span></a>
+        <a class="brand" href="/" target="_self"><Logo /><span>Kubehenge</span></a>
         <nav aria-label="Site">
           <a href="/docs/install" target="_self">docs</a>
           <a class="opt" href="/docs/clusters" target="_self">clusters</a>
@@ -76,7 +77,7 @@ onBeforeUnmount(() => stop());
                   <span class="lb">connect two</span><code>cluster mesh: prod ↔ staging</code>
                 </button>
                 <button class="btn act" type="button" data-act="topple" disabled>
-                  <span class="lb">topple one</span><code>kubectl -n clusters delete cluster edge</code>
+                  <span class="lb">topple one</span><code>kubehenge cluster delete edge --yes</code>
                 </button>
               </div>
               <output class="said" data-said aria-live="polite"></output>
@@ -121,7 +122,7 @@ onBeforeUnmount(() => stop());
             </div>
             <div class="ui u-signin">
               <div class="u-signin-panel">
-                <p class="u-brand"><img src="/logo.svg" alt="" />Kubehenge</p>
+                <p class="u-brand"><Logo />Kubehenge</p>
                 <p class="u-muted">Sign in with your Proxmox VE account.</p>
                 <div class="u-field">
                   <span class="u-label">User name</span

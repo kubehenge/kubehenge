@@ -9,6 +9,7 @@ export TF_CLI_CONFIG_FILE := $(CURDIR)/$(PROVIDERS)/tofu.tfrc
 IMAGE ?= ghcr.io/kubehenge/kubehenge
 CAPMOX_IMAGE ?= ghcr.io/kubehenge/cluster-api-provider-proxmox
 HELM_ADDON_IMAGE ?= ghcr.io/kubehenge/cluster-api-addon-provider-helm
+PROXMOX_CSI_IMAGE ?= ghcr.io/kubehenge/proxmox-csi-controller
 KO_FLAGS ?=
 # Where scripts/ko.sh builds the ko every image build runs, beside Go's own directory.
 KO_DIR ?= $(subst \,/,$(shell go env GOPATH))/kubehenge-ko
@@ -227,9 +228,9 @@ image: web gateway-api
 	sh scripts/ko.sh $(KO_DIR)
 	KO_DOCKER_REPO=$(IMAGE) KO_CONFIG_PATH=cmd/kubehenge $(KO_DIR)/ko build --bare --sbom=none $(KO_FLAGS) ./cmd/kubehenge
 
-# Build and push the provider images the management cluster runs as Kubehenge builds them
-# (capmox_build and helm_addon_build in management-cluster/versions.tf), check their digests and
-# print their references by digest.
+# Build and push the provider images and the CSI plugin's controller the management cluster runs as
+# Kubehenge builds them (capmox_build, helm_addon_build and proxmox_csi_build in
+# management-cluster/versions.tf), check their digests and print their references by digest.
 .PHONY: capmox-image
 capmox-image:
 	sh scripts/provider-image.sh $(KO_DIR) capmox $(CAPMOX_IMAGE) $(KO_FLAGS)
@@ -237,6 +238,10 @@ capmox-image:
 .PHONY: helm-addon-image
 helm-addon-image:
 	sh scripts/provider-image.sh $(KO_DIR) helm-addon $(HELM_ADDON_IMAGE) $(KO_FLAGS)
+
+.PHONY: proxmox-csi-image
+proxmox-csi-image:
+	sh scripts/provider-image.sh $(KO_DIR) proxmox-csi $(PROXMOX_CSI_IMAGE) $(KO_FLAGS)
 
 # Check the providers the management cluster runs from Kubehenge's forks: their files and images
 # by the digests versions.tf names, and their provenance and signatures from each fork's release.
@@ -255,8 +260,12 @@ verify-talos-pins: web gateway-api
 # YAML, Markdown, the changelog, the e2e image's Dockerfile and the node images' Containerfiles,
 # spelling and Renovate's config, each at its strictest settings; the files are the repository's
 # own, as git lists them.
+# CI runs the Go analysis and the rest on separate runners, so `lint-other` is everything but Go.
 .PHONY: lint
-lint: lint-go lint-gopls lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-changelog lint-docker lint-typos
+lint: lint-go lint-gopls lint-other
+
+.PHONY: lint-other
+lint-other: lint-web lint-tofu lint-helm lint-shell lint-actions lint-yaml lint-markdown lint-changelog lint-docker lint-typos lint-renovate
 
 FILES = git ls-files --cached --others --exclude-standard
 SHELL_SCRIPTS := test/e2e/*.sh test/e2e/ci/*.sh test/integration/*.sh test/unit/*.sh appliance/*.sh appliance/pve-entry/*.sh scripts/*.sh website/*.sh pkg/installer/*.sh pkg/provisioner/*.sh pkg/templates/*/*.sh charts/kubehenge/files/*.sh
@@ -288,17 +297,19 @@ fmt: web/node_modules/.package-lock.json
 # target take about 5 minutes and 4 GB, and an unchanged tree takes seconds from the cache.
 # Even those seconds open every package's cache entries, so inputs that already passed are not
 # linted again: the Go sources, tracked or not, the module, the config and the linter's version.
+# LINT_GO_OS narrows the systems, so that CI lints each on a runner of its own.
 LINT_GO := CGO_ENABLED=0 GOMAXPROCS=4 GOMEMLIMIT=2GiB nice -n 10 golangci-lint run --allow-parallel-runners
 LINT_GO_INPUTS := '*.go' go.mod go.sum .golangci.yml
+LINT_GO_SYSTEMS = $(or $(LINT_GO_OS),linux windows)
 .PHONY: lint-go
 lint-go: web gateway-api
 	go mod tidy -diff
 	golangci-lint config verify
 	key=$$({ git ls-files -s -- $(LINT_GO_INPUTS); git diff HEAD -- $(LINT_GO_INPUTS); \
 		git ls-files -o --exclude-standard -z -- '*.go' | xargs -0 -r git hash-object; \
-		golangci-lint version; } | sha256sum | cut -c1-16); \
+		golangci-lint version; echo $(LINT_GO_SYSTEMS); } | sha256sum | cut -c1-16); \
 	if [ -f "dist/lint-go/$$key" ]; then echo "golangci-lint: these inputs passed before"; \
-	else GOOS=linux $(LINT_GO) ./... && GOOS=windows $(LINT_GO) ./... && \
+	else for os in $(LINT_GO_SYSTEMS); do GOOS=$$os $(LINT_GO) ./... || exit 1; done && \
 		mkdir -p dist/lint-go && touch "dist/lint-go/$$key"; fi
 	$(GOVULNCHECK) ./...
 
@@ -388,6 +399,18 @@ lint-yaml:
 lint-markdown: web/node_modules/.package-lock.json
 	$(MARKDOWNLINT) $$($(FILES) '*.md')
 
+# Renovate's own validator, which refuses an unknown option and a config that needs migrating.
+# re2, the regex engine Renovate runs, is the one package whose install script runs (allowScripts):
+# it fetches the binary whose SHA-256 its package lists, or builds it. Without it, regexes would be
+# checked by JavaScript's rules instead.
+scripts/lint/node_modules/.package-lock.json: scripts/lint/package-lock.json
+	npm --prefix scripts/lint ci --no-fund --no-audit --strict-allow-scripts
+	touch $@
+
+.PHONY: lint-renovate
+lint-renovate: scripts/lint/node_modules/.package-lock.json
+	npm --prefix scripts/lint exec --no -- renovate-config-validator --strict --no-global renovate.json
+
 # The fragments of docs/changes/ and the sections of docs/changelog.md (.github/CONTRIBUTING.md).
 .PHONY: lint-changelog
 lint-changelog:
@@ -452,6 +475,11 @@ integration: web gateway-api
 	test/integration/assets.sh $(INTEGRATION_ASSETS)
 	KUBEBUILDER_ASSETS=$(INTEGRATION_ASSETS)/bin KUBEHENGE_INTEGRATION_CRDS=$(INTEGRATION_ASSETS)/crds \
 		go test -tags integration -count=1 -run '^TestIntegration' ./pkg/...
+
+# CI's integration runner also checks the providers from Kubehenge's forks, as their pins stand or
+# as Renovate moves them, and Sidero's images the Talos pins name, by content and signature.
+.PHONY: ci-integration
+ci-integration: integration verify-providers verify-talos-pins
 
 # End-to-end tier: needs a Proxmox VE host. DIR is a root configuration applying management-cluster/.
 .PHONY: e2e-management-cluster

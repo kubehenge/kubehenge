@@ -58,7 +58,7 @@ data:
   apiAuditLog: "true"
   {{- end }}
 ---
-# The appliance's own addresses, which the firewall of every cluster with security groups accepts.
+# The appliance's own addresses, which the firewall of every firewalled cluster accepts.
 # The appliance writes them, and the chart holds no data, so an upgrade leaves them as they are.
 apiVersion: v1
 kind: ConfigMap

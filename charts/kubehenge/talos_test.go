@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os/exec"
 	"reflect"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -41,7 +42,18 @@ type patchDefinition struct {
 }
 
 type patchSelector struct {
-	Kind string `json:"kind"`
+	Kind           string         `json:"kind"`
+	MatchResources patchResources `json:"matchResources"`
+}
+
+// patchResources is the part of a patch's matchResources that says which machines it reaches.
+type patchResources struct {
+	ControlPlane      bool       `json:"controlPlane"`
+	MachineDeployment patchPools `json:"machineDeploymentClass"`
+}
+
+type patchPools struct {
+	Names []string `json:"names"`
 }
 
 type jsonPatch struct {
@@ -221,9 +233,10 @@ func talosConfig(t *testing.T, role machine.Type, patches []string) map[string]m
 		t.Fatal(err)
 	}
 	// Talos checks a PTP device path with filepath.Clean, which turns /dev/ptp0 into \dev\ptp0 on
-	// Windows, so the one finding about it there is no finding about the configuration.
+	// Windows, so there an error that is that one finding alone is no finding about the configuration.
 	if _, err = cfg.ValidateAsClient(metalMode{}); err != nil &&
-		(runtime.GOOS != "windows" || !strings.Contains(err.Error(), "1 error occurred") || strings.Count(err.Error(), "PTP device path") != 1) {
+		(runtime.GOOS != "windows" || !strings.HasPrefix(err.Error(), "1 error occurred:") ||
+			!strings.Contains(err.Error(), "v1alpha1.Config: 1 error occurred:") || strings.Count(err.Error(), "PTP device path") != 1) {
 		t.Fatal(err)
 	}
 	encoded, err := cfg.EncodeString(encoder.WithComments(encoder.CommentsDisabled))
@@ -362,6 +375,53 @@ func TestTalosWorkerConfiguration(t *testing.T) {
 	checkTalosCommon(t, docs)
 }
 
+// signatureRule is one of Talos's ImageVerificationConfig rules.
+type signatureRule struct {
+	Image   string          `json:"image"`
+	Keyless keylessIdentity `json:"keyless"`
+}
+
+// keylessIdentity is the signer a keyless signature rule accepts.
+type keylessIdentity struct {
+	Issuer       string `json:"issuer"`
+	Subject      string `json:"subject"`
+	SubjectRegex string `json:"subjectRegex"`
+}
+
+// checkKubernetesSigners holds registry.k8s.io's images to the image promoter's two production
+// accounts, so that either of its bundles verifies an image and no look-alike account does.
+func checkKubernetesSigners(t *testing.T, rules string) {
+	t.Helper()
+	var parsed []signatureRule
+	if err := json.Unmarshal([]byte(rules), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(parsed, func(r signatureRule) bool { return r.Image == "registry.k8s.io/*" })
+	if i < 0 {
+		return
+	}
+	k := parsed[i].Keyless
+	if k.Issuer != "https://accounts.google.com" || k.Subject != "" {
+		t.Errorf("registry.k8s.io's rule: %+v", k)
+	}
+	re, err := regexp.Compile(k.SubjectRegex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for subject, want := range map[string]bool{
+		"krel-trust@k8s-releng-prod.iam.gserviceaccount.com":             true,
+		"promoter-summaries@k8s-releng-prod.iam.gserviceaccount.com":     true,
+		"krel-staging@k8s-releng-prod.iam.gserviceaccount.com":           false,
+		"xkrel-trust@k8s-releng-prod.iam.gserviceaccount.com":            false,
+		"krel-trust@k8s-releng-prod.iam.gserviceaccount.com.example.org": false,
+		"krel-trust@k8s-releng-prodXiamXgserviceaccountXcom":             false,
+	} {
+		if re.MatchString(subject) != want {
+			t.Errorf("registry.k8s.io's signer %s accepted = %v, want %v", subject, !want, want)
+		}
+	}
+}
+
 func checkTalosCommon(t *testing.T, docs map[string]map[string]any) {
 	t.Helper()
 	if on, ok := field(t, docs["v1alpha1"], "cluster", "externalCloudProvider", "enabled").(bool); !ok || !on {
@@ -382,6 +442,7 @@ func checkTalosCommon(t *testing.T, docs map[string]map[string]any) {
 			t.Errorf("no signature rule for %s: %s", registry, rules)
 		}
 	}
+	checkKubernetesSigners(t, rules)
 	if got := field(t, docs["HostnameConfig"], "hostname"); got != "demo-worker-abcde" {
 		t.Errorf("hostname = %v", got)
 	}

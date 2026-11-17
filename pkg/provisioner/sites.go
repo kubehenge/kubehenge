@@ -11,6 +11,7 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/kubehenge/kubehenge/pkg/pve"
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
@@ -25,6 +26,7 @@ type StorageSite struct {
 // TemplateSite is where one template's disks are, and how its clones are configured.
 type TemplateSite struct {
 	Name     string
+	VMID     int
 	Node     string
 	Tags     []string
 	Storages []string
@@ -46,6 +48,15 @@ type Sites struct {
 	// applied on, for the zones the token sees.
 	VNets     map[string]string
 	ZoneNodes map[string][]string
+	// Space is each storage on each node with its free space and how it allocates a disk, read as
+	// the interface reads it (pve.StoragesOf).
+	Space []pve.Storage
+	// Nodes are all the nodes Proxmox VE lists, offline ones too. Nil where they could not be read.
+	Nodes []string
+	// TaggingVNets are the VNets whose zone puts every frame in a VLAN of its own, so that a VLAN
+	// tag on a VM's device would add a second one. A VNet whose zone the token cannot read is not
+	// listed.
+	TaggingVNets map[string]bool
 }
 
 // SiteSource looks at the storages and templates; *Proxmox is the real one.
@@ -55,11 +66,18 @@ type SiteSource interface {
 
 // Sites reads where the storages are available and where the templates' disks are.
 func (p *Proxmox) Sites(ctx context.Context) (*Sites, error) {
-	var uses []pveStorageUse
-	if err := p.Client.Get(ctx, "/cluster/resources?type=storage", &uses); err != nil {
+	var uses []pve.StorageResource
+	if err := p.Client.Get(ctx, pve.StorageResourcesPath, &uses); err != nil {
 		return nil, fmt.Errorf("listing the storages: %w", err)
 	}
-	s := &Sites{Storages: map[string]StorageSite{}}
+	var configs []pve.StorageConfig
+	if err := p.Client.Get(ctx, pve.StorageConfigPath, &configs); err != nil {
+		// Without the configuration, a storage whose type does not tell counts as thin, which
+		// refuses nothing.
+		ctrl.LoggerFrom(ctx).V(1).Info("reading the storage configuration", "error", err.Error())
+		configs = nil
+	}
+	s := &Sites{Storages: map[string]StorageSite{}, Space: pve.StoragesOf(uses, configs)}
 	for _, u := range uses {
 		site := s.Storages[u.Storage]
 		site.Shared = site.Shared || u.Shared != 0
@@ -77,8 +95,9 @@ func (p *Proxmox) Sites(ctx context.Context) (*Sites, error) {
 		tags := templates.ParseTags(r.Tags)
 		at, _ := templates.BuildOf(tags)
 		hw, _ := templates.HardwareOf(templates.ParseAllTags(r.Tags))
+		id, _ := templates.VMID(r)
 		s.Templates = append(s.Templates, TemplateSite{
-			Name: r.Name, Node: r.Node, Tags: tags, Storages: inv.Sites[i].Storages, CPU: inv.Sites[i].CPU, Hardware: hw, Built: at,
+			Name: r.Name, VMID: id, Node: r.Node, Tags: tags, Storages: inv.Sites[i].Storages, CPU: inv.Sites[i].CPU, Hardware: hw, Built: at,
 		})
 	}
 	p.readNetworks(ctx, s)
@@ -95,6 +114,10 @@ func (p *Proxmox) readNetworks(ctx context.Context, s *Sites) {
 		return
 	}
 	s.Bridges = map[string][]string{}
+	s.Nodes = make([]string, len(nodes))
+	for i, n := range nodes {
+		s.Nodes[i] = n.Node
+	}
 	for _, n := range nodes {
 		if n.Status != nodeOnline {
 			continue
@@ -112,10 +135,7 @@ func (p *Proxmox) readNetworks(ctx context.Context, s *Sites) {
 		}
 		s.Bridges[n.Node] = bridges
 	}
-	var vnets []struct {
-		VNet string `json:"vnet"`
-		Zone string `json:"zone"`
-	}
+	var vnets []sdnVNet
 	if err := p.Client.Get(ctx, "/cluster/sdn/vnets", &vnets); err != nil {
 		log.V(1).Info("reading the SDN VNets", "error", err.Error())
 		return
@@ -124,6 +144,7 @@ func (p *Proxmox) readNetworks(ctx context.Context, s *Sites) {
 	for _, v := range vnets {
 		s.VNets[v.VNet] = v.Zone
 	}
+	s.TaggingVNets = p.taggingVNets(ctx, vnets)
 	var zones []struct {
 		SDN    string `json:"sdn"`
 		Node   string `json:"node"`
@@ -143,25 +164,81 @@ func (p *Proxmox) readNetworks(ctx context.Context, s *Sites) {
 	}
 }
 
+// sdnVNet is a VNet as Proxmox VE lists it.
+type sdnVNet struct {
+	VNet      string  `json:"vnet"`
+	Zone      string  `json:"zone"`
+	VLANAware pveFlag `json:"vlanaware"`
+}
+
+// taggingVNets are the VNets whose zone tags all its traffic. Where the zones cannot be read, none
+// is known to, so none is listed.
+func (p *Proxmox) taggingVNets(ctx context.Context, vnets []sdnVNet) map[string]bool {
+	var zones []struct {
+		Zone string `json:"zone"`
+		Type string `json:"type"`
+	}
+	if err := p.Client.Get(ctx, "/cluster/sdn/zones", &zones); err != nil {
+		ctrl.LoggerFrom(ctx).V(1).Info("reading the SDN zones", "error", err.Error())
+		return nil
+	}
+	types := make(map[string]string, len(zones))
+	for _, z := range zones {
+		types[z.Zone] = z.Type
+	}
+	tagging := map[string]bool{}
+	for _, v := range vnets {
+		if (pve.Network{ZoneType: types[v.Zone], VLANAware: bool(v.VLANAware)}).TagsTraffic() {
+			tagging[v.VNet] = true
+		}
+	}
+	return tagging
+}
+
 // Hosts are the names of the online nodes that can run the cluster's VMs: whose CPU reaches the
 // level its templates run at, where its storage is available and its bridge exists, and from which
 // its templates can be cloned.
 func (s *Sites) Hosts(c *clusterv1.Cluster, online []Node, fallbackLevel int) []string {
-	hosts := nodesFor(online, cpuNeed(s, c, fallbackLevel))
+	hosts, _ := hostsWhy(s, c, online, fallbackLevel)
+	return hosts
+}
+
+// hostsWhy are the Sites' Hosts, and why each online node it leaves out is left out, by node.
+func hostsWhy(s *Sites, c *clusterv1.Cluster, online []Node, fallbackLevel int) ([]string, map[string]leftOut) {
+	why := map[string]leftOut{}
+	need := cpuNeed(s, c, fallbackLevel)
+	hosts := nodesFor(online, need)
+	for _, n := range online {
+		if !slices.Contains(hosts, n.Name) {
+			why[n.Name] = cpuLeftOut(need)
+		}
+	}
+	drop := func(reason leftOut, out func(string) bool) {
+		hosts = slices.DeleteFunc(hosts, func(n string) bool {
+			if out(n) {
+				why[n] = reason
+				return true
+			}
+			return false
+		})
+	}
 	if storage, _, err := optionalVariable[string](c, "storage"); err == nil && storage != "" {
 		if site, ok := s.Storages[storage]; ok {
+			// The volume report names inactive storage from the site itself.
 			hosts = slices.DeleteFunc(hosts, func(n string) bool { return !slices.Contains(site.Active, n) })
 		}
 	}
 	if bridge := clusterBridge(c); bridge != "" {
-		hosts = slices.DeleteFunc(hosts, func(n string) bool { return !s.hasBridge(bridge, n) })
+		drop(leftOut{"which has no bridge or VNet " + bridge, "Add " + bridge + " to the node."},
+			func(n string) bool { return !s.hasBridge(bridge, n) })
 	}
 	for _, line := range templateLines(c) {
 		if reach, _, constrained := lineReach(s, line); constrained {
-			hosts = slices.DeleteFunc(hosts, func(n string) bool { return !slices.Contains(reach, n) })
+			drop(leftOut{"which the cluster's templates cannot be cloned to", "Build the cluster's templates on shared storage."},
+				func(n string) bool { return !slices.Contains(reach, n) })
 		}
 	}
-	return hosts
+	return hosts, why
 }
 
 // Refusal says why the cluster has no node among allowed to run on, for its storage or for its

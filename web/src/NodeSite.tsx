@@ -2,8 +2,9 @@ import { useEffect, useState, type JSX } from "react";
 
 import { api } from "./api";
 import { list } from "./network";
+import { certificateBundleProblem, sentence } from "./pem";
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, Field, useChange } from "./ui";
+import { Dialog, ErrorBox, Field, stageLabel, useChange } from "./ui";
 import { record, records, text, texts } from "./values";
 
 /** One registry mirror as the interface edits it: where the nodes pull a registry's images from. */
@@ -70,13 +71,17 @@ export function trustedText(s: string): string {
 const registryName = /^(?:\*|[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?(?::[0-9]{1,5})?)$/u;
 const endpointAddress =
   /^https?:\/\/[A-Za-z0-9](?:[-A-Za-z0-9.]*[A-Za-z0-9])?(?::[0-9]{1,5})?(?:\/(?:[A-Za-z0-9._-]+\/)*v2)?$/u;
-const certificates = /^(?:-----BEGIN CERTIFICATE-----\n(?:[A-Za-z0-9+/=]+\n)+-----END CERTIFICATE-----\n?)+$/u;
 const maxMirrors = 16;
 const maxEndpoints = 4;
 
+// bundleProblem is what the server says of a pasted bundle's layout, or nothing.
+const bundleProblem = (s: string): string | undefined => (pem(s) === "" ? undefined : certificateBundleProblem(pem(s)));
+
 /** certificateProblem says what is wrong with a pasted bundle. The server also checks the dates. */
-export const certificateProblem = (s: string): string | undefined =>
-  pem(s) === "" || certificates.test(pem(s)) ? undefined : "Paste PEM certificates only";
+export function certificateProblem(s: string): string | undefined {
+  const problem = bundleProblem(s);
+  return problem === undefined ? undefined : sentence(problem);
+}
 
 /** mirrorsProblem names the first thing wrong with the rows, or nothing. The server checks the same. */
 export function mirrorsProblem(rows: MirrorRow[]): string | undefined {
@@ -89,13 +94,13 @@ export function mirrorsProblem(rows: MirrorRow[]): string | undefined {
     const at = `Mirror ${i + 1}: `;
     const addresses = list(m.endpoints);
     const problem =
-      (!registryName.test(m.registry.trim()) && "enter a lower-case registry host name, or *") ||
+      (!registryName.test(m.registry.trim()) && "enter a lowercase registry host name, or *") ||
       (seen.has(m.registry.trim()) && "each registry once") ||
       (addresses.length === 0 && "add an endpoint") ||
       (addresses.length > maxEndpoints && `at most ${maxEndpoints} endpoints`) ||
       (!addresses.every((a) => endpointAddress.test(a)) &&
         "endpoints are http:// or https:// addresses, a path ends in /v2") ||
-      (certificateProblem(m.caBundle)?.toLowerCase() ?? false);
+      (bundleProblem(m.caBundle) ?? false);
     if (problem !== false) {
       return at + problem;
     }
@@ -260,14 +265,9 @@ function releaseMirrorCAProblem(bundle: string, url: string): string | undefined
   if (bundle.trim() === "") {
     return undefined;
   }
-  if (bundle.includes("PRIVATE KEY")) {
-    return "Holds a private key. Give certificates only";
-  }
-  if (!bundle.includes("-----BEGIN CERTIFICATE-----")) {
-    return "Holds no PEM certificate";
-  }
-  if (certificateProblem(bundle) !== undefined) {
-    return "Holds text besides its certificates";
+  const problem = certificateProblem(bundle);
+  if (problem !== undefined) {
+    return problem;
   }
   if (url === "") {
     return "A certificate needs a release mirror";
@@ -376,7 +376,7 @@ export function ReleaseMirrorDialog({ cluster: c, onClose }: { cluster: Cluster;
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed}>
-            Save
+            {stageLabel}
           </button>
         </>
       }
@@ -420,7 +420,7 @@ export function MirrorsDialog({ cluster: c, onClose }: { cluster: Cluster; onClo
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed}>
-            Save
+            {stageLabel}
           </button>
         </>
       }
@@ -456,7 +456,7 @@ export function TrustedCAsDialog({ cluster: c, onClose }: { cluster: Cluster; on
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed}>
-            Save
+            {stageLabel}
           </button>
         </>
       }

@@ -95,11 +95,7 @@ func newClientset(cfg *rest.Config) (kubernetes.Interface, error) { //nolint:ire
 
 // writeBundle writes the bundle to a new file, which goes again when the bundle fails.
 func writeBundle(ctx context.Context, cfg *rest.Config, classNamespace, namespace, name, output string) error {
-	scheme, err := interfaceScheme()
-	if err != nil {
-		return err
-	}
-	kube, err := newClient(cfg, scheme)
+	kube, err := managementKube(cfg)
 	if err != nil {
 		return err
 	}

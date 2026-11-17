@@ -23,11 +23,17 @@ const (
 )
 
 // AdmissionWebhooks are the controller's admission webhooks by path: ClusterDefaulter, then
-// ClusterAdmission, as the API server calls them for every Cluster.
+// ClusterAdmission, as the API server calls them for every Cluster, and WorkerPlacement for every
+// new worker's ProxmoxMachine.
 func AdmissionWebhooks(scheme *runtime.Scheme, hooks *Hooks) map[string]http.Handler {
+	reader := hooks.Classes
+	if reader == nil {
+		reader = hooks.Reader
+	}
 	return map[string]http.Handler{
 		DefaultClusterPath:  admission.WithDefaulter(scheme, &ClusterDefaulter{Hooks: hooks}),
 		ValidateClusterPath: admission.WithValidator(scheme, &ClusterAdmission{Hooks: hooks}),
+		PlaceWorkerPath:     &admission.Webhook{Handler: &WorkerPlacement{Reader: reader}},
 	}
 }
 
@@ -132,14 +138,9 @@ func (h *Hooks) readClass(ctx context.Context, c *clusterv1.Cluster) (*clusterv1
 	return class, nil
 }
 
-// checkClassVariables holds a cluster's variables to its class's schemas and CEL rules with Cluster
-// API's own code. Cluster API checks them only once its ClusterClass controller has passed the
-// class, which needs every template the class names, and Kubehenge applies a class's templates only
-// once its first cluster has started the class's providers: until then Cluster API lets every
-// cluster of the class through unchecked, the first of each distribution included. Unset variables
-// take their defaults on both sides first, so that a rule on changes compares a value with the
-// default the cluster ran with, also where Cluster API never stored it.
-func checkClassVariables(ctx context.Context, old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) field.ErrorList {
+// withInlineVariables is a copy of the class with its inline variables in its status, as Cluster
+// API's ClusterClass controller leaves them once it has passed the class.
+func withInlineVariables(class *clusterv1.ClusterClass) *clusterv1.ClusterClass {
 	inline := class.DeepCopy()
 	inline.Status.Variables = make([]clusterv1.ClusterClassStatusVariable, 0, len(class.Spec.Variables))
 	for i := range class.Spec.Variables {
@@ -151,6 +152,18 @@ func checkClassVariables(ctx context.Context, old, c *clusterv1.Cluster, class *
 			}},
 		})
 	}
+	return inline
+}
+
+// checkClassVariables holds a cluster's variables to its class's schemas and CEL rules with Cluster
+// API's own code. Cluster API checks them only once its ClusterClass controller has passed the
+// class, which needs every template the class names, and Kubehenge applies a class's templates only
+// once its first cluster has started the class's providers: until then Cluster API lets every
+// cluster of the class through unchecked, the first of each distribution included. Unset variables
+// take their defaults on both sides first, so that a rule on changes compares a value with the
+// default the cluster ran with, also where Cluster API never stored it.
+func checkClassVariables(ctx context.Context, old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) field.ErrorList {
+	inline := withInlineVariables(class)
 	var was *clusterv1.Cluster
 	if old != nil {
 		was = old.DeepCopy()

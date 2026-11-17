@@ -449,25 +449,40 @@ func (s *Server) servePodLogs(ctx context.Context, w http.ResponseWriter, r *htt
 	}
 	cs := statuses[i]
 	previous := cs.State.Running == nil && (cs.State.Terminated != nil || cs.LastTerminationState.Terminated != nil)
-	// Never Previous: the kubelet hands out the newest run without it, the running one or else the
+	// First without Previous: the kubelet hands out the newest run, the running one or else the
 	// last to stop, and keeps that run. Previous names the run before by the status the kubelet last
 	// wrote, which lags behind its removal of all but the newest exited container, so a crash-looping
 	// container's read would fail with "unable to retrieve container logs" now and then.
-	stream, err := logs.Kube.CoreV1().Pods(ns).GetLogs(name, &corev1.PodLogOptions{
-		Container: container, TailLines: new(int64(podLogLines)), LimitBytes: new(int64(podLogBytes)),
-	}).Stream(ctx)
+	lines, err := readPodLog(ctx, logs, ns, name, container, false)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "the log could not be read: "+problem(err))
 		return
 	}
-	defer func() { _ = stream.Close() }()
-	lines, err := readLines(io.LimitReader(stream, podLogBytes))
-	if err != nil && !errors.Is(err, context.Canceled) {
-		writeError(w, http.StatusBadGateway, "the log could not be read: "+problem(err))
-		return
+	// A restart the kubelet has just begun makes the newest run one that has written nothing yet,
+	// so the run before it, the one that stopped, tells why.
+	if len(lines) == 0 && cs.RestartCount > 0 {
+		if before, err := readPodLog(ctx, logs, ns, name, container, true); err == nil && len(before) > 0 {
+			lines, previous = before, true
+		}
 	}
 	s.Log.InfoContext(ctx, "read pod logs", "user", u.ticket.Username, "cluster", c.Namespace+"/"+c.Name, "pod", ns+"/"+name, "container", container)
 	writeJSON(w, http.StatusOK, podLogView{Container: container, Previous: previous, Lines: lines})
+}
+
+// readPodLog reads the last lines of one run of a container's log: the newest, or the one before it.
+func readPodLog(ctx context.Context, logs *Workload, ns, name, container string, previous bool) ([]string, error) {
+	stream, err := logs.Kube.CoreV1().Pods(ns).GetLogs(name, &corev1.PodLogOptions{
+		Container: container, Previous: previous, TailLines: new(int64(podLogLines)), LimitBytes: new(int64(podLogBytes)),
+	}).Stream(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("the log: %w", err)
+	}
+	defer func() { _ = stream.Close() }()
+	lines, err := readLines(io.LimitReader(stream, podLogBytes))
+	if errors.Is(err, context.Canceled) {
+		err = nil
+	}
+	return lines, err
 }
 
 // readLines reads a log's lines, the last podLogLines of them, however long each is.

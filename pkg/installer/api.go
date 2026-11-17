@@ -15,6 +15,8 @@ import (
 	"os"
 	"slices"
 	"strings"
+
+	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
 // APICandidate is a name or address of this cluster that the Proxmox VE API's certificate is valid
@@ -244,6 +246,9 @@ type CAChoice struct {
 	Fingerprint string
 	// NeedsTrust is set for a served CA nothing vouches for yet: the user decides.
 	NeedsTrust bool
+	// Pinned is set when the API serves no CA certificate, so trusting it means trusting its own
+	// certificate alone, which stops working when that is renewed.
+	Pinned bool
 }
 
 func fingerprint(c *x509.Certificate) string {
@@ -324,6 +329,19 @@ func (n *Node) DecideCA(ctx context.Context, cfg *Config, apiURL string) (*CACho
 	served, dialErr := n.Dial(ctx, host, port)
 	connects := dialErr == nil && len(served) > 0
 	check := func(ca []byte) (*x509.Certificate, bool) { return verifyAPI(served, host, poolOf(ca)) }
+	// fail names the certificate's own names where it is not valid for the URL's host, whichever CA
+	// is asked.
+	fail := func(caFile string) error {
+		if connects && served[0].VerifyHostname(host) != nil {
+			names := pve.NewCertificateNameError(host, served[0]).Names
+			if len(names) == 0 {
+				return userErr("Proxmox VE's certificate lists no reachable address, only loopback, so it is not valid for "+host,
+					"Reissue it on the node with pvecm updatecerts --force, then systemctl restart pveproxy")
+			}
+			return userErr(fmt.Sprintf("Proxmox VE's certificate is valid for %s, not %s", strings.Join(names, ", "), host), "Pass one of those with --proxmox-url")
+		}
+		return apiFailure(connects, apiURL, port, caFile)
+	}
 	if cfg.ProxmoxCA != "" {
 		given, err := os.ReadFile(cfg.ProxmoxCA)
 		if err != nil {
@@ -331,7 +349,7 @@ func (n *Node) DecideCA(ctx context.Context, cfg *Config, apiURL string) (*CACho
 		}
 		anchor, ok := check(given)
 		if !ok {
-			return nil, apiFailure(connects, apiURL, port, cfg.ProxmoxCA)
+			return nil, fail(cfg.ProxmoxCA)
 		}
 		return &CAChoice{Kind: CAGiven, PEM: encodeCerts(anchor), Subject: subjectOf(anchor), Fingerprint: fingerprint(anchor)}, nil
 	}
@@ -349,11 +367,11 @@ func (n *Node) DecideCA(ctx context.Context, cfg *Config, apiURL string) (*CACho
 	authority := servedAuthority(served)
 	if _, ok := check(encodeCerts(authority)); ok {
 		return &CAChoice{
-			Kind: CAServed, PEM: encodeCerts(authority), NeedsTrust: true,
+			Kind: CAServed, PEM: encodeCerts(authority), NeedsTrust: true, Pinned: !authority.IsCA,
 			Subject: subjectOf(authority), Issuer: authority.Issuer.String(), Fingerprint: fingerprint(authority),
 		}, nil
 	}
-	return nil, apiFailure(connects, apiURL, port, "")
+	return nil, fail("")
 }
 
 func apiFailure(connects bool, apiURL, port, caFile string) error {

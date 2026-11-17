@@ -1,4 +1,4 @@
-import { networkFieldsOf, newForm, nodeCustomisationOf, type Form, type Machine } from "./create-form";
+import { firewallOf, networkFieldsOf, newForm, nodeCustomisationOf, type Form, type Machine } from "./create-form";
 import { graceOf, graceVariable } from "./HostOutage";
 import { loadBalancerOf } from "./LoadBalancer";
 import { nodeOSKey } from "./node-os";
@@ -35,6 +35,9 @@ export const startKeys: ReadonlySet<keyof Form> = new Set<keyof Form>([
   "mtu",
   "queues",
   "securityGroups",
+  "firewall",
+  "firewallServing",
+  "firewallPorts",
   "families",
   "prefix",
   "gateway",
@@ -86,12 +89,6 @@ function machineOf(v: unknown, fallback: Machine): Machine {
   };
 }
 
-/** startDefault is the cluster a new one starts from unless another is chosen: the newest that works, else the newest. */
-export function startDefault(clusters: Cluster[]): Cluster | undefined {
-  const starts = startable(clusters);
-  return starts.find((c) => c.available) ?? starts[0];
-}
-
 /**
  * fromCluster is a new cluster's form set up as c is, keeping the name and namespace already
  * entered, and the version while the distribution stays: its versions are not offered again.
@@ -117,12 +114,16 @@ export function fromCluster(c: Cluster, entered: Pick<Form, "name" | "namespace"
     workerTimeouts: entryOf(c.workerPools[0]?.timeouts ?? {}),
     ...networkFieldsOf(v["network"], base),
     securityGroups: (texts(v["securityGroups"]) ?? []).join(", "),
+    firewall: firewallOf(v["firewall"], v["securityGroups"]).on,
+    firewallServing: firewallOf(v["firewall"], v["securityGroups"]).serving,
+    firewallPorts: firewallOf(v["firewall"], v["securityGroups"]).ports,
     loadBalancer: lb.implementation,
     loadBalancerMode: lb.mode,
     loadBalancerAsn: lb.asn,
     loadBalancerPeers: lb.peers,
     loadBalancerRouterID: lb.routerID,
     loadBalancerAuthenticated: lb.authenticated,
+    loadBalancerPicked: true,
     storage: text(v["storage"]) ?? "",
     place: placeOf(texts(v["allowedNodes"])),
     hostOutageGrace: graceOf(v[graceVariable]),

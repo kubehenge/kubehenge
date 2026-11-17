@@ -15,12 +15,92 @@ import (
 type fakeAPIReach struct {
 	reach *pve.APIReach
 	ok    bool
+	// err is the failure of a read that is not ok, a refusal where nil.
+	err   error
 	asked int
 }
 
-func (f *fakeAPIReach) APIReach(context.Context) (*pve.APIReach, bool) {
+func (f *fakeAPIReach) APIReach(context.Context) (*pve.APIReach, error) {
 	f.asked++
-	return f.reach, f.ok
+	if !f.ok {
+		if f.err != nil {
+			return nil, f.err
+		}
+		return nil, pve.ErrForbidden
+	}
+	return f.reach, nil
+}
+
+// A VM's firewall leaves the nodes' own alone, so the firewall without groups is never held to the
+// lockout check, with the datacenter firewall on or off. Groups are, also while it is off, and they
+// are refused with the firewall off.
+func TestValidatorHoldsOnlySecurityGroupsToTheLockoutCheck(t *testing.T) {
+	t.Parallel()
+	cut := fakeManagement{addresses: []string{"10.0.0.20", "10.3.0.4"}}
+	for _, tc := range []struct {
+		name, firewall, groups string
+		datacenter             bool
+		refusal                string
+	}{
+		{name: "datacenter on", firewall: `{"enabled": true}`, datacenter: true},
+		{name: "datacenter off", firewall: `{"enabled": true}`},
+		{name: "serving ports closed", firewall: `{"enabled": true, "servingPorts": false}`, datacenter: true},
+		{name: "firewall off", firewall: `{"enabled": false}`, datacenter: true},
+		{name: "groups while off", firewall: `{"enabled": false}`, groups: `["k8s"]`, refusal: "Security groups need the firewall on"},
+		{name: "groups, datacenter on", firewall: `{"enabled": true}`, groups: `["k8s"]`, datacenter: true, refusal: cutRefusal},
+		{name: "groups, datacenter off", firewall: `{"enabled": true}`, groups: `["k8s"]`, refusal: cutRefusal},
+	} {
+		hooks, _ := hooksFor(t)
+		hooks.SecurityGroups = &fakeSecurityGroups{groups: []string{"k8s"}, readable: true}
+		reach := localReach()
+		reach.Enabled = tc.datacenter
+		hooks.APIReach = &fakeAPIReach{reach: reach, ok: true}
+		hooks.Management = cut
+		hooks.Endpoint = endpointV4
+		v := &ClusterValidator{Hooks: hooks}
+		c := withSecurityGroups(networkCluster("192.168.1.1", 24), tc.groups)
+		addVariable(c, FirewallVariable, tc.firewall)
+		_, err := v.ValidateCreate(context.Background(), c)
+		switch {
+		case tc.refusal == "" && err != nil && (strings.Contains(err.Error(), "IPSet management") || strings.Contains(err.Error(), "firewall on")):
+			t.Errorf("%s: refused: %v", tc.name, err)
+		case tc.refusal != "" && (!apierrors.IsInvalid(err) || !strings.Contains(err.Error(), tc.refusal)):
+			t.Errorf("%s: %v, want %q", tc.name, err, tc.refusal)
+		}
+	}
+}
+
+// Cluster API's defaulting adds the class's firewall to the first change of a cluster made before
+// the variable existed. A worker scale-up then passes, with groups or without, while the datacenter
+// firewall is on and the management side would be cut: the lockout check is not asked. Groups that
+// exist are listed, as for any firewall change.
+func TestValidatorPassesAnOlderClusterGainingTheDefaultFirewall(t *testing.T) {
+	t.Parallel()
+	for groups, lists := range map[string]int{"": 0, `["k8s"]`: 1} {
+		hooks, _ := hooksFor(t)
+		listed := &fakeSecurityGroups{groups: []string{"k8s"}, readable: true}
+		hooks.SecurityGroups = listed
+		reach := localReach()
+		reach.Enabled = true
+		read := &fakeAPIReach{reach: reach, ok: true}
+		hooks.APIReach = read
+		hooks.Management = fakeManagement{addresses: []string{"10.0.0.20", "10.3.0.4"}}
+		hooks.Endpoint = endpointV4
+		v := &ClusterValidator{Hooks: hooks}
+		running := withSecurityGroups(networkCluster("192.168.1.1", 24), groups)
+		scaled := running.DeepCopy()
+		addVariable(scaled, FirewallVariable, `{"enabled": true}`)
+		scaled.Spec.Topology.Workers.MachineDeployments[0].Replicas = new(int32(3))
+		if _, err := v.ValidateUpdate(context.Background(), running, scaled); err != nil {
+			t.Errorf("groups %q: refused the scale-up: %v", groups, err)
+		}
+		if read.asked != 0 {
+			t.Errorf("groups %q: held a change that leaves the groups alone to the lockout check", groups)
+		}
+		if listed.asked != lists {
+			t.Errorf("groups %q: listed the groups %d times, want %d", groups, listed.asked, lists)
+		}
+	}
 }
 
 type fakeManagement struct {

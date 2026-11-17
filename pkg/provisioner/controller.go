@@ -73,6 +73,18 @@ type Reconciler struct {
 	// Egress is the management side's proxy, which the add-ons of clusters that set none of their
 	// own go through.
 	Egress Egress
+	// SiteCA is the PEM authority every cluster without trustedCAs of its own trusts. Empty when
+	// the site sets none, or when the one it sets is damaged.
+	SiteCA string
+	// SiteCAProblem is why the site CA the controller was given is no PEM certificate bundle. Each
+	// cluster reports it, and keeps the site CA it holds until the authority is fixed.
+	SiteCAProblem string
+	// SiteTimeZoneProblem is why the site time zone the controller was given is no time zone, which
+	// leaves schedules that name none in UTC. Each cluster reports it.
+	SiteTimeZoneProblem string
+	// ReleaseMirrorProblem is why the release mirror's authority the controller was given is no
+	// certificate valid now, which fails the nodes' downloads from the mirror. Each cluster reports it.
+	ReleaseMirrorProblem string
 	// Registrar removes clusters from Rancher before Rancher itself is switched off.
 	Registrar *Registrar
 	// Remotes reaches the workload clusters, to take their workloads out of the mesh before Istio
@@ -109,6 +121,12 @@ func Owns(c *clusterv1.Cluster, classNamespace string) bool {
 		ns = c.Namespace
 	}
 	return strings.HasPrefix(ref.Name, ClassPrefix) && ns == classNamespace
+}
+
+// ownedAndLive is Owns for a Cluster that is not being deleted, the only kind a background loop
+// works on.
+func ownedAndLive(c *clusterv1.Cluster, classNamespace string) bool {
+	return Owns(c, classNamespace) && c.DeletionTimestamp.IsZero()
 }
 
 // SetupWithManager registers the reconciler. Status updates do not trigger it: only a new
@@ -180,6 +198,16 @@ func (r *Reconciler) reconcileCluster(ctx context.Context, cluster *clusterv1.Cl
 	if err = r.ensureNodeCustomisation(ctx, cluster); err != nil {
 		return ctrl.Result{}, err
 	}
+	// The site CA's rollout reads other objects and waits on other clusters, so a failure there
+	// stops none of the cluster's own steps. It is returned once they have run.
+	siteCAAgain, siteErr := r.rollSiteCA(ctx, cluster)
+	result, err := r.reconcileAddons(ctx, cluster, access, creds, siteCAAgain)
+	return result, errors.Join(err, siteErr)
+}
+
+// reconcileAddons applies the cluster's add-ons and what comes after them, and marks the cluster
+// ready.
+func (r *Reconciler) reconcileAddons(ctx context.Context, cluster *clusterv1.Cluster, access Access, creds Credentials, siteCAAgain time.Duration) (ctrl.Result, error) {
 	addons, rancherRefused, err := r.addons(ctx, cluster)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -217,10 +245,19 @@ func (r *Reconciler) reconcileCluster(ctx context.Context, cluster *clusterv1.Cl
 	if addonWaiting || othersWaiting {
 		return ctrl.Result{RequeueAfter: waitInterval}, nil
 	}
+	return ctrl.Result{RequeueAfter: r.lookAgainIn(&addons, siteCAAgain)}, nil
+}
+
+// lookAgainIn is the sooner of the resync, the next add-on window and the site CA's wait.
+func (r *Reconciler) lookAgainIn(addons *Addons, siteCAAgain time.Duration) time.Duration {
+	again := resync
 	if until, sooner := addons.untilWindow(r.now()); sooner {
-		return ctrl.Result{RequeueAfter: until}, nil
+		again = until
 	}
-	return ctrl.Result{RequeueAfter: resync}, nil
+	if siteCAAgain > 0 {
+		again = min(again, siteCAAgain)
+	}
+	return again
 }
 
 // afterTheRest does what waits on other clusters or on the workload cluster's own API, however long

@@ -23,7 +23,7 @@ func healthy() *Inventory {
 		Groups:        map[string]bool{},
 		NodeAddresses: map[string][]netip.Addr{"pve1": {netip.MustParseAddr("10.0.0.5")}},
 		Answering:     map[netip.Addr]bool{},
-		ProxmoxURL:    "https://pve.example.org:8006",
+		ProxmoxURL:    "https://10.0.0.50:8006",
 	}
 }
 
@@ -311,8 +311,8 @@ func TestPreflightAddressesInUse(t *testing.T) {
 	inv.Answering[netip.MustParseAddr("10.0.0.11")] = true
 	inv.Answering[netip.MustParseAddr("10.0.0.10")] = true
 	f := settings("pve1").Preflight(inv, false)
-	mentions(t, f.Errors, "Address 10.0.0.11 answers")
-	mentions(t, f.Errors, "Address 10.0.0.10 answers")
+	mentions(t, f.Errors, "Address 10.0.0.11 already answers")
+	mentions(t, f.Errors, "Address 10.0.0.10 already answers")
 	if f := settings("pve1").Preflight(inv, true); len(f.Errors) != 0 {
 		t.Errorf("the module's own VMs answer once its state exists: %+v", f)
 	}
@@ -361,10 +361,48 @@ func TestPreflightWarnsOfVMsSharingNodes(t *testing.T) {
 
 func TestPreflightWarnsWhenTheAPIAddressIsOneNodes(t *testing.T) {
 	t.Parallel()
+	port, servers := serveDNS(t, fakeDNS{records: map[string][]netip.Addr{"pve1.": {netip.MustParseAddr("10.0.0.5")}}})
 	for _, url := range []string{"https://10.0.0.5:8006", "https://pve1:8006"} {
 		inv := healthy()
-		inv.ProxmoxURL = url
-		mentions(t, settings("pve1").Preflight(inv, false).Warnings, "is node pve1 alone")
+		inv.ProxmoxURL, inv.DNSPort = url, port
+		s := settings("pve1")
+		s.DNSServers = servers
+		mentions(t, s.Preflight(inv, false).Warnings, "is node pve1 alone")
+	}
+}
+
+// Fails on a build without checkAPIFamily, which lets an IPv4-only management cluster be set up
+// against an IPv6 API address and fail only once capmox cannot reach it.
+func TestPreflightRefusesAnAPIAddressTheNodesHaveNoFamilyFor(t *testing.T) {
+	t.Parallel()
+	ipv6Only := settings("pve1")
+	ipv6Only.IPFamilies, ipv6Only.NodeAddresses, ipv6Only.APIAddress, ipv6Only.Gateway = []string{"IPv6"}, nil, "fd00:1::10", ""
+	ipv6Only.NodeAddressesIPv6, ipv6Only.GatewayIPv6, ipv6Only.DNSServers = []string{"fd00:1::11/64"}, "fd00:1::1", []string{"fd00:1::1"}
+	dual := settings("pve1")
+	dual.IPFamilies, dual.NodeAddressesIPv6, dual.GatewayIPv6 = []string{"IPv4", "IPv6"}, []string{"fd00:1::11/64"}, "fd00:1::1"
+	for _, c := range []struct {
+		name, url string
+		s         *Settings
+		refused   string
+	}{
+		{"IPv6 API, IPv4 nodes", "https://[fd99:21:99::2]:8006", settings("pve1"), "no IPv6 address, so they cannot reach the Proxmox VE API at fd99:21:99::2. Give them IPv6 addresses, or move the appliance to an IPv4 address"},
+		{"IPv4 API, IPv6 nodes", "https://172.21.99.2:8006", ipv6Only, "no IPv4 address, so they cannot reach the Proxmox VE API at 172.21.99.2"},
+		{"IPv6 API, dual-stack nodes", "https://[fd99:21:99::2]:8006", dual, ""},
+		{"IPv4 API, IPv4 nodes", "https://172.21.99.2:8006", settings("pve1"), ""},
+		{"a name, which either family may reach", "https://pve.example.org:8006", ipv6Only, ""},
+	} {
+		inv := healthy()
+		inv.ProxmoxURL = c.url
+		errs := c.s.Preflight(inv, false).Errors
+		if c.refused != "" {
+			mentions(t, errs, c.refused, "certificate lists")
+			continue
+		}
+		for _, e := range errs {
+			if strings.Contains(e, "cannot reach the Proxmox VE API") {
+				t.Errorf("%s: refused: %s", c.name, e)
+			}
+		}
 	}
 }
 

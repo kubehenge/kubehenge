@@ -12,6 +12,7 @@ guests=${here}/../e2e/ci/guests.sh
 root=$(mktemp -d)
 bin=${root}/bin
 mkdir "${bin}" "${root}/work" "${root}/work/mgmt" "${root}/tmp"
+: > "${root}/work/mgmt/terraform.tfstate"
 trap 'rm -rf "${root}"' EXIT
 
 passes=0 failures=0
@@ -81,6 +82,13 @@ EOF
 
 cat > "${bin}/docker" << 'EOF'
 #!/bin/sh
+# The credentials the appliance's test keeps in the Proxmox VE container, from <root>/kept.
+if [ "$1 $2 $3" = "exec kubehenge-e2e-pve cat" ]; then
+    case $4 in
+        /root/kubehenge/management/*) exec cat "${0%/*}/../kept/${4##*/}" ;;
+        *) exit 1 ;;
+    esac
+fi
 [ "$1 $2 $3" = "exec kubehenge-e2e-pve qm" ] || {
     echo "unexpected: docker $*" >&2
     exit 1
@@ -217,6 +225,7 @@ case "$*" in
         for s in ${services}; do echo "${node} ${s} Running OK 1h Healthy"; done
         ;;
     'service '*) echo "ID $2 STATE Running EVENTS restarted 3 times" ;;
+    'logs etcd') cat "${0%/*}/../etcd.log" ;;
     'logs '*) echo "${node}: $2 log line, token: abcdefgh12345678" ;;
     'list /var/log/pods -r')
         echo 'NODE NAME'
@@ -309,6 +318,46 @@ has "the management cluster's node says why" "${out}/100-mgmt-0/state.txt" "no t
 has "a VM tagged talos says why" "${out}/101-talos-cp/state.txt" "cannot be read through its API"
 has "an untagged VM falls back to its guest agent" "${out}/102-talos-worker/state.txt" "QEMU guest agent is not running"
 has "the kubeadm VM is still read" "${out}/105-kubeadm-cp/state.txt" "guest 105 says hi"
+
+# Where the appliance made the management cluster, run.sh's mgmt directory holds no state, and the
+# credentials are the copies the appliance's test kept in the Proxmox VE container.
+mkdir -p "${root}/appliance-work/mgmt" "${root}/kept"
+printf 'context: mgmt\nkey: SECRET-MANAGEMENT-TALOSCONFIG\n' > "${root}/kept/talosconfig"
+printf 'management kubeconfig SECRET-KUBECONFIG\n' > "${root}/kept/kubeconfig"
+out=${root}/out-appliance
+collect_into "${out}" "${root}/appliance-work"
+truth "collect succeeds in an appliance lane" [ "${code}" = 0 ]
+has "the appliance's management node, by the kept talosconfig" "${out}/100-mgmt-0/etcd.txt" "172.20.99.11 members of etcd"
+has "a workload control plane, by the kept kubeconfig" "${out}/101-talos-cp/state.txt" "read through its API at 172.20.99.21"
+rm "${root}/kept/talosconfig" "${root}/kept/kubeconfig"
+out=${root}/out-nothing-kept
+collect_into "${out}" "${root}/appliance-work"
+has "a management node with nothing kept says why" "${out}/100-mgmt-0/state.txt" "and no /root/kubehenge/management/talosconfig in the Proxmox VE container"
+
+# etcd: the management node's slow syncs, slow requests and timeouts from its etcd log.
+cat > "${root}/etcd.log" << 'EOF'
+172.20.99.11: {"level":"info","ts":"2026-11-15T15:00:00.000000Z","msg":"serving client traffic securely"}
+172.20.99.11: {"level":"warn","ts":"2026-11-15T15:02:29.528451Z","caller":"wal/wal.go:845","msg":"slow fdatasync","took":"5.887842541s","expected-duration":"1s"}
+172.20.99.11: {"level":"warn","ts":"2026-11-15T15:03:39.254638Z","caller":"wal/wal.go:845","msg":"slow fdatasync","took":"1m0.5s","expected-duration":"1s"}
+172.20.99.11: {"level":"warn","ts":"2026-11-15T15:03:40.000000Z","msg":"apply request took too long","took":"958.161296ms","expected-duration":"100ms"}
+172.20.99.11: {"level":"warn","ts":"2026-11-15T15:03:41.000000Z","msg":"apply request took too long","took":"8.114398154s","expected-duration":"100ms"}
+172.20.99.11: {"level":"warn","ts":"2026-11-15T15:05:32.000000Z","msg":"failed to apply request","error":"etcdserver: request timed out"}
+EOF
+etcd_into() {
+    code=0
+    env PATH="${bin}:${PATH}" TMPDIR="${root}/tmp" KUBEHENGE_E2E_TALOSCTL_TIMEOUT=120 \
+        sh "${guests}" etcd "$1" "$2" > "${root}/etcd-run.log" 2>&1 || code=$?
+}
+etcd_into "${root}/etcd.txt" "${root}/work"
+truth "etcd succeeds" [ "${code}" = 0 ]
+has "the time the log covers" "${root}/etcd.txt" "mgmt-0: etcd log from 2026-11-15T15:00:00.000000Z to 2026-11-15T15:05:32.000000Z"
+has "slow syncs with the longest" "${root}/etcd.txt" "slow disk syncs (past 1 s): 2, longest 60.5 s"
+has "slow requests, those past 1 s and the longest" "${root}/etcd.txt" "slow requests (past 100 ms): 2, past 1 s: 1, longest 8.1 s"
+has "requests that timed out" "${root}/etcd.txt" "requests timed out: 1"
+lacks "only management nodes" "${root}/etcd.txt" "talos-cp"
+etcd_into "${root}/etcd-none.txt" "${root}/nowhere"
+truth "etcd succeeds without a cluster" [ "${code}" = 0 ]
+has "and says there is none" "${root}/etcd-none.txt" "no management cluster to read: no Terraform/OpenTofu state"
 
 # The node that never answers is cut off after the short timeout, and nothing more is asked of it.
 : > "${root}/hang-only"

@@ -103,9 +103,6 @@ const traits: Record<Family, Traits> = {
 /** bitsOf is the length of an address of the family in bits, also the longest prefix length. */
 export const bitsOf = (family: Family): number => traits[family].bits;
 
-/** pointToPointOf is the family's prefix length of a point-to-point link, /31 or /127. */
-export const pointToPointOf = (family: Family): number => traits[family].pointToPoint;
-
 const parseIPv4 = (s: string): bigint | undefined => {
   if (!ipv4.test(s)) {
     return undefined;
@@ -175,9 +172,6 @@ export const familyOf = (s: string): Family | undefined => parseAddress(s)?.fami
 /** isIPv6 tells whether text is an IPv6 address. */
 export const isIPv6 = (s: string): boolean => familyOf(s) === "IPv6";
 
-/** isIPv4 tells whether text is an IPv4 address. */
-export const isIPv4 = (s: string): boolean => ipv4.test(s);
-
 // The longest run of zero groups, at least two, is written as "::" (RFC 5952).
 function format6(value: bigint): string {
   const groups = Array.from({ length: v6Groups }, (_, i) =>
@@ -221,9 +215,6 @@ export function parseCidr(s: string): Prefixed | undefined {
   }
   return Number(bits) <= bitsOf(address.family) ? { address, bits: Number(bits) } : undefined;
 }
-
-/** isCidr tells whether text is an address with a prefix length, of either family. */
-export const isCidr = (s: string): boolean => parseCidr(s) !== undefined;
 
 /** hostBits is how many low bits of an address the prefix length leaves to hosts. */
 const hostBits = (family: Family, prefix: number): bigint => BigInt(bitsOf(family) - prefix);
@@ -303,6 +294,12 @@ export function spanOf(entry: string): Span | undefined {
   const a = parseAddress(entry);
   return a === undefined ? undefined : { family: a.family, first: a.value, last: a.value };
 }
+
+/** offNetworkText says why an entry is refused: it is no address, range or network, or it lies off the gateway's. */
+export const offNetworkText = (entry: string): string =>
+  spanOf(entry) === undefined
+    ? `${entry} is not an address, range or network`
+    : `${entry} is outside the gateway's network`;
 
 /** A node network as the forms hold it: its gateway and prefix length, as typed. */
 export interface NodeNetwork {

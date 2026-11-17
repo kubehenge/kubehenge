@@ -100,7 +100,7 @@
       }
     },
     "podSecurityExempt": {
-      "description": "Namespaces neither Pod Security Admission nor Kyverno holds to a cluster's pod security level, by what puts them there: a cluster exempts always's and those of what it runs.",
+      "description": "Namespaces that Pod Security Admission and Kyverno do not hold to a cluster's pod security level, grouped by what needs them. A cluster exempts the always group and the groups of what it runs.",
       "type": "object",
       "additionalProperties": false,
       "required": ["always", "calico", "monitoring", "logs", "backups", "istio", "metallb", "rancher", "rancherAgent"],
@@ -117,7 +117,7 @@
       }
     },
     "image": {
-      "description": "Kubehenge's controller image by digest, which a release's chart names and a checkout's needs given.",
+      "description": "Kubehenge's controller image by digest. A release's chart names it, and a checkout needs it given.",
       "type": "string",
       "pattern": "^([^@]+@sha256:[0-9a-f]{64})?$"
     },
@@ -144,6 +144,29 @@
         "url": { "type": "string", "pattern": "^$|^https?://[A-Za-z0-9._~:\\[\\]-]+(/[A-Za-z0-9._~:/\\[\\]-]*[A-Za-z0-9._~:\\[\\]-])?$" },
         "caBundle": { "type": "string", "maxLength": 262144 }
       }
+    },
+    "siteCA": {
+      "description": "The PEM authority of the site's private CA, the default of every connection that names none of its own.",
+      "type": "string",
+      "maxLength": 65536,
+      "pattern": "^$|^(-----BEGIN CERTIFICATE-----\\n([A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?)+$"
+    },
+    "timeZone": {
+      "description": "The IANA time zone that schedules without one of their own run in.",
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^$|^[A-Za-z0-9_+/-]+$",
+      "not": { "const": "Local" }
+    },
+    "vmIDRange": {
+      "description": "The VM IDs a new cluster's VMs and the VM templates take, both ends included. Empty, Proxmox VE's next free ID.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "start": { "type": "integer", "minimum": 100, "maximum": 999999999 },
+        "end": { "type": "integer", "minimum": 100, "maximum": 999999999 }
+      },
+      "dependencies": { "start": ["end"], "end": ["start"] }
     },
     "controllerLogs": {
       "description": "How the controller logs, in JSON either way.",
@@ -196,7 +219,7 @@
       }
     },
     "managementEndpoint": {
-      "description": "The management cluster's API as workload clusters reach it, for autoscalers that run inside their cluster; empty, none can.",
+      "description": "The management cluster's API as workload clusters reach it, for autoscalers that run inside their cluster. Empty means none can.",
       "type": "string",
       "pattern": "^(https://[^\\s/]+)?$"
     },
@@ -245,7 +268,7 @@
         "insecure": { "type": "boolean" },
         "secret": { "$ref": "#/$defs/name" },
         "capmoxSecret": {
-          "description": "<namespace>/<name> of the Secret with Cluster API's Proxmox VE provider token, which the controller tests. Empty, it is not tested.",
+          "description": "<namespace>/<name> of the Secret with Cluster API's Proxmox VE provider token, which the controller tests. Empty means it is not tested.",
           "type": "string",
           "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?/[a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$"
         },
@@ -265,7 +288,7 @@
           }
         },
         "sysAuditGroup": {
-          "description": "The group holding Sys.Audit on / that clusters asking for the cloud controller manager's HA group labels join, empty when no cluster may.",
+          "description": "The group holding Sys.Audit on / that clusters asking for the cloud controller manager's HA rule labels join, empty when no cluster may.",
           "type": "string"
         },
         "etcdRestore": { "type": "boolean" },

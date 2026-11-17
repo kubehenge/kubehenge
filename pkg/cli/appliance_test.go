@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -11,6 +12,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/kubehenge/kubehenge/pkg/appliance"
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
 const (
@@ -84,6 +91,13 @@ func newFakeInterface(t *testing.T) *fakeInterface {
 		}
 		answer(w, http.StatusAccepted, `{}`)
 	}))
+	mux.HandleFunc("POST /api/appliance/etcd-backups/recover", f.admin(func(w http.ResponseWriter, r *http.Request) {
+		if f.bodies[r.Method+" "+r.URL.Path]["passphrase"] != "right" {
+			answer(w, http.StatusForbidden, `{"error":"wrong passphrase"}`)
+			return
+		}
+		answer(w, http.StatusAccepted, `{}`)
+	}))
 	mux.HandleFunc("POST /api/setup/take-over", f.admin(func(w http.ResponseWriter, r *http.Request) {
 		if f.bodies[r.Method+" "+r.URL.Path]["passphrase"] != "right" {
 			answer(w, http.StatusForbidden, `{"error":"wrong passphrase"}`)
@@ -116,13 +130,21 @@ func newFakeInterface(t *testing.T) *fakeInterface {
 		}
 		answer(w, http.StatusOK, `{"entries":[]}`)
 	}))
+	const saved = `"appliance":true,"allowed":true,"settings":{"bridge":"vmbr0","timeZone":"Europe/Zurich"}`
 	mux.HandleFunc("GET /api/setup", f.admin(func(w http.ResponseWriter, _ *http.Request) {
 		f.setups++
 		if f.setups == 1 {
-			answer(w, http.StatusOK, `{"job":{"kind":"etcd-restore","state":"running","log":["Restoring"],"lines":1}}`)
+			answer(w, http.StatusOK, `{`+saved+`,"job":{"kind":"etcd-restore","state":"running","log":["Restoring"],"lines":1}}`)
 			return
 		}
-		answer(w, http.StatusOK, `{"job":{"kind":"etcd-restore","state":"succeeded","log":["The snapshot matches its checksum","etcd runs"],"lines":3}}`)
+		answer(w, http.StatusOK, `{`+saved+`,"job":{"kind":"etcd-restore","state":"succeeded","log":["The snapshot matches its checksum","etcd runs"],"lines":3}}`)
+	}))
+	mux.HandleFunc("POST /api/setup", f.admin(func(w http.ResponseWriter, _ *http.Request) {
+		if field(savedBody(f), "timeZone") == "Mars/Base" {
+			answer(w, http.StatusUnprocessableEntity, `{"error":"Time zone: Mars/Base is not an IANA time zone"}`)
+			return
+		}
+		answer(w, http.StatusAccepted, `{}`)
 	}))
 	f.srv = httptest.NewTLSServer(mux)
 	t.Cleanup(f.srv.Close)
@@ -308,11 +330,60 @@ func TestApplianceEtcdBackups(t *testing.T) {
 	}
 }
 
+// recover goes through the route the interface's button takes, with no snapshot to name.
+func TestApplianceEtcdBackupsRecover(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	if _, err := run(t, f.args("admin@pve", "etcd-backups", "recover", "20270301T120000Z-v1.37.1.db.age", "--passphrase-file", writeTemp(t, "right"))...); err == nil {
+		t.Error("recover took a snapshot's name")
+	}
+	if _, err := run(t, f.args("admin@pve", "etcd-backups", "recover", "--passphrase-file", writeTemp(t, "wrong"))...); err == nil || !strings.Contains(err.Error(), "wrong passphrase") {
+		t.Errorf("a wrong passphrase: %v", err)
+	}
+	out, err := run(t, f.args("admin@pve", "etcd-backups", "recover", "--passphrase-file", writeTemp(t, "right"))...)
+	if err != nil || !strings.HasSuffix(out, "Recovered the management cluster\n") {
+		t.Errorf("recover: %v\n%s", err, out)
+	}
+	if got := f.bodies["POST /api/appliance/etcd-backups/recover"]; got["passphrase"] != "right" {
+		t.Errorf("recover sent %v", got)
+	}
+}
+
+func TestApplianceEtcdBackupsShowTheVolume(t *testing.T) {
+	t.Parallel()
+	last := time.Date(2027, 3, 1, 12, 0, 0, 0, time.UTC)
+	v := &appliance.EtcdBackupStatus{
+		Volume: &appliance.VolumeBackupStatus{
+			Claim: "kubehenge-system/kubehenge-backups",
+			Last:  &provisioner.EtcdSnapshot{Name: "20270301T120000Z-v1.37.2.db.age", Time: last},
+			Copy:  &appliance.BackupCopy{Snapshot: "20270301T120000Z-v1.37.2.db.age", Bytes: 3 << 20, Cap: 1 << 30},
+		},
+		Where: &appliance.BackupSummary{Where: []string{"backup volume kubehenge-system/kubehenge-backups", "appliance copy"}, Last: &last, Error: "backup volume: unreachable"},
+	}
+	cmd := &cobra.Command{}
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	if err := printBackups(cmd, v); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"backup volume kubehenge-system/kubehenge-backups, appliance copy", "2027-03-01T12:00:00Z",
+		"backup volume: unreachable", "20270301T120000Z-v1.37.2.db.age, 3 of 1024 MiB",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the status lacks %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "Off") {
+		t.Errorf("backups on the volume show as off:\n%s", out.String())
+	}
+}
+
 // take-over needs --overwrite and the passphrase, and says what the next apply does.
 func TestApplianceTakeOver(t *testing.T) {
 	t.Parallel()
 	f := newFakeInterface(t)
-	if _, err := run(t, f.args("admin@pve", "take-over", "--passphrase-file", writeTemp(t, "right"))...); err == nil || !strings.Contains(err.Error(), "give --overwrite") {
+	if _, err := run(t, f.args("admin@pve", "take-over", "--passphrase-file", writeTemp(t, "right"))...); err == nil || !strings.Contains(err.Error(), "Give --overwrite") {
 		t.Errorf("without --overwrite: %v", err)
 	}
 	if _, err := run(t, f.args("admin@pve", "take-over", "--overwrite", "--passphrase-file", writeTemp(t, "wrong"))...); err == nil || err.Error() != "wrong passphrase" {

@@ -873,6 +873,11 @@ describe("the console", () => {
     await waitFor(() => expect(tabs.getByRole("link", { name: "Health" })).toHaveAccessibleDescription("2 to look at"));
     expect(tabs.getByRole("link", { name: "Machines" })).toHaveAccessibleDescription("1 failed");
     expect(tabs.getByRole("link", { name: "Summary" })).not.toHaveAttribute("aria-describedby");
+    // The key hint leads the name and the count ends the tab, so the two numbers never sit together.
+    const health = tabs.getByRole("link", { name: "Health" });
+    expect(health.firstElementChild?.tagName).toBe("KBD");
+    expect(health.lastElementChild).toHaveTextContent("2");
+    expect(health.lastElementChild?.tagName).toBe("SPAN");
 
     // The worst of it shows on every view but Health, which lists it all.
     const strip = within(screen.getByRole("region", { name: "Needs attention" }));

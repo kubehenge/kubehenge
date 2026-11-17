@@ -392,8 +392,8 @@ func TestApply(t *testing.T) {
 		t.Fatal(err)
 	}
 	runs := strings.Split(strings.TrimSpace(string(log)), "\n")
-	// init, apply, and the outputs kubeconfig, api_endpoint and talosconfig.
-	if len(runs) != 5 {
+	// init, plan, show, apply, and the outputs kubeconfig, api_endpoint and talosconfig.
+	if len(runs) != 7 {
 		t.Fatalf("tofu ran %d times: %s", len(runs), log)
 	}
 	for _, run := range runs {
@@ -503,23 +503,28 @@ func TestRemove(t *testing.T) {
 
 	before, gone := 0, 0
 	step := func(_ context.Context, j *Job) error { before++; j.Add("deleting templates"); return nil }
-	if err := a.Remove("the wrong passphrase entirely", ticket(), step, func() { gone++ }); err != nil {
+	if err := a.Remove("the wrong passphrase entirely", KeepBackups, ticket(), step, func() { gone++ }); err != nil {
 		t.Fatal(err)
 	}
 	if j := waitFor(t, a); j.State != "failed" || j.Kind != "remove" || before != 0 || gone != 0 || !a.Ready() {
 		t.Fatalf("wrong passphrase: job %+v, before %d, gone %d", j, before, gone)
 	}
 
-	if err := a.Remove("correct horse battery staple", ticket(), step, func() { gone++ }); err != nil {
+	ran := len(tofuCalls(t, a))
+	if err := a.Remove("correct horse battery staple", KeepBackups, ticket(), step, func() { gone++ }); err != nil {
 		t.Fatal(err)
 	}
 	j := waitFor(t, a)
 	if j.State != "succeeded" || before != 1 || gone != 1 || a.Ready() {
 		t.Fatalf("remove: job %+v, before %d, gone %d, ready %v", j, before, gone, a.Ready())
 	}
+	destroyApplied(t, tofuCalls(t, a)[ran:])
 	log, err := os.ReadFile(filepath.Join(a.Dir, "fake-tofu.log"))
-	if err != nil || !strings.Contains(string(log), `"destroy"`) {
-		t.Fatalf("tofu destroy did not run: %v", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(log), `["state","list"]`) || strings.Contains(string(log), "protection=false") {
+		t.Fatalf("a removal that keeps the backup volume did not look for it in the state, or lifted its protection:\n%s", log)
 	}
 	if s := a.SavedSettings(); s == nil || !slices.Equal(s.Nodes, []string{"pve1"}) {
 		t.Fatal("the settings for the next setup are gone")
@@ -1122,7 +1127,7 @@ func TestFixedOnceCreated(t *testing.T) {
 		change func(*Settings)
 		want   string
 	}{
-		"address changed": {func(s *Settings) { s.NodeAddresses = []string{"10.0.0.12/24"} }, "Node addresses: the nodes there are keep theirs (10.0.0.11/24)"},
+		"address changed": {func(s *Settings) { s.NodeAddresses = []string{"10.0.0.12/24"} }, "Node addresses: the nodes there keep theirs (10.0.0.11/24)"},
 		"node removed":    {func(s *Settings) { s.NodeAddresses = nil }, "Node addresses:"},
 		"API address":     {func(s *Settings) { s.APIAddress = "10.0.0.9" }, "API address: stays 10.0.0.10"},
 		"gateway":         {func(s *Settings) { s.Gateway = "10.0.0.254" }, "Gateway: stays 10.0.0.1"},

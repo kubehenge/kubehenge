@@ -43,6 +43,7 @@ A value written into a string (`${name}`) counts as a word.
 - **Errors** name what went wrong and the fix, without blame or apology. The server's message is shown as it is, so it follows these rules too.
   - kubectl users read the same words.
 - **Dialogs** are titled with the action and its object ("Delete cluster web"). Their confirm button repeats the verb.
+  - A dialog that stages its change confirms with "Add to plan", whatever its verb. Review plan's Apply carries it out.
   - The body says in one sentence what is lost.
   - Destroying a cluster or data asks for the typed name. A privilege grant names the privilege and what it allows.
 - **"…" on a button** only when it opens a dialog that asks for more.

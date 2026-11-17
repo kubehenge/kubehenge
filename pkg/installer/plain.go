@@ -26,6 +26,8 @@ type Env struct {
 	TofuSH  string
 	Log     *os.File
 	Cleanup func()
+	// Tune adjusts every runner built from this environment, for tests.
+	Tune func(*Runner)
 }
 
 // LogFile is where the commands' output goes.
@@ -91,10 +93,14 @@ func lookupHost(ctx context.Context, name string) ([]string, error) {
 
 // NewRunner builds the runner of a prepared session.
 func (e *Env) NewRunner(s *Session, emit func(Event)) *Runner {
-	return &Runner{
+	r := &Runner{
 		S: s, Exec: e.Exec, Fetch: e.Fetch, Work: e.Work, Dir: e.Dir, Emit: emit, Proxy: e.Proxy,
 		TofuV: e.TofuV, TofuSH: e.TofuSH, LogPath: e.LogPath,
 	}
+	if e.Tune != nil {
+		e.Tune(r)
+	}
+	return r
 }
 
 // RunPlain installs with one line per step and no questions. What only a question could settle
@@ -118,7 +124,7 @@ func RunPlain(ctx context.Context, s *Session, newRunner func(emit func(Event)) 
 	if s.Cfg.PVEEntry == "" {
 		s.Cfg.PVEEntry = "no"
 	}
-	for _, n := range s.Notices {
+	for _, n := range append(append([]string(nil), s.Notices...), s.Cautions...) {
 		_, _ = fmt.Fprintln(out, "kubehenge: "+n)
 	}
 	runner := newRunner(nil)
@@ -142,7 +148,9 @@ func RunPlain(ctx context.Context, s *Session, newRunner func(emit func(Event)) 
 		// The cleanup must run even when the run was cancelled.
 		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 		defer cancel()
-		_, _ = fmt.Fprintf(out, "kubehenge: removing container %s after the failure\n", s.Cfg.CTID)
+		if runner.Made() {
+			_, _ = fmt.Fprintf(out, "kubehenge: removing container %s after the failure\n", s.Cfg.CTID)
+		}
 		runner.Cleanup(cleanCtx)
 		return err
 	}

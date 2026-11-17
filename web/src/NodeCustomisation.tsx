@@ -30,7 +30,7 @@ import {
 } from "./node-customisation";
 import { Field, Head } from "./NodeSettings";
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, useChange } from "./ui";
+import { Dialog, ErrorBox, stageLabel, useChange } from "./ui";
 import { oneOf } from "./values";
 
 /** Whether a row's problem shows: once its field was touched, or for every row with showAll. */
@@ -557,12 +557,12 @@ export function NodeCustomisationDialog({
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || unchanged}>
-            Save
+            {stageLabel}
           </button>
         </>
       }
     >
-      <p className="muted">Saving replaces every node, one at a time.</p>
+      <p className="muted">Replaces every node, one at a time.</p>
       <NodeCustomisationFields value={value} onChange={setValue} talos={talos} showAll={attempted} refusal={error} />
     </Dialog>
   );

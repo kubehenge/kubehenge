@@ -93,7 +93,7 @@ func taintDriftAttention(a *attention, c *clusterv1.Cluster, v *nodeView, n *cor
 	if len(missing) > 0 {
 		parts = append(parts, "Missing from the node: "+strings.Join(missing, ", ")+".")
 	}
-	a.addMachine(v.Machine, severityWarning, roleWord(v.Role)+" "+v.Name+": taints differ from pool "+v.Pool, strings.Join(parts, " "), time.Time{})
+	a.addMachine(v.Machine, severityWarning, roleWord(v.Role)+" "+v.Name+": taints differ from pool "+provisioner.PoolLabel(v.Pool, provisioner.TopologyPools(c)), strings.Join(parts, " "), time.Time{})
 }
 
 // taintText writes a taint as key=value:effect, or key:effect without a value.

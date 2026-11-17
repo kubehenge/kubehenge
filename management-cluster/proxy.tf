@@ -83,6 +83,7 @@ resource "helm_release" "proxy_operator" {
   namespace        = "capi-operator-system"
   create_namespace = true
   chart            = "${path.module}/charts/proxy"
+  replace          = true
   wait             = true
 
   values = [yamlencode({

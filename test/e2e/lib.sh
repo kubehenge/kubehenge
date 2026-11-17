@@ -219,12 +219,29 @@ check_template_builder_privileges() {
 
 destroy_and_check_nothing_left() {
     rm -f "${dir}/talosconfig"
-    "${tofu}" -chdir="${dir}" destroy -input=false -auto-approve
-
-    step "nothing left on Proxmox VE"
     endpoint=$(jq -r .endpoint "${work}/objects.json")
     # shellcheck disable=SC2086 # curl_ca is empty or one option and its argument.
     pve() { curl -sS --fail ${curl_ca} -H "Authorization: PVEAPIToken=${TF_VAR_proxmox_api_token}" "${endpoint}/api2/json/$1"; }
+    # shellcheck disable=SC2086 # curl_ca is empty or one option and its argument.
+    pve_put() { curl -sS --fail ${curl_ca} -X PUT -H "Authorization: PVEAPIToken=${TF_VAR_proxmox_api_token}" -d "$2" "${endpoint}/api2/json/$1" > /dev/null; }
+
+    # Proxmox VE refuses to destroy a protected VM, and the module protects each of its VMs. The
+    # destroy goes as docs/uninstalling.md says: protection lifted on each VM first.
+    step "the module's VMs are protected, lifted before the destroy"
+    # Resources only: the node VMs' precondition results under .checks name the same mode and type.
+    "${tofu}" -chdir="${dir}" show -json |
+        jq -r '.values.root_module | .. | objects | select(.mode? == "managed" and .type? == "proxmox_virtual_environment_vm") | .values.vm_id' > "${work}/module-vms"
+    [ -s "${work}/module-vms" ] || fail "the state holds no VM of the module"
+    pve cluster/resources?type=vm > "${work}/resources"
+    while read -r vmid; do
+        node=$(jq -r --argjson id "${vmid}" '.data[] | select(.vmid == $id) | .node' "${work}/resources")
+        [ -n "${node}" ] || fail "VM ${vmid} of the state is not on Proxmox VE"
+        pve "nodes/${node}/qemu/${vmid}/config" | jq -e '.data.protection == 1' > /dev/null || fail "VM ${vmid} is not protected"
+        pve_put "nodes/${node}/qemu/${vmid}/config" protection=0
+    done < "${work}/module-vms"
+    "${tofu}" -chdir="${dir}" destroy -input=false -auto-approve
+
+    step "nothing left on Proxmox VE"
     for vmid in $(jq -r '.vm_ids[]' "${work}/objects.json"); do
         pve cluster/resources?type=vm | jq -e --argjson id "${vmid}" '[.data[] | select(.vmid == $id)] | length == 0' > /dev/null ||
             fail "VM ${vmid} is still there"

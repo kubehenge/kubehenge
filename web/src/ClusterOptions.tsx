@@ -9,7 +9,7 @@ import { CredentialField } from "./CredentialField";
 import { csiOn, csiWith, snapshotsOn, useCSIOffer, useSnapshotsOffer } from "./CsiPlugin";
 import { EgressDialog, egressOf, egressText } from "./EgressProxy";
 import { EtcdDialog, etcdQuotaOf, etcdText } from "./EtcdSize";
-import { FirewallDialog, securityGroupsOf, securityGroupsText } from "./Firewall";
+import { clusterFirewallText, FirewallDialog } from "./Firewall";
 import { GitOpsDialog, gitOpsOf, gitOpsText } from "./GitOps";
 import { HostOutageDialog, graceOf, graceText, graceVariable } from "./HostOutage";
 import { LoadBalancerDialog, loadBalancerOf, loadBalancerText } from "./LoadBalancer";
@@ -66,16 +66,19 @@ import {
   csiText,
   haGroupsText,
   snapshotsText,
+  stageLabel,
   useChange,
   Skeleton,
 } from "./ui";
 import { flag, record, text, texts } from "./values";
+import { VMIDRangeDialog, vmIDRangeOf, vmIDRangeText, vmIDVariable } from "./VmidRange";
 
 /** What the Options view changes, each through a dialog of its own. */
 export type OptionAction =
   | "nodeOS"
   | "placement"
   | "hostOutage"
+  | "vmIDRange"
   | "headlamp"
   | "monitoring"
   | "logs"
@@ -141,7 +144,7 @@ export function OptionDialog({
   }
   const dialogs: Record<
     Exclude<OptionAction, "headlamp" | "monitoring">,
-    (props: { cluster: Cluster; onClose: () => void }) => JSX.Element
+    (props: { cluster: Cluster; onClose: () => void }) => JSX.Element | null
   > = {
     logs: LogsDialog,
     podSecurity: PodSecurityDialog,
@@ -161,6 +164,7 @@ export function OptionDialog({
     nodeOS: NodeOSDialog,
     placement: PlacementDialog,
     hostOutage: HostOutageDialog,
+    vmIDRange: VMIDRangeDialog,
     talos: TalosDialog,
     etcd: EtcdDialog,
     nodeCustomisation: NodeCustomisationDialog,
@@ -348,6 +352,13 @@ export function optionRows<A extends string = never>(
       action: "hostOutage",
       name: "the host outage wait",
     },
+    {
+      label: "VM ID range",
+      value: vmIDRangeText(vmIDRangeOf(c.variables[vmIDVariable]), ""),
+      group: "Nodes",
+      action: "vmIDRange",
+      name: "the VM ID range",
+    },
   ];
   if (offered.ha) {
     rows.push({ label: "Proxmox VE HA", value: haText(haOn(c)), group: "Nodes", toggle: haToggle });
@@ -371,7 +382,7 @@ export function optionRows<A extends string = never>(
     });
   }
   if (offered.haGroups || haGroupsOn(c)) {
-    rows.push({ label: "HA group labels", value: haGroupsText(haGroupsOn(c)), group: "Nodes", toggle: haGroupsToggle });
+    rows.push({ label: "HA rule labels", value: haGroupsText(haGroupsOn(c)), group: "Nodes", toggle: haGroupsToggle });
   }
   rows.push(
     {
@@ -479,11 +490,11 @@ export function optionRows<A extends string = never>(
         ]
       : []),
     {
-      label: "Firewall security groups",
-      value: securityGroupsText(securityGroupsOf(c.variables["securityGroups"])),
+      label: "Firewall",
+      value: clusterFirewallText(c),
       group: "Network",
       action: "firewall",
-      name: "the firewall security groups",
+      name: "the firewall",
     },
     {
       label: "Automatic upgrades",
@@ -741,12 +752,12 @@ function NodeOSDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
             className="primary"
             disabled={busy || chosen === running || os === undefined || !movable(os, c)}
           >
-            Save
+            {stageLabel}
           </button>
         </>
       }
     >
-      <p className="muted">Saving replaces every node, one at a time.</p>
+      <p className="muted">Replaces every node, one at a time.</p>
       {oses === undefined && !filled(loadError) && <Skeleton rows={2} />}
       <ErrorBox message={loadError} />
       {oses !== undefined && (
@@ -806,12 +817,12 @@ function OIDCDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => 
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed || open.length > 0}>
-            Save
+            {stageLabel}
           </button>
         </>
       }
     >
-      <p className="muted">Saving replaces the control-plane nodes, one at a time.</p>
+      <p className="muted">Replaces the control-plane nodes, one at a time.</p>
       <OIDCProviders initial={value} fixed={!c.allowed.kubeconfig} onChange={setValue} />
       <ErrorBox message={error} />
     </Dialog>
@@ -896,7 +907,7 @@ function CISDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => v
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || cis || !on}>
-            Switch on
+            {stageLabel}
           </button>
         </>
       }
@@ -953,7 +964,7 @@ function PodSecurityDialog({ cluster: c, onClose }: { cluster: Cluster; onClose:
             className="primary"
             disabled={busy || (value.admission === current.admission && value.kyverno === current.kyverno)}
           >
-            Save
+            {stageLabel}
           </button>
         </>
       }
@@ -1108,7 +1119,7 @@ function HostedAddonDialog({
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed}>
-            Save
+            {stageLabel}
           </button>
         </>
       }
@@ -1202,7 +1213,7 @@ function RancherDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || register === (current.register !== false)}>
-            Save
+            {stageLabel}
           </button>
         </>
       }

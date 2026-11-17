@@ -181,7 +181,7 @@ func TestNUMATemplatesNeedTwoCoresPerMachine(t *testing.T) {
 		{"the default machines", sized("", new(int32(1))), true, ""},
 		{"a worker pool of one core", workerOverride(sized("", new(int32(1)), new(int32(1))), 1, `{"cores":1,"memoryMiB":4096}`), true, "worker pool md-1 has 1"},
 		{"a worker pool of one core without NUMA", workerOverride(sized("", new(int32(1))), 0, `{"cores":1,"memoryMiB":4096}`), false, ""},
-		{"the whole cluster's workers of one core", withAddons(sized("", new(int32(1))), map[string]string{"workerMachine": `{"cores":1,"memoryMiB":4096}`}), true, "worker pool md-0 has 1"},
+		{"the whole cluster's workers of one core", withAddons(sized("", new(int32(1))), map[string]string{"workerMachine": `{"cores":1,"memoryMiB":4096}`}), true, "worker pool Workers has 1"},
 		{"a control plane of one core", sized(`{"cores":1,"memoryMiB":4096}`, new(int32(1))), true, "the control plane has 1"},
 		{"two cores are enough", workerOverride(sized("", new(int32(1))), 0, `{"cores":2,"memoryMiB":4096}`), true, ""},
 	} {

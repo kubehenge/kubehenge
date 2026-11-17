@@ -83,6 +83,27 @@ func (s *Server) nodes(w http.ResponseWriter, r *http.Request, u user) {
 	writeJSON(w, http.StatusOK, nodes)
 }
 
+// datacenterFirewallView is whether Proxmox VE's datacenter firewall is on, without which no VM's
+// firewall acts: "on", "off", or "unknown" to a user who may not read it, which takes Sys.Audit on
+// /. The wizard shows it beside a cluster's firewall and never stops a create for it.
+type datacenterFirewallView struct {
+	State string `json:"state"`
+}
+
+func (s *Server) datacenterFirewall(w http.ResponseWriter, r *http.Request, u user) {
+	reach, err := s.Accounts.APIReach(r.Context(), u.ticket)
+	switch {
+	case errors.Is(err, pve.ErrForbidden):
+		writeJSON(w, http.StatusOK, datacenterFirewallView{State: "unknown"})
+	case err != nil:
+		s.proxmoxError(w, r, err)
+	case reach.Enabled:
+		writeJSON(w, http.StatusOK, datacenterFirewallView{State: "on"})
+	default:
+		writeJSON(w, http.StatusOK, datacenterFirewallView{State: "off"})
+	}
+}
+
 // haRulesView offers Proxmox VE's HA node-affinity rules as places for a cluster's VMs.
 type haRulesView struct {
 	// Readable tells whether the user may read the rules, which takes Sys.Audit on /, or is offered

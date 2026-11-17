@@ -2,7 +2,7 @@ import { useState, type JSX } from "react";
 
 import { api } from "./api";
 import type { Cluster, EtcdMember, EtcdSizes } from "./types";
-import { Dialog, ErrorBox, Field, Status, age, bytes, errorMessage, filled, useChange } from "./ui";
+import { Dialog, ErrorBox, Field, Status, age, bytes, errorMessage, filled, stageLabel, useChange } from "./ui";
 import { quantity, record } from "./values";
 
 /** The bounds and default of the etcd variable's quotaGiB, as the chart's schema has them. */
@@ -55,7 +55,7 @@ export function EtcdDialog({ cluster: c, onClose }: { cluster: Cluster; onClose:
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || Number(value) === current}>
-            Save
+            {stageLabel}
           </button>
         </>
       }

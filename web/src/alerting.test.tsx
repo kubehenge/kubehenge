@@ -158,9 +158,9 @@ describe("a cluster's monitoring options", () => {
 
     await user.click(await screen.findByRole("button", { name: "Edit monitoring" }));
     const dialog = screen.getByRole("dialog", { name: "Edit monitoring" });
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     await user.click(within(dialog).getByLabelText("Slack"));
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeEnabled();
     await user.type(within(dialog).getByLabelText("Channel"), "#ops");
     // The secret goes to the credential store at once, never into the variable.
     await user.click(await within(dialog).findByRole("button", { name: "Set…" }));
@@ -173,7 +173,7 @@ describe("a cluster's monitoring options", () => {
         values: { url: "https://hooks.slack.example/T0/B0/secret" },
       }),
     );
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);
     const body = calls.findLast((c) => c.key === "PATCH /api/clusters/clusters/web")?.body;

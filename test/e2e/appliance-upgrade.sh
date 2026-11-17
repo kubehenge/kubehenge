@@ -48,6 +48,7 @@ finish() {
         echo "-- the appliance's log" >&2
         pct exec "${ctid}" -- journalctl -u kubehenge.service -n 100 --no-pager >&2 || true
     fi
+    [ "${status}" -eq 0 ] || stuck_state
     pvesh delete "/access/users/${admin}" > /dev/null 2>&1 || true
     rm -rf "${work}"
 }
@@ -56,8 +57,10 @@ trap finish EXIT
 # management_vms: a line for each VM the management cluster made, which is each QEMU guest the node
 # did not hold before the test: its ID, SMBIOS UUID and network cards' MAC addresses. Proxmox VE
 # keeps the UUID and the MACs of a VM for its life, so a replaced VM or a re-created card shows.
+# The backup volume's VM, which a release may add, is checked on its own.
 management_vms() {
-    list '.[] | select(.type == "qemu") | "\(.node) \(.vmid)"' /cluster/resources --type vm > "${work}/guests"
+    list '.[] | select(.type == "qemu" and ((.tags // "" | split(";")) | index("backups") | not)) | "\(.node) \(.vmid)"' \
+        /cluster/resources --type vm > "${work}/guests"
     : > "${work}/vms"
     while read -r vm_node vmid; do
         if ! grep -q "^guest ${vmid} " "${work}/before"; then
@@ -156,18 +159,27 @@ management_vms > "${work}/vms-after"
 if ! diff "${work}/vms-before" "${work}/vms-after" >&2; then
     fail "the management cluster's VMs changed (< before the upgrade, > after it)"
 fi
+backups_vm=$(list '[.[] | select((.tags // "" | split(";")) | index("backups"))] | if length == 1 then "\(.[0].node) \(.[0].vmid)" else "" end' \
+    /cluster/resources --type vm)
+[ -n "${backups_vm}" ] || fail "the upgrade left the management cluster without one backup volume VM"
+backups_vm_ok=$(list '.protection == 1 and ([keys[] | select(test("^net[0-9]+$"))] | length) == 0' \
+    "/nodes/${backups_vm% *}/qemu/${backups_vm#* }/config")
+[ "${backups_vm_ok}" = true ] || fail "the backup volume's VM is unprotected or has a network card"
 management_credentials
 until_true 600 "every node of the management cluster Ready" nodes_ready
 until_true 900 "every provider of the management cluster Ready at its version" providers_ready
 
 step "remove the management cluster from the interface"
-body=$(jq -n --arg p "${passphrase}" '{passphrase: $p, confirm: "remove"}')
+# The backup volume goes with it, so that "Proxmox VE as it was" below finds it if it stays.
+body=$(jq -n --arg p "${passphrase}" '{passphrase: $p, confirm: "remove", removeBackups: true}')
 expect 202 "the removal" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup/remove" "${body}"
 until_true 3600 "the removal to end" job_ended
 job_was remove succeeded false
 
 step "remove the appliance"
+pct config "${ctid}" | grep -qx 'protection: 1' || fail "the upgrade left the appliance unprotected"
 pct stop "${ctid}"
+pct set "${ctid}" --protection 0
 pct destroy "${ctid}" --purge
 
 step "Proxmox VE as it was"

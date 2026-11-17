@@ -266,7 +266,10 @@ function ApplianceWarnings({
       {setup.diskFull && (
         <p className="warning" role="alert">
           Appliance disk {setup.diskFull.usedPercent} % full, {(setup.diskFull.freeMiB / mibPerGiB).toFixed(1)} GiB
-          free. Grow it on the Proxmox VE node: <code>pct resize {ctid} rootfs +4G</code>
+          free.
+          {setup.diskFull.backupCopy &&
+            ` Backup copy ${setup.diskFull.backupCopy.mib} of ${setup.diskFull.backupCopy.capMiB} MiB.`}{" "}
+          Grow it on the Proxmox VE node: <code>pct resize {ctid} rootfs +4G</code>
         </p>
       )}
       {certificate && (

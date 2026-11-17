@@ -102,7 +102,14 @@ func TestRancherNeedsFourVCPUsOnEveryNode(t *testing.T) {
 		{"four on the control planes", func(*clusterv1.Cluster) {}, ""},
 		{"the class's default two", func(c *clusterv1.Cluster) { setCores(c, "controlPlaneMachine", "") }, "control planes have 2"},
 		{"cores left to the default", func(c *clusterv1.Cluster) { setCores(c, "controlPlaneMachine", `{"memoryMiB":8192}`) }, "control planes have 2"},
-		{"workers on the default", func(c *clusterv1.Cluster) { workers(c, 2, "") }, "pool md-0 has 2"},
+		{"workers on the default", func(c *clusterv1.Cluster) { workers(c, 2, "") }, "pool Workers has 2"},
+		// Beside a pool of the user's named workers, the default pool keeps its own name.
+		{"beside a pool named workers", func(c *clusterv1.Cluster) {
+			workers(c, 2, "")
+			mine := c.Spec.Topology.Workers.MachineDeployments[0]
+			mine.Name = "workers"
+			c.Spec.Topology.Workers.MachineDeployments = append(c.Spec.Topology.Workers.MachineDeployments, mine)
+		}, "pool md-0 has 2, pool workers has 2"},
 		{"no workers running", func(c *clusterv1.Cluster) { workers(c, 0, "") }, ""},
 		{"workers made large", func(c *clusterv1.Cluster) { workers(c, 2, `{"cores":8}`) }, ""},
 		{"control plane override", func(c *clusterv1.Cluster) {

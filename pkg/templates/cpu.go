@@ -43,7 +43,7 @@ func CPULevel(o NodeOS) int {
 	if err != nil {
 		return 1
 	}
-	return x86LevelOf(CPUTypeOf(r))
+	return x86LevelOf(CPUTypeOf(&r))
 }
 
 // TalosCPULevel is the x86-64 microarchitecture level Talos's templates need of the Proxmox VE

@@ -85,12 +85,12 @@ func TestIPv6SettingsAreRefused(t *testing.T) {
 		"IPv6 nodes in two networks": {ipv6Settings, func(s *Settings) {
 			s.NodeAddressesIPv6 = []string{"fd00:1::11/64", "fd00:1::12/48", "fd00:1::13/64"}
 		}, "is in another network than fd00:1::/64"},
-		"two IPv6 nodes":               {ipv6Settings, func(s *Settings) { s.NodeAddressesIPv6 = []string{"fd00:1::11/64", "fd00:1::12/64"} }, "Node addresses: one, or three for high availability"},
+		"two IPv6 nodes":               {ipv6Settings, func(s *Settings) { s.NodeAddressesIPv6 = []string{"fd00:1::11/64", "fd00:1::12/64"} }, "Node addresses: one, three or five for high availability"},
 		"IPv4 addresses in IPv6 only":  {ipv6Settings, func(s *Settings) { s.NodeAddresses = []string{"10.0.0.11/24"} }, "IPv4 node addresses: leave empty, the cluster has no IPv4"},
 		"IPv4 gateway in IPv6 only":    {ipv6Settings, func(s *Settings) { s.Gateway = "10.0.0.1" }, "IPv4 gateway: leave empty, the cluster has no IPv4"},
 		"IPv6 addresses in IPv4 only":  {func() *Settings { return settings("pve1") }, func(s *Settings) { s.NodeAddressesIPv6 = []string{"fd00:1::11/64"} }, "IPv6 node addresses: leave empty, the cluster has no IPv6"},
-		"dual-stack without IPv6":      {func() *Settings { return dualSettings("IPv4", "IPv6") }, func(s *Settings) { s.NodeAddressesIPv6 = nil }, "IPv6 node addresses: one, or three for high availability"},
-		"dual-stack without IPv4":      {func() *Settings { return dualSettings("IPv6", "IPv4") }, func(s *Settings) { s.NodeAddresses = nil }, "IPv4 node addresses: one, or three for high availability"},
+		"dual-stack without IPv6":      {func() *Settings { return dualSettings("IPv4", "IPv6") }, func(s *Settings) { s.NodeAddressesIPv6 = nil }, "IPv6 node addresses: one, three or five for high availability"},
+		"dual-stack without IPv4":      {func() *Settings { return dualSettings("IPv6", "IPv4") }, func(s *Settings) { s.NodeAddresses = nil }, "IPv4 node addresses: one, three or five for high availability"},
 		"dual-stack uneven counts":     {func() *Settings { return dualSettings("IPv4", "IPv6") }, func(s *Settings) { s.NodeAddresses = []string{"10.0.0.11/24", "10.0.0.12/24", "10.0.0.13/24"} }, "IPv6 node addresses: as many as the IPv4 ones"},
 		"dual-stack without a gateway": {func() *Settings { return dualSettings("IPv4", "IPv6") }, func(s *Settings) { s.GatewayIPv6 = "" }, "IPv6 gateway: an IPv6 address"},
 		"dual-stack without IPv4 gw":   {func() *Settings { return dualSettings("IPv6", "IPv4") }, func(s *Settings) { s.Gateway = "" }, "IPv4 gateway: an IPv4 address"},
@@ -209,8 +209,8 @@ func TestIPv6FamilyIsFixedOnceCreated(t *testing.T) {
 	}{
 		"IPv6 first":        {func(s *Settings) { s.IPFamilies = []string{"IPv6", "IPv4"} }, "Address families: stay IPv4, IPv6"},
 		"IPv6 dropped":      {func(s *Settings) { s.IPFamilies = nil }, "Address families: stay IPv4, IPv6"},
-		"IPv6 address":      {func(s *Settings) { s.NodeAddressesIPv6 = []string{"fd00:1::12/64"} }, "IPv6 node addresses: the nodes there are keep theirs (fd00:1::11/64)"},
-		"IPv6 node removed": {func(s *Settings) { s.NodeAddressesIPv6 = nil }, "IPv6 node addresses: the nodes there are keep theirs"},
+		"IPv6 address":      {func(s *Settings) { s.NodeAddressesIPv6 = []string{"fd00:1::12/64"} }, "IPv6 node addresses: the nodes there keep theirs (fd00:1::11/64)"},
+		"IPv6 node removed": {func(s *Settings) { s.NodeAddressesIPv6 = nil }, "IPv6 node addresses: the nodes there keep theirs"},
 		"IPv6 gateway":      {func(s *Settings) { s.GatewayIPv6 = "fd00:1::254" }, "IPv6 gateway: stays fd00:1::1"},
 	} {
 		s := dualSettings("IPv4", "IPv6")
@@ -405,7 +405,7 @@ func TestIPv6AddressesAreChecked(t *testing.T) {
 	f := Findings{Errors: []string{}, Warnings: []string{}}
 	inv := &Inventory{Answering: map[netip.Addr]bool{netip.MustParseAddr("fd00:1::11"): true}}
 	s.checkAddressesFree(inv, &f)
-	if len(f.Errors) != 1 || !strings.Contains(f.Errors[0], "Address fd00:1::11 answers") {
+	if len(f.Errors) != 1 || !strings.Contains(f.Errors[0], "Address fd00:1::11 already answers") {
 		t.Errorf("an IPv6 node address that answers: %v", f.Errors)
 	}
 	list := dualSettings("IPv4", "IPv6")

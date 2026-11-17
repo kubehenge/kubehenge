@@ -19,7 +19,11 @@ One Terraform/OpenTofu apply creates Kubehenge's management cluster on Proxmox V
 - **A group for the clusters' own users,** allowed to use space on the listed storages and to read the nodes. Each cluster's user, created by the controller, adds rights on its own pool only ([architecture](../docs/architecture.md#each-clusters-own-corner-of-proxmox-ve)).
 - **The Talos disk image,** built by the Talos Image Factory with the QEMU guest agent.
 - **One, three or five VMs,** each a Talos control-plane node, with static addresses and a virtual IP in front of the Kubernetes API.
+  - They carry Proxmox VE's protection, so Proxmox VE refuses to destroy them. An apply or destroy that removes or replaces one fails, after the provider has shut the VM down. Run `qm set <vmid> --protection 0` first on the VMs the plan deletes. The appliance does that itself.
   - Their VM IDs are picked at random from `vm_id_range`, away from the lowest free ID that Proxmox VE offers to anything else created at the same moment. The default is 10000 up to, not including, 99999, and the appliance sets it from `next-id` ([install settings](../docs/install-settings.md#management-cluster-vm-ids)).
+
+- **A backup volume,** the disk of the VM `kubehenge-backups`, which sits in no pool and never starts. The `backup_volume` variable sets its size (`size_gb`, 20 GB by default), its protection (`protection`, on by default) and whether the storage is shared ([install-settings.md](../docs/install-settings.md#module-variables)).
+- **Two users for the management cluster itself,** `<name>-management-csi` for its CSI plugin and `<name>-management-zones`, which reads where its VMs run.
 
 ### Optional users and rights
 
@@ -35,7 +39,7 @@ One Terraform/OpenTofu apply creates Kubehenge's management cluster on Proxmox V
   - It may use its node's network for the download and its bridge.
   - The chart's CronJob runs `kubehenge template refresh` with it each week. Clusters' nodes move to the new builds in their upgrade windows once they are `soak_hours` old.
 - **`cluster_sys_audit`**, on by default, adds a group holding `Sys.Audit` on `/`, unpropagated.
-  - The controller adds a cluster's user to it for its nodes' HA group labels, unless the cluster switches them off. The controller's token holds `User.Modify` on the group to do so ([clusters](../docs/clusters.md#machines)).
+  - The controller adds a cluster's user to it for its nodes' HA rule labels, unless the cluster switches them off. The controller's token holds `User.Modify` on the group to do so ([clusters](../docs/clusters.md#machines)).
   - The cluster's token can then read the Proxmox VE cluster's own configuration (firewall rules, backup jobs, HA, the corosync configuration). It sees nothing of its guests, storages or nodes.
 - **`node_boot_logs`**, on by default, gives the controller's token `VM.GuestAgent.FileRead` on the workload pool.
   - With it the controller reads the boot logs of kubeadm, RKE2 and k3s nodes through their guest agents. It reads only the files the node's agent policy opens ([install settings](../docs/install-settings.md#nodes-boot-logs)).
@@ -114,4 +118,6 @@ capmox at its tested release runs Kubehenge's reproducible build of that release
 
 ## Remove
 
-First delete the clusters the management cluster created, so their VMs go with them. Delete the templates in the template pool too (`kubehenge template delete`), since Proxmox VE keeps a pool that still holds VMs. Then `tofu destroy`. Destroy removes the management cluster's VMs, the Talos image, the pools, the group, the Cluster API, controller and template build users and their tokens.
+First delete the clusters the management cluster created, so their VMs go with them. Delete the templates in the template pool too (`kubehenge template delete`), since Proxmox VE keeps a pool that still holds VMs. Lift the protection of each management VM with `qm set <vmid> --protection 0`. The backup volume's VM, `kubehenge-backups`, is protected too, so `tofu destroy` fails on it. To keep the backups, run `tofu state rm proxmox_virtual_environment_vm.backups`. To delete them, set `backup_volume = { protection = false }` and apply. Then run `tofu destroy`.
+
+Destroy removes the management cluster's VMs, the Talos image, the pools, the group, the users and their tokens, and the backup volume where its protection is off. [uninstalling.md](../docs/uninstalling.md#what-the-module-made) lists them all.

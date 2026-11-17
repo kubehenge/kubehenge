@@ -10,6 +10,7 @@ import type {
   ClusterClass,
   ClusterHealth,
   ClusterRef,
+  RemovedCluster,
   ClusterEtcdSnapshots,
   CreateCheck,
   ControlPlaneRecovery,
@@ -18,6 +19,7 @@ import type {
   FleetHealth,
   HealthEvent,
   FreeAddresses,
+  DatacenterFirewall,
   HARules,
   Job,
   ManagementAutomatic,
@@ -43,6 +45,7 @@ import type {
   Session,
   SetupFindings,
   SetupStatus,
+  SiteCARoll,
   Storage,
   StoredCredential,
   ReleasePin,
@@ -351,8 +354,11 @@ export interface Api {
   /** change is made against the cluster as its user was shown it. A newer generation refuses it. */
   change: (c: ClusterShown, req: ChangeRequest) => Promise<Cluster>;
   plan: (c: ClusterShown, req: ChangeRequest) => Promise<Plan>;
-  /** remove deletes the cluster. confirm is its name as the user typed it. */
-  remove: (ns: string, name: string, confirm: string) => Promise<void>;
+  /**
+   * remove deletes the cluster. confirm is its name as the user typed it. deleteEtcdSnapshots takes
+   * its snapshots on the backup volume too.
+   */
+  remove: (ns: string, name: string, typed: { confirm: string; deleteEtcdSnapshots: boolean }) => Promise<void>;
   backups: (ns: string, name: string) => Promise<ClusterBackups>;
   backUp: (ns: string, name: string) => Promise<BackupRun>;
   /** deleteBackup has Velero delete a backup before it runs out, once its name is typed to confirm. */
@@ -367,6 +373,10 @@ export interface Api {
   /** podSecurityCheck lists the running pods the restricted Pod Security level would refuse. */
   podSecurityCheck: (ns: string, name: string) => Promise<PodSecurityCheck>;
   takeEtcdSnapshot: (ns: string, name: string) => Promise<void>;
+  /** removedClusters lists the removed clusters of a namespace whose snapshots the backup volume keeps. */
+  removedClusters: (ns: string) => Promise<RemovedCluster[]>;
+  /** deleteRemoved deletes a removed cluster's snapshots and backup keys, its name typed to confirm. */
+  deleteRemoved: (ns: string, name: string, confirm: string) => Promise<void>;
   /** defragmentEtcd asks the controller to defragment every etcd member at once. */
   defragmentEtcd: (ns: string, name: string) => Promise<void>;
   etcdRestorePlan: (ns: string, name: string, snapshot: string) => Promise<EtcdRestorePlan>;
@@ -385,6 +395,9 @@ export interface Api {
   setupStatus: () => Promise<SetupStatus>;
   setup: (settings: ManagementSettings, passphrase: string) => Promise<Job>;
   setupCheck: (settings: ManagementSettings) => Promise<SetupFindings>;
+  siteCARoll: (siteCA: string) => Promise<SiteCARoll>;
+  /** timeZoneCheck refuses a time zone name the server's time zone database does not know. */
+  timeZoneCheck: (timeZone: string) => Promise<unknown>;
 
   health: (ns: string, name: string) => Promise<ClusterHealth>;
   /** upgradeChecks reads the removed APIs in use and the fail-closed webhooks an upgrade to version would meet. */
@@ -432,7 +445,7 @@ export interface Api {
   notifications: () => Promise<NotificationSent[]>;
   testNotifications: () => Promise<NotificationSent[]>;
   credential: (name: "kubeconfig" | "talosconfig", passphrase: string) => Promise<Blob>;
-  removeManagement: (passphrase: string) => Promise<Job>;
+  removeManagement: (passphrase: string, removeBackups: boolean) => Promise<Job>;
   takeOverManagement: (passphrase: string) => Promise<void>;
   managementHealth: () => Promise<ManagementHealth>;
   rebootReady: () => Promise<RebootReadiness>;
@@ -445,6 +458,8 @@ export interface Api {
   restoreManagement: (snapshot: string, passphrase: string) => Promise<Job>;
   /** recreateManagement makes the management cluster's VMs again and restores a snapshot into them. */
   recreateManagement: (snapshot: string, passphrase: string) => Promise<Job>;
+  /** recoverManagement makes the management cluster again from the backup volume or the appliance's copy. */
+  recoverManagement: (passphrase: string) => Promise<Job>;
   dismissBackupWarning: () => Promise<ManagementBackups>;
   /** exportManagement downloads the appliance's state, encrypted with exportPassphrase. */
   exportManagement: (passphrase: string, exportPassphrase: string) => Promise<Blob>;
@@ -502,6 +517,7 @@ export interface Api {
     },
   ) => Promise<FreeAddresses>;
   haRules: () => Promise<HARules>;
+  datacenterFirewall: () => Promise<DatacenterFirewall>;
 }
 
 export const api: Api = {
@@ -532,7 +548,8 @@ export const api: Api = {
     requestAgainst("PATCH", clusterPath(c.namespace, c.name), { body: req, generation: c.generation }),
   plan: (c, req) =>
     requestAgainst("POST", `${clusterPath(c.namespace, c.name)}/plan`, { body: req, generation: c.generation }),
-  remove: (ns, name, confirm) => act("DELETE", clusterPath(ns, name), { confirm }),
+  remove: (ns, name, { confirm, deleteEtcdSnapshots }) =>
+    act("DELETE", clusterPath(ns, name), deleteEtcdSnapshots ? { confirm, deleteEtcdSnapshots } : { confirm }),
   backups: (ns, name) => request("GET", `${clusterPath(ns, name)}/backups`),
   backUp: (ns, name) => request("POST", `${clusterPath(ns, name)}/backups`),
   deleteBackup: (ns, name, { backup, confirm }) =>
@@ -546,6 +563,9 @@ export const api: Api = {
   etcdSnapshots: (ns, name) => request("GET", `${clusterPath(ns, name)}/etcd-snapshots`),
   podSecurityCheck: (ns, name) => request("GET", `${clusterPath(ns, name)}/pod-security-check`),
   takeEtcdSnapshot: (ns, name) => act("POST", `${clusterPath(ns, name)}/etcd-snapshots`),
+  removedClusters: (ns) => request("GET", `/api/removed-etcd-snapshots/${encodeURIComponent(ns)}`),
+  deleteRemoved: (ns, name, confirm) =>
+    act("DELETE", `/api/removed-etcd-snapshots/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`, { confirm }),
   defragmentEtcd: (ns, name) => act("POST", `${clusterPath(ns, name)}/etcd-defrag`),
   etcdRestorePlan: (ns, name, snapshot) => request("GET", `${etcdSnapshotURL(ns, name, snapshot)}/restore-plan`),
   restoreEtcd: (ns, name, req) => act("POST", `${clusterPath(ns, name)}/etcd-restores`, req),
@@ -559,6 +579,8 @@ export const api: Api = {
   setupStatus: () => request("GET", "/api/setup"),
   setup: (settings, passphrase) => request("POST", "/api/setup", { settings, passphrase }),
   setupCheck: (settings) => request("POST", "/api/setup/check", { settings }),
+  siteCARoll: (siteCA) => request("POST", "/api/setup/site-ca-roll", { siteCA }),
+  timeZoneCheck: (timeZone) => request("POST", "/api/setup/time-zone", { timeZone }),
 
   health: (ns, name) => request("GET", `${clusterPath(ns, name)}/health`),
   upgradeChecks: (ns, name, version) =>
@@ -605,7 +627,8 @@ export const api: Api = {
   notifications: () => request("GET", "/api/notifications"),
   testNotifications: () => request("POST", "/api/notifications/test"),
   credential: (name, passphrase) => download("POST", "/api/setup/credential", { name, passphrase }),
-  removeManagement: (passphrase) => request("POST", "/api/setup/remove", { passphrase, confirm: "remove" }),
+  removeManagement: (passphrase, removeBackups) =>
+    request("POST", "/api/setup/remove", { passphrase, confirm: "remove", removeBackups }),
   takeOverManagement: (passphrase) => act("POST", "/api/setup/take-over", { passphrase }),
   managementHealth: () => request("GET", "/api/setup/health"),
   rebootReady: () => request("GET", "/api/appliance/reboot-ready"),
@@ -618,6 +641,7 @@ export const api: Api = {
     request("POST", `/api/appliance/etcd-backups/snapshots/${encodeURIComponent(snapshot)}/restore`, { passphrase }),
   recreateManagement: (snapshot, passphrase) =>
     request("POST", `/api/appliance/etcd-backups/snapshots/${encodeURIComponent(snapshot)}/recreate`, { passphrase }),
+  recoverManagement: (passphrase) => request("POST", "/api/appliance/etcd-backups/recover", { passphrase }),
   dismissBackupWarning: () => request("POST", "/api/appliance/etcd-backups/warning/dismissal"),
   exportManagement: (passphrase, exportPassphrase) =>
     download("POST", "/api/appliance/export", { passphrase, exportPassphrase }),
@@ -655,6 +679,7 @@ export const api: Api = {
   freeAddresses: (node, bridge, req) =>
     request("POST", `/api/proxmox/nodes/${encodeURIComponent(node)}/bridges/${encodeURIComponent(bridge)}/free`, req),
   haRules: () => request("GET", "/api/proxmox/ha-rules"),
+  datacenterFirewall: () => request("GET", "/api/proxmox/datacenter-firewall"),
 };
 
 /** dnsOf reads how a node resolves names. A node whose DNS cannot be read offers none. */

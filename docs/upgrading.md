@@ -6,7 +6,7 @@ Kubehenge itself, the management cluster and the workload clusters are upgraded 
 2. **The management cluster** is Talos, Kubernetes, Cluster API and its providers, and Kubehenge's ClusterClasses and controller. Applying it again moves them to the versions the new release carries.
 3. **Workload clusters** upgrade Kubernetes by hand or automatically inside an upgrade window. Their nodes' operating system moves to each week's build of the VM templates inside the same window.
 
-Before 1.0.0, a minor release may change behaviour. Read its entry in the [changelog](changelog.md) first.
+Before 1.0.0, any release may change behaviour, a patch release included. Read its entry in the [changelog](changelog.md) first.
 
 ## Kubehenge
 
@@ -214,7 +214,7 @@ Kubehenge reads both as the cluster's health identity, which may read `/metrics`
 | Days of the month | `window.monthDays` | Such as `1, 15`. A day listed here or in Days counts. Every day when both are empty. |
 | From | `window.start` | When the window opens, `HH:MM`. `02:00` by default. |
 | Duration (hours) | `window.durationMinutes` | How long it stays open, 30 minutes to 24 hours in half hours. Four hours by default. A window may run past midnight. |
-| Time zone | `window.timeZone` | An IANA time zone, such as `Europe/Berlin`. The variable defaults to `UTC`. Switching automatic upgrades on in the dialog, or in the create wizard, starts from the browser's zone. |
+| Time zone | `window.timeZone` | An IANA time zone, such as `Europe/Berlin`. Without one the window opens in the site time zone, else `UTC`. Switching automatic upgrades on in the dialog, or in the create wizard, starts from the site time zone, else the browser's. |
 
 #### When it starts
 
@@ -226,6 +226,7 @@ Kubehenge's controller looks at every cluster every five minutes. It starts an u
 - one step at a time, the next once the cluster is settled again.
   - `patch` mode steps to the newest release of the cluster's minor version.
   - `minor` mode steps to the newest release of the next minor version once the distribution's stable release has reached it, otherwise as `patch` does.
+    - Where Rancher or the Talos release does not run the next minor version, the cluster keeps taking its own patch releases. It gets the condition `AutoUpgradeSkipped` ([troubleshooting.md](troubleshooting.md#automatic-upgrade-skipped)).
 
 Cluster API then rolls the nodes as for any upgrade. A rollout that has started finishes even if the window closes. The last automatic upgrade shows in the cluster's **Summary** as **Last automatic upgrade**, recorded on the Cluster in the annotation `kubehenge.dev/auto-upgraded`.
 
@@ -327,3 +328,55 @@ A rollout, a node image refresh and the replacement of an unhealthy node each re
 A timeout of 0 keeps waiting for ever, for single-replica workloads that must not go down. The rollout then stays on that machine until the pod or the volume lets go.
 
 Set them per cluster and per pool with **Timeouts…** under **Machines**, with `kubehenge cluster timeouts`, or as `deletion` in the Cluster ([clusters.md](clusters.md#pools)). Talos nodes upgraded in place use the drain timeout too, before their reboot. At the timeout the node reboots with the pods left, as a removed machine is deleted ([clusters.md](clusters.md#talos-upgrades)).
+
+## Proxmox VE
+
+### Upgrading Proxmox VE
+
+A Proxmox VE cluster that runs two major versions at once is only a stopover.
+
+- **Finish the upgrade before installing.** The installer checks the node it runs on, and nothing checks the others.
+- **Upgrade the nodes one at a time.**
+  - While the major versions differ, new VMs go to the oldest version's nodes that have room. Newer nodes get them only when none has.
+  - The Health page lists the nodes of each version. An event warns when a cluster has to use a newer node.
+- **Move VMs from old to new only.** A VM started on a newer node gets a machine version an older node cannot run.
+- **HA rules wait.** Proxmox VE refuses them until every node runs 9. Kubehenge writes none meanwhile and sets the condition `HARulesPending` on the cluster, which the interface and `kubectl describe cluster` show.
+
+### Patching Proxmox VE nodes
+
+Patch the nodes one at a time. A control plane needs a minute or two after its node is back before its etcd member has rejoined. Two members down at once stop a cluster.
+
+1. Run `kubehenge appliance ready-for-reboot --node <node>`.
+2. Reboot the node.
+3. Run `kubehenge appliance ready-for-reboot` without `--node` until it exits 0.
+4. Do the next node.
+
+#### Reading the answer
+
+Without `--node`, the command exits 0 only when every etcd member of the management cluster and of every cluster is healthy. With `--node`, it exits 0 when stopping that node's guests leaves every etcd a majority of healthy members. Members already down count as gone. A cluster that is degraded but has no member on the node does not hold it back. Otherwise the command prints the first blocker in one line, with the cluster, the member and the node.
+
+**Administration, Health** shows the answer for each node under **Ready for reboot**, and names a degraded cluster that holds no node back. **etcd** there counts the management cluster's healthy members. A record the controller has not renewed for three minutes blocks every node.
+
+#### Start order
+
+The management VMs start first after a node boots. They carry `startup: order=1,up=90`, so the next guest waits 90 seconds for their etcd members.
+
+## The appliance's certificate
+
+The interface warns administrators 30 days before its certificate runs out. Renew it in the shell of the appliance's node, with the installer of the appliance's release or a newer one:
+
+```sh
+sh install.sh --certificate --ctid 105
+```
+
+The same command makes a new certificate after the appliance's address changed. `--name kubehenge.example.org` gives the appliance a DNS name. `--cert <file> --key <file>` installs a certificate of your own.
+
+It restarts the interface and the shared Headlamp, then prints the new fingerprint. It does not restart while the management cluster is being applied or removed or a VM template is being built. Run it again once that has finished.
+
+`--upgrade` renews a certificate the installer made once it has less than 60 days left. It only warns about a certificate of your own.
+
+### Names and addresses
+
+A renewal keeps a name given before unless `--name` gives another, or `--no-name` drops it for the appliance's address again. It keeps a name from a certificate this cluster's CA signed. It keeps any other name only where this node's DNS resolves it to the appliance's address. Otherwise it drops the name and says so, unless `--name` names it. The address is the one the container's configuration gives it, or with DHCP the one the container reports.
+
+After a new name or address, it points this node's Kubernetes entry ([install.md](install.md#the-proxmox-ve-interface-entry)) at it and prints the command for the other nodes. Update the redirect URLs registered for OpenID realms (`https://<name>/api/openid/callback`) and for the shared Headlamp (`https://<name>:8443/oidc-callback`).

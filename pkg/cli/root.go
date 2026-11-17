@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -31,12 +32,25 @@ func NewRoot() *cobra.Command {
 
 	root.AddCommand(newTemplateCommand(&conn), newControllerCommand(&conn), newServeCommand(&conn),
 		newUpdateCommand(), newReleaseCommand(), newWaitCommand(), newManifestsCommand(), newEtcdSnapshotCommand(),
-		newApplianceCommand(), newDiagnoseCommand(), newTokenJobCommand(&conn), newCSIProxyCommand(&conn), newClusterCommand(&conn), newChartsCommand(), newInstallCommand())
+		newApplianceCommand(), newDiagnoseCommand(), newTokenJobCommand(&conn), newCSIProxyCommand(&conn), newBackupStoreCommand(), newClusterCommand(&conn), newChartsCommand(), newInstallCommand())
+	hideInternalCommands(root)
 	// Cobra adds its completion command only once it executes. Added here, it refuses unknown
 	// commands as the other groups do.
 	root.InitDefaultCompletionCmd()
 	refuseUnknownCommands(root)
 	return root
+}
+
+// internalCommands are the commands Kubehenge's own pods, units and tests start. No administrator
+// runs them, so the help leaves them out. They still run, and "kubehenge <name> --help" still works.
+var internalCommands = []string{"controller", "csi-proxy", "manifests", "update", "wait", "backup-store"}
+
+func hideInternalCommands(root *cobra.Command) {
+	for _, sub := range root.Commands() {
+		if slices.Contains(internalCommands, sub.Name()) {
+			sub.Hidden = true
+		}
+	}
 }
 
 // proxmoxFlags adds the flags of the commands that reach the Proxmox VE API.

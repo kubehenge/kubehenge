@@ -222,7 +222,7 @@ describe("health page", () => {
       }),
     ).toHaveAttribute("href", "#health-nodes");
     expect(tiles.getByRole("link", { name: /Node pressure\s*1 of 2 nodes/u })).toBeInTheDocument();
-    expect(tiles.getByRole("link", { name: /Pods not well\s*1/u })).toHaveAttribute("href", "#health-pods");
+    expect(tiles.getByRole("link", { name: /Unhealthy pods\s*1/u })).toHaveAttribute("href", "#health-pods");
     expect(tiles.getByRole("link", { name: /Add-ons\s*1 of 2 deployed/u })).toHaveAttribute("href", "#health-addons");
     expect(screen.getByRole("link", { name: "Pod shop/api-7d9f: CrashLoopBackOff" })).toHaveAttribute(
       "href",
@@ -272,7 +272,7 @@ describe("health page", () => {
     await expect(screen.findByText("The cluster's API server is not up yet.")).resolves.toBeInTheDocument();
     expect(
       within(screen.getByRole("list", { name: "At a glance" })).getByRole("link", {
-        name: /Pods not well\s*Not read/u,
+        name: /Unhealthy pods\s*Not read/u,
       }),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Logs" })).not.toBeInTheDocument();
@@ -526,7 +526,7 @@ describe("health page", () => {
     render(<HealthView cluster={cluster} headlamp={undefined} />);
 
     const glance = within(await screen.findByRole("list", { name: "At a glance" }));
-    for (const tile of ["Control plane", "Workers", "Node pressure", "Pods not well"]) {
+    for (const tile of ["Control plane", "Workers", "Node pressure", "Unhealthy pods"]) {
       expect(
         glance.getByRole("link", {
           name: new RegExp(`${tile}\\s*Not read`, "u"),

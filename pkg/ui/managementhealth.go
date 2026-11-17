@@ -37,6 +37,8 @@ type managementHealthView struct {
 	Unowned *provisioner.UnownedVMs `json:"unowned,omitempty"`
 	// BackupWarning stands while the management cluster's etcd is not backed up.
 	BackupWarning *appliance.EtcdBackupWarning `json:"backupWarning,omitempty"`
+	// Backups is where the management backups are, when the last ran, and why one failed.
+	Backups *appliance.BackupSummary `json:"backups,omitempty"`
 }
 
 type etcdMembersView struct {
@@ -82,7 +84,11 @@ func (s *Server) managementHealth(w http.ResponseWriter, r *http.Request, u user
 		v.Unowned = s.unownedVMs(ctx, kube)
 	}
 	if s.Appliance != nil {
-		v.BackupWarning = s.Appliance.EtcdBackups().Warning
+		st := s.Appliance.EtcdBackups()
+		v.BackupWarning = st.Warning
+		if sum := st.Summary(); len(sum.Where) > 0 {
+			v.Backups = sum
+		}
 	}
 	writeJSON(w, http.StatusOK, v)
 }

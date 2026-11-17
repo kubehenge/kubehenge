@@ -92,6 +92,9 @@ func checkEtcdUpload(c *clusterv1.Cluster, s *EtcdSnapshots) error {
 	if !s.Enabled {
 		return errors.New("etcdSnapshots: distributionUpload needs etcd snapshots switched on")
 	}
+	if s.Target == VolumeTarget {
+		return errors.New("etcdSnapshots: distributionUpload needs a target: the servers upload to a bucket, never to the backup volume")
+	}
 	return nil
 }
 

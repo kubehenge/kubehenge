@@ -712,8 +712,7 @@ button.go {
   color: var(--error);
 }
 
-.runs-stalled h3,
-.runs-stalled .run-error {
+.runs-stalled h3 {
   color: var(--warning);
 }
 
@@ -826,14 +825,13 @@ button.go {
     overflow-x: auto;
   }
 
-  .topbar > *,
-  .views a {
+  .topbar > * {
     flex-shrink: 0;
   }
 
+  /* Every view stays in sight: a phone's width wraps the tabs to a second row, never cuts them. */
   .views {
-    scrollbar-width: none;
-    overflow-x: auto;
+    flex-wrap: wrap;
   }
 
   .views kbd {
@@ -1154,6 +1152,12 @@ button.go {
 
 .staged-effect {
   color: var(--dim);
+}
+
+.staged-lines {
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
 .staged-value {
@@ -1493,6 +1497,7 @@ h4.subsection {
 
 .host-head {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: baseline;
   justify-content: space-between;
@@ -1500,8 +1505,11 @@ h4.subsection {
   margin-block-end: 6px;
 }
 
+/* The count wraps below a long name's tile before the name is cut, so an offline node stays readable. */
 .host-name {
   overflow: hidden;
+
+  max-inline-size: 100%;
 
   font-family: var(--mono);
   font-weight: 600;
@@ -1521,6 +1529,21 @@ h4.subsection {
 
 .host-offline .host-count {
   color: var(--error);
+}
+
+.host-unreachable {
+  border-color: var(--warning);
+}
+
+.host-unreachable .host-count {
+  color: var(--warning);
+}
+
+.host-fault {
+  margin-block: 0 6px;
+  font-size: 12px;
+  color: var(--dim);
+  overflow-wrap: anywhere;
 }
 
 .host-machines {
@@ -2084,6 +2107,19 @@ fieldset.choices .check {
   margin-block-start: 14px;
 }
 
+/* Apply stays in reach of a form that scrolls through every section. */
+.actions-sticky {
+  position: sticky;
+
+  /* The page's own bottom padding is 40px, which the bar covers. */
+  inset-block-end: -40px;
+
+  padding-block: 10px;
+  border-block-start: 1px solid var(--line);
+
+  background: var(--surface);
+}
+
 /* A saved secret's state beside the buttons that change it, in the field's own column. */
 .secret-state {
   display: flex;
@@ -2557,6 +2593,13 @@ fieldset.choices .check {
   margin: 16px 0 0;
   padding-block-start: 12px;
   border-block-start: 1px solid var(--line);
+}
+
+.accept {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-block: 12px;
 }
 
 .preflight > div {
@@ -3056,6 +3099,7 @@ form.box > *,
 
   font-weight: 600;
   color: var(--dim);
+  text-decoration: none;
 
   background: none;
 }
@@ -3141,9 +3185,11 @@ details.advanced > summary {
   background: var(--surface-2);
 }
 
+/* Dark enough, and blurred, that the page behind reads as under the dialog in both colour schemes. */
 .dialog::backdrop,
 .palette::backdrop {
-  background: rgb(0 0 0 / 40%);
+  background: rgb(0 0 0 / 65%);
+  backdrop-filter: blur(3px);
 }
 
 .dialog-title {

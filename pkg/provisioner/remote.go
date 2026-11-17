@@ -2,7 +2,10 @@ package provisioner
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"sync"
 	"time"
 
@@ -17,7 +20,10 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/remotecommand"
+	"k8s.io/streaming/pkg/httpstream"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -111,6 +117,41 @@ func (rs *Remotes) Client(ctx context.Context, cluster *clusterv1.Cluster) (clie
 		return nil, found, err
 	}
 	return r.client, true, nil
+}
+
+// Attach streams stdin to a container of a pod in a workload cluster, as `kubectl attach -i` does,
+// over WebSocket where the API server speaks it and SPDY where not. It returns once the stream is
+// sent and the container closed its side.
+func (rs *Remotes) Attach(ctx context.Context, cluster *clusterv1.Cluster, namespace, pod, container string, stdin io.Reader) error {
+	r, found, err := rs.get(ctx, cluster)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errors.New("the cluster has no kubeconfig yet")
+	}
+	cs, err := kubernetes.NewForConfig(r.config)
+	if err != nil {
+		return fmt.Errorf("a client for the cluster: %w", err)
+	}
+	u := cs.CoreV1().RESTClient().Post().Resource("pods").Namespace(namespace).Name(pod).SubResource("attach").
+		VersionedParams(&corev1.PodAttachOptions{Container: container, Stdin: true}, scheme.ParameterCodec).URL()
+	ws, err := remotecommand.NewWebSocketExecutor(r.config, http.MethodGet, u.String())
+	if err != nil {
+		return fmt.Errorf("attaching to pod %s: %w", pod, err)
+	}
+	spdyExec, err := remotecommand.NewSPDYExecutor(r.config, http.MethodPost, u)
+	if err != nil {
+		return fmt.Errorf("attaching to pod %s: %w", pod, err)
+	}
+	exec, err := remotecommand.NewFallbackExecutor(ws, spdyExec, httpstream.IsUpgradeFailure)
+	if err != nil {
+		return fmt.Errorf("attaching to pod %s: %w", pod, err)
+	}
+	if err := exec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdin: stdin}); err != nil {
+		return fmt.Errorf("streaming to pod %s: %w", pod, err)
+	}
+	return nil
 }
 
 // get returns the cluster's client and its configuration, and false until Cluster API has made its

@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"golang.org/x/net/http/httpproxy"
+
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
 // Limits on what the proxy setting may hold, so that it stays a setting and not a file store.
@@ -87,17 +89,6 @@ func (p *Proxy) FullURL() string {
 	return u.String()
 }
 
-// RedactURL is a proxy URL as it may be shown or logged: the password hidden. An address that does
-// not parse is hidden whole, since a parse failure says nothing about where the password is.
-func RedactURL(raw string) string {
-	u, err := url.Parse(raw)
-	// Without a scheme, "user:pass@host" parses as an opaque URL whose password Redacted cannot see.
-	if err != nil || (u.User == nil && strings.Contains(raw, "@")) {
-		return "(unreadable address)"
-	}
-	return u.Redacted()
-}
-
 // Redacted is the setting as the interface may show it back.
 func (p *Proxy) Redacted() *Proxy {
 	if p == nil {
@@ -142,7 +133,8 @@ func (p *Proxy) Secrets() []string {
 }
 
 // check adds what is wrong with the proxy, in the words of the setup page's fields. No message
-// carries the address, which may hold a password.
+// carries the address, which may hold a password. An authority that passes is rewritten as its
+// certificates alone.
 func checkProxySetting(p *Proxy, pr *problems) {
 	if p == nil {
 		return
@@ -167,13 +159,10 @@ func checkProxySetting(p *Proxy, pr *problems) {
 	}
 	checkProxyExceptions(p, pr)
 	if p.CABundle != "" {
-		switch {
-		case len(p.CABundle) > maxProxyCABundle:
-			pr.addf("Proxy certificate authority: at most %d KiB", maxProxyCABundle/kibibyte)
-		case strings.Contains(p.CABundle, "PRIVATE KEY"):
-			pr.addf("Proxy certificate authority: certificates only, no private key")
-		case !x509.NewCertPool().AppendCertsFromPEM([]byte(p.CABundle)):
-			pr.addf("Proxy certificate authority: holds no PEM certificate")
+		if plain, err := provisioner.PlainAuthorityBundle(p.CABundle, maxProxyCABundle); err != nil {
+			pr.addf("Proxy certificate authority: %s", err)
+		} else {
+			p.CABundle = plain
 		}
 	}
 }
@@ -321,6 +310,9 @@ func (t *SavedTransport) current() (http.RoundTripper, error) {
 	if saved != nil {
 		if err = saved.ReleaseMirror.Mirror().Trust(transport); err != nil {
 			return nil, fmt.Errorf("the saved release mirror: %w", err)
+		}
+		if err = trustSiteCA(transport, saved.SiteCA); err != nil {
+			return nil, fmt.Errorf("the saved site CA: %w", err)
 		}
 	}
 	t.rt = transport

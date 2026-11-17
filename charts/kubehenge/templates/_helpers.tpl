@@ -258,6 +258,25 @@ node's own memory with every CNI the class offers, so that a cluster of the defa
       {{- with .clusters.storages }}
       enum: {{ toJson . }}
       {{- end }}
+- name: vmIDRange
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      required: [start, end]
+      description: The VM IDs the cluster's VMs take, both ends included. A new cluster that sets none takes the site's, else Proxmox VE's next free ID.
+      properties:
+        start:
+          type: integer
+          minimum: 100
+          maximum: 999999999
+        end:
+          type: integer
+          minimum: 100
+          maximum: 999999999
+      x-kubernetes-validations:
+        - rule: self.start <= self.end
+          message: The range starts above its end.
 - name: allowedNodes
   required: false
   schema:
@@ -451,10 +470,40 @@ kubehenge.dev/addon-cpu: '{"headlamp":10,"monitoring":300,"logs":75,"backups":70
 
 {{/*
 The S3 stores an administrator set for backups, which a cluster's backups variable names one of:
-the interface offers them and the controller reads them here.
+the interface offers them and the controller reads them here. The site's default time zone and
+whether it has a site CA ride along, for the interface to show.
 */}}
 {{- define "kubehenge.backupTargets" -}}
-kubehenge.dev/backup-targets: {{ .Values.backupTargets | toJson | quote }}
+{{- $targets := list -}}
+{{- range .Values.backupTargets -}}
+{{- $target := deepCopy . -}}
+{{- if and .endpoint $.Values.siteCA (not .caCertificate) -}}
+{{- $_ := set $target "caCertificate" $.Values.siteCA -}}
+{{- end -}}
+{{- $targets = append $targets $target -}}
+{{- end -}}
+kubehenge.dev/backup-targets: {{ $targets | toJson | quote }}
+{{- if .Values.timeZone }}
+kubehenge.dev/time-zone: {{ .Values.timeZone | quote }}
+{{- end }}
+{{- if .Values.siteCA }}
+kubehenge.dev/site-ca: "set"
+{{- end }}
+{{- if .Values.vmIDRange }}
+kubehenge.dev/vm-id-range: {{ include "kubehenge.vmIDRange" . | quote }}
+{{- end }}
+{{- end -}}
+
+{{/*
+The site's VM ID range as start-end. Helm reads the numbers of a values file as floats, so they go
+through int, or 1000000 prints as 1e+06.
+*/}}
+{{- define "kubehenge.vmIDRange" -}}
+{{- $r := .Values.vmIDRange -}}
+{{- if gt (int64 $r.start) (int64 $r.end) -}}
+{{- fail (printf "vmIDRange starts at %d, above its end %d" (int64 $r.start) (int64 $r.end)) -}}
+{{- end -}}
+{{- printf "%d-%d" (int64 $r.start) (int64 $r.end) -}}
 {{- end -}}
 
 {{/*
@@ -764,8 +813,7 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           description: When to back up, as a cron expression of five fields or a descriptor such as @weekly.
         timeZone:
           type: string
-          default: UTC
-          description: IANA time zone the schedule is read in, such as Europe/Berlin.
+          description: IANA time zone the schedule is read in, such as Europe/Berlin. Without one, the site time zone, else UTC.
         retentionDays:
           type: integer
           minimum: 1
@@ -809,25 +857,28 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
   schema:
     openAPIV3Schema:
       type: object
+      default:
+        enabled: true
       description: >-
         Snapshots of the cluster's etcd, which holds every object of the cluster but its volumes'
-        data, on a schedule to one of the S3 targets an administrator set, beside the cluster's
-        Velero backups in an etcd folder of its own. Kubehenge's controller takes each snapshot
-        through the cluster's API server with a client certificate it signs for itself, encrypts
-        it with age to a key of the cluster's own in the <cluster>-backup-keys Secret, and stores
-        it with the credential typed into the interface for the cluster, or else the one for every
+        data, on a schedule. They go to one of the S3 targets an administrator set, beside the
+        cluster's Velero backups in an etcd folder of its own, or without a target to the
+        management cluster's backup volume. Kubehenge's controller takes each snapshot through the
+        cluster's API server with a client certificate it signs for itself, encrypts it with age to
+        a key of the cluster's own in the <cluster>-backup-keys Secret, and stores it, in a target
+        with the credential typed into the interface for the cluster, or else the one for every
         cluster; no key or credential enters the cluster. Restoring one brings back the cluster's
         objects as they were, for a cluster that lost its etcd quorum or had its objects deleted
         or damaged.
       properties:
         enabled:
           type: boolean
-          default: false
+          default: true
         target:
           type: string
           minLength: 1
           maxLength: 63
-          description: The administrator's target to store the snapshots in, by name.
+          description: The administrator's target to store the snapshots in, by name. Without one they go to the management cluster's backup volume.
         schedule:
           type: string
           minLength: 1
@@ -836,8 +887,7 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           description: When to take a snapshot, as a cron expression of five fields or a descriptor such as @daily.
         timeZone:
           type: string
-          default: UTC
-          description: IANA time zone the schedule is read in, such as Europe/Berlin.
+          description: IANA time zone the schedule is read in, such as Europe/Berlin. Without one, the site time zone, else UTC.
         keep:
           type: integer
           minimum: 1
@@ -857,8 +907,8 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
             target. Switching it, or changing the schedule or keep while it is on, replaces the
             control-plane machines.
       x-kubernetes-validations:
-        - rule: "!self.enabled || has(self.target)"
-          message: etcd snapshots need a target.
+        - rule: "!has(self.distributionUpload) || !self.distributionUpload || has(self.target)"
+          message: The distribution's own upload needs a target, as the servers upload to a bucket.
         - rule: "!has(self.distributionUpload) || !self.distributionUpload || self.enabled"
           message: The distribution's own upload takes the target, schedule and keep of etcd snapshots, which are off.
 - name: podSecurity
@@ -1476,15 +1526,63 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
       maxItems: 16
       uniqueItems: true
       description: >-
-        Proxmox VE security groups whose rules police the nodes' traffic, in order. They turn on the
-        firewall of each node's VM and network interface. Inbound traffic no rule accepts is dropped,
-        so the groups must accept the cluster's own traffic. Unset, the firewall is left alone. A
-        change replaces the nodes.
+        Proxmox VE security groups whose rules police the nodes' traffic, in order, after the
+        cluster's own traffic and before the serving ports, so a group can drop or narrow those.
+        They need the firewall on. A change replaces the nodes.
       items:
         type: string
         minLength: 2
         maxLength: 18
         pattern: "^[A-Za-z][A-Za-z0-9_-]+$"
+- name: firewall
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: object
+      default:
+        enabled: true
+      description: >-
+        The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound
+        traffic except the cluster's own, the management side's, what the security groups let in,
+        the serving ports and the ports listed here. It acts only while Proxmox VE's datacenter
+        firewall is on. A change replaces the nodes.
+      properties:
+        enabled:
+          type: boolean
+          default: true
+        servingPorts:
+          type: boolean
+          default: true
+          description: >-
+            Whether the nodes accept the Kubernetes API (6443), the Talos API (50000, Talos only),
+            ingress (80 and 443), the load-balancer addresses, the NodePorts (30000 to 32767) and
+            ICMP echo from anywhere. Off, only the security groups and the ports listed let them in.
+        ports:
+          type: array
+          maxItems: 32
+          description: Further ports the nodes accept from anywhere.
+          items:
+            type: object
+            properties:
+              protocol:
+                type: string
+                enum: [tcp, udp]
+              port:
+                type: integer
+                minimum: 1
+                maximum: 65535
+              endPort:
+                type: integer
+                minimum: 1
+                maximum: 65535
+                description: The last port of a range from port.
+            required: [protocol, port]
+            x-kubernetes-validations:
+              - rule: "!has(self.endPort) || self.endPort > self.port"
+                message: A range ends above its first port.
+      x-kubernetes-validations:
+        - rule: "!has(self.ports) || !has(self.enabled) || self.enabled"
+          message: Ports need the firewall on.
 - name: egressProxy
   required: false
   schema:
@@ -1556,8 +1654,16 @@ root context: the default is the chart's clusterOIDC.
         ServiceAccount tokens. A token's audience has to be the provider's clientID. Headlamp and
         kubectl sign in with the first one; tokens keep working beside it.
       {{- with .Values.clusterOIDC }}
+      {{- $providers := list }}
+      {{- range . }}
+      {{- $provider := deepCopy . }}
+      {{- if and $.Values.siteCA (not .certificateAuthority) }}
+      {{- $_ := set $provider "certificateAuthority" $.Values.siteCA }}
+      {{- end }}
+      {{- $providers = append $providers $provider }}
+      {{- end }}
       default:
-        {{- toYaml . | nindent 8 }}
+        {{- toYaml $providers | nindent 8 }}
       {{- end }}
       items:
         type: object
@@ -2364,8 +2470,7 @@ reads it.
               default: 240
             timeZone:
               type: string
-              default: UTC
-              description: IANA time zone of start, such as Europe/Berlin.
+              description: IANA time zone of start, such as Europe/Berlin. Without one, the site time zone, else UTC.
 {{- end -}}
 
 {{/*
@@ -2506,16 +2611,23 @@ Call with the root context.
               {{- .Files.Get "files/proxmox-network.tpl" | nindent 14 }}
 # Cluster API copies the machine template's annotations onto each ProxmoxMachine, where Kubehenge's
 # capmox build reads them (scripts/capmox-patches): capmox has no firewall field, and a field of its
-# own would be pruned by the CRDs of capmox's release. The groups are part of the machine, so a change
-# replaces the nodes. capmox keeps each VM's IPSet, which the firewall accepts everything from ahead
-# of the groups, at the cluster's own addresses: the control-plane endpoint, the node addresses and
+# own would be pruned by the CRDs of capmox's release. The groups and the ports the firewall serves
+# from anywhere are part of the machine, so a change replaces the nodes. capmox writes each VM's
+# rules before it first starts, in order: everything from the VM's IPSet kubehenge, the groups,
+# everything to its IPSet kubehenge-lb, then each port. So a group can drop or narrow a serving port.
+# The Talos class also serves Talos's API, which the chart writes in at TALOS_PORTS.
+# Inbound traffic no rule accepts is dropped. The ports annotation, even empty, turns the firewall
+# on. Rules without an address match both families, and ICMP echo has a rule per family. capmox keeps the IPSet
+# kubehenge at the cluster's own addresses: the control-plane endpoint, the node addresses and
 # the pods (which reach other nodes unencapsulated with Cilium's native routing or Calico's BGP). That
 # keeps every port and protocol a distribution or CNI uses (VXLAN, Geneve, BGP, WireGuard, etcd, the
-# kubelet) open between them without a port list. The controller's annotation on the ProxmoxCluster
-# adds the management cluster's nodes and the appliance. capmox follows a change of the
-# ProxmoxCluster on the running VMs, so a new address replaces no node.
+# kubelet) open between them without a port list. The controller's annotations on the ProxmoxCluster
+# add the management cluster's nodes, the appliance and Cluster Mesh peers to kubehenge, and the
+# load-balancer addresses to kubehenge-lb. capmox follows a change of the ProxmoxCluster on the
+# running VMs, so a new address replaces no node. A cluster without the firewall variable, made
+# before it existed or past the defaulting webhook, keeps the firewall its groups give it.
 - name: proxmox-firewall
-  enabledIf: {{ `{{ if .securityGroups }}true{{ end }}` | quote }}
+  enabledIf: {{ `{{ if or .securityGroups (and .firewall .firewall.enabled) }}true{{ end }}` | quote }}
   definitions:
     - selector:
         apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
@@ -2529,8 +2641,9 @@ Call with the root context.
           path: /spec/template/metadata
           valueFrom:
             template: |
-              annotations:
-                kubehenge.dev/firewall-groups: {{ `{{ join "," .securityGroups | quote }}` }}
+              {{- /* Talos's API is mTLS, as the Kubernetes API is. The class, never a variable, decides it, so no variable's change reaches the firewall. */}}
+              {{- $talosPorts := ternary `"tcp/50000"` "" (hasSuffix "/talos.yaml" .Template.Name) }}
+              {{- .Files.Get "files/proxmox-firewall.tpl" | replace "TALOS_PORTS" $talosPorts | nindent 14 }}
 - name: proxmox-storage
   definitions:
     - selector:
@@ -2545,6 +2658,23 @@ Call with the root context.
           path: /spec/template/spec/storage
           valueFrom:
             variable: storage
+# capmox takes the lowest free ID of the range and fails the machine, with no other ID, when it is
+# full. The ProxmoxMachine's spec is the template's, so a range that changes replaces the nodes.
+- name: proxmox-vm-ids
+  enabledIf: {{ `{{ if .vmIDRange }}true{{ end }}` | quote }}
+  definitions:
+    - selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+        kind: ProxmoxMachineTemplate
+        matchResources:
+          controlPlane: true
+          machineDeploymentClass:
+            names: [worker]
+      jsonPatches:
+        - op: add
+          path: /spec/template/spec/vmIDRange
+          valueFrom:
+            variable: vmIDRange
 {{- range $role, $selector := dict "controlPlane" (dict "controlPlane" true) "worker" (dict "machineDeploymentClass" (dict "names" (list "worker"))) }}
 - name: proxmox-{{ $role | kebabcase }}-size
   definitions:

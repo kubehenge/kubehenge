@@ -20,6 +20,7 @@ import (
 
 	"github.com/kubehenge/kubehenge/pkg/appliance"
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
+	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
 const (
@@ -122,33 +123,11 @@ func (s *Server) recreateManagement(w http.ResponseWriter, r *http.Request, u us
 		return
 	}
 	a := s.Appliance
-	saved := a.SavedSettings()
-	if saved == nil {
-		writeError(w, http.StatusConflict, "there is no management cluster to recreate")
-		return
-	}
-	privileges := slices.Clone(setupPrivileges)
-	if saved.ProxmoxHA {
-		privileges = append(privileges, haPrivilege)
-	}
-	if saved.EtcdRestore {
-		privileges = append(privileges, restorePrivilege)
-	}
-	if !s.require(w, r, u, "/", privileges...) {
-		return
-	}
-	done, ok := s.reservePassphrase(w, u)
+	ticket, done, ok := s.recreationTicket(w, r, u)
 	if !ok {
 		return
 	}
-	// The run needs the whole of a ticket's life, so it gets a new one rather than the session's.
-	ticket, err := s.Accounts.Renew(r.Context(), u.ticket)
-	if err != nil {
-		done(false)
-		s.proxmoxError(w, r, err)
-		return
-	}
-	err = a.RecreateManagement(r.Context(), r.PathValue("name"), req.Passphrase, ticket, s.applied(ticket))
+	err := a.RecreateManagement(r.Context(), r.PathValue("name"), req.Passphrase, ticket, s.applied(ticket))
 	if jobConflict(err) {
 		done(false)
 		writeError(w, http.StatusConflict, err.Error())
@@ -159,6 +138,63 @@ func (s *Server) recreateManagement(w http.ResponseWriter, r *http.Request, u us
 	}
 	s.Log.Warn("management cluster recreation started", "user", u.ticket.Username, "snapshot", r.PathValue("name"))
 	writeJSON(w, http.StatusAccepted, a.Current())
+}
+
+// recreationTicket checks that the user may make the management cluster again and reserves the
+// passphrase's tries, then renews the user's ticket for the run, which needs its whole life.
+func (s *Server) recreationTicket(w http.ResponseWriter, r *http.Request, u user) (*pve.Ticket, func(bool), bool) {
+	saved := s.Appliance.SavedSettings()
+	if saved == nil {
+		writeError(w, http.StatusConflict, "there is no management cluster to recreate")
+		return nil, nil, false
+	}
+	privileges := slices.Clone(setupPrivileges)
+	if saved.ProxmoxHA {
+		privileges = append(privileges, haPrivilege)
+	}
+	if saved.EtcdRestore {
+		privileges = append(privileges, restorePrivilege)
+	}
+	if !s.require(w, r, u, "/", privileges...) {
+		return nil, nil, false
+	}
+	done, ok := s.reservePassphrase(w, u)
+	if !ok {
+		return nil, nil, false
+	}
+	ticket, err := s.Accounts.Renew(r.Context(), u.ticket)
+	if err != nil {
+		done(false)
+		s.proxmoxError(w, r, err)
+		return nil, nil, false
+	}
+	return ticket, done, true
+}
+
+// recoverManagement makes a lost management cluster again from the backup volume, or the
+// appliance's copy where the volume holds none.
+func (s *Server) recoverManagement(w http.ResponseWriter, r *http.Request, u user) {
+	var req struct {
+		Passphrase string `json:"passphrase"`
+	}
+	if !readJSON(w, r, &req) || !s.mayBackUpManagement(w, r, u) {
+		return
+	}
+	ticket, done, ok := s.recreationTicket(w, r, u)
+	if !ok {
+		return
+	}
+	err := s.Appliance.RecoverManagement(req.Passphrase, ticket, s.applied(ticket))
+	if jobConflict(err) {
+		done(false)
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if !checkPassphrase(w, done, err) {
+		return
+	}
+	s.Log.Warn("management cluster recovery from its own backups started", "user", u.ticket.Username)
+	writeJSON(w, http.StatusAccepted, s.Appliance.Current())
 }
 
 // clusterSpec hands out a cluster's spec as the backup target keeps it, to those who may see the

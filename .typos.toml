@@ -4,6 +4,8 @@
 extend-exclude = [
   # Armoured keys and signatures, base64 throughout.
   "*.asc",
+  # A copy of curl's CA bundle, PEM certificates in base64.
+  "pkg/provisioner/testdata/curl-cacert.txt",
   # The Apache License's text, kept word for word.
   "LICENSE",
 ]

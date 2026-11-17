@@ -587,7 +587,7 @@ func (s *Server) deletableBackup(ctx context.Context, w http.ResponseWriter, r *
 	case view.Deleting:
 		why = fmt.Sprintf("backup %s is being deleted already", name)
 	case !veleroFinished(view.Phase):
-		why = fmt.Sprintf("backup %s is still running; delete it once it has finished", name)
+		why = fmt.Sprintf("backup %s is still running. Delete it once it has finished", name)
 	}
 	if why != "" {
 		writeError(w, http.StatusConflict, why)

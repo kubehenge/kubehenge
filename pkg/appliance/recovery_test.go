@@ -3,6 +3,7 @@ package appliance
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -329,14 +330,23 @@ func (f *tracedTalos) Restore(ctx context.Context, admin []byte, nodes []string,
 	return f.fakeManagementTalos.Restore(ctx, admin, nodes, open, log)
 }
 
-// appliesIn lists the applies the fake OpenTofu was asked for, in order.
+// appliesIn lists the applies the fake OpenTofu ran, in order, each by the arguments of the plan it
+// applied, which carry its targets.
 func appliesIn(log string) []string {
 	raw, _ := os.ReadFile(filepath.Clean(log))
-	var out []string
+	var calls [][]string
 	for line := range strings.SplitSeq(string(raw), "\n") {
-		if strings.HasPrefix(line, `{"args":["apply"`) {
-			out = append(out, line)
+		var rec struct {
+			Args []string `json:"args"`
 		}
+		if json.Unmarshal([]byte(line), &rec) == nil && len(rec.Args) > 0 {
+			calls = append(calls, rec.Args)
+		}
+	}
+	plans := appliedPlans(calls)
+	out := make([]string, 0, len(plans))
+	for _, plan := range plans {
+		out = append(out, strings.Join(plan, " "))
 	}
 	return out
 }
@@ -368,8 +378,8 @@ func TestRecreateMakesTheVMsBeforeTheRestoreAndAppliesWholeAfter(t *testing.T) {
 	if j.State != "succeeded" || len(kubeconfig) == 0 {
 		t.Fatalf("recreate %+v, kubeconfig %q", j, kubeconfig)
 	}
-	if len(traced.applies) != 1 || !strings.Contains(traced.applies[0], "-target=proxmox_virtual_environment_vm.node") ||
-		!strings.Contains(traced.applies[0], "-target=module.talos_node_0") {
+	if len(traced.applies) != 1 || !strings.Contains(traced.applies[0], "-target=module.management.proxmox_virtual_environment_vm.node") ||
+		!strings.Contains(traced.applies[0], "-target=module.management.module.talos_node_0") {
 		t.Fatalf("before the restore, applies were %q: only the VMs and nodes belong there", traced.applies)
 	}
 	all := appliesIn(traced.tofuLog)

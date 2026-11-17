@@ -8,12 +8,15 @@ locals {
   # Talos and the node's container runtime pull these only with their publishers' keyless
   # signatures: the Image Factory's builds of a release differ in their bytes, so no digest of its
   # installer stays valid, and Talos's Kubernetes upgrades name the components by tag. Sidero signs
-  # its images with its release service account or a siderolabs.com account; Kubernetes' image
-  # promoter signs everything on registry.k8s.io. A registry mirror has to serve the signatures too.
+  # its images with its release service account or a siderolabs.com account. Kubernetes' image
+  # promoter signs everything on registry.k8s.io with two accounts that only its production jobs
+  # use: krel-trust for the promotion, promoter-summaries for its verification summary. Talos reads
+  # every bundle and pulls once, so accepting both lets one failed bundle fetch not fail the pull.
+  # A registry mirror has to serve the signatures too.
   image_signatures = [
     { image = "factory.talos.dev/*", keyless = { issuer = "https://accounts.google.com", subject = "image-factory-signing@talos-production.iam.gserviceaccount.com" } },
     { image = "ghcr.io/siderolabs/*", keyless = { issuer = "https://accounts.google.com", subjectRegex = "^(releasemgr-svc@talos-production\\.iam\\.gserviceaccount\\.com|[^@]+@siderolabs\\.com)$" } },
-    { image = "registry.k8s.io/*", keyless = { issuer = "https://accounts.google.com", subject = "krel-trust@k8s-releng-prod.iam.gserviceaccount.com" } },
+    { image = "registry.k8s.io/*", keyless = { issuer = "https://accounts.google.com", subjectRegex = "^(krel-trust|promoter-summaries)@k8s-releng-prod\\.iam\\.gserviceaccount\\.com$" } },
   ]
   # The Talos providers' controllers, which only the management cluster runs, come from Kubehenge's
   # forks of them and are pulled only as each fork's release workflow signed them for a version tag,
@@ -30,6 +33,12 @@ locals {
     leader-elect-lease-duration = local.patient_leases.leaderElection.leaseDuration
     leader-elect-renew-deadline = local.patient_leases.leaderElection.renewDeadline
     leader-elect-retry-period   = local.patient_leases.leaderElection.retryPeriod
+  }
+
+  # In milliseconds. The election timeout stays ten heartbeats, as etcd's tuning guide asks.
+  etcd_timing_args = {
+    heartbeat-interval = "500"
+    election-timeout   = "5000"
   }
 }
 
@@ -102,11 +111,18 @@ data "talos_machine_configuration" "node" {
       # The management cluster has no workers: its controllers run on the control plane. With IPv6
       # the kubelet registers one address per family, primary first, picked from the nodes'
       # networks so the VIP is never taken. Talos refuses that setting in .machine.kubelet beside
-      # this document.
+      # this document. The zone label names the Proxmox VE node the VM runs on, which a migration
+      # changes, so Kubehenge alone sets it. The appliance does after each apply, the controller
+      # before each wake of the backup store and on a node still without one. The CSI node plugin
+      # restarts until it is set. Set here, a kubelet start would put back the node the VM was made on. Talos refuses .machine.nodeLabels beside this
+      # document too.
       yamlencode(merge({
         apiVersion = "v1alpha1"
         kind       = "KubeNodeConfig"
         taints     = { "node-role.kubernetes.io/control-plane" = { "$patch" = "delete" } }
+        labels = {
+          "topology.kubernetes.io/region" = local.csi_region
+        }
         }, local.has_ipv6 ? {
         nodeIP = { validSubnets = flatten(local.node_networks) }
       } : {})),
@@ -175,10 +191,16 @@ data "talos_machine_configuration" "node" {
         kind          = "ResolverConfig"
         searchDomains = { domains = var.search_domains }
       })],
-      # With IPv6, etcd advertises a node address of the primary family, never the VIP or an
-      # address of the other family.
-      !local.has_ipv6 ? [] : [yamlencode({
-        cluster = { etcd = { advertisedSubnets = local.node_networks[0] } }
+      # etcd's own timings fit a LAN with SSDs. It fails a request after 5 s plus two election
+      # timeouts, 7 s by default, and storage under load (HDD-backed LVM, NFS, a busy Ceph pool)
+      # holds a sync longer than that. With these it waits 15 s. A dead leader is replaced after 5 s
+      # instead of 1 s. With IPv6, etcd advertises a node address of the primary family, never the
+      # VIP or an address of the other family.
+      [yamlencode({
+        cluster = { etcd = merge(
+          { extraArgs = local.etcd_timing_args },
+          local.has_ipv6 ? { advertisedSubnets = local.node_networks[0] } : {},
+        ) }
       })],
     )),
   ]
@@ -196,6 +218,7 @@ module "talos_node_0" {
   source = "./modules/talos-node"
 
   node                  = local.nodes[0].ip
+  vm_id                 = proxmox_virtual_environment_vm.node[0].id
   client_configuration  = talos_machine_secrets.this.client_configuration
   machine_configuration = data.talos_machine_configuration.node[0].machine_configuration
   image                 = local.talos_image
@@ -211,6 +234,7 @@ module "talos_node_1" {
   count  = length(local.nodes) > 1 ? 1 : 0
 
   node                  = local.nodes[1].ip
+  vm_id                 = proxmox_virtual_environment_vm.node[1].id
   client_configuration  = talos_machine_secrets.this.client_configuration
   machine_configuration = data.talos_machine_configuration.node[1].machine_configuration
   image                 = local.talos_image
@@ -225,6 +249,7 @@ module "talos_node_2" {
   count  = length(local.nodes) > 2 ? 1 : 0
 
   node                  = local.nodes[2].ip
+  vm_id                 = proxmox_virtual_environment_vm.node[2].id
   client_configuration  = talos_machine_secrets.this.client_configuration
   machine_configuration = data.talos_machine_configuration.node[2].machine_configuration
   image                 = local.talos_image
@@ -239,6 +264,7 @@ module "talos_node_3" {
   count  = length(local.nodes) > 3 ? 1 : 0
 
   node                  = local.nodes[3].ip
+  vm_id                 = proxmox_virtual_environment_vm.node[3].id
   client_configuration  = talos_machine_secrets.this.client_configuration
   machine_configuration = data.talos_machine_configuration.node[3].machine_configuration
   image                 = local.talos_image
@@ -253,6 +279,7 @@ module "talos_node_4" {
   count  = length(local.nodes) > 4 ? 1 : 0
 
   node                  = local.nodes[4].ip
+  vm_id                 = proxmox_virtual_environment_vm.node[4].id
   client_configuration  = talos_machine_secrets.this.client_configuration
   machine_configuration = data.talos_machine_configuration.node[4].machine_configuration
   image                 = local.talos_image

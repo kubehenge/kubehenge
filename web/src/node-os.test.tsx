@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { App } from "./App";
 import { fieldProblems, newForm, request, summary, withClass } from "./create-form";
 import { fakeServer } from "./fake-server";
-import { baseTitle, forDistribution, nodeOSKey, nodeOSRef } from "./node-os";
+import { baseTitle, forDistribution, nodeOSKey, nodeOSLabel, nodeOSRef } from "./node-os";
 import type { Cluster, ClusterClass, NodeOS, NodeOSChoice } from "./types";
 
 const alma: NodeOS = {
@@ -102,6 +102,16 @@ const rke2Cluster: Cluster = {
   nodeOS: alma,
 };
 
+describe("node OS options", () => {
+  it("name a state in brackets, never a sentence", () => {
+    expect(nodeOSLabel({ ...alma, unreleased: "openSUSE has not released Leap 16.1 yet" })).toBe(
+      "AlmaLinux 10 (not released)",
+    );
+    expect(nodeOSLabel({ ...alma, noTemplate: "there is no template" })).toBe("AlmaLinux 10 (no template yet)");
+    expect(nodeOSLabel(alma)).toBe("AlmaLinux 10");
+  });
+});
+
 describe("node OS keys", () => {
   it("carry FIPS mode", () => {
     expect(nodeOSKey(almaFIPS)).toBe("almalinux-10-fips");
@@ -137,7 +147,7 @@ describe("the node OS", () => {
     expect(nodeOS).toHaveValue("almalinux-10");
     await user.click(screen.getByRole("button", { name: "About Node OS" }));
     expect(screen.getByText("Minimal, from AlmaLinux 10's signed packages, with SELinux enforcing.")).toBeVisible();
-    expect(within(nodeOS).getByRole("option", { name: "openSUSE Leap 16.1: not released yet" })).toBeDisabled();
+    expect(within(nodeOS).getByRole("option", { name: "openSUSE Leap 16.1 (not released)" })).toBeDisabled();
     await waitFor(() => expect(screen.getByLabelText("Kubernetes version")).toHaveValue("v1.37.1"));
 
     await user.selectOptions(nodeOS, "rocky-10");
@@ -194,7 +204,7 @@ describe("the node OS", () => {
     await expect(screen.findByRole("row", { name: /Node OS/u })).resolves.toHaveTextContent("AlmaLinux 10");
     await user.click(screen.getByRole("button", { name: "Edit the node OS" }));
     const dialog = screen.getByRole("dialog", { name: "Edit node OS" });
-    expect(within(dialog).getByText(/replaces every node, one at a time/u)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Replaces every node, one at a time/u)).toBeInTheDocument();
     const choice = (name: RegExp): HTMLElement => within(dialog).getByRole("radio", { name });
     await waitFor(() => expect(choice(/^AlmaLinux 10/u)).toBeChecked());
     expect(choice(/^AlmaLinux 10/u)).toHaveAccessibleName("AlmaLinux 10 (running)");
@@ -204,11 +214,11 @@ describe("the node OS", () => {
     );
     expect(choice(/^openSUSE Leap/u)).toBeDisabled();
     expect(choice(/^openSUSE Leap/u)).toHaveAccessibleDescription("Not released yet.");
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
 
     await user.click(choice(/^Rocky Linux 10/u));
     expect(choice(/^Rocky Linux 10/u)).toHaveAccessibleDescription("Needs Proxmox VE nodes with x86-64-v3 CPUs");
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await expect(within(dialog).findByRole("alert")).resolves.toHaveTextContent(
       /^There is no kubeadm VM template of v1\.36\.5 on Rocky Linux 10 yet; .*Administration page\.$/u,
     );
@@ -291,7 +301,7 @@ describe("the node OS", () => {
     await user.click(await screen.findByRole("button", { name: "Edit the node OS" }));
     const dialog = screen.getByRole("dialog", { name: "Edit node OS" });
     await user.click(await within(dialog).findByRole("radio", { name: "AlmaLinux 10 FIPS" }));
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() =>
       expect(calls.find((c) => c.key === "POST /api/clusters/clusters/web/plan")?.body).toStrictEqual({
         variables: { nodeOS: { family: "almalinux", release: "10", fips: true } },

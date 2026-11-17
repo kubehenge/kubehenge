@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/luthermonson/go-proxmox"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -23,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	addonsv1 "sigs.k8s.io/cluster-api/api/addons/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -37,6 +40,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	"github.com/kubehenge/kubehenge/pkg/backupstore"
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
 	"github.com/kubehenge/kubehenge/pkg/templates"
@@ -69,6 +73,11 @@ const (
 	// firewallSourcesInterval is how soon a new address of the appliance reaches the clusters'
 	// ProxmoxClusters, after the appliance's own check.
 	firewallSourcesInterval = 15 * time.Second
+	// credentialOrphansInterval is how often a credential stored ahead of its cluster is looked at,
+	// and credentialOrphansGrace how long its cluster has to appear: a create request makes the
+	// cluster seconds after the credential.
+	credentialOrphansInterval = time.Minute
+	credentialOrphansGrace    = 10 * time.Minute
 	// certificateWatchInterval is how often the clusters' certificates are looked at, a few reads
 	// each: they are renewed weeks before they run out, and RKE2 and k3s report theirs every half hour.
 	certificateWatchInterval = 5 * time.Minute
@@ -114,7 +123,7 @@ type controllerOptions struct {
 	csiChart          string
 	csiNewestChart    string
 	snapshotChart     string
-	csiProxyImage     string
+	image             string
 	ciliumChart       string
 	calicoChart       string
 	headlampChart     string
@@ -148,6 +157,8 @@ type controllerOptions struct {
 	chartMirrors      []string
 	releaseMirror     provisioner.ReleaseMirror
 	releaseMirrorCA   string
+	siteCAFile        string
+	timeZone          string
 	egressProxy       string
 	egressNoProxy     string
 	podSecurityExempt string
@@ -212,7 +223,7 @@ chart's PodTemplate, the only pod that mounts that token.`,
 	f.StringVar(&o.podSecurityExempt, "pod-security-exempt", "{}", "namespaces exempt from pod security, in Kyverno's policies and the ClusterClasses' Pod Security Admission alike, as a JSON object of lists keyed by what runs there: always, calico, monitoring, logs, backups, istio, metallb, rancher, rancherAgent")
 	f.StringArrayVar(&o.classProviders, "class-providers", nil, "namespaces of the Cluster API providers that only one ClusterClass's clusters use, as <class>=<namespace>,<namespace>. They run only while such a cluster exists (repeatable)")
 	f.BoolVar(&o.offerHARules, "offer-ha-rules", false, "offer Proxmox VE's HA node-affinity rules, their names and nodes only, to those who may create a cluster but not read the rules, through the ConfigMap "+provisioner.HARulesName)
-	f.StringSliceVar(&o.managementAddrs, "management-addresses", nil, "the management cluster's node addresses, which the firewall of every cluster with security groups accepts beside the appliance's (comma-separated)")
+	f.StringSliceVar(&o.managementAddrs, "management-addresses", nil, "the management cluster's node addresses, which the firewall of every firewalled cluster accepts beside the appliance's (comma-separated)")
 	f.StringSliceVar(&o.headlampSignIn, "headlamp-sign-in-namespaces", nil, "the interface's namespaces whose clusters the appliance's shared Headlamp signs users in to as cluster-admin, if they may download the admin kubeconfig (comma-separated). Empty signs nobody in and removes the identities")
 	f.DurationVar(&o.upgradeInterval, "upgrade-interval", defaultUpgradeInterval, "how often clusters are checked for an automatic upgrade due in their window")
 	f.DurationVar(&o.nodeImageSoak, "node-image-soak", provisioner.DefaultNodeImageSoak, "how old a template build must be before clusters move to it, as the template refresh's --soak")
@@ -248,6 +259,8 @@ func (o *controllerOptions) addonFlags(f *pflag.FlagSet) {
 	f.StringArrayVar(&o.chartMirrors, "chart-mirror", nil, "a mirror of a chart repository, as <host>=<address>, such as ghcr.io=oci://registry.example.org/ghcr or charts.jetstack.io=https://charts.example.org/jetstack. It serves the same charts under the same digests (repeatable)")
 	f.StringVar(&o.releaseMirror.URL, "release-mirror", "", "a mirror of the RKE2 and k3s releases, such as https://mirror.example.org/github, which serves them on GitHub's paths beneath it: <mirror>/<repository>/releases/download/<version>/<file> and <mirror>/<repository>/raw/<version>/install.sh. Nodes download from it in place of GitHub, and still install only the pinned files")
 	f.StringVar(&o.releaseMirrorCA, "release-mirror-ca", "", "a PEM file with the authority of a --release-mirror the usual authorities do not sign, which the nodes trust for their download")
+	f.StringVar(&o.siteCAFile, "site-ca", "", "a PEM file with the site CA. Nodes of clusters without their own trustedCAs trust it, and so does an https release mirror without its own authority")
+	f.StringVar(&o.timeZone, "time-zone", provisioner.DefaultTimeZone, "the IANA time zone that schedules without one of their own run in, such as a cluster's etcd snapshots")
 	f.StringVar(&o.egressProxy, "egress-proxy", os.Getenv("HTTPS_PROXY"), "the proxy the add-ons of clusters that set none of their own go through (env HTTPS_PROXY). An address with credentials is not passed on")
 	f.StringVar(&o.egressNoProxy, "egress-no-proxy", os.Getenv("NO_PROXY"), "the exceptions to --egress-proxy, comma-separated (env NO_PROXY)")
 	f.StringVar(&o.certManagerChart, "cert-manager-chart", "", "cert-manager chart, installed with Rancher and with monitoring, as <repository>/<name>:<version>@sha256:<digest>")
@@ -286,9 +299,9 @@ func (o *controllerOptions) addonFlags(f *pflag.FlagSet) {
 // for the CSI plugin's newest release, Sys.Audit on / for the cloud controller manager's HA group
 // labels, and the proxy that copies the volumes of clusters taking volume snapshots.
 func (o *controllerOptions) grantFlags(f *pflag.FlagSet) {
-	f.StringVar(&o.csiProxyImage, "csi-proxy-image", "", "image of the proxy beside the CSI plugin's controller in clusters that take volume snapshots, as <repository>@sha256:<digest>. It runs kubehenge csi-proxy and copies volumes with each cluster's own token. Empty, no cluster takes volume snapshots")
+	f.StringVar(&o.image, "image", "", "Kubehenge's own image, as <repository>@sha256:<digest>. Volume snapshots need it, and so do etcd restores from the backup volume on kubeadm, RKE2 and k3s")
 	f.StringVar(&o.snapshotChart, "snapshot-controller-chart", "", "the volume snapshot controller's chart, with its CRDs and the VolumeSnapshotClass, for clusters that take volume snapshots, as <repository>/<name>:<version>@sha256:<digest>")
-	f.StringVar(&o.settings.SysAuditGroup, "sys-audit-group", "", "Proxmox VE group holding Sys.Audit on /, joined by the user of each cluster that asks for the cloud controller manager's HA group labels. Empty, no cluster joins it")
+	f.StringVar(&o.settings.SysAuditGroup, "sys-audit-group", "", "Proxmox VE group holding Sys.Audit on /, joined by the user of each cluster that asks for the cloud controller manager's HA rule labels. Empty, no cluster joins it")
 	f.StringVar(&o.csiNewestChart, "csi-newest-chart", "", "the CSI plugin's newest release, for clusters whose token holds Datastore.Allocate on their storage, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.settings.DatastoreRole, "datastore-allocate-role", "", "Proxmox VE role holding Datastore.Allocate, given on its storage to each cluster that asks for it. Empty, no cluster holds it")
 	f.StringSliceVar(&o.r.DatastoreAllocate.Management, "management-storages", nil, "storages the management cluster uses, on which no cluster may hold Datastore.Allocate (comma-separated)")
@@ -331,16 +344,15 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	if err != nil {
 		return fmt.Errorf("--proxmox-ca: %w", err)
 	}
-	c, err := pve.Connect(*conn)
+	cloud, err := o.newCloud(conn)
 	if err != nil {
-		return fmt.Errorf("connecting to Proxmox VE: %w", err)
+		return err
 	}
 	rancherMinors, providers, err := o.parseFlags()
 	if err != nil {
 		return err
 	}
 	distributions := &provisioner.Distributions{ClassNamespace: o.r.ClassNamespace, Providers: providers}
-	cloud := &provisioner.Proxmox{Client: c, Settings: o.settings, ProbeTTL: nodeProbeTTL}
 	o.completeReconciler(cloud, provisioner.Endpoint{URL: strings.TrimSuffix(conn.URL, "/"), CA: string(ca), Insecure: conn.Insecure}, rancherMinors)
 
 	logger, err := o.logs.zapLogger()
@@ -362,7 +374,7 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	}
 	remotes := &provisioner.Remotes{Reader: mgr.GetClient()}
 	registrar := &provisioner.Registrar{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Remotes: remotes}
-	if err = o.setUpControllers(mgr, registrar, distributions); err != nil {
+	if err = o.setUpControllers(mgr, registrar, distributions, cloud); err != nil {
 		return err
 	}
 	if err = o.addReclaimer(mgr, conn, cloud, remotes); err != nil {
@@ -371,7 +383,7 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 	if err = o.addPlacement(mgr, extensions, scheme, o.newHooks(mgr, registrar, cloud, rancherMinors), cloud); err != nil {
 		return err
 	}
-	if err = o.addUpgrader(mgr, c, rancherMinors, remotes); err != nil {
+	if err = o.addUpgrader(mgr, cloud.Client, rancherMinors, remotes); err != nil {
 		return err
 	}
 	if err = o.addWatches(mgr, remotes, cloud.Client); err != nil {
@@ -384,6 +396,20 @@ func (o *controllerOptions) run(ctx context.Context, conn *pve.Config) error {
 		return fmt.Errorf("the controller manager: %w", err)
 	}
 	return nil
+}
+
+// newCloud connects to Proxmox VE with the controller's token, and signs clusters' users in there
+// to create their own tokens.
+func (o *controllerOptions) newCloud(conn *pve.Config) (*provisioner.Proxmox, error) {
+	c, err := pve.Connect(*conn)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to Proxmox VE: %w", err)
+	}
+	accounts, err := pve.NewAccounts(*conn)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to Proxmox VE: %w", err)
+	}
+	return &provisioner.Proxmox{Client: c, Accounts: accounts, Settings: o.settings, ProbeTTL: nodeProbeTTL}, nil
 }
 
 // newHooks makes the Runtime SDK hooks, which check a cluster against the same grants and pins as
@@ -407,14 +433,22 @@ func (o *controllerOptions) newHooks(mgr ctrl.Manager, registrar *provisioner.Re
 		DatastoreAllocate: o.r.DatastoreAllocate,
 		SysAuditGroup:     o.r.SysAuditGroup,
 		VolumeSnapshots:   o.r.VolumeSnapshots,
-		Releases: &provisioner.ReleaseChecksums{
-			Pins:   provisioner.DefaultReleasePins(),
-			Store:  &provisioner.PinStore{Reader: mgr.GetAPIReader(), Namespace: o.r.ClassNamespace},
-			Mirror: func() provisioner.ReleaseMirror { return o.releaseMirror },
-		},
-		Client: mgr.GetClient(),
-		Soak:   o.nodeImageSoak,
-		Now:    time.Now,
+		Releases:          o.releaseChecksums(mgr.GetAPIReader()),
+		Client:            mgr.GetClient(),
+		Soak:              o.nodeImageSoak,
+		Now:               time.Now,
+		SiteCA:            func() string { return o.r.SiteCA },
+	}
+}
+
+// releaseChecksums reads the release pins and, from the mirror when one is set, the releases. The
+// mirror's authority is its own, else the site CA.
+func (o *controllerOptions) releaseChecksums(reader client.Reader) *provisioner.ReleaseChecksums {
+	return &provisioner.ReleaseChecksums{
+		Pins:   provisioner.DefaultReleasePins(),
+		Store:  &provisioner.PinStore{Reader: reader, Namespace: o.r.ClassNamespace},
+		Mirror: func() provisioner.ReleaseMirror { return o.releaseMirror },
+		SiteCA: func() string { return o.r.SiteCA },
 	}
 }
 
@@ -573,9 +607,9 @@ func (o *controllerOptions) parseCharts() error {
 		}
 	}
 	var err error
-	if o.csiProxyImage != "" {
-		if o.r.VolumeSnapshots.ProxyImage, err = provisioner.ParseCSIProxyImage(o.csiProxyImage); err != nil {
-			return fmt.Errorf("--csi-proxy-image: %w", err)
+	if o.image != "" {
+		if o.r.VolumeSnapshots.ProxyImage, err = provisioner.ParseCSIProxyImage(o.image); err != nil {
+			return fmt.Errorf("--image: %w", err)
 		}
 	}
 	if o.r.Charts.CalicoImages, err = provisioner.ParseCalicoImages(o.calicoImages); err != nil {
@@ -602,8 +636,9 @@ func (o *controllerOptions) parseMirrors() error {
 	return o.parseReleaseMirror()
 }
 
-// parseReleaseMirror reads the release mirror and its authority, refusing either before a node
-// could fail on it.
+// parseReleaseMirror reads the release mirror, the site CA and the site time zone. It refuses a
+// mirror address a node could not be handed, or a file it cannot read, and leaves the rest to each
+// cluster's report.
 func (o *controllerOptions) parseReleaseMirror() error {
 	if o.releaseMirrorCA != "" {
 		ca, err := os.ReadFile(o.releaseMirrorCA)
@@ -612,8 +647,39 @@ func (o *controllerOptions) parseReleaseMirror() error {
 		}
 		o.releaseMirror.CABundle = string(ca)
 	}
-	if err := o.releaseMirror.Check(time.Now()); err != nil {
+	if o.timeZone != "" {
+		// Schedules stay in UTC. A wrong zone is no reason to stop the controller, which the clusters'
+		// upgrades, snapshots and deletions depend on. Each reconcile reports it on its cluster.
+		if err := provisioner.SetDefaultTimeZone(o.timeZone); err != nil {
+			o.r.SiteTimeZoneProblem = fmt.Sprintf("--time-zone: %v", err)
+		}
+	}
+	if o.siteCAFile != "" {
+		ca, err := os.ReadFile(o.siteCAFile)
+		if err != nil {
+			return fmt.Errorf("--site-ca: %w", err)
+		}
+		// A damaged authority, or one that has run out, is no reason to stop the controller, which the
+		// clusters' upgrades, snapshots and deletions depend on. Each reconcile reports it on its
+		// cluster, and a damaged one reaches no node. A sound one is given as the classes' schemas
+		// take it, whatever is written between its certificates.
+		plain, err := provisioner.NormaliseCertificateBundle(string(ca))
+		if err == nil {
+			err = provisioner.CheckCertificateBundle(plain, time.Time{})
+		}
+		if err != nil {
+			o.r.SiteCAProblem = fmt.Sprintf("--site-ca: the authority %v", err)
+		} else {
+			o.r.SiteCA = strings.TrimSpace(plain)
+		}
+	}
+	if err := o.releaseMirror.CheckAddress(); err != nil {
 		return fmt.Errorf("--release-mirror: %w", err)
+	}
+	// A damaged or lapsed authority is no reason to stop the controller either. Only the nodes'
+	// downloads from the mirror need it, and each reconcile reports it on its cluster.
+	if err := o.releaseMirror.CheckAuthority(time.Now()); err != nil {
+		o.r.ReleaseMirrorProblem = fmt.Sprintf("--release-mirror-ca: %v", err)
 	}
 	return nil
 }
@@ -702,7 +768,7 @@ func (o *controllerOptions) newManager(scheme *runtime.Scheme, extensions *serve
 // registrar, what taints control-plane nodes, what approves kubeadm kubelets' serving
 // certificates, what keeps the identities in the clusters, what runs their autoscalers and, when
 // some distribution's providers run only while used, the controller that starts and stops them.
-func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *provisioner.Registrar, distributions *provisioner.Distributions) error {
+func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *provisioner.Registrar, distributions *provisioner.Distributions, cloud *provisioner.Proxmox) error {
 	o.r.Client = mgr.GetClient()
 	o.r.Reader = mgr.GetAPIReader()
 	o.r.Registrar = registrar
@@ -743,10 +809,14 @@ func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *pro
 	}
 	firewall := &provisioner.FirewallSources{
 		Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Namespace: o.r.ClassNamespace,
-		Management: o.managementAddrs, Interval: firewallSourcesInterval,
+		Management: o.managementAddrs, Interval: firewallSourcesInterval, Datacenter: cloud,
+		Events: mgr.GetEventRecorder("kubehenge"),
 	}
 	if err = mgr.Add(firewall); err != nil {
 		return fmt.Errorf("the firewall sources: %w", err)
+	}
+	if err = mgr.Add(&provisioner.CredentialOrphans{Client: mgr.GetClient(), Interval: credentialOrphansInterval, Grace: credentialOrphansGrace}); err != nil {
+		return fmt.Errorf("the credentials stored ahead of their clusters: %w", err)
 	}
 	if err = o.addAutoscalers(mgr, registrar.Remotes); err != nil {
 		return err
@@ -802,6 +872,9 @@ func (o *controllerOptions) addPlacement(mgr manager.Manager, extensions *server
 		Interval:       placementInterval,
 		Events:         mgr.GetEventRecorder("kubehenge"),
 		WorkloadPool:   o.r.WorkloadPool,
+	}
+	if hooks.Registrar != nil {
+		placer.Workload = hooks.Registrar.Remotes.Workload
 	}
 	if err := mgr.Add(placer); err != nil {
 		return fmt.Errorf("the placer: %w", err)
@@ -900,11 +973,25 @@ func (o *controllerOptions) addUpgrader(mgr manager.Manager, c *proxmox.Client, 
 	return nil
 }
 
-// addEtcd adds what snapshots clusters' etcd into their backup targets, and what restores it from
-// a snapshot through the VMs' guest agents, with --etcd-restore, in Jobs that alone hold the restore
-// token. Without it every restore of kubeadm, RKE2 and k3s is done by hand.
+// addEtcd adds what snapshots clusters' etcd into their backup targets or the backup volume, and
+// what restores it from a snapshot through the VMs' guest agents, with --etcd-restore, in Jobs that
+// alone hold the restore token. Without it every restore of kubeadm, RKE2 and k3s is done by hand.
 func (o *controllerOptions) addEtcd(mgr manager.Manager, c *proxmox.Client, remotes *provisioner.Remotes) error {
-	targets := &provisioner.ClusterTargets{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, OpenStore: provisioner.OpenTarget}
+	kube, err := kubernetes.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		return fmt.Errorf("a client for the backup volume: %w", err)
+	}
+	volume := &backupstore.Volume{
+		Kube: kube, VMs: backupstore.ProxmoxVMs(o.connect),
+		Log: slog.New(logr.ToSlogHandler(mgr.GetLogger().WithName("backup-volume"))),
+	}
+	if err = mgr.Add(&backupstore.Sleeper{Volume: volume, Every: time.Minute}); err != nil {
+		return fmt.Errorf("the backup volume's sleeper: %w", err)
+	}
+	targets := &provisioner.ClusterTargets{
+		Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, OpenStore: provisioner.OpenTarget,
+		Volume: volume,
+	}
 	dialer := &provisioner.EtcdDialer{Reader: mgr.GetAPIReader(), Remotes: remotes, Talos: provisioner.DialTalos}
 	snapshotter := &provisioner.EtcdSnapshotter{
 		Client:         mgr.GetClient(),
@@ -935,6 +1022,8 @@ func (o *controllerOptions) addEtcd(mgr manager.Manager, c *proxmox.Client, remo
 		Etcd:           snapshotter.Etcd,
 		Talos:          provisioner.DialTalos,
 		APIs:           remotes,
+		Workloads:      remotes,
+		ReceiverImage:  o.r.VolumeSnapshots.ProxyImage,
 		Events:         mgr.GetEventRecorder("kubehenge"),
 	}
 	if o.etcdRestore {

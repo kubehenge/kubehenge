@@ -122,6 +122,7 @@ const activity = { since: when, entries: [], events: section() };
 const nodes = { "GET /api/proxmox/nodes": { body: [{ node: "pve1", online: true }] } };
 
 const signedIn: Record<string, Route> = {
+  ...nodes,
   "GET /api/session": { body: { user: "root@pam", csrf: "c1", canCreate: true, canTrust: true } },
   "GET /api/setup": { body: { appliance: true, ready: true, allowed: true, backup: true } },
   "GET /api/clusters": { body: [cluster("web")] },
@@ -277,6 +278,7 @@ const create: Record<string, Route> = {
   "GET /api/versions/kubeadm": { body: { versions: ["v1.36.1", "v1.36.0"], stable: "v1.36.1" } },
   "GET /api/template-builds": { body: { allowed: true, requested: [], building: [] } },
   "GET /api/proxmox/ha-rules": { body: { readable: true, rules: [] } },
+  "GET /api/proxmox/datacenter-firewall": { body: { state: "off" } },
   ...nodes,
   ...storages,
 };
@@ -290,6 +292,7 @@ const loaded = async (): Promise<void> => {
 const text = (t: string | RegExp) => async () => screen.findAllByText(t);
 
 const detail: Record<string, Route> = {
+  "GET /api/removed-etcd-snapshots/default": { body: [] },
   "GET /api/clusters/default/web": { body: cluster("web") },
   "GET /api/clusters/default/web/health": { body: health },
   "GET /api/clusters/default/web/backups": { body: backups },
@@ -980,7 +983,7 @@ const cases: Case[] = [
         within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByLabelText("Install Headlamp"),
       );
       await user.click(
-        within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByRole("button", { name: "Save" }),
+        within(screen.getByRole("dialog", { name: "Edit Headlamp" })).getByRole("button", { name: "Add to plan" }),
       );
       await screen.findByRole("region", { name: "Staged changes" });
       await check("Staged changes bar");
@@ -1006,7 +1009,7 @@ const cases: Case[] = [
       );
       await user.selectOptions(dialog.getByLabelText("File 1 source"), "secret");
       await check("Node customisation rows");
-      await user.click(dialog.getByRole("button", { name: "Save" }));
+      await user.click(dialog.getByRole("button", { name: "Add to plan" }));
       await check("Node customisation problems");
     },
   },
@@ -1066,6 +1069,13 @@ const cases: Case[] = [
     name: "templates, free to delete",
     path: "/administration/templates",
     routes: { ...admin, "GET /api/templates": { body: { templates: [{ ...template, inUse: undefined }] } } },
+    ready: loaded,
+  },
+  // Removing Kubehenge is offered only once no cluster is left, so its dialog opens here.
+  {
+    name: "management cluster without clusters",
+    path: "/administration",
+    routes: { ...admin, "GET /api/clusters": { body: [] } },
     ready: loaded,
   },
   { name: "error: clusters", path: "/", routes: failing("GET /api/clusters"), ready: loaded },
@@ -1246,7 +1256,9 @@ const cases: Case[] = [
       await check("General");
       await user.click(screen.getByRole("button", { name: "Next" }));
       await waitFor(() => expect(screen.getByLabelText("Bridge")).toHaveValue("vmbr0"));
+      await user.clear(screen.getByLabelText("Gateway"));
       await user.type(screen.getByLabelText("Gateway"), "192.0.2.1");
+      await user.clear(screen.getByLabelText("DNS servers"));
       await user.type(screen.getByLabelText("DNS servers"), "192.0.2.53");
       await user.type(screen.getByLabelText("API address"), "192.0.2.30");
       await user.type(screen.getByLabelText("Node addresses"), "192.0.2.31-192.0.2.39");
@@ -1265,8 +1277,10 @@ const cases: Case[] = [
       await user.click(screen.getByRole("button", { name: "Next" }));
       await check("Add-ons");
       await user.click(screen.getByRole("checkbox", { name: "Use existing cert-manager" }));
+      await user.click(screen.getByRole("button", { name: "Next" }));
+      await check("Policies");
       await user.type(screen.getByLabelText("Namespace labels"), "team");
-      await check("Add-ons with a label problem");
+      await check("Policies with a label problem");
       await user.clear(screen.getByLabelText("Namespace labels"));
       await user.click(screen.getByRole("button", { name: "Next" }));
       await check("Identity providers");

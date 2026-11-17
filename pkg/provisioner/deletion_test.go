@@ -338,7 +338,7 @@ func TestAbandonedDeletion(t *testing.T) {
 	for _, want := range []string{
 		"Warning AbandoningDeletion",
 		"Warning LeftBehind left behind by the abandoned deletion: VM 101 on pve1",
-		"Warning DeletionAbandoned deletion abandoned; left behind: Rancher registration, VM 101 on pve1",
+		"Warning DeletionAbandoned deletion abandoned. Left behind: Rancher registration, VM 101 on pve1",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("no event %q in:\n%s", want, got)
@@ -360,7 +360,7 @@ func TestAbandonedDeletionLeavesThePool(t *testing.T) {
 		t.Fatal("the cluster is still there")
 	}
 	got := strings.Join(f.drained(), "\n")
-	if !strings.Contains(got, "left behind: VM 101 on pve1, Pool kubehenge/team-a.web and user") {
+	if !strings.Contains(got, "Left behind: VM 101 on pve1, Pool kubehenge/team-a.web and user") {
 		t.Errorf("events:\n%s", got)
 	}
 }
@@ -430,7 +430,7 @@ func TestAbandonedDeletionWithoutVMsReleasesAtOnce(t *testing.T) {
 			t.Errorf("%s %s is still there", o.gvk.Kind, o.name)
 		}
 	}
-	if got := strings.Join(f.drained(), "\n"); !strings.Contains(got, "deletion abandoned; left behind: nothing") {
+	if got := strings.Join(f.drained(), "\n"); !strings.Contains(got, "deletion abandoned. Left behind: nothing") {
 		t.Errorf("events:\n%s", got)
 	}
 }
@@ -450,7 +450,7 @@ func TestAbandonedDeletionWithAVMWaitsTheGrace(t *testing.T) {
 	if !f.reconcileUntilGone(5) {
 		t.Fatal("the cluster is still there after the grace")
 	}
-	if got := strings.Join(f.drained(), "\n"); !strings.Contains(got, "left behind: VM 101 on pve1") {
+	if got := strings.Join(f.drained(), "\n"); !strings.Contains(got, "Left behind: VM 101 on pve1") {
 		t.Errorf("events:\n%s", got)
 	}
 }
@@ -492,7 +492,7 @@ func TestAbandonedDeletionGraceReleasesEverything(t *testing.T) {
 			t.Errorf("%s %s is still there", o.gvk.Kind, o.name)
 		}
 	}
-	if got := strings.Join(f.drained(), "\n"); !strings.Contains(got, "deletion abandoned; left behind: VM 101 on pve1") {
+	if got := strings.Join(f.drained(), "\n"); !strings.Contains(got, "deletion abandoned. Left behind: VM 101 on pve1") {
 		t.Errorf("events:\n%s", got)
 	}
 }
@@ -513,7 +513,7 @@ func TestAbandonedDeletionWithoutVMsRecordsAFailedRemoval(t *testing.T) {
 	if !f.reconcileUntilGone(5) {
 		t.Fatal("the cluster is still there after the grace")
 	}
-	if got := strings.Join(f.drained(), "\n"); !strings.Contains(got, "left behind: Pool kubehenge/team-a.web and user") {
+	if got := strings.Join(f.drained(), "\n"); !strings.Contains(got, "Left behind: Pool kubehenge/team-a.web and user") {
 		t.Errorf("events:\n%s", got)
 	}
 }
@@ -527,7 +527,7 @@ func TestAbandonedDeletionWithoutVMsRetriesTheRemoval(t *testing.T) {
 	if !f.reconcileUntilGone(10) {
 		t.Fatal("the cluster is still there before the grace is up")
 	}
-	if got := strings.Join(f.drained(), "\n"); !strings.Contains(got, "left behind: nothing") {
+	if got := strings.Join(f.drained(), "\n"); !strings.Contains(got, "Left behind: nothing") {
 		t.Errorf("events:\n%s", got)
 	}
 }

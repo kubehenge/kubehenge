@@ -588,7 +588,7 @@ export function start(root) {
     const v = victim();
     if (!loading)
       $("code", toppleBtn).textContent = v
-        ? `kubectl -n clusters delete cluster ${v.c.name}`
+        ? `kubehenge cluster delete ${v.c.name} --yes`
         : "nothing left to topple but prod";
     toppleBtn.disabled = busy || !v;
   }

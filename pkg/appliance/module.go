@@ -29,8 +29,16 @@ variable "settings" {
   type = any
 }
 
+# Lifted only by a removal that deletes the backup volume too.
+variable "backup_volume_protection" {
+  type    = bool
+  default = true
+}
+
 module "management" {
   source = %q
+
+  backup_volume = { protection = var.backup_volume_protection }
 
   proxmox_endpoint       = var.settings.proxmox_endpoint
   proxmox_ca_certificate = var.settings.proxmox_ca_certificate
@@ -56,6 +64,9 @@ module "management" {
   registry_mirrors       = var.settings.registryMirrors
   chart_repositories     = var.settings.chartRepositories
   release_mirror         = var.settings.releaseMirror
+  site_ca                = try(var.settings.siteCA, "")
+  time_zone              = try(var.settings.timeZone, "")
+  workload_vm_id_range   = try(var.settings.workloadVMIDRange, null)
   controller_image       = var.settings.controllerImage
   vm_id_range            = var.settings.vmIdRange
   pod_subnets            = var.settings.podSubnets
@@ -121,7 +132,7 @@ func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase str
 		return nil, err
 	}
 	j.Add("Applying the management cluster")
-	err = a.tofu(ctx, j, env, jsonMessage, "apply", "-auto-approve", "-input=false", "-json")
+	err = a.applyPlanned(ctx, j, env, ticket)
 	if err != nil {
 		a.explainWaits(ctx, j, env)
 		return nil, err
@@ -143,19 +154,38 @@ func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase str
 	if err != nil {
 		return nil, err
 	}
-	talos, err := a.output(ctx, env, "talosconfig")
+	talos, err := a.output(ctx, env, talosconfigName)
 	if err != nil {
 		return nil, err
 	}
 	if err = a.recordApplied(CredentialsExpire([]byte(admin), []byte(talos))); err != nil {
 		return nil, err
 	}
-	// The cluster runs as applied either way. The backups' status says why their snapshots fail.
-	if err = a.renewEtcdBackupCredential(ctx, []byte(talos)); err != nil {
+	a.setUpBackups(ctx, j, []byte(admin), []byte(talos), passphrase)
+	return kubeconfig, nil
+}
+
+// setUpBackups readies the etcd backups for the applied cluster. The cluster runs as applied either
+// way, so a failure only goes into the job's log and the backups' status, which says why their
+// snapshots fail.
+func (a *Appliance) setUpBackups(ctx context.Context, j *Job, admin, talos []byte, passphrase string) {
+	if err := a.renewEtcdBackupCredential(ctx, talos); err != nil {
 		j.Add("Renewing the credential of the etcd backups failed: " + err.Error())
 		a.etcdBackupFailed(err)
 	}
-	return kubeconfig, nil
+	if err := a.setUpVolumeBackups(ctx, talos, admin, passphrase); err != nil {
+		j.Add("Setting up the backups on the backup volume failed: " + err.Error())
+		a.volumeBackupFailed(err)
+	}
+	// The controller tries again within a minute, and before each wake of the backup store, so a
+	// failure holds no apply up.
+	unknown, err := a.labelZones(ctx, admin)
+	if err != nil {
+		j.Add("Setting the management nodes' zones failed: " + err.Error())
+	}
+	if len(unknown) > 0 {
+		j.Add("Proxmox VE lists no VM for node " + strings.Join(unknown, ", ") + ", whose zone stays as it is")
+	}
 }
 
 // init prepares OpenTofu for the module released with the appliance. OpenTofu reads the lock file
@@ -228,6 +258,16 @@ func (a *Appliance) writeConfig(s *Settings, ids VMIDRange) error {
 		"proxy":                    moduleProxy(s, a.ProxmoxURL),
 		// The module takes no null for a list.
 		"extraClusterNamespaces": append([]string{}, s.ExtraClusterNamespaces...),
+	}
+	// Left out while unset, so that the module's defaults apply.
+	if s.SiteCA != "" {
+		values["siteCA"] = s.SiteCA
+	}
+	if s.TimeZone != "" {
+		values["timeZone"] = s.TimeZone
+	}
+	if s.WorkloadVMIDRange != nil {
+		values["workloadVMIDRange"] = s.WorkloadVMIDRange
 	}
 	if s.HasIPv6() {
 		// An IPv4 cluster leaves these out, so its variables stay as they were and the module's
@@ -398,12 +438,23 @@ func (a *Appliance) tofu(ctx context.Context, j *Job, env []string, message func
 	case err != nil && run.Err() != nil && ctx.Err() == nil:
 		return fmt.Errorf("tofu %s: interrupted before the Proxmox VE sign-in it runs on expires, so run it again: %w", args[0], err)
 	case err != nil && len(failures) > 0:
-		return fmt.Errorf("tofu %s: %w: %s", args[0], err, strings.Join(failures, "; "))
+		return &tofuError{fmt.Errorf("tofu %s: %w: %s", args[0], err, strings.Join(failures, "; ")), failures}
 	case err != nil:
 		return fmt.Errorf("tofu %s: %w", args[0], err)
 	}
 	return nil
 }
+
+// tofuError is a tofu run that failed with the error diagnostics it printed, each as
+// errorDiagnostic reads it.
+type tofuError struct {
+	err         error
+	diagnostics []string
+}
+
+func (e *tofuError) Error() string { return e.err.Error() }
+
+func (e *tofuError) Unwrap() error { return e.err }
 
 // errorDiagnostic is the summary and detail of a line of OpenTofu's -json output that reports an
 // error, or "" for any other line. The job's error carries them, as the log scrolls out of view.
@@ -425,7 +476,15 @@ func errorDiagnostic(line string) string {
 
 // output reads one output of the last apply.
 func (a *Appliance) output(ctx context.Context, env []string, name string) (string, error) {
-	cmd := exec.CommandContext(ctx, a.Tofu, "-chdir="+a.workdir(), "output", "-raw", name) //nolint:gosec // the binary and arguments are the appliance's own
+	out, err := a.read(ctx, env, "output", "-raw", name)
+	return string(out), err
+}
+
+// read runs one OpenTofu command that prints what it reads, and returns that. Its errors name the
+// command and what it read, its last argument.
+func (a *Appliance) read(ctx context.Context, env []string, args ...string) ([]byte, error) {
+	what := args[0] + " " + args[len(args)-1]
+	cmd := exec.CommandContext(ctx, a.Tofu, append([]string{"-chdir=" + a.workdir()}, args...)...) //nolint:gosec // the binary and arguments are the appliance's own
 	cmd.Env = env
 	out, err := cmd.Output()
 	if exit, ok := errors.AsType[*exec.ExitError](err); ok {
@@ -437,12 +496,12 @@ func (a *Appliance) output(ctx context.Context, env []string, name string) (stri
 				stderr = j.hidden.Replace(stderr)
 			}
 		}
-		return "", fmt.Errorf("tofu output %s: %s", name, stderr)
+		return nil, fmt.Errorf("tofu %s: %s", what, stderr)
 	}
 	if err != nil {
-		return "", fmt.Errorf("tofu output %s: %w", name, err)
+		return nil, fmt.Errorf("tofu %s: %w", what, err)
 	}
-	return string(out), nil
+	return out, nil
 }
 
 // moduleOIDC names the providers as the module's cluster_oidc does. Null takes its default.

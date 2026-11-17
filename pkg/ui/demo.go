@@ -65,6 +65,11 @@ var errDemo = errors.New("the demo changes nothing")
 // cluster, and changes are refused. clock is the demo's time, which its sample data is dated
 // against. The appliance it sets up keeps its settings in a folder that cleanup removes.
 func SetUpDemo(s *Server, clock func() time.Time) (func(), error) {
+	return demoFrom(s, clock, demoFleetJSON)
+}
+
+// demoFrom is SetUpDemo over the fleet raw holds, in the form of demo-fleet.json.
+func demoFrom(s *Server, clock func() time.Time, raw []byte) (func(), error) {
 	if s.Appliance != nil || s.Headlamp != nil || s.Upgrades != nil {
 		return nil, errors.New("the demo runs without the appliance, Headlamp or upgrades")
 	}
@@ -73,15 +78,15 @@ func SetUpDemo(s *Server, clock func() time.Time) (func(), error) {
 		return nil, fmt.Errorf("the demo's appliance: %w", err)
 	}
 	cleanup := func() { _ = os.RemoveAll(dir) }
-	if err := fillDemo(s, clock, dir); err != nil {
+	if err := fillDemo(s, clock, dir, raw); err != nil {
 		cleanup()
 		return nil, err
 	}
 	return cleanup, nil
 }
 
-func fillDemo(s *Server, clock func() time.Time, dir string) error {
-	fleet, err := newDemoFleet(clock().UTC())
+func fillDemo(s *Server, clock func() time.Time, dir string, raw []byte) error {
+	fleet, err := newDemoFleet(clock().UTC(), raw)
 	if err != nil {
 		return err
 	}
@@ -92,7 +97,11 @@ func fillDemo(s *Server, clock func() time.Time, dir string) error {
 	if err = os.MkdirAll(filepath.Join(dir, "management"), demoDirMode); err != nil {
 		return fmt.Errorf("the demo's appliance: %w", err)
 	}
-	if err = os.WriteFile(filepath.Join(dir, "management", "settings.json"), fleet.data.Management, demoFileMode); err != nil {
+	settings, err := fleet.managementSettings()
+	if err != nil {
+		return err
+	}
+	if err = os.WriteFile(filepath.Join(dir, "management", "settings.json"), settings, demoFileMode); err != nil {
 		return fmt.Errorf("the demo's appliance: %w", err)
 	}
 	s.Appliance = &appliance.Appliance{Dir: dir, Release: demoName, Now: clock}
@@ -103,6 +112,7 @@ func fillDemo(s *Server, clock func() time.Time, dir string) error {
 	s.OpenStore = func(*provisioner.BackupTarget, map[string][]byte) (provisioner.ObjectStore, error) {
 		return nil, errors.New("the demo has no backup target")
 	}
+	s.Volume = demoVolume{}
 	s.NewKube = func([]byte) (client.Client, error) { return nil, errDemo }
 	s.NewClientset = nil
 	s.MakeTemplate = func(context.Context, *pve.Ticket, templates.Builder, *templates.Template) (int, error) {
@@ -231,11 +241,12 @@ func (s *Server) demoGuard(next http.Handler) http.Handler {
 func demoRead(r *http.Request) bool {
 	p := r.URL.Path
 	switch {
-	case p == "/api/session", p == "/api/session/second-factor":
+	case p == "/api/session", p == "/api/session/token", p == "/api/session/second-factor":
 		return true
 	case r.Method != http.MethodPost:
 		return false
-	case p == "/api/release-pins/check":
+	case p == "/api/release-pins/check", p == "/api/setup/time-zone", p == "/api/setup/site-ca-roll",
+		p == "/api/setup/check":
 		return true
 	case p == "/api/clusters":
 		return r.URL.Query().Get("dryRun") == "All"
@@ -332,4 +343,39 @@ func demoChannelList(suffix string) string {
 	list.Data = append(list.Data, map[string]string{"id": "stable", "latest": "v1.36.99+" + suffix})
 	raw, _ := json.Marshal(list) //nolint:errchkjson // maps of strings always encode
 	return string(raw)
+}
+
+// demoVolume is the demo's backup volume: awake and empty, as a new management cluster's is, so the
+// Backups view lists no removed clusters. It takes nothing, as the rest of the demo.
+type demoVolume struct{}
+
+// demoVolumeSize is the demo volume's size, the storage chart's default of 20 GB.
+const demoVolumeSize = 20 << 30
+
+func (demoVolume) Open(context.Context, string) (provisioner.VolumeStore, error) { //nolint:ireturn // BackupVolume's own signature
+	return demoVolume{}, nil
+}
+
+func (demoVolume) Done(context.Context, string) error { return nil }
+
+func (demoVolume) Room(context.Context) (int64, int64, error) {
+	return demoVolumeSize, demoVolumeSize, nil
+}
+
+func (demoVolume) List(context.Context, string) ([]provisioner.StoredObject, error) { return nil, nil }
+
+func (demoVolume) Put(context.Context, string, io.Reader, map[string]string) (int64, error) {
+	return 0, errDemo
+}
+
+func (demoVolume) Stat(context.Context, string) (provisioner.StoredObject, error) {
+	return provisioner.StoredObject{}, errDemo
+}
+
+func (demoVolume) Get(context.Context, string) (io.ReadCloser, error) { return nil, errDemo }
+
+func (demoVolume) Remove(context.Context, string) error { return errDemo }
+
+func (demoVolume) PresignGet(context.Context, string, time.Duration) (string, error) {
+	return "", errDemo
 }

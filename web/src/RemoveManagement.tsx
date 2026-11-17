@@ -1,6 +1,7 @@
 import { useState, type JSX } from "react";
 
 import { api } from "./api";
+import { useFleet } from "./fleet";
 import { Dialog, ErrorBox, Field, errorMessage, passphraseShort } from "./ui";
 
 // DangerZone holds what cannot be taken back, apart from the settings above it: removing
@@ -8,6 +9,8 @@ import { Dialog, ErrorBox, Field, errorMessage, passphraseShort } from "./ui";
 // Every cluster has to be deleted first.
 export function DangerZone({ running, onStarted }: { running: boolean; onStarted: () => void }): JSX.Element {
   const [open, setOpen] = useState(false);
+  // The server refuses a removal while clusters exist, so the page does not offer one.
+  const clusters = useFleet()?.clusters?.length ?? 0;
   return (
     <section className="panel danger-zone" aria-labelledby="danger-zone">
       <div className="box">
@@ -15,9 +18,13 @@ export function DangerZone({ running, onStarted }: { running: boolean; onStarted
         <div className="danger-row">
           <div>
             <strong>Remove Kubehenge</strong>
-            <p className="muted">Keeps the appliance</p>
+            <p className="muted">
+              {clusters > 0
+                ? `Delete ${clusters} ${clusters === 1 ? "cluster" : "clusters"} first`
+                : "Keeps the appliance"}
+            </p>
           </div>
-          <button type="button" className="danger" disabled={running} onClick={() => setOpen(true)}>
+          <button type="button" className="danger" disabled={running || clusters > 0} onClick={() => setOpen(true)}>
             Remove…
           </button>
         </div>
@@ -38,6 +45,7 @@ export function DangerZone({ running, onStarted }: { running: boolean; onStarted
 export function RemoveDialog({ onClose, onStarted }: { onClose: () => void; onStarted: () => void }): JSX.Element {
   const [typed, setTyped] = useState("");
   const [passphrase, setPassphrase] = useState("");
+  const [removeBackups, setRemoveBackups] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const ready = !busy && typed === "remove" && !passphraseShort(passphrase);
@@ -49,7 +57,7 @@ export function RemoveDialog({ onClose, onStarted }: { onClose: () => void; onSt
     setBusy(true);
     setError(undefined);
     try {
-      await api.removeManagement(passphrase);
+      await api.removeManagement(passphrase, removeBackups);
       onStarted();
     } catch (err) {
       setError(errorMessage(err));
@@ -75,7 +83,12 @@ export function RemoveDialog({ onClose, onStarted }: { onClose: () => void; onSt
         </>
       }
     >
-      <p>Deletes the management cluster, templates, pools, users and roles. Delete every cluster first.</p>
+      <p>Deletes the management cluster, templates, pools, users and roles.</p>
+      <p>Keeps the backup volume, VM kubehenge-backups, with its etcd snapshots and exports.</p>
+      <label className="check">
+        <input type="checkbox" checked={removeBackups} onChange={(e) => setRemoveBackups(e.target.checked)} /> Delete
+        the backup volume
+      </label>
       <Field label="State passphrase">
         {(id) => (
           <input

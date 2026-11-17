@@ -92,7 +92,7 @@ describe("the host outage wait", () => {
     await user.click(screen.getByRole("button", { name: "Edit the host outage wait" }));
     const dialog = screen.getByRole("dialog", { name: "Edit host outage wait" });
     const field = within(dialog).getByLabelText("Host outage wait");
-    const save = within(dialog).getByRole("button", { name: "Save" });
+    const save = within(dialog).getByRole("button", { name: "Add to plan" });
     expect(save).toBeDisabled();
     await user.clear(field);
     await user.type(field, "3");

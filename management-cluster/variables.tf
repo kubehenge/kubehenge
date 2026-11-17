@@ -356,6 +356,22 @@ variable "node_disk_gb" {
   default     = 32
 }
 
+variable "backup_volume" {
+  description = "The volume the management cluster's backups are kept on: a disk of size_gb on vm_datastore, owned by a VM of its own that never starts, so that it outlives every node VM. With protection, Proxmox VE refuses deleting that VM and its disk, and a destroy of the module stops there until protection is set false and applied. shared says whether vm_datastore reaches every node, read from Proxmox VE when null: a shared volume attaches on any node, and one on a node's own storage only while a backup or recovery runs."
+  type = object({
+    size_gb    = optional(number, 20)
+    protection = optional(bool, true)
+    shared     = optional(bool)
+  })
+  default  = {}
+  nullable = false
+
+  validation {
+    condition     = var.backup_volume.size_gb >= 1 && floor(var.backup_volume.size_gb) == var.backup_volume.size_gb
+    error_message = "backup_volume.size_gb is a whole number of GB, 1 or more."
+  }
+}
+
 variable "vm_id_range" {
   description = "The range the control-plane VMs' IDs are drawn from at random: start is the lowest ID and end is one past the highest, as the provider draws them. Set it inside the datacenter's next-id range (Datacenter, Options) when administrators reserve ID bands. The VMs keep the IDs they have when it changes."
   type = object({
@@ -565,7 +581,7 @@ variable "template_refresh" {
 }
 
 variable "cluster_sys_audit" {
-  description = "Give each cluster the cloud controller manager's HA group labels unless the cluster switches them off. They need Sys.Audit on /: Kubehenge's controller adds the cluster's user to a group holding Sys.Audit on /, unpropagated, so that its token can list Proxmox VE's HA groups and rules and read the rest of the Proxmox VE cluster's own configuration (firewall rules, backup jobs, HA, the corosync configuration), but nothing of its guests, storages, nodes or users. Off, no cluster's token holds Sys.Audit on / and nodes go without the labels."
+  description = "Give each cluster the cloud controller manager's HA rule labels unless the cluster switches them off. They need Sys.Audit on /: Kubehenge's controller adds the cluster's user to a group holding Sys.Audit on /, unpropagated, so that its token can list Proxmox VE's HA groups and rules and read the rest of the Proxmox VE cluster's own configuration (firewall rules, backup jobs, HA, the corosync configuration), but nothing of its guests, storages, nodes or users. Off, no cluster's token holds Sys.Audit on / and nodes go without the labels."
   type        = bool
   default     = true
   nullable    = false
@@ -671,6 +687,47 @@ variable "release_mirror" {
   validation {
     condition     = var.release_mirror.ca_bundle == "" || startswith(var.release_mirror.url, "https://")
     error_message = "release_mirror.ca_bundle needs an https:// url."
+  }
+}
+
+variable "site_ca" {
+  description = "The PEM authority of the site's private CA, the default of every connection that names none of its own: the nodes of clusters without trustedCAs, the release mirror, the backup targets with an endpoint and the identity providers. Empty, none."
+  type        = string
+  default     = ""
+  nullable    = false
+
+  validation {
+    condition     = var.site_ca == "" || can(regex("^(-----BEGIN CERTIFICATE-----\n([A-Za-z0-9+/=]+\n)+-----END CERTIFICATE-----\n?)+$", var.site_ca))
+    error_message = "site_ca holds PEM certificates alone."
+  }
+}
+
+variable "time_zone" {
+  description = "The IANA time zone that schedules without one of their own run in, such as a cluster's etcd snapshots. Empty, UTC, and the wizard starts from the user's browser time zone."
+  type        = string
+  default     = ""
+  nullable    = false
+
+  validation {
+    condition     = var.time_zone == "" || (can(regex("^[A-Za-z0-9_+/-]+$", var.time_zone)) && var.time_zone != "Local")
+    error_message = "time_zone is an IANA time zone name such as Europe/Zurich."
+  }
+}
+
+variable "workload_vm_id_range" {
+  description = "The VM IDs a new cluster's VMs and the VM templates take, both ends included, such as { start = 100000, end = 100999 }. A cluster may set its own. Null, Proxmox VE's next free ID. It is apart from vm_id_range, which draws the management VMs' IDs."
+  type = object({
+    start = number
+    end   = number
+  })
+  default = null
+
+  validation {
+    condition = var.workload_vm_id_range == null || (
+      floor(var.workload_vm_id_range.start) == var.workload_vm_id_range.start && floor(var.workload_vm_id_range.end) == var.workload_vm_id_range.end &&
+      var.workload_vm_id_range.start >= 100 && var.workload_vm_id_range.start <= var.workload_vm_id_range.end && var.workload_vm_id_range.end <= 999999999
+    )
+    error_message = "workload_vm_id_range must be whole numbers with start up to end, within 100 to 999999999, the VM IDs Proxmox VE accepts."
   }
 }
 

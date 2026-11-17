@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -121,8 +122,8 @@ func TestPlacerKeepsThePlacementWhenNoNodeHasRoom(t *testing.T) {
 func TestNoRoomGivesTheMachinesSizeWithoutRoundingItUp(t *testing.T) {
 	t.Parallel()
 	for mib, want := range map[int64]string{8192: "8 GiB", 1024: "1 GiB", 3321: "3.3 GiB", 3277: "3.3 GiB", 3276: "3.2 GiB", 1025: "1.1 GiB"} {
-		if got := neededGiB(mib); got != want {
-			t.Errorf("neededGiB(%d) = %q, want %q", mib, got, want)
+		if got := NeededGiB(mib); got != want {
+			t.Errorf("NeededGiB(%d) = %q, want %q", mib, got, want)
 		}
 	}
 }
@@ -441,7 +442,9 @@ func TestSitesReadTheBridgesAndTheZonesTheTokenSees(t *testing.T) {
 			http.Error(w, "permission check failed", http.StatusForbidden)
 			return
 		case "/api2/json/cluster/sdn/vnets":
-			data = []map[string]any{{"vnet": "v1", "zone": "z1"}}
+			data = []map[string]any{{"vnet": "v1", "zone": "z1"}, {"vnet": "aware", "zone": "z1", "vlanaware": 1}, {"vnet": "flat", "zone": "z2"}}
+		case "/api2/json/cluster/sdn/zones":
+			data = []map[string]any{{"zone": "z1", "type": "vlan"}, {"zone": "z2", "type": "simple"}}
 		case "/api2/json/cluster/resources":
 			data = []map[string]any{
 				{"type": "sdn", "sdn": "z1", "node": "pve1", "status": "ok"},
@@ -459,5 +462,11 @@ func TestSitesReadTheBridgesAndTheZonesTheTokenSees(t *testing.T) {
 	}
 	if s.VNets["v1"] != "z1" || !slices.Equal(s.ZoneNodes["z1"], []string{"pve1"}) {
 		t.Errorf("VNets %v and zones %v, want v1 in z1 applied on pve1 only", s.VNets, s.ZoneNodes)
+	}
+	if !maps.Equal(s.TaggingVNets, map[string]bool{"v1": true}) {
+		t.Errorf("tagging VNets = %v, want v1 alone: aware is VLAN-aware and flat is in a simple zone", s.TaggingVNets)
+	}
+	if !slices.Equal(s.Nodes, []string{"pve1", "pve2", "pve3"}) {
+		t.Errorf("nodes = %v, want every node Proxmox VE lists, the offline one too", s.Nodes)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -37,6 +38,10 @@ type Facts struct {
 	FQDN          string
 	Bridges       []string
 	DefaultBridge string
+	// DefaultVLAN is the tag of the VLAN device (such as vmbr0.20) the default route leaves by.
+	DefaultVLAN string
+	// VLANFromRoute is set when the container's VLAN was taken from that device.
+	VLANFromRoute bool
 	// NodeDHCP is whether the node's own bridge address comes from DHCP, which is the best
 	// sign that its network has a DHCP server.
 	NodeDHCP         bool
@@ -53,6 +58,10 @@ type Facts struct {
 	SuggestedIP      string
 	Candidates       []APICandidate
 	Members          []Member
+	// TemplateTight holds the storages that take templates but have under 200 MiB free.
+	TemplateTight []Storage
+	// TemplateShort is set when TemplateStorages are all short of room, the one with the most free first.
+	TemplateShort bool
 }
 
 // Member is an address of one of the cluster's nodes.
@@ -73,6 +82,10 @@ type Node struct {
 	// Dial returns the certificates the API at host:port serves.
 	Dial func(ctx context.Context, host, port string) ([]*x509.Certificate, error)
 }
+
+// workKiB is what OpenTofu's archive and its copy need beside the release that install.sh unpacked
+// in the same TMPDIR after its own check for 1 GiB.
+const workKiB = 524288
 
 const (
 	rootDiskKiB  = 9437184
@@ -117,6 +130,8 @@ func (n *Node) Storages(ctx context.Context, content string, leastKiB int64) ([]
 			short = append(short, s)
 		}
 	}
+	// Where none has the room asked for, the one with the most free is the least short.
+	slices.SortStableFunc(short, func(a, b Storage) int { return cmp.Compare(b.FreeKiB, a.FreeKiB) })
 	slices.SortStableFunc(fit, func(a, b Storage) int {
 		if a.rank != b.rank {
 			return cmp.Compare(a.rank, b.rank)
@@ -214,6 +229,12 @@ func (n *Node) Detect(ctx context.Context, cfg *Config) (*Facts, error) {
 	gw, dev := n.defaultRoute(ctx)
 	f.Gateway = gw
 	f.DefaultBridge = pickDefaultBridge(f.Bridges, dev)
+	if bridge, tag := vlanOfDevice(f.Bridges, dev); bridge != "" {
+		f.DefaultBridge, f.DefaultVLAN = bridge, tag
+		if cfg.Bridge == "" && cfg.VLAN == "" {
+			cfg.VLAN, f.VLANFromRoute = tag, true
+		}
+	}
 	f.DNS, f.LoopbackDNSOnly = n.resolvers()
 	var err error
 	if f.RootStorages, _, err = n.Storages(ctx, "rootdir", rootDiskKiB); err != nil {
@@ -221,12 +242,17 @@ func (n *Node) Detect(ctx context.Context, cfg *Config) (*Facts, error) {
 	}
 	_, short, _ := n.Storages(ctx, "rootdir", rootDiskKiB)
 	f.ShortRoot = shortText(short)
-	all, _, err := n.Storages(ctx, "vztmpl", 0)
+	roomy, tight, err := n.Storages(ctx, "vztmpl", templateKiB)
 	if err != nil {
 		return nil, fmt.Errorf("listing storages: %w", err)
 	}
-	f.TemplateStorages = all
-	f.TemplateHeld = n.TemplateHeld(ctx, all, Template)
+	// A storage with no room for the template is offered only where none has, so its own error
+	// names the shortage.
+	f.TemplateStorages, f.TemplateTight = roomy, tight
+	if len(roomy) == 0 {
+		f.TemplateStorages, f.TemplateShort = tight, len(tight) > 0
+	}
+	f.TemplateHeld = n.TemplateHeld(ctx, append(slices.Clone(roomy), tight...), Template)
 	if out, err := n.run(ctx, "pvesh", "get", "/cluster/nextid"); err == nil {
 		f.NextID = strings.Trim(strings.TrimSpace(out), `"`)
 	}
@@ -236,15 +262,35 @@ func (n *Node) Detect(ctx context.Context, cfg *Config) (*Facts, error) {
 		bridge = f.DefaultBridge
 	}
 	if bridge != "" {
-		f.Prefix = n.bridgeAddress4(ctx, bridge)
-		f.NodeDHCP = n.bridgeIsDHCP(bridge)
+		dev := f.addressDevice(bridge, cfg.VLAN)
+		f.Prefix = n.bridgeAddress4(ctx, dev)
+		f.NodeDHCP = n.bridgeIsDHCP(dev)
 		if f.Prefix.IsValid() {
-			f.SuggestedIP = n.SuggestAddress(ctx, bridge, f)
+			f.SuggestedIP = n.SuggestAddress(ctx, dev, f)
 		}
 		f.Members = n.clusterAddresses(ctx)
-		f.Candidates = n.APICandidates(ctx, f, bridge)
+		f.Candidates = n.APICandidates(ctx, f, dev)
 	}
 	return f, nil
+}
+
+// vlanOfDevice splits a VLAN device such as vmbr0.20 into the bridge it sits on and its tag. Both
+// are empty for any other device.
+func vlanOfDevice(bridges []string, dev string) (string, string) {
+	i := strings.LastIndex(dev, ".")
+	if i <= 0 || !slices.Contains(bridges, dev[:i]) || !inRange(dev[i+1:], 1, vlanMax) {
+		return "", ""
+	}
+	return dev[:i], dev[i+1:]
+}
+
+// addressDevice is the device that holds the node's address on the container's network: the
+// bridge, else the bridge's VLAN device where the node's default route leaves by it.
+func (f *Facts) addressDevice(bridge, vlan string) string {
+	if f.DefaultVLAN != "" && bridge == f.DefaultBridge && vlan == f.DefaultVLAN {
+		return bridge + "." + vlan
+	}
+	return bridge
 }
 
 func shortText(short []Storage) string {
@@ -420,6 +466,131 @@ func (n *Node) bridgeIsDHCP(bridge string) bool {
 	}
 	re := regexp.MustCompile(`(?m)^\s*iface\s+` + regexp.QuoteMeta(bridge) + `\s+inet\s+dhcp\b`)
 	return re.Match(data)
+}
+
+var vlanAwareRE = regexp.MustCompile(`(?m)^\s*bridge[-_]vlan[-_]aware\s+(yes|1|true|on)\b`)
+
+// bridgeVLANAware reports whether the bridge carries VLAN tags on its own ports: from Proxmox VE's
+// view of the node's network, else of the SDN VNet, else from /etc/network/interfaces and the
+// files it sources. A bridge no source shows as aware is not.
+func (n *Node) bridgeVLANAware(ctx context.Context, bridge string) bool {
+	if out, err := n.run(ctx, "pvesh", "get", "/nodes/"+n.Hostname+"/network/"+bridge, "--output-format", "json"); err == nil {
+		if aware, known := vlanAwareFromJSON(out); known {
+			return aware
+		}
+	}
+	if out, err := n.run(ctx, "pvesh", "get", "/cluster/sdn/vnets/"+bridge, "--output-format", "json"); err == nil {
+		var vnet map[string]any
+		if json.Unmarshal([]byte(out), &vnet) == nil && str(vnet, "vnet") == bridge {
+			aware, _ := flagOn(vnet["vlanaware"])
+			return aware
+		}
+	}
+	return n.vlanAwareInFiles(interfaces, bridge, map[string]bool{})
+}
+
+// vlanAwareFromJSON reads Proxmox VE's description of one interface. It is unknown when the text
+// describes no interface. An Open vSwitch bridge carries tags on its ports and has no VLAN-aware
+// setting.
+func vlanAwareFromJSON(out string) (bool, bool) {
+	var conf map[string]any
+	if json.Unmarshal([]byte(out), &conf) != nil {
+		return false, false
+	}
+	if str(conf, "type") == "OVSBridge" {
+		return true, true
+	}
+	if aware, set := flagOn(conf["bridge_vlan_aware"]); set {
+		return aware, true
+	}
+	_, described := conf["iface"]
+	return false, described
+}
+
+// flagOn reads a Proxmox VE boolean, which its API gives as a number, a boolean or a string. The
+// second result is false when the value is missing.
+func flagOn(v any) (bool, bool) {
+	switch v := v.(type) {
+	case float64:
+		return v != 0, true
+	case bool:
+		return v, true
+	case string:
+		return v == "1" || v == "yes" || v == "true", true
+	}
+	return false, false
+}
+
+// vlanAwareInFiles reports whether the bridge's stanza turns VLAN filtering on or makes it an Open
+// vSwitch bridge, in the file or one it sources, such as interfaces.d/sdn with the SDN's VNets.
+func (n *Node) vlanAwareInFiles(file, bridge string, seen map[string]bool) bool {
+	if seen[file] {
+		return false
+	}
+	seen[file] = true
+	data, err := n.readFile(file)
+	if err != nil {
+		return false
+	}
+	aware, sources := vlanAwareInFile(string(data), bridge)
+	if aware {
+		return true
+	}
+	for _, pattern := range sources {
+		if !strings.HasPrefix(pattern, "/") {
+			pattern = path.Join(path.Dir(file), pattern)
+		}
+		for _, f := range n.glob(pattern) {
+			if n.vlanAwareInFiles(f, bridge, seen) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// glob lists the node's files that match the pattern, as paths on the node.
+func (n *Node) glob(pattern string) []string {
+	matches, _ := filepath.Glob(n.path(pattern))
+	var list []string
+	for _, m := range matches {
+		if n.Root != "" {
+			rel, err := filepath.Rel(n.Root, m)
+			if err != nil {
+				continue
+			}
+			m = "/" + filepath.ToSlash(rel)
+		}
+		list = append(list, m)
+	}
+	return list
+}
+
+var ovsBridgeRE = regexp.MustCompile(`^\s*ovs_type\s+OVSBridge\b`)
+
+// vlanAwareInFile reports whether the bridge's stanza in an interfaces file turns VLAN filtering
+// on or makes it an Open vSwitch bridge, and lists the files the text sources.
+func vlanAwareInFile(data, bridge string) (bool, []string) {
+	stanza := false
+	var sources []string
+	for line := range strings.SplitSeq(data, "\n") {
+		f := strings.Fields(line)
+		if len(f) >= 2 && f[0] == "iface" {
+			stanza = f[1] == bridge
+			continue
+		}
+		if len(f) >= 2 && f[0] == "source" {
+			sources = append(sources, f[1:]...)
+		}
+		if len(f) > 0 && (f[0] == "auto" || strings.HasPrefix(f[0], "allow-") || f[0] == "source") {
+			stanza = false
+			continue
+		}
+		if stanza && (vlanAwareRE.MatchString(line) || ovsBridgeRE.MatchString(line)) {
+			return true, nil
+		}
+	}
+	return false, sources
 }
 
 func (n *Node) resolvers() ([]string, bool) {

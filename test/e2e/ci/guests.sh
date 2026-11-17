@@ -21,6 +21,10 @@
 #                                          and its etcd members' view of their
 #                                          cluster; from a Talos VM, whose guest agent runs no
 #                                          commands, the same through Talos's API
+#   test/e2e/ci/guests.sh etcd <file> [<work dir>]
+#                                          the management cluster's etcd, from each management
+#                                          node's etcd log: its slow disk syncs and slow requests,
+#                                          counted with their longest, into <file>
 #
 # record and summary read the VMs' QEMU processes on this machine, which runs Proxmox VE's container
 # on its own kernel; collect runs the commands in the container. Everything collect writes passes
@@ -28,8 +32,10 @@
 #
 # collect reads a Talos VM from this machine with talosctl and the talosconfig of the VM's cluster:
 # the management cluster's from the Terraform/OpenTofu state in run.sh's work directory (by default
-# $RUNNER_TEMP/e2e, where the workflow keeps it), a workload cluster's from its <cluster>-talosconfig
-# Secret, read with the management cluster's kubeconfig from the same place. They stay in a private
+# $RUNNER_TEMP/e2e, where the workflow keeps it), or where the appliance made the cluster, from the
+# copy its test keeps in the Proxmox VE container (keep_management_credentials in
+# test/e2e/common.sh). A workload cluster's comes from its <cluster>-talosconfig Secret, read with
+# the management cluster's kubeconfig from the same places. They stay in a private
 # directory that collect removes when it ends, never in what it writes. A VM runs Talos when it is
 # tagged management (the management cluster's nodes) or talos, or when its cluster has a
 # talosconfig. Each talosctl call is cut off after KUBEHENGE_E2E_TALOSCTL_TIMEOUT seconds (60), and
@@ -494,11 +500,26 @@ talos_collect() {
     done
 }
 
-# tofu_output <output> <file>: one of the management cluster's Terraform/OpenTofu outputs into the
-# file, or why it could not be had into <file>.why.
-tofu_output() {
-    if [ -z "${work}" ] || [ ! -d "${work}/mgmt" ]; then
+# kept_credentials is where the appliance's test keeps the management cluster's credentials in the
+# Proxmox VE container. run.sh gives it the same path as KUBEHENGE_E2E_KEEP.
+kept_credentials=/root/kubehenge/management
+
+# management_credential <kubeconfig|talosconfig> <file>: the management cluster's credential into
+# the file, or why it could not be had into <file>.why. It is the Terraform/OpenTofu output where the
+# job applied the module. In a lane where the appliance made the cluster, run.sh's mgmt directory
+# holds no state and no providers, and the credential is the copy the appliance's test kept.
+management_credential() {
+    if [ -z "${work}" ] || [ ! -f "${work}/mgmt/terraform.tfstate" ]; then
         echo "no Terraform/OpenTofu state in '${work}/mgmt'" > "$2.why"
+        kept_code=0
+        timeout -k 10 60 docker exec kubehenge-e2e-pve cat "${kept_credentials}/$1" < /dev/null > "$2" 2>> "$2.why" ||
+            kept_code=$?
+        if [ "${kept_code}" -eq 0 ] && [ -s "$2" ]; then
+            rm -f "$2.why"
+            return 0
+        fi
+        rm -f "$2"
+        echo "and no ${kept_credentials}/$1 in the Proxmox VE container, exit code ${kept_code}" >> "$2.why"
         return 1
     fi
     tofu_code=0
@@ -523,7 +544,7 @@ talos_machines() {
     if [ -z "${kubeconfig}" ] || [ ! -s "${kubeconfig}" ]; then
         kubeconfig=${private}/kubeconfig
         # shellcheck disable=SC2310 # its failure is why nothing is asked of the management cluster.
-        if ! tofu_output kubeconfig "${kubeconfig}"; then
+        if ! management_credential kubeconfig "${kubeconfig}"; then
             cp "${kubeconfig}.why" "${private}/machines.why"
             kubeconfig=''
             return 0
@@ -583,7 +604,7 @@ EOF
             talos_config=${private}/management.talosconfig
             if [ ! -e "${talos_config}" ] && [ ! -e "${talos_config}.why" ]; then
                 # shellcheck disable=SC2310 # its failure is recorded.
-                tofu_output talosconfig "${talos_config}" || true
+                management_credential talosconfig "${talos_config}" || true
             fi
             ;;
         *)
@@ -649,14 +670,85 @@ collect() {
         done
 }
 
+# etcd_figures <node> <log>: from a node's etcd log, the time it covers, its slow disk syncs (etcd
+# warns past 1 s), its slow requests (past 100 ms) and its requests that timed out, each with the
+# longest it logged.
+etcd_figures() {
+    awk -v node="$1" '
+        # A Go duration as etcd logs it, such as 958.16ms or 1m2.5s, in milliseconds.
+        function ms(t, v) {
+            if (t ~ /ms$/) { sub(/ms$/, "", t); return t + 0 }
+            if (t !~ /[0-9]s$/) return 0
+            v = 0
+            if (t ~ /m[0-9]/) { v = substr(t, 1, index(t, "m") - 1) * 60000; t = substr(t, index(t, "m") + 1) }
+            sub(/s$/, "", t)
+            return v + t * 1000
+        }
+        function took(line) {
+            if (!match(line, /"took":"[^"]*"/)) return 0
+            return ms(substr(line, RSTART + 8, RLENGTH - 9))
+        }
+        match($0, /"ts":"[^"]*"/) { ts = substr($0, RSTART + 6, RLENGTH - 7); if (first == "") first = ts; last = ts }
+        /slow fdatasync/ { t = took($0); syncs++; if (t > sync_max) sync_max = t }
+        /apply request took too long/ { t = took($0); reqs++; if (t >= 1000) reqs_1s++; if (t > req_max) req_max = t }
+        /etcdserver: request timed out/ { timeouts++ }
+        END {
+            if (first == "") { printf "%s: etcd logged nothing\n", node; exit }
+            printf "%s: etcd log from %s to %s\n", node, first, last
+            printf "  slow disk syncs (past 1 s): %d, longest %.1f s\n", syncs, sync_max / 1000
+            printf "  slow requests (past 100 ms): %d, past 1 s: %d, longest %.1f s\n", reqs, reqs_1s, req_max / 1000
+            printf "  requests timed out: %d\n", timeouts
+        }' "$2"
+}
+
+# etcd_latency <file> <work dir>: etcd_figures for each management node, through Talos's API with
+# the management cluster's talosconfig, into the file. Says so when there is no cluster to read.
+etcd_latency() {
+    work=$2
+    private=$(mktemp -d)
+    trap 'rm -rf "${private}"' EXIT
+    trap 'exit 1' HUP INT TERM
+    talos_config=${private}/management.talosconfig
+    {
+        # shellcheck disable=SC2310 # its failure is what is reported.
+        if ! management_credential talosconfig "${talos_config}"; then
+            echo "no management cluster to read: $(cat "${talos_config}.why" 2> /dev/null || true)"
+            exit 0
+        fi
+        docker exec kubehenge-e2e-pve qm list < /dev/null | awk 'NR > 1 && $3 == "running" { print $1, $2 }' > "${private}/vms"
+        while read -r vmid name; do
+            tags=$(timeout -k 10 60 docker exec kubehenge-e2e-pve qm config "${vmid}" < /dev/null 2> /dev/null |
+                sed -n 's/^tags: //p' | tr ', ' ';;')
+            case ";${tags};" in
+                *";backups;"*) continue ;;
+                *";management;"*) ;;
+                *) continue ;;
+            esac
+            talos_address=$(agent_address "${vmid}")
+            if [ -z "${talos_address}" ]; then
+                echo "${name}: its guest agent gives no address"
+                continue
+            fi
+            talosctl_node logs etcd
+            if [ "${talos_code}" -ne 0 ]; then
+                echo "${name} (${talos_address}): talosctl logs etcd failed, exit code ${talos_code}"
+                tail -n 3 "${private}/talosctl.out"
+                continue
+            fi
+            etcd_figures "${name}" "${private}/talosctl.out"
+        done < "${private}/vms"
+    } 2>&1 | redact > "$1"
+}
+
 case ${1:-} in
     record) record "${2:?usage: $0 record <file>}.trims" > "$2" ;;
     now) sample ;;
     trim) trim "${2:?usage: $0 trim <file>}.trims" ;;
     summary) summary "${2:?usage: $0 summary <file>}" ;;
     collect) collect "${2:?usage: $0 collect <directory> [<work directory>]}" "${3:-${RUNNER_TEMP:+${RUNNER_TEMP}/e2e}}" ;;
+    etcd) etcd_latency "${2:?usage: $0 etcd <file> [<work directory>]}" "${3:-${RUNNER_TEMP:+${RUNNER_TEMP}/e2e}}" ;;
     *)
-        echo "usage: $0 record <file> | now | summary <file> | collect <directory> [<work directory>]" >&2
+        echo "usage: $0 record <file> | now | summary <file> | collect <directory> [<work directory>] | etcd <file> [<work directory>]" >&2
         exit 2
         ;;
 esac

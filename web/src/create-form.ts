@@ -13,7 +13,6 @@ import {
   backupsVariable,
   classTargets,
   newBackupFields,
-  withTarget,
   type BackupFields,
 } from "./Backups";
 import {
@@ -49,12 +48,21 @@ import {
   etcdProblems,
   etcdSnapshotsText,
   etcdSnapshotsVariable,
+  toTarget,
   uploadsItself,
   withEtcdTarget,
   type EtcdSnapshotFields,
   type EtcdSnapshotsValue,
 } from "./EtcdSnapshots";
-import { securityGroupsProblem } from "./Firewall";
+import {
+  datacenterNote,
+  firewallPortsProblem,
+  firewallText,
+  firewallVariable,
+  securityGroupsProblem,
+  type DatacenterFirewallState,
+  type FirewallFields,
+} from "./Firewall";
 import {
   gitOpsFields,
   gitOpsProblems,
@@ -70,6 +78,7 @@ import {
   loadBalancerProblems,
   loadBalancerText,
   loadBalancerVariable,
+  recommendedImplementation,
   bgpOffered,
   type Implementation,
   type LoadBalancer,
@@ -87,6 +96,7 @@ import {
   familyLabels,
   familyNames,
   familyOf,
+  offNetworkText,
   hasFamily,
   inList,
   isMTU,
@@ -97,8 +107,10 @@ import {
   maxQueues,
   minMTU,
   networkOf,
+  parseAddress,
   parseCidr,
   rangeProblem,
+  sameNetwork,
   searchDomainsProblem,
   timeServersProblem,
   whole,
@@ -163,6 +175,7 @@ import type {
 } from "./types";
 import {
   browserZone,
+  bytes,
   cniName,
   csiText,
   haGroupsText,
@@ -177,10 +190,20 @@ import {
   sole,
 } from "./ui";
 import { quantity, record, text, texts } from "./values";
+import { siteVMIDAnnotation, vmIDRangeProblem, vmIDRangeText, vmIDRangeVariable, vmIDVariable } from "./VmidRange";
 
+export { firewallOf } from "./Firewall";
 export { nodeCustomisationOf } from "./node-customisation";
 
-export const steps = ["General", "Network", "Machines", "Add-ons", "Identity providers", "Confirm"] as const;
+export const steps = [
+  "General",
+  "Network",
+  "Machines",
+  "Add-ons",
+  "Policies",
+  "Identity providers",
+  "Confirm",
+] as const;
 export type Step = (typeof steps)[number];
 
 export interface Machine {
@@ -209,6 +232,8 @@ export interface Form {
   /** Empty while the interface creates clusters in one namespace only. */
   namespace: string;
   name: string;
+  /** The names of the clusters in the form's namespace, which a new name may not repeat. */
+  taken: string[];
   className: string;
   /** The node OS as one word, such as almalinux-10. Empty while the class offers none. */
   nodeOS: string;
@@ -231,8 +256,14 @@ export interface Form {
   mtu: string;
   /** The nodes' interface queues, empty for one. */
   queues: string;
-  /** Proxmox VE security groups of the nodes' firewall, comma-separated, empty to leave the firewall off. */
+  /** Proxmox VE security groups of the nodes' firewall, comma-separated, applied after its own rules. */
   securityGroups: string;
+  /** Whether the nodes' firewall is on, which the class defaults to. */
+  firewall: boolean;
+  /** Whether the firewall opens its serving ports to anyone, which the class defaults to. */
+  firewallServing: boolean;
+  /** Further ports the firewall opens to anywhere, such as tcp/8443, udp/4000-4010. */
+  firewallPorts: string;
   /** The address families of the nodes, the primary first. Fixed once the cluster exists. */
   families: FamilyChoice;
   /** The IPv4 network. Left out of the cluster with IPv6 alone. */
@@ -262,6 +293,8 @@ export interface Form {
   loadBalancerPeers: string;
   loadBalancerRouterID: string;
   loadBalancerAuthenticated: boolean;
+  /** Whether the load balancer was chosen by hand, which the address range then never changes. */
+  loadBalancerPicked: boolean;
   /** Typed here and stored as the cluster's bgp credential once it exists. Never copied from another cluster. */
   loadBalancerPassword: string;
   pods: string;
@@ -270,6 +303,8 @@ export interface Form {
   place: Place;
   /** Minutes machines of an away host wait before replacement, as text. */
   hostOutageGrace: string;
+  /** The VM IDs the cluster's VMs take, as start-end. Empty takes the site's range, else the next free ID. */
+  vmIDRange: string;
   proxmoxHA: boolean;
   datastoreAllocate: boolean;
   volumeSnapshots: boolean;
@@ -301,6 +336,10 @@ export interface Form {
   rancherInstall: boolean;
   rancherHostname: string;
   rancherRegister: boolean;
+  /** Whether a cluster already runs Rancher, so that registering has something to register with. */
+  rancherExists: boolean;
+  /** Whether the namespace is known to hold no access key for every cluster. Unknown counts as held. */
+  noSharedKey: boolean;
   certificates: CertificatesForm;
   /** The labels of every namespace Kubehenge makes, one key=value per line. */
   namespaceLabels: string;
@@ -313,7 +352,11 @@ export interface Form {
   egress: EgressChoice;
   oidc: OIDCProvider[];
   upgradeMode: UpgradeMode;
+  /** Whether the nodes move to new node images (on Talos, patch releases) inside the window. */
+  nodeImages: boolean;
   backups: boolean;
+  /** The time zone a schedule not yet named starts in: the site's once the classes are read, else the browser's. */
+  siteZone: string;
   backupFields: BackupFields;
   /** Whether the cluster gets an access key of its own, stored once it is created. */
   // storeBackupKey is whether the form stores the cluster's own access key for its backups.
@@ -325,9 +368,13 @@ export interface Form {
 }
 
 /** newUpgrades is the policy a new cluster starts with: every day from 02:00 for four hours, in the browser's time zone. */
-export const newUpgrades = (mode: Form["upgradeMode"], timeZone: string): UpgradePolicy => ({
+export const newUpgrades = (mode: Form["upgradeMode"], timeZone: string, nodeImages = true): UpgradePolicy => ({
   mode,
-  window: { start: defaultStart, durationMinutes: defaultMinutes, timeZone },
+  ...(nodeImages ? {} : { nodeImages: false }),
+  // With nothing to run there is no window to keep.
+  ...(mode === "off" && !nodeImages
+    ? {}
+    : { window: { start: defaultStart, durationMinutes: defaultMinutes, timeZone } }),
 });
 
 export const versionExamples: Record<string, string> = {
@@ -336,6 +383,10 @@ export const versionExamples: Record<string, string> = {
   kubeadm: "v1.36.5",
   talos: "v1.36.5",
 };
+
+/** hasManagementProxy says whether the management side has a proxy that a cluster takes unless it names its own. */
+export const hasManagementProxy = (c: ClusterClass | undefined): boolean =>
+  c?.annotations?.["kubehenge.dev/management-proxy"] === "true";
 
 export function variable(c: ClusterClass | undefined, name: string): Schema | undefined {
   return c?.variables.find((v) => v.name === name)?.schema;
@@ -449,7 +500,35 @@ export interface Room {
   /** Set where no node the cluster may use has room for its largest machine. */
   nodeWarning?: string | undefined;
   disk: number;
+  /** The disks of the machines the cluster starts with, each autoscaled pool at its fewest. */
+  startDisk: number;
   freeDisk?: number | undefined;
+  /** Set where the disks exceed the free space of a storage that can overcommit, so the cluster may still be made. */
+  diskWarning?: string | undefined;
+  /**
+   * Set where thick storage holds what the cluster starts with but not its autoscaled pool at the
+   * most, in the words of the controller's AutoscalerNoRoom event.
+   */
+  growthWarning?: string | undefined;
+}
+
+/** spreadOver counts the online nodes a form's cluster may use, which its control planes spread over. */
+export const spreadOver = (nodes: PveNode[], form: Form): number => {
+  const allowed = allowedNodes(form.place);
+  return nodes.filter((n) => n.online && (allowed === undefined || allowed.includes(n.node))).length;
+};
+
+/**
+ * volumeWorkersWarning is said of node-local storage: a warning when the workers, an autoscaled
+ * pool at its fewest, are fewer than the nodes their volumes can come to be on, else a note.
+ */
+export function volumeWorkersWarning(form: Form, nodes: PveNode[], storages: Storage[]): string | undefined {
+  if (!storages.some((s) => s.storage === form.storage && !s.shared)) {
+    return undefined;
+  }
+  return form.workerReplicas > 0 && form.workerReplicas < spreadOver(nodes, form)
+    ? "Fewer workers than nodes can leave volumes without a worker."
+    : "Volumes on node-local storage stay on one node.";
 }
 
 /** createRoom weighs a form's VMs against the online nodes it may use and the storage it chose. */
@@ -464,15 +543,38 @@ export function createRoom(form: Form, nodes: PveNode[], storages: Storage[]): R
   const disks = chosen.some((s) => s.shared)
     ? chosen.slice(0, 1)
     : chosen.filter((s) => usable.some((n) => n.node === s.node));
+  const disk = (cp * form.controlPlaneMachine.diskGiB + workers * form.workerMachine.diskGiB) * bytesPerGiB;
+  const startDisk =
+    (cp * form.controlPlaneMachine.diskGiB + form.workerReplicas * form.workerMachine.diskGiB) * bytesPerGiB;
+  const freeDisk = disks.length > 0 ? disks.reduce((sum, s) => sum + s.avail, 0) : undefined;
   return {
+    growthWarning:
+      freeDisk !== undefined && startDisk <= freeDisk && disk > freeDisk && thick(chosen[0])
+        ? growthWarning(form.storage, disks, { free: freeDisk, need: disk })
+        : undefined,
+    startDisk,
+    diskWarning:
+      freeDisk !== undefined && disk > freeDisk && !thick(chosen[0])
+        ? `The disks need ${bytes(disk)}, ${bytes(freeDisk)} free. Thin storage may take them, until it runs out.`
+        : undefined,
     memory: (cp * form.controlPlaneMachine.memoryMiB + workers * form.workerMachine.memoryMiB) * bytesPerMiB,
     freeMemory: known
       ? usable.reduce((sum, n) => sum + Math.max(0, (n.maxMemory ?? 0) - (n.memory ?? 0)), 0)
       : undefined,
     nodeWarning: memoryNodeWarning(form, nodes),
-    disk: (cp * form.controlPlaneMachine.diskGiB + workers * form.workerMachine.diskGiB) * bytesPerGiB,
-    freeDisk: disks.length > 0 ? disks.reduce((sum, s) => sum + s.avail, 0) : undefined,
+    disk,
+    freeDisk,
   };
+}
+
+// growthWarning words thick storage too small for the autoscaled pool at its most, as the
+// controller's AutoscalerNoRoom event does.
+function growthWarning(storage: string, disks: Storage[], { free, need }: { free: number; need: number }): string {
+  const where = disks.some((s) => s.shared) ? "shared" : `on ${disks.map((s) => s.node).join(", ")}`;
+  return (
+    `Storage ${storage} (${where}) has ${Math.floor(free / bytesPerGiB)} GiB free. ` +
+    `The pools at their most workers need ${need / bytesPerGiB} GiB`
+  );
 }
 
 /** AddonKey names an add-on in a class's figures. */
@@ -523,7 +625,7 @@ function addonTotal(
       (form.monitoring || form.rancherInstall || form.certificates.enabled) && !usesExistingCertManager(form, c),
     rancher: form.rancherInstall,
     rancherAgent: !form.rancherInstall && form.rancherRegister,
-    backups: form.backups && variable(c, "backups") !== undefined,
+    backups: backupsChosen(form, c),
     argocd: form.gitops.engine === "argocd",
     flux: form.gitops.engine === "flux",
   };
@@ -677,28 +779,57 @@ export function withRoom(form: Form, c: ClusterClass | undefined): Form {
   return raised;
 }
 
-/** backupsChosen says whether the form's backups are on and its class has them. */
+/** backupsChosen says whether the form's backups are on and its class has them and a target to take them to. */
 export const backupsChosen = (f: Form, c: ClusterClass | undefined): boolean =>
-  f.backups && variable(c, "backups") !== undefined;
+  f.backups && variable(c, "backups") !== undefined && classTargets(c).length > 0;
 
-/** etcdOffered says whether a class has etcd snapshots and a backup target to take them to. */
-export const etcdOffered = (c: ClusterClass | undefined): boolean =>
-  variable(c, "etcdSnapshots") !== undefined && classTargets(c).length > 0;
+const keyTyped = (f: Form): boolean => backupKeys.some((k) => filled(f.backupKey[k.key]));
+
+/** backupsWait says whether Velero's backups are on but have no access key of the cluster's own yet. */
+export const backupsWait = (f: Form, c: ClusterClass | undefined): boolean => backupsChosen(f, c) && !keyTyped(f);
+
+/** etcdOffered says whether a class has etcd snapshots, to a backup target or else the backup volume. */
+export const etcdOffered = (c: ClusterClass | undefined): boolean => variable(c, "etcdSnapshots") !== undefined;
 
 /** etcdChosen says whether the form's etcd snapshots are on and its class offers them. */
 export const etcdChosen = (f: Form, c: ClusterClass | undefined): boolean => f.etcdSnapshots && etcdOffered(c);
 
+/** etcdToTarget says whether the form's etcd snapshots go to a bucket target, which needs an access key. */
+const etcdToTarget = (f: Form, c: ClusterClass | undefined): boolean =>
+  etcdChosen(f, c) && toTarget(f.etcdFields.target);
+
 /** keyNeeded says whether the cluster gets the access key that its backups or etcd snapshots are written with. */
-export const keyNeeded = (f: Form, c: ClusterClass | undefined): boolean => backupsChosen(f, c) || etcdChosen(f, c);
+export const keyNeeded = (f: Form, c: ClusterClass | undefined): boolean => backupsChosen(f, c) || etcdToTarget(f, c);
 
 /**
- * withBackupChoices takes the one backup target a class offers until another is chosen, the backups'
+ * keyRequired says whether the access key must be entered to go on: only for an upload by the nodes
+ * themselves. Velero's backups run in the cluster and need a key of its own, and etcd snapshots one
+ * of its own or for every cluster, but both wait for it rather than stop the wizard (backupsWait,
+ * snapshotsWait).
+ */
+export const keyRequired = (f: Form, c: ClusterClass | undefined): boolean =>
+  etcdChosen(f, c) && f.etcdFields.upload && c !== undefined && uploadsItself(c.distribution);
+
+/**
+ * snapshotsWait says whether the etcd snapshots have no key yet: none stored for every cluster and
+ * none entered. The controller takes none until a key for their target is stored.
+ */
+export const snapshotsWait = (f: Form, c: ClusterClass | undefined): boolean =>
+  etcdToTarget(f, c) && f.noSharedKey && !keyTyped(f);
+
+/** snapshotsWaitText is what the snapshot step and Confirm say of snapshots that wait for a key. */
+export const snapshotsWaitText = (target: string): string => `No snapshots until a key for ${target} is stored`;
+
+/**
+ * withBackupChoices takes the first backup target a class offers until another is chosen, the backups'
  * target for etcd snapshots when it is one of them, and a key of the cluster's own only for those who
  * may store one.
  */
 export function withBackupChoices(f: Form, c: ClusterClass | undefined, canTrust: boolean | undefined): Form {
   const targets = classTargets(c);
-  const backupFields = withTarget(f.backupFields, targets);
+  const backupFields = filled(f.backupFields.target)
+    ? f.backupFields
+    : { ...f.backupFields, target: targets[0]?.name ?? "" };
   return {
     ...f,
     backupFields,
@@ -866,6 +997,7 @@ export function withBridgeNetwork(f: Form, net: BridgeNetwork | undefined, touch
 export const newForm = (): Form => ({
   from: "",
   namespace: "",
+  taken: [],
   name: "",
   className: "",
   nodeOS: "",
@@ -883,6 +1015,9 @@ export const newForm = (): Form => ({
   mtu: "",
   queues: "",
   securityGroups: "",
+  firewall: true,
+  firewallServing: true,
+  firewallPorts: "",
   families: "ipv4",
   addresses: "",
   prefix: 24,
@@ -904,12 +1039,14 @@ export const newForm = (): Form => ({
   loadBalancerPeers: "",
   loadBalancerRouterID: "",
   loadBalancerAuthenticated: false,
+  loadBalancerPicked: false,
   loadBalancerPassword: "",
   pods: "",
   services: "",
   storage: "",
   place: anyNode,
   hostOutageGrace: defaultGrace,
+  vmIDRange: "",
   proxmoxHA: true,
   datastoreAllocate: false,
   volumeSnapshots: false,
@@ -936,6 +1073,8 @@ export const newForm = (): Form => ({
   rancherInstall: false,
   rancherHostname: "",
   rancherRegister: true,
+  rancherExists: true,
+  noSharedKey: false,
   certificates: newCertificates(),
   namespaceLabels: "",
   existingCertManager: false,
@@ -944,8 +1083,10 @@ export const newForm = (): Form => ({
   gitops: newGitOps(),
   egress: newEgress(),
   oidc: [],
-  upgradeMode: "off",
-  backups: false,
+  upgradeMode: "patch",
+  nodeImages: true,
+  backups: true,
+  siteZone: browserZone(),
   backupFields: newBackupFields(),
   storeBackupKey: true,
   backupKey: {},
@@ -1089,7 +1230,7 @@ function addOnVariables(form: Form, c: ClusterClass, defined: Set<string>): Reco
   } else if (!form.rancherRegister) {
     variables["rancher"] = { register: false };
   }
-  if (form.backups) {
+  if (backupsChosen(form, c)) {
     variables["backups"] = backupsVariable(form.backupFields);
   }
   if (etcdChosen(form, c)) {
@@ -1158,7 +1299,7 @@ export interface PendingCredential {
 /** pendingCredentials are the credentials to store for the created cluster that the form holds. */
 export function pendingCredentials(form: Form, c: ClusterClass): PendingCredential[] {
   const pending: PendingCredential[] = [];
-  if (keyNeeded(form, c) && form.storeBackupKey) {
+  if (keyNeeded(form, c) && form.storeBackupKey && (keyRequired(form, c) || keyTyped(form))) {
     pending.push({
       purpose: "backup",
       values: form.backupKey,
@@ -1289,6 +1430,9 @@ function networkVariable(form: Form, c: ClusterClass): Record<string, unknown> {
 // proxmoxVariables are the variables of where the nodes go on Proxmox VE and how it looks after them.
 function proxmoxVariables(form: Form, defined: ReadonlySet<string>): Record<string, unknown> {
   const variables: Record<string, unknown> = { ...graceVariables(form) };
+  if (form.vmIDRange.trim() !== "") {
+    variables[vmIDVariable] = vmIDRangeVariable(form.vmIDRange);
+  }
   const nodes = allowedNodes(form.place);
   if (nodes !== undefined) {
     variables["allowedNodes"] = nodes;
@@ -1307,7 +1451,10 @@ function proxmoxVariables(form: Form, defined: ReadonlySet<string>): Record<stri
   if (!form.haGroups && defined.has("ccm")) {
     variables["ccm"] = { haGroups: false };
   }
-  if (list(form.securityGroups).length > 0 && defined.has("securityGroups")) {
+  if (defined.has("firewall")) {
+    variables["firewall"] = firewallVariable(firewallFieldsOf(form));
+  }
+  if (form.firewall && list(form.securityGroups).length > 0 && defined.has("securityGroups")) {
     variables["securityGroups"] = list(form.securityGroups);
   }
   return variables;
@@ -1339,9 +1486,8 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   variables["oidc"] = cleanProviders(form.oidc);
   // A cluster whose nodes move to new template builds needs its window in the browser's time zone
   // even with Kubernetes upgrades off.
-  const upgrades = newUpgrades(form.upgradeMode, browserZone());
-  if (form.upgradeMode !== "off" || (defined.has("upgrades") && refreshesNodes(upgrades))) {
-    variables["upgrades"] = upgrades;
+  if (form.upgradeMode !== "off" || defined.has("upgrades")) {
+    variables["upgrades"] = newUpgrades(form.upgradeMode, form.siteZone, form.nodeImages);
   }
   const req: CreateRequest = {
     ...(form.namespace ? { namespace: form.namespace } : {}),
@@ -1353,6 +1499,11 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
     variables: Object.fromEntries(Object.entries(variables).filter(([k]) => defined.has(k))),
     ...timeoutRequests(form),
   };
+  // The cluster's own access key is stored before the cluster, which then owns it.
+  const key = pendingCredentials(form, c).find((p) => p.purpose === "backup");
+  if (key !== undefined) {
+    req.backupKey = key.values;
+  }
   if (autoscales(form, c)) {
     req.workerAutoscaling = { min: form.workerReplicas, max: form.workerMax };
   }
@@ -1365,10 +1516,12 @@ export function request(form: Form, c: ClusterClass): CreateRequest {
   return req;
 }
 
-const gib = (mib: number): string => (mib % mibPerGiB === 0 ? `${mib / mibPerGiB} GiB` : `${mib} MiB`);
+// size writes an amount in the unit the Confirm step's needs use, such as 878.9 GiB or 8.8 TiB.
+const size = (mib: number): string => bytes(mib * bytesPerMiB).replace(".0 ", " ");
 /** coresText counts cores, with "core" for one. */
 export const coresText = (n: number): string => `${n} ${n === 1 ? "core" : "cores"}`;
-const machine = (m: Machine): string => `${coresText(m.cores)}, ${gib(m.memoryMiB)} memory, ${m.diskGiB} GiB disk`;
+const machine = (m: Machine): string =>
+  `${coresText(m.cores)}, ${size(m.memoryMiB)} memory, ${size(m.diskGiB * mibPerGiB)} disk`;
 
 /** formLoadBalancerValue is what the load-balancer fields show of the form. */
 export const formLoadBalancerValue = (form: Form): LoadBalancerValue => ({
@@ -1388,7 +1541,10 @@ function rancherChoice(form: Form): string {
   if (form.rancherInstall) {
     return `Installed at ${form.rancherHostname}`;
   }
-  return form.rancherRegister ? registeredWithRancher : "Not registered";
+  if (!form.rancherRegister) {
+    return "Not registered";
+  }
+  return form.rancherExists ? registeredWithRancher : "Registers once a cluster installs Rancher";
 }
 
 function meshChoice(form: Form): string {
@@ -1413,7 +1569,14 @@ function releaseRows(form: Form, c: ClusterClass, defined: Set<string>): [string
   return rows;
 }
 
-function interfaceRows(form: Form): [string, string][] {
+/** firewallFieldsOf is the form's firewall as its field edits it. */
+export const firewallFieldsOf = (form: Form): FirewallFields => ({
+  on: form.firewall,
+  serving: form.firewallServing,
+  ports: form.firewallPorts,
+});
+
+function interfaceRows(form: Form, datacenter: DatacenterFirewallState | undefined): [string, string][] {
   const rows: [string, string][] = [];
   if (form.mtu) {
     rows.push(["MTU", form.mtu]);
@@ -1421,9 +1584,9 @@ function interfaceRows(form: Form): [string, string][] {
   if (form.queues) {
     rows.push(["Queues", form.queues]);
   }
-  if (list(form.securityGroups).length > 0) {
-    rows.push(["Security groups", list(form.securityGroups).join(", ")]);
-  }
+  const firewall = firewallText(firewallFieldsOf(form), form.securityGroups);
+  const note = form.firewall ? datacenterNote(datacenter) : undefined;
+  rows.push(["Firewall", note === undefined ? firewall : `${firewall}. ${note}`]);
   return rows;
 }
 
@@ -1450,6 +1613,23 @@ interface SummaryOffered {
   csi?: boolean;
   snapshots?: boolean;
   haGroups?: boolean;
+  /** The datacenter firewall's state, which the firewall's row names when it is not on. */
+  datacenterFirewall?: DatacenterFirewallState | undefined;
+}
+
+// vmIDRows are the summary's row of the VM IDs the cluster's VMs take, for a class that has them.
+function vmIDRows(form: Form, c: ClusterClass, defined: ReadonlySet<string>): [string, string][] {
+  return defined.has(vmIDVariable)
+    ? [["VM ID range", vmIDRangeText(form.vmIDRange, c.annotations?.[siteVMIDAnnotation] ?? "")]]
+    : [];
+}
+
+// vmIDProblems holds the range, the site's where the form leaves it empty, to the figures the server
+// holds it to.
+function vmIDProblems(form: Form, c: ClusterClass | undefined): Problems {
+  const range = form.vmIDRange || (c?.annotations?.[siteVMIDAnnotation] ?? "");
+  const problem = variable(c, vmIDVariable) ? vmIDRangeProblem(range, nodesNeeded(form) + 1) : undefined;
+  return problem === undefined ? {} : { vmIDRange: problem };
 }
 
 // proxmoxRows are the summary's rows of where the nodes go on Proxmox VE and how it looks after them.
@@ -1471,13 +1651,13 @@ function proxmoxRows(form: Form, defined: ReadonlySet<string>, offered: SummaryO
     rows.push(["Volume snapshots", snapshotsText(form.volumeSnapshots)]);
   }
   if (offered.haGroups === true) {
-    rows.push(["HA group labels", haGroupsText(form.haGroups)]);
+    rows.push(["HA rule labels", haGroupsText(form.haGroups)]);
   }
   return rows;
 }
 
 // summary is what the Confirm step shows: each setting by its name, as the user chose it. Proxmox
-// VE HA, the CSI plugin's release and the HA group labels only where they can be chosen.
+// VE HA, the CSI plugin's release and the HA rule labels only where they can be chosen.
 export function summary(form: Form, c: ClusterClass, offered: SummaryOffered = {}): [string, string][] {
   const defined = new Set(c.variables.map((v) => v.name));
   const shownFamilies = familiesOf(form.families).length;
@@ -1491,7 +1671,7 @@ export function summary(form: Form, c: ClusterClass, offered: SummaryOffered = {
       autoscales(form, c) ? `${form.workerReplicas} to ${form.workerMax}, autoscaled` : String(form.workerReplicas),
     ],
     ["Bridge", form.vlan ? `${form.bridge}, VLAN ${form.vlan}` : form.bridge],
-    ...interfaceRows(form),
+    ...interfaceRows(form, offered.datacenterFirewall),
     ...(form.families === "ipv4" ? [] : [["Address families", familyLabels[form.families]] as [string, string]]),
     ["API address", form.endpoint],
     ...(hasFamily(form.families, "IPv4")
@@ -1518,6 +1698,7 @@ export function summary(form: Form, c: ClusterClass, offered: SummaryOffered = {
     ["Service range", form.services || "Automatic"],
     ["Storage", form.storage],
     ...proxmoxRows(form, defined, offered),
+    ...vmIDRows(form, c, defined),
     ["Control-plane machines", machine(form.controlPlaneMachine)],
   );
   if (mostWorkers(form) > 0) {
@@ -1531,7 +1712,7 @@ export function summary(form: Form, c: ClusterClass, offered: SummaryOffered = {
   }
   rows.push(...customisationRows(form, defined), ...addOnRows(form, c, defined));
   if (defined.has("upgrades")) {
-    const upgrades = newUpgrades(form.upgradeMode, browserZone());
+    const upgrades = newUpgrades(form.upgradeMode, form.siteZone, form.nodeImages);
     rows.push(["Automatic upgrades", describe(upgrades, refreshesNodes(upgrades), c.distribution)]);
   }
   if (defined.has("oidc")) {
@@ -1570,13 +1751,28 @@ const customisationRows = (form: Form, defined: Set<string>): [string, string][]
 // backupRows sums up the backups and etcd snapshots, each with where its access key comes from.
 function backupRows(form: Form, c: ClusterClass, defined: Set<string>): [string, string][] {
   const rows: [string, string][] = [];
-  const key = form.storeBackupKey ? "own access key" : "access key to store later";
+  let key = form.storeBackupKey ? "own access key" : "access key to store later";
+  if (backupsWait(form, c)) {
+    key = "waits for the cluster's access key";
+  }
   if (defined.has("backups")) {
-    rows.push(["Backups", form.backups ? `${backupsText(backupsVariable(form.backupFields))}, ${key}` : "Off"]);
+    rows.push([
+      "Backups",
+      backupsChosen(form, c) ? `${backupsText(backupsVariable(form.backupFields))}, ${key}` : "Off",
+    ]);
   }
   if (etcdOffered(c)) {
     const sum = etcdSnapshotsText(etcdVariable(form, c), c.distribution);
-    rows.push(["etcd snapshots", form.etcdSnapshots ? `${sum}, ${key}` : "Off"]);
+    const typed = keyTyped(form);
+    let etcdKey = key;
+    if (!keyRequired(form, c) && !typed) {
+      etcdKey = "key for every cluster";
+    }
+    let etcd = form.etcdSnapshots ? `${sum}, ${etcdKey}` : "Off";
+    if (snapshotsWait(form, c)) {
+      etcd = snapshotsWaitText(form.etcdFields.target);
+    }
+    rows.push(["etcd snapshots", etcd]);
   }
   return rows;
 }
@@ -1607,17 +1803,17 @@ function addOnRows(form: Form, c: ClusterClass, defined: Set<string>): [string, 
   if (defined.has("certificates")) {
     rows.push(...certificatesRows(form));
   }
-  return [...rows, ...reachRows(form, defined)];
+  return [...rows, ...reachRows(form, defined, c)];
 }
 
 // reachRows sum up the add-ons that reach beyond the cluster.
-function reachRows(form: Form, defined: Set<string>): [string, string][] {
+function reachRows(form: Form, defined: Set<string>, c: ClusterClass): [string, string][] {
   const rows: [string, string][] = [];
   if (defined.has("gitops")) {
     rows.push(["GitOps", gitOpsText(form.gitops)]);
   }
   if (defined.has("egressProxy")) {
-    rows.push(["Egress proxy", egressText(form.egress)]);
+    rows.push(["Egress proxy", egressText(form.egress, hasManagementProxy(c))]);
   }
   if (defined.has("registryMirrors") && mirrorsVariable(form.registryMirrors) !== undefined) {
     rows.push(["Registry mirrors", mirrorsText(form.registryMirrors)]);
@@ -1665,6 +1861,7 @@ export type FieldKey =
   | "mtu"
   | "queues"
   | "securityGroups"
+  | "firewallPorts"
   | "endpoint"
   | "addresses"
   | "prefix"
@@ -1687,6 +1884,7 @@ export type FieldKey =
   | "volumeSnapshots"
   | "placement"
   | "hostOutageGrace"
+  | "vmIDRange"
   | "controlPlaneMachine"
   | "workerMachine"
   | "workerNodes"
@@ -1733,9 +1931,14 @@ function nameProblem(name: string): string | undefined {
   return name.endsWith("-") ? "End the name with a letter or digit" : undefined;
 }
 
+// nameTaken tells that a cluster of the form's namespace already has the name: the cluster could
+// not be created, and the last step would only say so as a warning.
+const nameTaken = (form: Form): string | undefined =>
+  form.taken.includes(form.name) ? `${form.name} is in use. Enter another name.` : undefined;
+
 function generalProblems(form: Form, c: ClusterClass | undefined): Problems {
   const p: Problems = {};
-  const name = nameProblem(form.name);
+  const name = nameProblem(form.name) ?? nameTaken(form);
   if (name !== undefined) {
     p.name = name;
   }
@@ -1823,7 +2026,7 @@ function addressProblems(form: Form, routed: boolean): Problems {
     } else if (other !== undefined) {
       p[n.key] = `${other} is an ${n.family === "IPv4" ? "IPv6" : "IPv4"} address. Enter ${n.family} addresses here`;
     } else if (bad !== undefined) {
-      p[n.key] = `${bad} is not an address, range or network on the gateway's network`;
+      p[n.key] = offNetworkText(bad);
     } else if (count < needed) {
       p[n.key] = `Enter at least ${needed} addresses, one per node plus one spare`;
     }
@@ -1891,9 +2094,13 @@ function interfaceProblems(form: Form): Problems {
   if (form.queues && !isQueues(form.queues)) {
     p.queues = `A whole number from 1 to ${maxQueues}`;
   }
-  const groups = securityGroupsProblem(form.securityGroups);
+  const groups = form.firewall ? securityGroupsProblem(form.securityGroups) : undefined;
   if (groups !== undefined) {
     p.securityGroups = groups;
+  }
+  const ports = firewallPortsProblem(firewallFieldsOf(form));
+  if (ports !== undefined) {
+    p.firewallPorts = ports;
   }
   return p;
 }
@@ -1931,16 +2138,32 @@ function balancerProblems(form: Form, c: ClusterClass | undefined): Problems {
   return p;
 }
 
-/** setLoadBalancer sets the form fields behind the load-balancer fields that a patch holds. */
+/** withSiteZone moves the schedules that still start in the form's zone to the site's zone. */
+export const withSiteZone = (f: Form, zone: string): Form => ({
+  ...f,
+  siteZone: zone,
+  etcdFields: f.etcdFields.timeZone === f.siteZone ? { ...f.etcdFields, timeZone: zone } : f.etcdFields,
+  backupFields: f.backupFields.timeZone === f.siteZone ? { ...f.backupFields, timeZone: zone } : f.backupFields,
+});
+
+/**
+ * setLoadBalancer sets the form fields behind the load-balancer fields that a patch holds. A load
+ * balancer nobody chose follows the address range: MetalLB once there is one.
+ */
 export function setLoadBalancer(
   set: <K extends keyof Form>(k: K, v: Form[K]) => void,
   patch: Partial<LoadBalancerValue>,
+  picked: boolean,
 ): void {
   if (patch.implementation !== undefined) {
     set("loadBalancer", patch.implementation);
+    set("loadBalancerPicked", true);
   }
   if (patch.addresses !== undefined) {
     set("loadBalancerAddresses", patch.addresses);
+    if (!picked && patch.implementation === undefined) {
+      set("loadBalancer", recommendedImplementation(patch.addresses));
+    }
   }
   if (patch.mode !== undefined) {
     set("loadBalancerMode", patch.mode);
@@ -2074,6 +2297,7 @@ function machineProblems(form: Form, c: ClusterClass | undefined): Problems {
   if (grace !== undefined) {
     p.hostOutageGrace = grace;
   }
+  Object.assign(p, vmIDProblems(form, c));
   for (const key of ["controlPlaneMachine", "workerMachine"] as const) {
     const problem = machineProblem(form, c, key);
     if (problem !== undefined) {
@@ -2112,10 +2336,6 @@ function addOnProblems(form: Form, c: ClusterClass | undefined): Problems {
   if (certificates.length > 0) {
     p.certificates = certificates.join(" ");
   }
-  const labels = variable(c, "namespaceLabels") ? parseLabels(form.namespaceLabels).problem : undefined;
-  if (labels !== undefined) {
-    p.namespaceLabels = labels;
-  }
   if (variable(c, "gitops") !== undefined) {
     const g = gitOpsProblems(form.gitops);
     for (const field of gitOpsFields) {
@@ -2127,11 +2347,17 @@ function addOnProblems(form: Form, c: ClusterClass | undefined): Problems {
   }
   return {
     ...p,
-    ...egressFormProblems(form, c),
     ...backupsProblems(form, c),
     ...etcdSnapshotsProblems(form, c),
     ...accessKeyProblems(form, c),
   };
+}
+
+// policyProblems are what keeps the policies step from being complete: the egress proxy and the
+// namespace labels.
+function policyProblems(form: Form, c: ClusterClass | undefined): Problems {
+  const labels = variable(c, "namespaceLabels") ? parseLabels(form.namespaceLabels).problem : undefined;
+  return { ...egressFormProblems(form, c), ...(labels === undefined ? {} : { namespaceLabels: labels }) };
 }
 
 // egressFormProblems are what is wrong with the egress proxy the form names, by field.
@@ -2221,7 +2447,8 @@ function etcdSnapshotsProblems(form: Form, c: ClusterClass | undefined): Problem
 
 // accessKeyProblems keep the one key that backups and etcd snapshots share from being left out.
 function accessKeyProblems(form: Form, c: ClusterClass | undefined): Problems {
-  if (keyNeeded(form, c) && form.storeBackupKey && !backupKeys.every((k) => filled(form.backupKey[k.key]))) {
+  const wanted = keyRequired(form, c) || (keyNeeded(form, c) && keyTyped(form));
+  if (wanted && form.storeBackupKey && !backupKeys.every((k) => filled(form.backupKey[k.key]))) {
     return { backupKey: "Enter both parts of the access key" };
   }
   return {};
@@ -2241,6 +2468,9 @@ export function fieldProblems(step: Step, form: Form, c: ClusterClass | undefine
     }
     case "Add-ons": {
       return addOnProblems(form, c);
+    }
+    case "Policies": {
+      return policyProblems(form, c);
     }
     case "Identity providers": {
       const o = oidcProblems(form.oidc);
@@ -2407,6 +2637,22 @@ export function bridgeMtuProblems(step: Step, form: Form, bridges: Bridge[]): Pr
   return { mtu: `The bridge has MTU ${mtu}. Use ${mtu} or less` };
 }
 
+/**
+ * gatewayProblems marks a gateway outside the network the bridge's nodes sit in. The addresses the
+ * user did not touch stay as they were: the gateway is what was changed.
+ */
+export function gatewayProblems(step: Step, form: Form, net: BridgeNetwork | undefined): Problems {
+  const cidr = net?.cidr === undefined ? undefined : parseCidr(net.cidr);
+  const gateway = parseAddress(form.gateway);
+  if (step !== "Network" || cidr === undefined || gateway === undefined || gateway.family !== cidr.address.family) {
+    return {};
+  }
+  if (sameNetwork(gateway, cidr.address, cidr.bits)) {
+    return {};
+  }
+  return { gateway: `Not in the bridge's network ${networkOf(net?.cidr ?? "") ?? ""}` };
+}
+
 /** csiProblems holds the machines step to the CSI plugin's release a new cluster chose. */
 export function csiProblems(step: Step, form: Form, csi: CSIOffer): Problems {
   if (step !== "Machines" || !csi.offered || !form.datastoreAllocate || csi.problem === undefined) {
@@ -2456,8 +2702,73 @@ export function memoryNodeWarning(form: Form, nodes: PveNode[]): string | undefi
   if (best === undefined || freeMiB(best) >= need) {
     return undefined;
   }
+  // A machine no node could ever hold is refused on its field, and waiting would not help.
+  if (candidates.every((n) => n.maxMemory !== undefined && n.maxMemory / bytesPerMiB < need)) {
+    return undefined;
+  }
   const needGiB = Math.ceil(need / mibPerGiB);
   return `No node has ${needGiB} GiB free, the most is ${Math.floor(freeMiB(best) / mibPerGiB)} GiB on ${best.node}. The cluster waits for room.`;
+}
+
+// thick tells whether a storage reserves a disk's full size when it is made, as the server judges
+// it (pve.Storage.AllocatesOnWrite): plain LVM, ZFS without sparse volumes, and file storages that
+// preallocate. Thin kinds and storages whose type or ZFS setting is unknown only warn.
+function thick(s: Storage | undefined): boolean {
+  if (s === undefined) {
+    return false;
+  }
+  const kind = s.type ?? "";
+  if (kind === "lvm") {
+    return true;
+  }
+  if (kind === "zfspool" || kind === "zfs") {
+    return s.sparse === false;
+  }
+  if (kind === "" || kind === "lvmthin" || kind === "rbd") {
+    return false;
+  }
+  return s.preallocation === "falloc" || s.preallocation === "full";
+}
+
+/**
+ * capacityProblems holds the machines step to what the cluster could never fit, with the figures
+ * Confirm shows: a machine larger than the memory of every node it may use, and the disks the
+ * cluster starts with beyond the storage's free space. Memory merely in use now, and an autoscaled
+ * pool's most, only warn. The cluster waits for the one and may never reach the other.
+ */
+export function capacityProblems(
+  step: Step,
+  form: Form,
+  { nodes, storages }: { nodes: PveNode[]; storages: Storage[] },
+): Problems {
+  if (step !== "Machines") {
+    return {};
+  }
+  const p: Problems = {};
+  const allowed = allowedNodes(form.place);
+  const usable = nodes.filter((n) => n.online && (allowed === undefined || allowed.includes(n.node)));
+  const biggest = usable.every((n) => n.maxMemory !== undefined)
+    ? Math.max(0, ...usable.map((n) => (n.maxMemory ?? 0) / bytesPerMiB))
+    : Infinity;
+  const workers = mostWorkers(form) > 0;
+  for (const [key, m, used] of [
+    ["controlPlaneMachine", form.controlPlaneMachine, true],
+    ["workerMachine", form.workerMachine, workers],
+  ] as const) {
+    if (used && usable.length > 0 && m.memoryMiB > biggest) {
+      p[key] = `No node has ${size(m.memoryMiB)} of memory. Lower the machine's memory.`;
+    }
+  }
+  const room = createRoom(form, nodes, storages);
+  if (
+    room.freeDisk !== undefined &&
+    room.startDisk > room.freeDisk &&
+    thick(storages.find((s) => s.storage === form.storage))
+  ) {
+    p[workers ? "workerMachine" : "controlPlaneMachine"] ??=
+      `The disks need ${bytes(room.startDisk)}, ${bytes(room.freeDisk)} free. Lower a disk size or the node count.`;
+  }
+  return p;
 }
 
 // freeMiB is a node's free memory, unlimited while it reports none.

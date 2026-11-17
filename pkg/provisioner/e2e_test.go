@@ -97,8 +97,13 @@ func exists(t *testing.T, admin *proxmox.Client, node, storage, volid string) bo
 func TestVolumesEndToEnd(t *testing.T) { //nolint:paralleltest // owns the Proxmox VE host for its run
 	ctx := context.Background()
 	admin := signIn(t, env(t, "KUBEHENGE_PROXMOX_TOKEN", ""))
+	accounts, err := pve.NewAccounts(pve.Config{URL: env(t, "KUBEHENGE_PROXMOX_URL", ""), CAFile: os.Getenv("KUBEHENGE_PROXMOX_CA")})
+	if err != nil {
+		t.Fatal(err)
+	}
 	p := &Proxmox{
-		Client: signIn(t, env(t, "KUBEHENGE_E2E_CONTROLLER_TOKEN", "")),
+		Client:   signIn(t, env(t, "KUBEHENGE_E2E_CONTROLLER_TOKEN", "")),
+		Accounts: accounts,
 		Settings: Settings{
 			Group: env(t, "KUBEHENGE_E2E_CLUSTER_GROUP", "kubehenge-clusters"),
 			Role:  env(t, "KUBEHENGE_E2E_CLUSTER_ROLE", "kubehenge-cluster-vms"),

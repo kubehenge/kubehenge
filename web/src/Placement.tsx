@@ -2,7 +2,7 @@ import { useEffect, useId, useState, type JSX } from "react";
 
 import { api } from "./api";
 import type { Cluster, ClusterClass, HARule, HARules, PveNode, Storage } from "./types";
-import { Detail, Dialog, ErrorBox, Field, Info, Status, errorMessage, filled, useChange } from "./ui";
+import { Detail, Dialog, ErrorBox, Field, Info, Status, errorMessage, filled, stageLabel, useChange } from "./ui";
 import { flag, record, texts } from "./values";
 
 /** Where a cluster's VMs may run: any node, the nodes of an HA rule, or nodes chosen one by one. */
@@ -103,10 +103,22 @@ export const nodeNote = (n: PveNode): string => {
   return filled(n.fault) ? " (not reachable)" : " (offline)";
 };
 
+/**
+ * nodeFault is why a member node does not answer, with what to do about it. Proxmox VE words the
+ * reason, and its own certificate error is cured on the node.
+ */
+export const nodeAdvice = (node: string, reason: string): string =>
+  reason.includes("certificate verify failed")
+    ? `Run pvecm updatecerts --force on ${node}, then restart pveproxy.`
+    : `Check that ${node} answers the other nodes.`;
+
+export const nodeFault = (node: string, reason: string | undefined): string | undefined =>
+  filled(reason) ? `${reason}. ${nodeAdvice(node, reason)}` : undefined;
+
 // choices are the nodes to tick: those the user sees, and those the cluster has that they do not,
 // which a change may keep.
 function choices(nodes: PveNode[], kept: string[]): { node: string; note: string; why?: string }[] {
-  const seen = nodes.map((n) => ({ node: n.node, note: nodeNote(n), why: n.fault }));
+  const seen = nodes.map((n) => ({ node: n.node, note: nodeNote(n), why: nodeFault(n.node, n.fault) }));
   const unseen = kept
     .filter((x) => !nodes.some((n) => n.node === x))
     .map((node) => ({ node, note: " (not shown to you)" }));
@@ -332,7 +344,7 @@ export function PlacementDialog({ cluster: c, onClose }: { cluster: Cluster; onC
             Cancel
           </button>
           <button type="submit" className="primary" disabled={busy || !changed || problem !== undefined}>
-            Save
+            {stageLabel}
           </button>
         </>
       }
@@ -352,11 +364,11 @@ export function PlacementDialog({ cluster: c, onClose }: { cluster: Cluster; onC
   );
 }
 
-/** sysAuditAnnotation marks the classes whose clusters may choose the HA group labels. */
+/** sysAuditAnnotation marks the classes whose clusters may choose the HA rule labels. */
 export const sysAuditAnnotation = "kubehenge.dev/sys-audit";
 
 /**
- * offersHAGroups tells whether the class's clusters may have the HA group labels. They take no right
+ * offersHAGroups tells whether the class's clusters may have the HA rule labels. They take no right
  * of the user's own: Sys.Audit on / reads the Proxmox VE cluster's configuration alone, and
  * Kubehenge's administrator decides whether clusters may hold it.
  */
@@ -366,7 +378,7 @@ export const offersHAGroups = (cls: ClusterClass | undefined): boolean =>
 /** haGroupsOn reads whether the cluster's nodes are labelled with their Proxmox VE HA groups. */
 export const haGroupsOn = (c: Cluster): boolean => flag(record(c.variables["ccm"])["haGroups"]) === true;
 
-/** HAGroupsField chooses the HA group labels. */
+/** HAGroupsField chooses the HA rule labels. */
 export function HAGroupsField({
   checked,
   onChange,
@@ -379,9 +391,9 @@ export function HAGroupsField({
     <>
       <label className="check">
         <input type="checkbox" checked={checked} aria-describedby={hint} onChange={(e) => onChange(e.target.checked)} />{" "}
-        Add HA group labels
+        Add HA rule labels
       </label>
-      <Info about="HA group labels">
+      <Info about="HA rule labels">
         Labels nodes group.topology.proxmox.sinextra.dev/&lt;group&gt; by HA group and node-affinity rule. Sys.Audit
         cannot read guests or storages.
       </Info>
@@ -392,7 +404,7 @@ export function HAGroupsField({
   );
 }
 
-/** useHAGroupsOffered reads whether an existing cluster may have the HA group labels. */
+/** useHAGroupsOffered reads whether an existing cluster may have the HA rule labels. */
 export function useHAGroupsOffered(c: Cluster): boolean {
   const [offered, setOffered] = useState(false);
   const className = c.class;

@@ -1,0 +1,317 @@
+//go:build integration
+
+package backupstore
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
+	"github.com/kubehenge/kubehenge/test/integration"
+)
+
+// TestIntegrationControllerWakesTheVolume runs Volume as the controller's account against the
+// storage chart the module installs for a backup volume. The account wakes the store, takes its
+// request away again and lets the store sleep, and changes nothing else of the store.
+func TestIntegrationControllerWakesTheVolume(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
+	if err := integration.OwnChildren(); err != nil {
+		t.Fatal(err)
+	}
+	objects := integration.RenderChart(t, "kubehenge-storage", "../../management-cluster/charts/storage", "kube-system", "../appliance/testdata/storage-zones-values.yaml")
+	api := integration.Start(t, &integration.Options{Objects: objects, Namespaces: []string{Namespace, "kube-system"}})
+	admin, err := kubernetes.NewForConfig(api.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	as := rest.CopyConfig(api.Config)
+	as.Impersonate = rest.ImpersonationConfig{
+		UserName: "system:serviceaccount:" + Namespace + ":kubehenge-controller",
+		Groups:   []string{"system:serviceaccounts", "system:serviceaccounts:" + Namespace, "system:authenticated"},
+	}
+	controller, err := kubernetes.NewForConfig(as)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	patch := func(c kubernetes.Interface, name, body string) error {
+		_, perr := c.AppsV1().Deployments(Namespace).Patch(ctx, name, types.MergePatchType, []byte(body), metav1.PatchOptions{})
+		return perr
+	}
+
+	// The policy takes a moment to be enforced after it is made.
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+		err = patch(controller, Service, `{"metadata":{"annotations":{"probe":"x"}}}`)
+		if apierrors.IsInvalid(err) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("another annotation of the store: %v", err)
+		}
+		if err = patch(admin, Service, `{"metadata":{"annotations":{"probe":null}}}`); err != nil {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the API server let the controller change any annotation of the store for 30 seconds")
+		}
+	}
+
+	node := &corev1.Node{
+		Name: "mgmt-cp-0", Labels: map[string]string{corev1.LabelTopologyZone: "pve2"},
+		Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{SystemUUID: "uuid-0"}},
+	}
+	if _, err = admin.CoreV1().Nodes().Create(ctx, node, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	// The controller wakes the sleeping store itself: it sets the node's zone to where its VM runs,
+	// and starts the store through its scale.
+	onPVE1 := func(context.Context, string) (*VMIndex, error) {
+		return &VMIndex{ByUUID: map[string][]VM{"uuid-0": {{VMID: 100, Name: "mgmt-cp-0", Node: "pve1", Type: "qemu"}}}}, nil
+	}
+	v := &Volume{Kube: controller, VMs: onPVE1}
+	replicas := func() int32 {
+		t.Helper()
+		d, gerr := admin.AppsV1().Deployments(Namespace).Get(ctx, Service, metav1.GetOptions{})
+		if gerr != nil {
+			t.Fatal(gerr)
+		}
+		return *d.Spec.Replicas
+	}
+	for _, holder := range []string{"snapshots of a/web", "restore of b/db"} {
+		if _, err = v.Open(ctx, holder); !errors.Is(err, provisioner.ErrVolumeAsleep) {
+			t.Fatalf("%s asking for the sleeping store: %v, want it waking", holder, err)
+		}
+		if got := replicas(); got != 1 {
+			t.Fatalf("after %s's wake the store has %d replicas", holder, got)
+		}
+	}
+	if n, gerr := admin.CoreV1().Nodes().Get(ctx, "mgmt-cp-0", metav1.GetOptions{}); gerr != nil || n.Labels[corev1.LabelTopologyZone] != "pve1" {
+		t.Fatalf("the store was woken with its node labelled %v: %v", n.Labels, gerr)
+	}
+	// A Done that read the store before another holder asked for it again leaves it awake.
+	if err = v.scale(ctx, "1", 0); !apierrors.IsConflict(err) {
+		t.Fatalf("a scale from a stale read: %v, want a conflict", err)
+	}
+	for i, holder := range []string{"snapshots of a/web", "restore of b/db"} {
+		if err = v.Done(ctx, holder); err != nil {
+			t.Fatalf("taking %s's request away: %v", holder, err)
+		}
+		d, gerr := admin.AppsV1().Deployments(Namespace).Get(ctx, Service, metav1.GetOptions{})
+		if gerr != nil {
+			t.Fatal(gerr)
+		}
+		if left := i == 0; WakeRequested(d, time.Now()) != left || (*d.Spec.Replicas == 1) != left {
+			t.Fatalf("after %s's Done the store is asked for %v with %d replicas, want %v: %v", holder, !left, *d.Spec.Replicas, left, d.Annotations)
+		}
+	}
+
+	const outside = "the controller changes nothing of the backup store but its wake request"
+	for what, body := range map[string]string{
+		"adding an annotation":              `{"metadata":{"annotations":{"probe":"x"}}}`,
+		"the interface's wake request":      `{"metadata":{"annotations":{"` + InterfaceWakeAnnotation + `":"2026-11-15T00:00:00Z"}}}`,
+		"a label":                           `{"metadata":{"labels":{"probe":"x"}}}`,
+		"scaling":                           `{"spec":{"replicas":1}}`,
+		"the wake request and the spec too": `{"metadata":{"annotations":{"` + WakeRequestAnnotation + `":"2026-11-15T00:00:00Z"}},"spec":{"replicas":1}}`,
+	} {
+		if err := patch(controller, Service, body); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), outside) {
+			t.Errorf("%s: %v, want refused", what, err)
+		}
+	}
+	if _, err := controller.AppsV1().Deployments("kube-system").List(ctx, metav1.ListOptions{}); !apierrors.IsForbidden(err) {
+		t.Errorf("listing other Deployments: %v, want forbidden", err)
+	}
+}
+
+// TestIntegrationControllerLeavesASharedStoreUp runs Volume as the controller's account against the
+// storage chart for shared storage, where the store never sleeps. The controller holds the store
+// and lets it go, and may not scale it.
+func TestIntegrationControllerLeavesASharedStoreUp(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
+	if err := integration.OwnChildren(); err != nil {
+		t.Fatal(err)
+	}
+	shared := filepath.Join(t.TempDir(), "shared.yaml")
+	if err := os.WriteFile(shared, []byte("backupVolume:\n  zone: \"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	objects := integration.RenderChart(t, "kubehenge-storage", "../../management-cluster/charts/storage", "kube-system", "../appliance/testdata/storage-zones-values.yaml", shared)
+	api := integration.Start(t, &integration.Options{Objects: objects, Namespaces: []string{Namespace, "kube-system"}})
+	as := rest.CopyConfig(api.Config)
+	as.Impersonate = rest.ImpersonationConfig{
+		UserName: "system:serviceaccount:" + Namespace + ":kubehenge-controller",
+		Groups:   []string{"system:serviceaccounts", "system:serviceaccounts:" + Namespace, "system:authenticated"},
+	}
+	controller, err := kubernetes.NewForConfig(as)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	v := &Volume{Kube: controller}
+	if err = v.Wake(ctx, "snapshots of a/web"); err != nil && !errors.Is(err, provisioner.ErrVolumeAsleep) {
+		t.Fatalf("holding the shared store: %v", err)
+	}
+	if err = v.Done(ctx, "snapshots of a/web"); err != nil {
+		t.Fatalf("letting the shared store go: %v", err)
+	}
+	if err = v.scale(ctx, "", 0); !apierrors.IsForbidden(err) {
+		t.Fatalf("scaling the shared store: %v, want forbidden", err)
+	}
+
+	// The CSI node plugin needs a zone on shared storage too, so the controller labels a node that
+	// joined without one.
+	admin, err := kubernetes.NewForConfig(api.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := &corev1.Node{
+		Name:   "mgmt-cp-0",
+		Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{SystemUUID: "uuid-0"}},
+	}
+	if _, err = admin.CoreV1().Nodes().Create(ctx, node, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	v.VMs = func(context.Context, string) (*VMIndex, error) {
+		return &VMIndex{ByUUID: map[string][]VM{"uuid-0": {{VMID: 100, Name: "mgmt-cp-0", Node: "pve1", Type: "qemu"}}}}, nil
+	}
+	if err = v.labelMissingZones(ctx); err != nil {
+		t.Fatalf("labelling a node on shared storage: %v", err)
+	}
+	if node, err = admin.CoreV1().Nodes().Get(ctx, "mgmt-cp-0", metav1.GetOptions{}); err != nil || node.Labels[corev1.LabelTopologyZone] != "pve1" {
+		t.Fatalf("on shared storage the node is labelled %v (%v), want zone pve1", node, err)
+	}
+}
+
+// TestIntegrationInterfaceForwardsToTheStoreAlone runs the interface's account against the storage
+// chart. It finds the store's pod in the Service's EndpointSlices and may open a port-forward to it,
+// and to no other pod. The harness runs no kubelet, so a forward the policy lets through ends where
+// the API server looks for the pod's node.
+func TestIntegrationInterfaceForwardsToTheStoreAlone(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
+	if err := integration.OwnChildren(); err != nil {
+		t.Fatal(err)
+	}
+	objects := integration.RenderChart(t, "kubehenge-storage", "../../management-cluster/charts/storage", "kube-system", "../appliance/testdata/storage-zones-values.yaml")
+	api := integration.Start(t, &integration.Options{Objects: objects, Namespaces: []string{Namespace, "kube-system"}})
+	admin, err := kubernetes.NewForConfig(api.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// With the interface on a port-forward, the store's port admits the controller's pods alone.
+	nps, err := admin.NetworkingV1().NetworkPolicies(Namespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range nps.Items {
+		for _, rule := range nps.Items[i].Spec.Ingress {
+			if len(rule.From) != 1 || rule.From[0].PodSelector == nil || rule.From[0].PodSelector.MatchLabels["app.kubernetes.io/name"] != "kubehenge-controller" || rule.From[0].IPBlock != nil {
+				t.Errorf("NetworkPolicy %s admits %+v", nps.Items[i].Name, rule.From)
+			}
+		}
+	}
+	as := rest.CopyConfig(api.Config)
+	as.Impersonate = rest.ImpersonationConfig{
+		UserName: "system:serviceaccount:" + Namespace + ":kubehenge-interface",
+		Groups:   []string{"system:serviceaccounts", "system:serviceaccounts:" + Namespace, "system:authenticated"},
+	}
+	iface, err := kubernetes.NewForConfig(as)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	const store, other = "kubehenge-backup-store-5d8f7c9b4-abcde", "kubehenge-backup-store-zones-29384756-abcde"
+	for _, name := range []string{store, other} {
+		pod := &corev1.Pod{Name: name, Namespace: Namespace, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: "x"}}}}
+		if _, err = admin.CoreV1().Pods(Namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	forward := func(name string) error {
+		return iface.CoreV1().RESTClient().Post().Namespace(Namespace).Resource("pods").Name(name).SubResource("portforward").Do(ctx).Error()
+	}
+	const refused = "the interface forwards to the backup store's pods only"
+	// The policy takes a moment to be enforced after it is made.
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+		err = forward(other)
+		if err != nil && strings.Contains(err.Error(), refused) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("a forward to %s: %v, want refused", other, err)
+		}
+	}
+	if err = forward(store); err == nil || strings.Contains(err.Error(), refused) || apierrors.IsForbidden(err) {
+		t.Errorf("a forward to the store's pod: %v, want it past RBAC and the policy", err)
+	}
+	if _, err = iface.DiscoveryV1().EndpointSlices(Namespace).List(ctx, metav1.ListOptions{}); err != nil {
+		t.Errorf("listing the store's EndpointSlices: %v", err)
+	}
+	proxy := iface.CoreV1().RESTClient().Get().Namespace(Namespace).Resource("services").Name(Service + ":http").SubResource("proxy").Do(ctx).Error()
+	if !apierrors.IsForbidden(proxy) {
+		t.Errorf("the store's service proxy: %v, want forbidden", proxy)
+	}
+	if err = iface.CoreV1().RESTClient().Post().Namespace("kube-system").Resource("pods").Name(store).SubResource("portforward").Do(ctx).Error(); !apierrors.IsForbidden(err) {
+		t.Errorf("a forward in kube-system: %v, want forbidden", err)
+	}
+}
+
+// TestIntegrationInterfaceWakesTheVolume runs Volume as the interface's account against the storage
+// chart, as the appliance wakes the store for its own backups and a look at the snapshots. It sets
+// the node's zone, starts the store through its scale, and lets it sleep once done.
+func TestIntegrationInterfaceWakesTheVolume(t *testing.T) { //nolint:paralleltest // starts an API server and ends every child process of the binary after it
+	if err := integration.OwnChildren(); err != nil {
+		t.Fatal(err)
+	}
+	objects := integration.RenderChart(t, "kubehenge-storage", "../../management-cluster/charts/storage", "kube-system", "../appliance/testdata/storage-zones-values.yaml")
+	api := integration.Start(t, &integration.Options{Objects: objects, Namespaces: []string{Namespace, "kube-system"}})
+	admin, err := kubernetes.NewForConfig(api.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	zones := &corev1.Secret{Name: ZonesSecret, Namespace: Namespace, Data: map[string][]byte{"token": []byte("zones"), "nodes": []byte("mgmt-cp-0")}}
+	if _, err = admin.CoreV1().Secrets(Namespace).Update(ctx, zones, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	node := &corev1.Node{
+		Name: "mgmt-cp-0", Labels: map[string]string{corev1.LabelTopologyZone: "pve2"},
+		Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{SystemUUID: "uuid-0"}},
+	}
+	if _, err = admin.CoreV1().Nodes().Create(ctx, node, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	as := rest.CopyConfig(api.Config)
+	as.Impersonate = rest.ImpersonationConfig{
+		UserName: "system:serviceaccount:" + Namespace + ":kubehenge-interface",
+		Groups:   []string{"system:serviceaccounts", "system:serviceaccounts:" + Namespace, "system:authenticated"},
+	}
+	iface, err := kubernetes.NewForConfig(as)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := &Volume{Kube: iface, Annotation: InterfaceWakeAnnotation, VMs: onPVE1}
+	if err = v.Wake(ctx, "a look"); !errors.Is(err, provisioner.ErrVolumeAsleep) {
+		t.Fatalf("the interface waking the sleeping store: %v, want it waking", err)
+	}
+	d, err := admin.AppsV1().Deployments(Namespace).Get(ctx, Service, metav1.GetOptions{})
+	if err != nil || *d.Spec.Replicas != 1 {
+		t.Fatalf("after the interface's wake the store is %v: %v", d.Spec.Replicas, err)
+	}
+	if n, gerr := admin.CoreV1().Nodes().Get(ctx, "mgmt-cp-0", metav1.GetOptions{}); gerr != nil || n.Labels[corev1.LabelTopologyZone] != "pve1" {
+		t.Fatalf("the store was woken with its node labelled %v: %v", n.Labels, gerr)
+	}
+	if err = v.Done(ctx, "a look"); err != nil {
+		t.Fatal(err)
+	}
+	if d, err = admin.AppsV1().Deployments(Namespace).Get(ctx, Service, metav1.GetOptions{}); err != nil || *d.Spec.Replicas != 0 {
+		t.Fatalf("with no holder left the store is %v: %v", d.Spec.Replicas, err)
+	}
+}

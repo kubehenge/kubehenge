@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/appliance"
+	"github.com/kubehenge/kubehenge/pkg/backupstore"
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
 	"github.com/kubehenge/kubehenge/pkg/release"
@@ -285,6 +286,15 @@ func interfaceScheme() (*runtime.Scheme, error) {
 	return scheme, nil
 }
 
+// managementKube is a client of the management cluster with the types the CLI reads and writes.
+func managementKube(cfg *rest.Config) (client.Client, error) {
+	scheme, err := interfaceScheme()
+	if err != nil {
+		return nil, err
+	}
+	return newClient(cfg, scheme)
+}
+
 func newClient(cfg *rest.Config, scheme *runtime.Scheme) (client.Client, error) {
 	c, err := client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
@@ -304,13 +314,16 @@ func (o *serveOptions) setUpAppliance(conn *pve.Config) error {
 	if err != nil {
 		return fmt.Errorf("--proxmox-ca: %w", err)
 	}
-	a.ProxmoxURL, a.ProxmoxCA, a.ProxmoxInsecure, a.Log, a.Release = conn.URL, string(ca), conn.Insecure, s.Log, release.Version
+	a.ProxmoxURL, a.ProxmoxCA, a.ProxmoxCAFile, a.ProxmoxInsecure, a.Log, a.Release = conn.URL, string(ca), conn.CAFile, conn.Insecure, s.Log, release.Version
 	s.ProxmoxInsecure = conn.Insecure
 	a.InterfaceKubeconfig = appliance.InterfaceKubeconfig
 	if s.Accounts != nil {
 		a.NextID = s.Accounts.NextID
 	}
 	a.Talos = &provisioner.ManagementTalos{}
+	if err = a.CleanUp(); err != nil {
+		return fmt.Errorf("clearing what the last run left: %w", err)
+	}
 	a.LoadLast()
 	if a.Ready() {
 		kubeconfig, readErr := os.ReadFile(a.KubeconfigPath())
@@ -342,6 +355,9 @@ func (o *serveOptions) setUpAppliance(conn *pve.Config) error {
 		}
 		b.Client, b.Sources, b.Proxy = session, templates.DefaultSources(provisioner.DefaultReleasePins().Talos()), savedGuestProxy(a)
 		b.Sources.HTTP = savedProxyClient(a.Dir, pveConfig.URL, b.Sources.HTTP.Timeout)
+		if saved := a.SavedSettings(); saved != nil && saved.WorkloadVMIDRange != nil {
+			b.FirstVMID, b.LastVMID = int(saved.WorkloadVMIDRange.Start), int(saved.WorkloadVMIDRange.End)
+		}
 		return b.Create(ctx, tpl)
 	}
 	s.Upgrades = &ui.Upgrades{
@@ -476,7 +492,7 @@ func applianceVMIDDefault() int {
 // certificate is for, by which it finds its guest in Proxmox VE and notices an address it lost. It
 // also reads the use of the disk holding the appliance's state in dir.
 func knowTheAppliance(s *ui.Server, cert *x509.Certificate, dir string) {
-	s.DiskUse = func() (uint64, uint64, error) { return appliance.DiskUse(dir) }
+	s.DiskUse = func() (uint64, uint64, error) { return backupstore.DiskUse(dir) }
 	s.ApplianceMACs, s.OwnAddresses = ownMACs(), ownAddresses
 	s.CertificateNames = cert.DNSNames
 	for _, ip := range cert.IPAddresses {

@@ -49,6 +49,7 @@ func (s *Server) fleetHealth(w http.ResponseWriter, r *http.Request, u user) {
 		v := shared
 		v.Attention = slices.Clone(shared.Attention)
 		if pool, poolErr := s.poolPath(c.Namespace, c.Name); poolErr == nil {
+			s.addOfflineNodes(ctx, u, pool, &v)
 			s.addNodeClocks(ctx, u, pool, &v)
 		}
 		out[i] = summed(c, &v)

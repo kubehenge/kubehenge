@@ -139,7 +139,7 @@ if [ -n "${release}" ]; then
     [ -n "${release_sha}" ] || fail "--release needs --sha256"
     KUBEHENGE_SHA256=${release_sha}
 fi
-[ -n "${KUBEHENGE_SHA256}" ] || fail "this script carries no release checksum; use --release <file> --sha256 <hex>"
+[ -n "${KUBEHENGE_SHA256}" ] || fail "this script carries no release checksum. Use --release <file> --sha256 <hex>"
 
 work=$(mktemp -d)
 free_kib=$(df -Pk "${work}" 2> /dev/null | awk 'NR == 2 { print $4 }')

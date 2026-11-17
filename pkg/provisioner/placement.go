@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -61,9 +63,20 @@ type Placer struct {
 	// different major versions. Unset, none is.
 	Events events.EventRecorder
 	newer  map[string]bool
+	// growth is the room warning last given for each cluster's autoscaled pools, by cluster.
+	growth map[string]string
 	// WorkloadPool names the clusters' VM pools, for reading the interface sizes of their VMs.
 	// Unset, the sizes are not read.
 	WorkloadPool string
+	// Workload reads a workload cluster, for the volumes on storage local to each node. Unset, none
+	// are read and nothing steers workers to them.
+	Workload func(ctx context.Context, c *clusterv1.Cluster) (r client.Reader, found bool, err error)
+	// VolumeTimeout bounds the read of one cluster's volumes, 5 s where zero. The volumes are read
+	// beside the placement, which no cluster that is slow to answer holds up.
+	VolumeTimeout time.Duration
+	// volumesBusy is set while a round of volume reads runs, and volumes waits for it.
+	volumesBusy atomic.Bool
+	volumes     sync.WaitGroup
 }
 
 // NodesSkippedCondition on a Cluster says that Placer left Proxmox VE nodes out of its placement
@@ -115,44 +128,77 @@ func (p *Placer) placeAll(ctx context.Context) {
 		log.Error(err, "listing clusters")
 		return
 	}
+	var jobs []volumeJob
 	for i := range clusters.Items {
 		c := &clusters.Items[i]
-		if !Owns(c, p.ClassNamespace) || !c.DeletionTimestamp.IsZero() {
-			continue
+		if ownedAndLive(c, p.ClassNamespace) {
+			if job := p.place(ctx, c, online, sites, skipped); job != nil {
+				jobs = append(jobs, *job)
+			}
 		}
-		p.markSkipped(ctx, c, skipped)
-		p.markVersions(ctx, c, online)
-		p.markMTUs(ctx, c, online)
-		needs, err := needsOf(c, sites)
-		if err != nil {
-			log.Error(err, "reading the cluster's node OS", "cluster", client.ObjectKeyFromObject(c))
-			continue
-		}
-		level := needs.Level
-		chosen, storage, err := placementVariables(c)
-		if err != nil {
-			log.Error(err, "reading the cluster's nodes and storage", "cluster", client.ObjectKeyFromObject(c))
-			continue
-		}
-		// The annotation lists every node the cluster could use, whichever it chose, for the hook to
-		// narrow. Whether a VM has a place at all is judged against the chosen ones.
-		hosts, _ := nodesToPlace(online, level, nil, storage)
-		_, blocked := nodesToPlace(online, level, chosen, storage)
-		usable := placeable(online, storage)
-		if sites != nil {
-			hosts = sites.Hosts(c, usable, level)
-		}
-		hosts, short, newer := preferOldest(online, hosts, func(h []string) ([]string, *roomOn) {
-			return fitMemory(ctx, p.Client, p.ClassNamespace, c, usable, h)
-		})
-		p.markShort(ctx, c, short)
-		if newer {
-			p.sayNewer(c, online)
-		} else {
-			p.clearNewer(c)
-		}
-		p.record(ctx, c, hosts, refusedForFaults(blocked, hosts, skipped))
 	}
+	p.startVolumes(ctx, jobs, online, sites)
+}
+
+// place records where one cluster's VMs may go, and what keeps them from going anywhere, as one look
+// at the nodes and the storages found them. It returns what reading the cluster's volumes needs,
+// nil where the placement could not be judged.
+func (p *Placer) place(ctx context.Context, c *clusterv1.Cluster, online []Node, sites *Sites, skipped []NodeFault) *volumeJob {
+	log := ctrl.LoggerFrom(ctx).WithName("placer")
+	p.markSkipped(ctx, c, skipped)
+	p.markVersions(ctx, c, online)
+	p.markMTUs(ctx, c, online)
+	p.markVMIDRange(ctx, c)
+	needs, err := needsOf(c, sites)
+	if err != nil {
+		log.Error(err, "reading the cluster's node OS", "cluster", client.ObjectKeyFromObject(c))
+		return nil
+	}
+	level := needs.Level
+	chosen, storage, err := placementVariables(c)
+	if err != nil {
+		log.Error(err, "reading the cluster's nodes and storage", "cluster", client.ObjectKeyFromObject(c))
+		return nil
+	}
+	// The annotation lists every node the cluster could use, whichever it chose, for the hook to
+	// narrow. Whether a VM has a place at all is judged against the chosen ones.
+	hosts, _ := nodesToPlace(online, level, nil, storage)
+	_, blocked := nodesToPlace(online, level, chosen, storage)
+	usable := placeable(online, storage)
+	// why says, for the volumes on a node left out, what keeps the cluster's VMs off it.
+	why := map[string]leftOut{}
+	if sites != nil {
+		hosts, why = hostsWhy(sites, c, usable, level)
+	}
+	offered, fitted := hosts, hosts
+	hosts, short, newer := preferOldest(online, hosts, func(h []string) ([]string, *roomOn) {
+		fitted = h
+		return fitMemory(ctx, p.Client, p.ClassNamespace, c, usable, h)
+	})
+	narrowedWhy(online, offered, fitted, hosts, why)
+	p.markShort(ctx, c, short)
+	if sites != nil {
+		p.markDisks(ctx, c, sites.Space, nodeNames(usable, chosen))
+	}
+	if newer {
+		p.sayNewer(c, online)
+	} else {
+		p.clearNewer(c)
+	}
+	p.record(ctx, c, hosts, refusedForFaults(blocked, hosts, skipped))
+	p.unpinStale(ctx, c, pinnable(chosen, hosts))
+	return &volumeJob{cluster: c, chosen: chosen, storage: storage, hosts: pinnable(chosen, hosts), leftOut: why}
+}
+
+// nodeNames are the names of the nodes, kept to chosen where the cluster chose any.
+func nodeNames(nodes []Node, chosen []string) []string {
+	var names []string
+	for _, n := range nodes {
+		if len(chosen) == 0 || slices.Contains(chosen, n.Name) {
+			names = append(names, n.Name)
+		}
+	}
+	return names
 }
 
 // refusedForFaults is the reason no VM can be placed: blocked where it is already set, else that the
@@ -254,7 +300,7 @@ func (h *Hooks) GeneratePatches(ctx context.Context, req *runtimehooksv1.Generat
 		item := &req.Items[i]
 		var patch []byte
 		switch {
-		case item.HolderReference.Kind == "Cluster" && item.HolderReference.FieldPath == "spec.infrastructureRef":
+		case item.HolderReference.Kind == clusterSpecKind && item.HolderReference.FieldPath == "spec.infrastructureRef":
 			patch, err = h.placementPatch(ctx, cluster, chosen)
 		case kindOf(item) == proxmoxMachineTemplate:
 			patch, err = images.patch(ctx, item)
@@ -323,9 +369,12 @@ func (h *Hooks) placementPatch(ctx context.Context, cluster *clusterv1.Cluster, 
 	return patch, nil
 }
 
+// jsonPatchAdd is the JSON patch operation that adds a value.
+const jsonPatchAdd = "add"
+
 // addOp is a JSON patch operation adding value at path.
 func addOp(path string, value any) map[string]any {
-	return map[string]any{"op": "add", "path": path, valueKey: value}
+	return map[string]any{"op": jsonPatchAdd, "path": path, valueKey: value}
 }
 
 // onlineNodes are the nodes recorded on the cluster, or, for a cluster the Placer has not got to

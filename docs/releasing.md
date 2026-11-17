@@ -15,6 +15,7 @@ A pushed version tag releases Kubehenge with no further step. CI checks the tag,
 | `ghcr.io/kubehenge/kubehenge:v<version>` | The controller image. |
 | `ghcr.io/kubehenge/cluster-api-provider-proxmox:<capmox release>-<commit>` | The build of Cluster API's Proxmox VE provider (capmox), released only while the module uses one. It is built from the upstream release commit `capmox_build` names in `management-cluster/versions.tf`, with the fixes in `scripts/capmox-patches`. `scripts/provider-image.sh` builds it reproducibly and refuses an image whose digest differs from the module's. Anyone can rebuild it and compare. |
 | `ghcr.io/kubehenge/cluster-api-addon-provider-helm:<release>-<commit>` | The build of the Add-on Provider for Helm that `helm_addon_build` names, with the fixes in `scripts/helm-addon-patches`. It is built and released as capmox's is. |
+| `ghcr.io/kubehenge/proxmox-csi-controller:<release>-<commit>` | The build of the Proxmox CSI plugin's controller that `proxmox_csi_build` names, which the management cluster runs. Its fixes in `scripts/proxmox-csi-patches` let it detach a volume from a protected VM. The build runs their tests first. It is built and released as capmox's is. |
 
 The Talos providers are not part of a Kubehenge release. The management cluster installs them from the releases of Kubehenge's forks, [cluster-api-bootstrap-provider-talos](https://github.com/kubehenge/cluster-api-bootstrap-provider-talos) and [cluster-api-control-plane-provider-talos](https://github.com/kubehenge/cluster-api-control-plane-provider-talos). Each fork signs and attests its own image and files.
 
@@ -73,7 +74,7 @@ Its `Release index` job downloads the latest release's index, archive and proven
    - Add a tag ruleset for `v*` that blocks updates and deletions. A released tag can then never be moved.
    - Turn on immutable releases (Settings, General, Releases). A published release's files and tag then never change, and GitHub attests the release itself.
    - Add the key you sign tags with to your GitHub account as a signing key. GitHub then verifies the tag's signature.
-3. After the first release, make the `kubehenge`, `cluster-api-provider-proxmox` and `cluster-api-addon-provider-helm` packages on ghcr.io public.
+3. After the first release, make the `kubehenge`, `cluster-api-provider-proxmox`, `cluster-api-addon-provider-helm` and `proxmox-csi-controller` packages on ghcr.io public.
 
 ## Each release
 
@@ -127,7 +128,8 @@ verify kubehenge_<version>_linux_amd64.tar.gz --bundle kubehenge_<version>.intot
   --predicate-type https://spdx.dev/Document/v2.3
 for image in ghcr.io/kubehenge/kubehenge:v<version> \
   "$(sed -n 's/^ *image *= *"\(ghcr.io\/kubehenge\/cluster-api-provider-proxmox@.*\)"/\1/p' ../management-cluster/versions.tf)" \
-  "$(sed -n 's/^ *image *= *"\(ghcr.io\/kubehenge\/cluster-api-addon-provider-helm@.*\)"/\1/p' ../management-cluster/versions.tf)"; do
+  "$(sed -n 's/^ *image *= *"\(ghcr.io\/kubehenge\/cluster-api-addon-provider-helm@.*\)"/\1/p' ../management-cluster/versions.tf)" \
+  "$(sed -n 's/^ *image *= *"\(ghcr.io\/kubehenge\/proxmox-csi-controller@.*\)"/\1/p' ../management-cluster/versions.tf)"; do
   verify "oci://$image"
   verify "oci://$image" --predicate-type https://spdx.dev/Document/v2.3
   cosign verify "$image" \
@@ -138,4 +140,44 @@ done
 
 `gh release verify` checks GitHub's attestation of the published release, its tag and every file as they now stay. `make verify-providers`, from the same checkout, checks the Talos providers the tag pins the same way, against their forks' release workflows. Until the packages on ghcr.io are public, the image checks need a login (`docker login ghcr.io`). `index.json` should hold the previous releases unchanged and one new entry whose checksum matches `SHA256SUMS`.
 
-How users check a release before installing it is in [install.md](install.md#verifying-a-release).
+## Verifying a release
+
+`install.sh` checks what it downloads. The appliance installs only releases listed in an index signed with the project's release key. What is left to check yourself is the script.
+
+The release workflow built each file and each image Kubehenge runs from the tagged source, on a GitHub-hosted runner (SLSA Build Level 3). Each carries signed build provenance and an SPDX SBOM. They are stored as GitHub attestations and, for the files, in `kubehenge_<version>.intoto.jsonl`.
+
+With the [GitHub CLI](https://cli.github.com), for the release you install (`<version>` without the `v`):
+
+```sh
+gh release download v<version> --repo kubehenge/kubehenge --dir kubehenge-release
+cd kubehenge-release
+sha256sum -c kubehenge_<version>_SHA256SUMS
+for file in install.sh kubehenge_<version>_linux_amd64.tar.gz; do
+  gh attestation verify "$file" --repo kubehenge/kubehenge \
+    --bundle kubehenge_<version>.intoto.jsonl \
+    --signer-workflow kubehenge/kubehenge/.github/workflows/release-build.yml \
+    --source-ref refs/tags/v<version> --deny-self-hosted-runners
+done
+```
+
+The checksums prove the files are the ones the release lists. The attestation proves the release workflow built them, from this repository at that tag, with the steps in `release-build.yml`.
+
+### The SBOM
+
+`kubehenge_<version>_linux_amd64.spdx.json` lists every file in the archive with its SHA-256 and every package in it at its exact version. A vulnerability scanner such as Grype or Trivy can read it. Add `--predicate-type https://spdx.dev/Document/v2.3` to the command above to check the SBOM attested to the archive instead of its provenance.
+
+### The images
+
+The images carry the same provenance and SBOM in the registry, and a Sigstore signature that cosign checks:
+
+```sh
+image=ghcr.io/kubehenge/kubehenge:v<version>
+gh attestation verify "oci://$image" --repo kubehenge/kubehenge \
+  --signer-workflow kubehenge/kubehenge/.github/workflows/release-build.yml \
+  --source-ref refs/tags/v<version> --deny-self-hosted-runners
+cosign verify "$image" \
+  --certificate-identity https://github.com/kubehenge/kubehenge/.github/workflows/release-build.yml@refs/tags/v<version> \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+The Cluster API providers for Talos come from Kubehenge's forks ([architecture.md](architecture.md#what-the-run-creates)), each signed and attested by its own release workflow. The management cluster's nodes pull their images only with that signature. `make verify-providers`, from a checkout of the tag, checks their files and images against the digests the tag pins, with the GitHub CLI and cosign.

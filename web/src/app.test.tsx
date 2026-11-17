@@ -461,6 +461,30 @@ describe("clusters", () => {
     expect(deletion?.body).toStrictEqual({ confirm: "web" });
   });
 
+  it("deletes the etcd snapshots on the backup volume only when asked", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web");
+    const onVolume: Cluster = { ...web, variables: { ...web.variables, etcdSnapshots: { enabled: true } } };
+    const calls = fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": () => ({ body: onVolume }),
+      "DELETE /api/clusters/default/web": () => ({ status: 202 }),
+      "GET /api/clusters": () => ({ body: [] }),
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Delete" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete cluster web" });
+    expect(within(dialog).queryByText(/etcd snapshots stay/u)).not.toBeInTheDocument();
+    const drop = within(dialog).getByRole("checkbox", { name: "Delete etcd snapshots" });
+    expect(drop).not.toBeChecked();
+    await user.click(drop);
+    await user.type(within(dialog).getByLabelText("Confirm name"), "web");
+    await user.click(within(dialog).getByRole("button", { name: "Delete cluster" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
+    const deletion = calls.find((c) => c.key === "DELETE /api/clusters/default/web");
+    expect(deletion?.body).toStrictEqual({ confirm: "web", deleteEtcdSnapshots: true });
+  });
+
   it("says what runs the workloads of a cluster without workers", async () => {
     window.history.replaceState(null, "", "/clusters/default/web");
     const alone: Cluster = { ...web, workers: { desired: 0, ready: 0, available: 0, upToDate: 0 } };
@@ -475,15 +499,21 @@ describe("clusters", () => {
     const calls = fakeServer({
       ...signedIn,
       "GET /api/clusters/default/web": () => ({ body: web }),
-      "PATCH /api/clusters/default/web": () => ({ body: web }),
+      "PATCH /api/clusters/default/web": () => ({
+        body: { ...web, workerPools: [{ name: "md-0", class: "worker", replicas: 4 }] },
+      }),
     });
     const user = userEvent.setup({ delay: null });
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "Scale" }));
-    const workers = screen.getByLabelText("Workers (md-0)");
+    const workers = screen.getByLabelText("Workers");
     await user.clear(workers);
     await user.type(workers, "4");
-    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Scale" }));
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.queryByRole("button", { name: "Scale" })).not.toBeInTheDocument();
+    await user.click(dialog.getByRole("button", { name: "Add to plan" }));
+    const bar = await screen.findByRole("region", { name: "Staged changes" });
+    expect(bar).toHaveTextContent("Workers: 2 to 4");
     await applyStaged(user);
     await waitFor(() =>
       expect(calls.find((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({
@@ -531,7 +561,7 @@ describe("clusters", () => {
     expect(dialog.getByText("None spare. Add one under Options.")).toBeInTheDocument();
     await waitFor(() => expect(dialog.getByText("2 problems")).toBeInTheDocument());
     expect(dialog.getByRole("link", { name: "Health" })).toHaveAttribute("href", "/clusters/default/web/health");
-    expect(dialog.getByRole("button", { name: "Upgrade" })).toBeDisabled();
+    expect(dialog.getByRole("button", { name: "Add to plan" })).toBeDisabled();
   });
 
   it("warns of removed APIs and fail-closed webhooks in the upgrade dialog, and still upgrades", async () => {
@@ -561,7 +591,7 @@ describe("clusters", () => {
     expect(dialog.getByText("1 at risk")).toBeInTheDocument();
     expect(dialog.getByText("flowcontrol.apiserver.k8s.io/v1beta3 flowschemas, removed in 1.32")).toBeInTheDocument();
     expect(dialog.getByText("policy-guard: Service guard/policy has 1 ready endpoint")).toBeInTheDocument();
-    await user.click(dialog.getByRole("button", { name: "Upgrade" }));
+    await user.click(dialog.getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(calls.find((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({
@@ -634,7 +664,7 @@ describe("clusters", () => {
       ).toStrictEqual(["v1.32.4+rke2r1 (running)", "v1.33.13+rke2r3", "v1.32.13+rke2r2"]),
     );
     await user.selectOptions(within(dialog).getByLabelText("Kubernetes version"), "v1.33.13+rke2r3");
-    await user.click(within(dialog).getByRole("button", { name: "Upgrade" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await applyStaged(user);
     await waitFor(() =>
       expect(calls.find((c) => c.key === "PATCH /api/clusters/default/web")?.body).toStrictEqual({
@@ -728,7 +758,7 @@ describe("clusters", () => {
     await expect(screen.findByText(/Cluster not found/u)).resolves.toBeInTheDocument();
   });
 
-  it("shows where the VMs run, and warns when control-plane VMs share a node", async () => {
+  it("shows where the machines run, and warns when control-plane machines share a node", async () => {
     window.history.replaceState(null, "", "/clusters/default/web/machines");
     fakeServer({
       ...signedIn,
@@ -746,7 +776,7 @@ describe("clusters", () => {
     });
     render(<App />);
     await expect(
-      screen.findByText(/^pve1 runs 2 of 3 control-plane VMs, so losing it stops the control plane\./u),
+      screen.findByText(/^pve1 runs 2 of 3 control-plane machines, so losing it stops the control plane\./u),
     ).resolves.toBeInTheDocument();
     expect(screen.getAllByRole("cell", { name: "pve1" })).toHaveLength(3);
   });
@@ -866,7 +896,7 @@ describe("clusters", () => {
     expect(screen.queryByRole("button", { name: "Delete cp-a" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Delete md-a" }));
     const dialog = screen.getByRole("dialog", { name: "Delete md-a" });
-    expect(dialog).toHaveTextContent("Pool md-0 shrinks by one.");
+    expect(dialog).toHaveTextContent("Pool Workers shrinks by one.");
     await user.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(reads(calls, "DELETE /api/clusters/default/web/machines/md-a")).toBe(1));
   });
@@ -1032,6 +1062,9 @@ describe("create", () => {
     mtu: "",
     queues: "",
     securityGroups: "",
+    firewall: true,
+    firewallServing: true,
+    firewallPorts: "",
     families: "ipv4",
     addresses: "10.0.0.21-10.0.0.29\n10.0.0.32/28",
     prefix: 24,
@@ -1053,12 +1086,14 @@ describe("create", () => {
     loadBalancerPeers: "",
     loadBalancerRouterID: "",
     loadBalancerAuthenticated: false,
+    loadBalancerPicked: false,
     loadBalancerPassword: "",
     pods: "",
     services: "",
     storage: "local-lvm",
     place: { placement: "any", haRule: "", nodes: [] },
     hostOutageGrace: "30",
+    vmIDRange: "",
     proxmoxHA: true,
     datastoreAllocate: false,
     volumeSnapshots: false,
@@ -1085,6 +1120,9 @@ describe("create", () => {
     rancherInstall: false,
     rancherHostname: "",
     rancherRegister: false,
+    rancherExists: true,
+    noSharedKey: false,
+    taken: [],
     certificates: newForm().certificates,
     namespaceLabels: "",
     existingCertManager: false,
@@ -1094,6 +1132,8 @@ describe("create", () => {
     egress: newForm().egress,
     oidc: [],
     upgradeMode: "off",
+    siteZone: newForm().siteZone,
+    nodeImages: true,
     backups: false,
     backupFields: {
       target: "",
@@ -1207,6 +1247,11 @@ describe("create", () => {
     });
     expect(Object.fromEntries(summary(open, rke2))["Headlamp"]).toBe("On, at headlamp.example, read-only for everyone");
     expect(request({ ...form, headlamp: false, headlampView: true }, rke2).variables).not.toHaveProperty("headlamp");
+  });
+
+  it("writes machine sizes in the unit the needs use", () => {
+    const big = { ...form, workerMachine: { cores: 4, memoryMiB: 900_000, diskGiB: 9000 } };
+    expect(Object.fromEntries(summary(big, rke2))["Worker machines"]).toBe("4 cores, 878.9 GiB memory, 8.8 TiB disk");
   });
 
   it("sums the form up as the Confirm step shows it", () => {
@@ -1362,7 +1407,7 @@ describe("create", () => {
 
     for (const [addresses, problem] of [
       ["", "Enter at least one address, range or network"],
-      ["10.0.1.100-10.0.1.120", "10.0.1.100-10.0.1.120 is not an address, range or network on the gateway's network"],
+      ["10.0.1.100-10.0.1.120", "10.0.1.100-10.0.1.120 is outside the gateway's network"],
       ["10.0.0.25-10.0.0.30", "10.0.0.25-10.0.0.30 overlaps the node addresses"],
       ["10.0.0.40/28", "10.0.0.40/28 overlaps the node addresses"],
       ["10.0.0.20", "10.0.0.20 overlaps the API address"],
@@ -1429,7 +1474,7 @@ describe("create", () => {
     // Layer 2 holds the pool and the API address to the nodes' network.
     expect(fieldProblems("Network", { ...bgp, loadBalancerMode: "l2" }, withLB)).toMatchObject({
       endpoint: "Use an address on the gateway's network",
-      loadBalancerAddresses: "198.51.100.0/28 is not an address, range or network on the gateway's network",
+      loadBalancerAddresses: "198.51.100.0/28 is outside the gateway's network",
     });
     // kube-vip and Talos only answer by ARP, so the mode stays layer 2.
     expect(request({ ...bgp, loadBalancer: "kube-vip" }, withLB).variables["loadBalancer"]).not.toHaveProperty("mode");
@@ -1458,13 +1503,25 @@ describe("create", () => {
     }
   });
 
+  it("lets node image refreshes be switched off", () => {
+    const withUpgrades = {
+      ...rke2,
+      variables: [...rke2.variables, { name: "upgrades", required: false, schema: { type: "object" } }],
+    };
+    const off = { ...form, nodeImages: false };
+    expect(request(off, withUpgrades).variables["upgrades"]).toStrictEqual({ mode: "off", nodeImages: false });
+    expect(Object.fromEntries(summary(off, withUpgrades))["Automatic upgrades"]).toBe("Off");
+  });
+
   it("starts automatic upgrades with a window in the browser's time zone", () => {
     const withUpgrades = {
       ...rke2,
       variables: [...rke2.variables, { name: "upgrades", required: false, schema: { type: "object" } }],
     };
     const zone = new Intl.DateTimeFormat().resolvedOptions().timeZone;
-    expect(request({ ...form, upgradeMode: "patch" }, withUpgrades).variables["upgrades"]).toStrictEqual({
+    expect(
+      request({ ...form, siteZone: zone, upgradeMode: "patch" }, withUpgrades).variables["upgrades"],
+    ).toStrictEqual({
       mode: "patch",
       window: { start: "02:00", durationMinutes: 240, timeZone: zone },
     });
@@ -1644,7 +1701,7 @@ describe("create", () => {
       /^Enter at least 6 addresses/u,
     );
     expect(fieldProblems("Network", { ...form, addresses: "10.0.1.21-10.0.1.29" }, rke2).addresses).toMatch(
-      /on the gateway's network$/u,
+      /is outside the gateway's network$/u,
     );
     expect(fieldProblems("Network", { ...form, addresses: "10.0.0.29-10.0.0.21" }, rke2).addresses).toMatch(
       /is not an address/u,
@@ -1922,6 +1979,47 @@ describe("create", () => {
     expect(name).not.toHaveAttribute("aria-invalid");
   });
 
+  it("refuses a name another cluster has on the first step", async () => {
+    window.history.replaceState(null, "", "/clusters/new");
+    fakeServer({
+      "GET /api/session": () => ({ body: { user: "alice@pve", csrf: "c1" } }),
+      "GET /api/classes": () => ({ body: [rke2] }),
+      "GET /api/clusters": () => ({
+        body: [
+          {
+            namespace: "clusters",
+            name: "web",
+            class: "kubehenge-rke2",
+            distribution: "rke2",
+            version: "v1.36.5+rke2r1",
+            generation: 1,
+            created: "2026-10-01T00:00:00Z",
+            deleting: false,
+            phase: "Provisioned",
+            available: true,
+            conditions: [],
+            controlPlane: { desired: 1, ready: 1, available: 1, upToDate: 1 },
+            workers: { desired: 1, ready: 1, available: 1, upToDate: 1 },
+            workerPools: [{ name: "md-0", class: "worker", replicas: 1 }],
+            variables: {},
+            pool: "/pool/kubehenge/clusters.web",
+            allowed: { change: true, kubeconfig: true },
+          },
+        ],
+      }),
+      "GET /api/proxmox/storages": () => ({ body: [] }),
+      "GET /api/proxmox/nodes": () => ({ body: [] }),
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    const name = await screen.findByLabelText("Name");
+    await screen.findByLabelText("Start from");
+    await user.type(name, "web");
+    await waitFor(() => expect(name).toHaveAccessibleDescription("web is in use. Enter another name."));
+    await user.type(name, "2");
+    expect(name).not.toHaveAttribute("aria-invalid");
+  });
+
   describe("search domains from the node", () => {
     it("keeps what the user typed, or cleared, when another bridge's node answers differently", async () => {
       const user = userEvent.setup({ delay: null });
@@ -1960,6 +2058,29 @@ describe("create", () => {
     const calls = fakeServer({
       "GET /api/session": () => ({ body: { user: "alice@pve", csrf: "c1" } }),
       "GET /api/classes": () => ({ body: [rke2OS] }),
+      "GET /api/clusters": () => ({
+        body: [
+          {
+            namespace: "clusters",
+            name: "rancher",
+            class: "kubehenge-rke2",
+            distribution: "rke2",
+            version: "v1.36.5+rke2r1",
+            generation: 1,
+            created: "2026-10-01T00:00:00Z",
+            deleting: false,
+            phase: "Provisioned",
+            available: true,
+            conditions: [],
+            controlPlane: { desired: 1, ready: 1, available: 1, upToDate: 1 },
+            workers: { desired: 1, ready: 1, available: 1, upToDate: 1 },
+            workerPools: [{ name: "md-0", class: "worker", replicas: 1 }],
+            variables: { rancher: { install: true, hostname: "rancher.example.org" } },
+            pool: "/pool/kubehenge/clusters.rancher",
+            allowed: { change: true, kubeconfig: true },
+          },
+        ],
+      }),
       "GET /api/proxmox/storages": () => ({
         body: [
           {
@@ -2016,7 +2137,7 @@ describe("create", () => {
     expect(screen.getByLabelText("Search domains")).toHaveValue("corp.example");
     expect(screen.getByLabelText("Gateway")).toHaveValue("10.0.0.1");
     expect(screen.getByLabelText("Prefix length")).toHaveValue(16);
-    expect(screen.getByLabelText("API address")).toHaveAttribute("placeholder", "10.0.0.20");
+    expect(screen.getByLabelText("API address")).not.toHaveAttribute("placeholder");
     expect(screen.getByLabelText("Node addresses")).toHaveAccessibleDescription(
       "Ranges like 10.0.0.21-10.0.0.29, networks or addresses",
     );
@@ -2035,6 +2156,10 @@ describe("create", () => {
     await user.type(screen.getByLabelText("VLAN tag"), "10");
     expect(screen.getByLabelText("Gateway")).toHaveValue("");
     expect(screen.getByLabelText("API address")).toHaveValue("");
+    // A problem replaces the hint rather than sitting above it.
+    await user.type(screen.getByLabelText("VLAN tag"), "0000");
+    expect(screen.getByLabelText("VLAN tag")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("VLAN tag")).not.toHaveAccessibleDescription(/Optional/u);
     await user.clear(screen.getByLabelText("VLAN tag"));
     expect(screen.getByLabelText("Gateway")).toHaveValue("10.0.0.1");
     await waitFor(() => expect(screen.getByLabelText("API address")).toHaveValue("10.0.0.30"));
@@ -2068,6 +2193,7 @@ describe("create", () => {
     await user.click(screen.getByRole("checkbox", { name: /Install Rancher/u }));
     await user.click(screen.getByRole("button", { name: "Machines" }));
     expect(within(screen.getByRole("group", { name: "Control plane" })).getByLabelText("Cores")).toHaveValue(4);
+    await user.click(screen.getByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
     // The class's default providers come pre-filled. Adding one more is checked before going on.
@@ -2182,6 +2308,7 @@ describe("create", () => {
     expect(screen.getByRole("checkbox", { name: /Install Rancher/u })).toHaveAccessibleDescription(
       "Needs Sys.Modify on the workload pool",
     );
+    await user.click(screen.getByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
     expect(screen.getByRole("button", { name: "Add identity provider" })).toBeDisabled();
     expect(screen.getByLabelText("Issuer URL")).toBeDisabled();

@@ -96,7 +96,8 @@
 # release the cluster starts on and a newer one its nodes are upgraded to in place, both with a
 # template in the template pool. Talos has no SSH, no systemd and no guest agent that runs commands:
 # the steps that read a node from inside read it through Talos's API, with talosctl and the
-# cluster's talosconfig, or are left out.
+# cluster's talosconfig, or are left out. The datacenter firewall is on while talosctl reads the nodes
+# after they start and after their upgrade, so the class's default firewall is what lets it in.
 # KUBEHENGE_E2E_PART runs part of the test, for a machine whose memory holds the guests of only one:
 # lifecycle sizes the nodes at the least the class lets them have with the add-ons a cluster starts
 # with, and switches on no other; addons-a, addons-b, addons-c but on k3s and addons-d on RKE2 each
@@ -256,11 +257,13 @@ cleanup() {
     [ -z "${health_pid}" ] || kill "${health_pid}" 2> /dev/null || true
     # shellcheck disable=SC2310 # each removal is tried, whatever happened to those before it
     remove_ha_rule || true
+    # shellcheck disable=SC2310 # best effort: a failed restore must not hide the run's own status.
+    [ -z "${datacenter_before:-}" ] || datacenter_firewall "${datacenter_before}" 2> /dev/null || true
     [ "${status}" -eq 0 ] || seaweedfs_errors "${work}"
     if [ "${status}" -ne 0 ] && [ -n "${KUBEHENGE_E2E_NAMESPACE:-}" ]; then
-        printf '\nleaving cluster %s/%s for inspection; delete it with: kubectl -n %s delete cluster %s\n' "${ns}" "${name}" "${ns}" "${name}"
+        printf '\nleaving cluster %s/%s for inspection; delete it with: kubectl -n %s annotate cluster %s kubehenge.dev/allow-deletion=true && kubectl -n %s delete cluster %s\n' "${ns}" "${name}" "${ns}" "${name}" "${ns}" "${name}"
     elif [ "${status}" -ne 0 ]; then
-        printf '\nleaving cluster %s/%s for inspection; delete it with: kubectl delete namespace %s\n' "${ns}" "${name}" "${ns}"
+        printf '\nleaving cluster %s/%s for inspection; delete it with: kubectl -n %s annotate clusters --all kubehenge.dev/allow-deletion=true && kubectl delete namespace %s\n' "${ns}" "${name}" "${ns}" "${ns}"
     fi
     rm -rf "${work}"
 }
@@ -278,6 +281,13 @@ pve_post() {
     pve -X POST "$@" "${KUBEHENGE_PROXMOX_URL}/api2/json/${api_path}" > /dev/null
 }
 pve_delete() { pve -X DELETE "${KUBEHENGE_PROXMOX_URL}/api2/json/$1" > /dev/null; }
+# datacenter_firewall <0|1>: switches Proxmox VE's datacenter firewall, keeping in datacenter_before
+# the state before the first switch, which cleanup puts back.
+datacenter_before=
+datacenter_firewall() {
+    [ -n "${datacenter_before}" ] || datacenter_before=$(pve_get cluster/firewall/options | jq -r '.data.enable // 0')
+    pve -X PUT -d "enable=$1" "${KUBEHENGE_PROXMOX_URL}/api2/json/cluster/firewall/options" > /dev/null
+}
 # remove_ha_rule: takes the HA rule the nodes are labelled with, its resource and guest away again,
 # in the order Proxmox VE allows.
 remove_ha_rule() {
@@ -321,6 +331,28 @@ on_machines() {
         pm_vmid=$(kubectl -n "${ns}" get proxmoxmachine "${pm}" -o jsonpath='{.spec.virtualMachineID}')
         guest "${pm_node}" "${pm_vmid}" "$2"
     done
+}
+# own_image_registry "<Machine names>" [off]: the clusters pull Kubehenge's own image from ghcr.io,
+# where a build under test is not. With KUBEHENGE_E2E_REGISTRY set, containerd on those Machines
+# asks the registry the build was pushed to first and ghcr.io for anything it has not; off takes
+# that away again.
+own_image_registry() {
+    [ -n "${KUBEHENGE_E2E_REGISTRY:-}" ] || return 0
+    case ${distribution} in
+        k3s | rke2) certs=/var/lib/rancher/${distribution}/agent/etc/containerd/certs.d ;;
+        kubeadm) certs=/etc/containerd/certs.d ;;
+        *) fail "the ${distribution} nodes take no registry from the guest agent for Kubehenge's image" ;;
+    esac
+    if [ "${2:-}" = off ]; then
+        # shellcheck disable=SC2310 # a node that does not take it off fails the test with the reason.
+        on_machines "$1" "rm -f ${certs}/ghcr.io/hosts.toml" > /dev/null ||
+            fail "the registry of Kubehenge's image was not taken off the nodes"
+        return 0
+    fi
+    hosts=$(printf 'server = "https://ghcr.io"\n\n[host."http://%s"]\n  capabilities = ["pull", "resolve"]\n' "${KUBEHENGE_E2E_REGISTRY}")
+    # shellcheck disable=SC2310 # a node that does not take it fails the test with the reason.
+    on_machines "$1" "mkdir -p ${certs}/ghcr.io && printf '%s\n' '${hosts}' > ${certs}/ghcr.io/hosts.toml" > /dev/null ||
+        fail "the nodes did not take the registry of Kubehenge's image"
 }
 b64url() { base64 -w0 | tr '+/' '-_' | tr -d '='; }
 
@@ -762,8 +794,22 @@ if [ "${distribution}" = talos ]; then
     talos_annotation() {
         kubectl -n "${ns}" get "cluster/${name}" -o json | jq -r --arg a "kubehenge.dev/$1" '.metadata.annotations[$a] // ""'
     }
+    # trustd_dropped <address>: whether the runner's connection to trustd's port times out, as the
+    # firewall's drop does. trustd is for the nodes alone, so the firewall keeps it closed.
+    trustd_dropped() {
+        trustd_host=$1
+        case ${trustd_host} in *:*) trustd_host="[${trustd_host}]" ;; *) ;; esac
+        trustd_rc=0
+        curl -s --connect-timeout 4 -o /dev/null "http://${trustd_host}:50001/" || trustd_rc=$?
+        seen="curl exit ${trustd_rc}"
+        [ "${trustd_rc}" -eq 28 ]
+    }
 
-    step "the nodes run Talos ${talos_from}, reached through Talos's API with the cluster's talosconfig"
+    step "the nodes run Talos ${talos_from}, reached through Talos's API with the cluster's talosconfig behind the firewall"
+    datacenter_firewall 1
+    first_talos_address=$(talos_addresses | head -n 1)
+    [ -n "${first_talos_address}" ] || fail "no machine has an address"
+    until_true 120 "the firewall drops trustd's port from the runner" trustd_dropped "${first_talos_address}"
     talos_image=$(talos_annotation talos-image)
     [ "${talos_image}" = "${talos_from}" ] || fail "the cluster's machines boot Talos '${talos_image}', not ${talos_from}"
     # shellcheck disable=SC2310 # a failed read fails the step.
@@ -783,6 +829,7 @@ if [ "${distribution}" = talos ]; then
         release=$(talos_release "${address}") || fail "the Talos API of ${address} does not answer with the talosconfig"
         [ "${release}" = "${talos_from}" ] || fail "the Talos API of ${address} reports '${release}', not ${talos_from}"
     done
+    datacenter_firewall "${datacenter_before}"
 fi
 
 step "Kubehenge reports the cluster reconciled and its machines settled"
@@ -1118,11 +1165,15 @@ refused health create pods -n e2e-health
 refused health delete nodes
 refused health-logs list pods -n e2e-health
 refused health-logs get secrets -n kube-system
-# Raw, as kubectl logs would first read the pod, which this identity may not. Without previous=true,
-# as the health page reads: the kubelet hands out the newest run, the crash, which it keeps, while
-# previous=true can name a run it has already removed.
+# Raw, as kubectl logs would first read the pod, which this identity may not. As the health page
+# reads: first the newest run, the crash, which the kubelet keeps. A restart just begun makes that a
+# run with nothing written yet, and then the run before it tells why.
 crash_log=$(KUBECONFIG="${work}/health-logs" kubectl get --raw "/api/v1/namespaces/e2e-health/pods/crasher/log") ||
     fail "the logs identity cannot read the pod's log"
+if [ -z "${crash_log}" ]; then
+    crash_log=$(KUBECONFIG="${work}/health-logs" kubectl get --raw "/api/v1/namespaces/e2e-health/pods/crasher/log?previous=true") ||
+        fail "the logs identity cannot read the pod's previous log"
+fi
 printf '%s' "${crash_log}" | grep -q no-such-command || fail "the pod's log does not tell why it stopped: ${crash_log}"
 wl delete namespace e2e-health --wait=false
 
@@ -1460,6 +1511,11 @@ owned() {
     first_node=$(pve_get nodes | jq -r '.data[0].node')
     pve_get "nodes/${first_node}/storage/${KUBEHENGE_E2E_STORAGE}/content?content=images&vmid=${owner}" | jq '.data | length'
 }
+# volume_node_is <node>: the cluster records the node as holding one of its volumes.
+volume_node_is() {
+    kubectl -n "${ns}" get "cluster/${name}" -o json |
+        jq -e --arg n "$1" '(.metadata.annotations["kubehenge.dev/volume-nodes"] // "") | split(",") | index($n) != null' > /dev/null
+}
 # persistent_volume: a pod writes to a volume of its own, which goes again with its claim.
 persistent_volume() {
     wl apply -f - << 'EOF'
@@ -1509,6 +1565,16 @@ EOF
     pv=$(wl -n default get pvc e2e -o jsonpath='{.spec.volumeName}')
     volume=$(wl get pv "${pv}" -o jsonpath='{.spec.csi.volumeHandle}')
     printf 'volume %s\n' "${volume}"
+    # On storage local to each node the cluster records the volume's node, where it keeps a worker.
+    storage_config=$(pve_get "storage/${KUBEHENGE_E2E_STORAGE}")
+    shared=$(printf '%s' "${storage_config}" | jq '.data.shared // 0')
+    if [ "${shared}" = 0 ]; then
+        zone=$(printf '%s' "${volume}" | cut -d/ -f2)
+        until_true 120 "${zone} recorded as holding a volume" volume_node_is "${zone}"
+        without=$(kubectl -n "${ns}" get "cluster/${name}" -o json |
+            jq -r '.status.conditions[]? | select(.type == "VolumesWithoutWorker") | .message')
+        [ -z "${without}" ] || fail "the volume's node has no worker: ${without}"
+    fi
     owned_volumes=$(owned)
     [ "${owned_volumes}" -ge 1 ] || fail "no volume owned by the volume owner VM ${owner}"
     wl -n default delete pod/e2e pvc/e2e --wait --timeout=5m
@@ -1678,21 +1744,9 @@ if [ "${KUBEHENGE_E2E_VOLUME_SNAPSHOTS:-}" = 1 ]; then
         volumes=$(held) || return 1
         ! printf '%s\n' "${volumes}" | grep -qxF "$1"
     }
-    # The clusters pull Kubehenge's own image from ghcr.io, where a build under test is not: on the
-    # control-plane nodes, where the proxy runs beside the CSI plugin's controller, containerd asks
-    # the registry the build was pushed to first and ghcr.io for anything that registry has not.
-    if [ -n "${KUBEHENGE_E2E_REGISTRY:-}" ]; then
-        case ${distribution} in
-            k3s | rke2) certs=/var/lib/rancher/${distribution}/agent/etc/containerd/certs.d ;;
-            kubeadm) certs=/etc/containerd/certs.d ;;
-            *) fail "the ${distribution} nodes take no registry from the guest agent for the copy proxy's image" ;;
-        esac
-        hosts=$(printf 'server = "https://ghcr.io"\n\n[host."http://%s"]\n  capabilities = ["pull", "resolve"]\n' "${KUBEHENGE_E2E_REGISTRY}")
-        snapshot_servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
-        # shellcheck disable=SC2310 # a node that does not take it fails the test with the reason.
-        on_machines "${snapshot_servers}" "mkdir -p ${certs}/ghcr.io && printf '%s\n' '${hosts}' > ${certs}/ghcr.io/hosts.toml" > /dev/null ||
-            fail "the control-plane nodes did not take the registry of Kubehenge's image"
-    fi
+    # The copy proxy runs beside the CSI plugin's controller on the control-plane nodes.
+    snapshot_servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+    own_image_registry "${snapshot_servers}"
     # not_found <kubectl get arguments>: the object is not found, rather than out of reach for a
     # moment.
     not_found() {
@@ -1886,11 +1940,7 @@ EOF
     until_true 600 "the VolumeSnapshotClass removed" not_found volumesnapshotclass proxmox
     until_true 600 "the snapshot controller removed" none_of -n kube-system deployments -l app.kubernetes.io/name=snapshot-controller
     persistent_volume
-    if [ -n "${KUBEHENGE_E2E_REGISTRY:-}" ]; then
-        # shellcheck disable=SC2310 # a node that does not take it off fails the test with the reason.
-        on_machines "${snapshot_servers}" "rm -f ${certs}/ghcr.io/hosts.toml" > /dev/null ||
-            fail "the registry of Kubehenge's image was not taken off the control-plane nodes"
-    fi
+    own_image_registry "${snapshot_servers}" off
 fi
 
 if [ "${KUBEHENGE_E2E_HA_GROUPS:-}" = 1 ]; then
@@ -2113,6 +2163,61 @@ if [ "${restores_etcd}" = true ]; then
         }
         until_true 900 "every control plane a member of the restored etcd" etcd_rejoined
     fi
+
+    step "etcd snapshots: one taken onto the management cluster's backup volume"
+    set_variable etcdSnapshots "{\"enabled\":true,\"keep\":2,\"schedule\":\"${etcd_schedule}\"}"
+    volume_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    wl -n default create configmap e2e-before-volume-snapshot --from-literal=marker="${volume_marker}"
+    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    webhook_retried kubectl -n "${ns}" annotate cluster "${name}" --overwrite \
+        "kubehenge.dev/etcd-snapshot-requested={\"by\":\"e2e\",\"at\":\"${now}\"}"
+    until_true 900 "an etcd snapshot taken onto the backup volume" snapshot_taken
+    volume_snapshot=$(kubectl -n "${ns}" get cluster "${name}" -o json |
+        jq -r '.metadata.annotations["kubehenge.dev/etcd-snapshot"] | fromjson | .name')
+    [ "${volume_snapshot}" != "${snapshot_name}" ] || fail "no new snapshot was taken onto the backup volume"
+    # No target is what the interface and the CLI show as "Kept on: the backup volume".
+    kubectl -n "${ns}" get cluster "${name}" -o json |
+        jq -e '.spec.topology.variables[] | select(.name == "etcdSnapshots") | .value | (.target // "") == ""' > /dev/null ||
+        fail "the cluster's etcdSnapshots name a target, not the backup volume"
+
+    wl -n default delete configmap e2e-before-volume-snapshot
+    lost_marker=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    wl -n default create configmap e2e-after-volume-snapshot --from-literal=marker="${lost_marker}"
+    control_planes=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
+    control_plane_count=$(printf '%s' "${control_planes}" | wc -w)
+    # A kubeadm, RKE2 or k3s control plane receives the snapshot in a pod of Kubehenge's own image.
+    [ "${distribution}" = talos ] || own_image_registry "${control_planes}"
+    if [ "${distribution}" != talos ] && [ "${control_plane_count}" -ge 3 ]; then
+        step "etcd's quorum lost on purpose, then restored from the backup volume"
+        # Every member but the first drops etcd's peer traffic, so no member has a majority and the
+        # API server stops answering. Those machines are replaced by the restore.
+        for machine in ${control_planes#* }; do
+            on_machines "${machine}" "iptables -I INPUT -p tcp --dport 2380 -j DROP && iptables -I OUTPUT -p tcp --dport 2380 -j DROP" > /dev/null
+        done
+        api_down() {
+            # shellcheck disable=SC2310 # polled with set -e off, and an answer is what is checked.
+            if wl get --raw /readyz > /dev/null 2>&1; then
+                return 1
+            fi
+        }
+        until_true 600 "the cluster's API server down without its quorum" api_down
+    else
+        step "etcd restored from the backup volume"
+    fi
+    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    webhook_retried kubectl -n "${ns}" annotate cluster "${name}" --overwrite \
+        "kubehenge.dev/etcd-restore={\"snapshot\":\"${volume_snapshot}\",\"by\":\"e2e\",\"at\":\"${now}\"}"
+    until_true 2400 "etcd restored from the backup volume" etcd_restored
+    until_true 1200 "cluster ${name} available after the restore from the volume" available_or_failed
+    wl wait --for=condition=Ready nodes --all --timeout=10m
+    until_true 300 "the ConfigMap made before the volume snapshot back" wl -n default get configmap e2e-before-volume-snapshot
+    # shellcheck disable=SC2310 # absent's answer is what is checked.
+    absent wl -n default get configmap e2e-after-volume-snapshot ||
+        fail "a ConfigMap made after the volume snapshot outlived the restore"
+    wl -n default delete configmap e2e-before-volume-snapshot
+    # The pod is deleted once the snapshot is handed over, and may take a moment to terminate.
+    until_true 120 "the pod that received the snapshot gone after the restore" \
+        none_of -n kube-system pods -l app.kubernetes.io/name=kubehenge-restore
 fi
 
 case ${part}-${distribution} in
@@ -3716,11 +3821,16 @@ if [ "${distribution}" = talos ]; then
     done
     cordoned=$(wl get nodes -o json | jq -r '[.items[] | select(.spec.unschedulable == true) | .metadata.name] | join(" ")')
     [ -z "${cordoned}" ] || fail "nodes left cordoned after their upgrade: ${cordoned}"
+    datacenter_firewall 1
+    first_talos_address=$(talos_addresses | head -n 1)
+    [ -n "${first_talos_address}" ] || fail "no machine has an address"
+    until_true 120 "the firewall drops trustd's port from the runner" trustd_dropped "${first_talos_address}"
     for address in $(talos_addresses); do
         # shellcheck disable=SC2310 # a node that does not answer fails the step.
         release=$(talos_release "${address}") || fail "the Talos API of ${address} does not answer"
         [ "${release}" = "${talos_to}" ] || fail "the Talos API of ${address} reports '${release}', not ${talos_to}"
     done
+    datacenter_firewall "${datacenter_before}"
     # Machines made before the next Kubernetes upgrade still boot the release before, and the
     # controller upgrades them in turn.
     talos_image=$(talos_annotation talos-image)
@@ -4253,6 +4363,17 @@ hold=e2e.kubehenge.dev/hold
 worker=$(kubectl -n "${ns}" get machines -l "cluster.x-k8s.io/cluster-name=${name},!cluster.x-k8s.io/control-plane" -o json | jq -r '[.items[] | select(.metadata.deletionTimestamp == null)][0].metadata.name // empty')
 [ -n "${worker}" ] || fail "no worker machine to hold the deletion up with"
 webhook_retried kubectl -n "${ns}" patch "machine/${worker}" --type json -p "[{\"op\":\"add\",\"path\":\"/metadata/finalizers/-\",\"value\":\"${hold}\"}]" > /dev/null
+# The chart's deletion guard refuses a delete until the cluster carries its annotation.
+set +e
+refusal=$(creator -n "${ns}" delete "cluster/${name}" --wait=false 2>&1)
+deleted=$?
+set -e
+[ "${deleted}" -ne 0 ] || fail "the cluster was deleted without kubehenge.dev/allow-deletion"
+case "${refusal}" in
+    *kubehenge.dev/allow-deletion*) ;;
+    *) fail "the unannotated delete failed for another reason: ${refusal}" ;;
+esac
+webhook_retried creator -n "${ns}" annotate "cluster/${name}" kubehenge.dev/allow-deletion=true > /dev/null
 creator -n "${ns}" delete "cluster/${name}" --wait=false
 # deletion_holds: the deletion's status names the held Machine and the test's finalizer.
 deletion_holds() {
