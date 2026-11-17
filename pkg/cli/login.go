@@ -167,12 +167,8 @@ func newInterfaceClient(l *login) (*interfaceClient, error) {
 // certificate, given as the CA, is trusted by any address it is reached at. A CA names no host and
 // gives "", then the address in the URL is checked.
 func servedName(pemData string) string {
-	block, _ := pem.Decode([]byte(pemData))
-	if block == nil {
-		return ""
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
+	cert := firstCertificate(pemData)
+	if cert == nil {
 		return ""
 	}
 	if len(cert.DNSNames) > 0 {
@@ -182,6 +178,47 @@ func servedName(pemData string) string {
 		return cert.IPAddresses[0].String()
 	}
 	return ""
+}
+
+func firstCertificate(pemData string) *x509.Certificate {
+	block, _ := pem.Decode([]byte(pemData))
+	if block == nil {
+		return nil
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil
+	}
+	return cert
+}
+
+// openAppliance is openInterface for the appliance commands, which keep reaching the appliance
+// once its own certificate has expired (pinExpired).
+func openAppliance(ctx context.Context) (*interfaceClient, error) {
+	c, err := openInterface(ctx)
+	if err != nil {
+		return nil, err
+	}
+	c.pinExpired()
+	return c, nil
+}
+
+// pinExpired trusts the login's CA after it has expired, as the appliance's own certificate given
+// to login --ca does one day, by verifying it as of its first valid moment. Verifying it against the
+// clock would lock the appliance's shell out of login and the appliance commands, recovery
+// included, and the interface warns about the expiry itself. The cluster commands keep checking the
+// clock. Only that certificate is trusted then, not the rest of the CA file, which a clock turned
+// back might take.
+func (c *interfaceClient) pinExpired() {
+	leaf := firstCertificate(c.login.CA)
+	transport, ok := c.http.Transport.(*http.Transport)
+	if leaf == nil || !ok || transport.TLSClientConfig == nil || time.Now().Before(leaf.NotAfter) {
+		return
+	}
+	pinned := x509.NewCertPool()
+	pinned.AddCert(leaf)
+	transport.TLSClientConfig.RootCAs = pinned
+	transport.TLSClientConfig.Time = func() time.Time { return leaf.NotBefore }
 }
 
 // versionHeader carries the interface's version, which it tells only a request whose session or
@@ -317,6 +354,7 @@ func signInTo(ctx context.Context, l *login, user, passwordFile, tokenFile, totp
 	if err != nil {
 		return err
 	}
+	c.pinExpired()
 	if user == "" {
 		if l.Token, err = secretFrom(tokenFile, "KUBEHENGE_PROXMOX_TOKEN"); err != nil {
 			return err

@@ -536,7 +536,7 @@ func printLog(out io.Writer, job *appliance.JobView, printed int) int {
 
 // signedIn does what the command asks as the login's user.
 func (*applianceOptions) signedIn(cmd *cobra.Command, do func(context.Context, *applianceSession) error) error {
-	s, err := openInterface(cmd.Context())
+	s, err := openAppliance(cmd.Context())
 	if err != nil {
 		return err
 	}

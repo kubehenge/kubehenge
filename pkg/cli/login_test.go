@@ -2,8 +2,15 @@ package cli
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +18,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The commands that reach the interface have no sign-in of their own: kubehenge login is the one
@@ -227,6 +235,57 @@ func TestOnlyARefusedLoginSaysToLogInAgain(t *testing.T) {
 	_, err := runIn(t, filepath.Join(t.TempDir(), "login.json"), "login", totp.URL, "--ca", ca, "--user", "otp@pve", "--password-file", writeTemp(t, "pw"), "--totp", "000000")
 	if err == nil || !strings.HasPrefix(err.Error(), "Wrong code") {
 		t.Errorf("a wrong code: %v", err)
+	}
+}
+
+// expiredCertificate is a self-signed certificate for 127.0.0.1 that expired an hour ago.
+func expiredCertificate(t *testing.T) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1), IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1)},
+		NotBefore: time.Now().Add(-48 * time.Hour), NotAfter: time.Now().Add(-time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+}
+
+// The appliance's shell logs in with the appliance's own certificate once it has expired, and the
+// appliance commands reach it, as the way to recover. The cluster commands still check the clock,
+// and another expired certificate is not trusted.
+func TestAnExpiredApplianceCertificateKeepsTheApplianceCommands(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	f.srv.Close()
+	srv := httptest.NewUnstartedServer(f.srv.Config.Handler)
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{expiredCertificate(t)}, MinVersion: tls.VersionTLS12}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	certFile := func(cert tls.Certificate) string {
+		return writeTemp(t, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]})))
+	}
+	login := func(cert tls.Certificate) error {
+		_, err := f.run("login", srv.URL, "--ca", certFile(cert), "--user", "admin@pve", "--password-file", writeTemp(t, fakePassword))
+		return err
+	}
+	if err := login(srv.TLS.Certificates[0]); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if out, err := f.run("appliance", "upgrades"); err != nil || !strings.Contains(out, "Installed     0.1.0") {
+		t.Errorf("appliance upgrades: %v\n%s", err, out)
+	}
+	if _, err := f.run("cluster", "list"); err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Errorf("cluster list through an expired certificate: %v", err)
+	}
+	if err := login(expiredCertificate(t)); err == nil || !strings.Contains(err.Error(), "unknown authority") {
+		t.Errorf("login with another expired certificate: %v", err)
 	}
 }
 
