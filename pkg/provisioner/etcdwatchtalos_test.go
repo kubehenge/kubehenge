@@ -379,6 +379,10 @@ func TestEtcdWatchBootstrapsAgainOnceTheNodeIsReady(t *testing.T) {
 	if got := recorded(f.events); len(got) != 1 || !strings.Contains(got[0], "Bootstrapped it again.") {
 		t.Errorf("events %v", got)
 	}
+	// The answer that came before Talos could take a bootstrap is not a start.
+	if got := f.machine("web-cp-0").Annotations[EtcdRepairsAnnotation]; got != `{"repairs":1}` {
+		t.Errorf("%s %q", EtcdRepairsAnnotation, got)
+	}
 }
 
 // A node whose etcd fails on every boot is started again maxEtcdRepairs times, then left Failed
