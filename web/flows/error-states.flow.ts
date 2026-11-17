@@ -18,18 +18,24 @@ async function needsAttention(page: Page, { severity, what, message }: Attention
 
 test("the fleet sorts the clusters by what needs the owner", async ({ page }) => {
   await page.goto("/");
-  // The cluster's entry in the list, ahead of the run that names it.
-  const card = (cluster: string): ReturnType<Page["getByRole"]> =>
-    page.getByRole("link", { name: new RegExp(`^clusters/${cluster}`, "u") }).first();
-  await expect(page.getByRole("heading", { name: "Needs you 3" })).toBeVisible();
-  await expect(card("payments")).toContainText(
+  // The cluster's row in the list, which says why it stands where it does.
+  const row = (cluster: string): ReturnType<Page["getByRole"]> =>
+    page.getByRole("row").filter({ has: page.getByRole("link", { name: cluster, exact: true }) });
+  await expect(page.getByRole("button", { name: "Needs you 3" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Running 1" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Healthy 4" })).toBeVisible();
+  await expect(row("payments")).toContainText(
     "Pod billing/invoice-worker-p5h6r: CrashLoopBackOff, 14 restarts and 3 more",
   );
-  await expect(card("legacy")).toContainText("Kubernetes out of support and 3 more");
-  await expect(card("staging")).toContainText("Worker staging-md-0-2trfn: taints differ from pool Workers and 3 more");
-  await expect(page.getByRole("heading", { name: "Running 1" })).toBeVisible();
-  await expect(card("edge")).toContainText("Upgrading to v1.37.1+k3s1");
-  await expect(page.getByRole("heading", { name: "Healthy 4" })).toBeVisible();
+  await expect(row("legacy")).toContainText("Kubernetes out of support and 3 more");
+  await expect(row("staging")).toContainText("Worker staging-md-0-2trfn: taints differ from pool Workers and 3 more");
+  await expect(row("edge")).toContainText("Upgrading to v1.37.1+k3s1");
+
+  // The default order puts what needs the owner first, then the running work, then the healthy.
+  const needs = ["legacy", "payments", "staging"];
+  const names = await page.locator("td.fleet-name a").allTextContents();
+  expect(names.slice(0, needs.length).toSorted()).toEqual(needs);
+  expect(names[needs.length]).toBe("edge");
 });
 
 test("payments shows a crash-looping pod, a slow etcd disk and a firing alert", async ({ page }) => {

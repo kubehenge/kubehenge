@@ -25,6 +25,6 @@ test("deletes a cluster once its name is typed", async ({ page, problems }) => {
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(dialog).toBeHidden();
   await page.goto("/");
-  await expect(page.getByRole("link", { name: /clusters\/web/u })).toBeVisible();
+  await expect(page.getByRole("link", { name: "web", exact: true })).toBeVisible();
   expect(await cluster(page, "web")).toMatchObject({ name: "web", deleting: false });
 });
