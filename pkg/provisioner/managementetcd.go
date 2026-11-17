@@ -212,19 +212,24 @@ func (m *ManagementTalos) answering(ctx context.Context, admin []byte, nodes []s
 }
 
 func (m *ManagementTalos) on(ctx context.Context, raw []byte, address string, do func(context.Context, TalosNode) error) error {
+	if err := m.with(ctx, raw, address, do); err != nil {
+		return fmt.Errorf("%s: %w", address, err)
+	}
+	return nil
+}
+
+// with is on with an error that does not name the node, for a caller that does.
+func (m *ManagementTalos) with(ctx context.Context, raw []byte, address string, do func(context.Context, TalosNode) error) error {
 	dial := m.Dial
 	if dial == nil {
 		dial = DialTalos
 	}
 	t, err := dial(ctx, raw, address)
 	if err != nil {
-		return fmt.Errorf("%s: %w", address, err)
+		return err
 	}
 	defer func() { _ = t.Close() }()
-	if err := do(ctx, t); err != nil {
-		return fmt.Errorf("%s: %w", address, err)
-	}
-	return nil
+	return do(ctx, t)
 }
 
 // wait does something on a node until it says it is done. A node that does not answer, or is not
@@ -235,7 +240,7 @@ func (m *ManagementTalos) wait(ctx context.Context, raw []byte, address, what st
 	poll := cmp.Or(m.Poll, talosRestorePoll)
 	for {
 		done := false
-		err := m.on(ctx, raw, address, func(ctx context.Context, t TalosNode) error {
+		err := m.with(ctx, raw, address, func(ctx context.Context, t TalosNode) error {
 			var err error
 			done, err = do(ctx, t)
 			return err
@@ -244,7 +249,7 @@ func (m *ManagementTalos) wait(ctx context.Context, raw []byte, address, what st
 		case err == nil && done:
 			return nil
 		case err != nil && !errors.Is(err, errTalosNotReady) && ctx.Err() == nil:
-			return fmt.Errorf("%s: %w", what, err)
+			return fmt.Errorf("%s: %s: %w", what, address, err)
 		}
 		select {
 		case <-ctx.Done():

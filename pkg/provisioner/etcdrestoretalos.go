@@ -76,13 +76,19 @@ func talosEtcdJoined(ctx context.Context, t TalosNode, from *string, reboot func
 	return false, stayedFailed(etcd, "a reboot")
 }
 
-// stayedFailed is a not-ready error, so that the wait reads etcd again, which names Talos's reason
-// for when the wait runs out.
+// stayedFailedError is a not-ready error, so that the wait reads etcd again. Its text ends on
+// Talos's reason, which is what shows once the wait runs out, and so says nothing of readiness.
+type stayedFailedError string
+
+func (e stayedFailedError) Error() string { return string(e) }
+
+func (stayedFailedError) Is(target error) bool { return target == errTalosNotReady }
+
 func stayedFailed(etcd TalosService, after string) error {
 	if etcd.Event == "" {
-		return fmt.Errorf("etcd stayed Failed after %s: %w", after, errTalosNotReady)
+		return stayedFailedError("etcd stayed Failed after " + after)
 	}
-	return fmt.Errorf("etcd stayed Failed after %s, Talos says %q: %w", after, etcd.Event, errTalosNotReady)
+	return stayedFailedError(fmt.Sprintf("etcd stayed Failed after %s, Talos says %q", after, etcd.Event))
 }
 
 // planTalosRestore writes out the steps that restore a Talos cluster's etcd by hand with talosctl,
@@ -484,15 +490,20 @@ func (run *restoreRun) knowTalosNodes(ctx context.Context) error {
 
 // onTalos does something through a node's Talos API.
 func (run *restoreRun) onTalos(ctx context.Context, n RestoreNode, do func(context.Context, TalosNode) error) error {
-	t, err := run.r.Talos(ctx, run.talosconfig, n.Address)
-	if err != nil {
-		return fmt.Errorf("control-plane machine %s: %w", n.Machine, err)
-	}
-	defer func() { _ = t.Close() }()
-	if err := do(ctx, t); err != nil {
+	if err := run.withTalos(ctx, n, do); err != nil {
 		return fmt.Errorf("control-plane machine %s: %w", n.Machine, err)
 	}
 	return nil
+}
+
+// withTalos is onTalos with an error that does not name the machine, for a caller that does.
+func (run *restoreRun) withTalos(ctx context.Context, n RestoreNode, do func(context.Context, TalosNode) error) error {
+	t, err := run.r.Talos(ctx, run.talosconfig, n.Address)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = t.Close() }()
+	return do(ctx, t)
 }
 
 // waitTalos does something through a node's Talos API until it says it is done, for at most
@@ -507,7 +518,7 @@ func (run *restoreRun) waitTalos(ctx context.Context, n RestoreNode, what string
 	}
 	for {
 		done := false
-		err := run.onTalos(ctx, n, func(ctx context.Context, t TalosNode) error {
+		err := run.withTalos(ctx, n, func(ctx context.Context, t TalosNode) error {
 			var err error
 			done, err = do(ctx, t)
 			return err
@@ -517,7 +528,7 @@ func (run *restoreRun) waitTalos(ctx context.Context, n RestoreNode, what string
 			ctrl.LoggerFrom(ctx).Info(what, "machine", n.Machine)
 			return nil
 		case err != nil && !errors.Is(err, errTalosNotReady) && ctx.Err() == nil:
-			return fmt.Errorf("%s: %w", what, err)
+			return fmt.Errorf("%s: control-plane machine %s: %w", what, n.Machine, err)
 		}
 		select {
 		case <-ctx.Done():

@@ -140,9 +140,9 @@ func TestManagementTalosRestoreGivesUpOnAFailedEtcd(t *testing.T) {
 	t.Parallel()
 	f := &fakeTalos{starting: func(int) (string, bool) { return talosEtcdFailed, false }}
 	_, err := restoreManagement(f, 300*time.Millisecond)
-	want := fmt.Sprintf("starting etcd on 10.0.0.21 did not finish: 10.0.0.21: etcd stayed Failed after starting it again, Talos says %q", fakePullFailure)
-	if err == nil || !strings.Contains(err.Error(), want) {
-		t.Fatalf("error %v, want one naming %q", err, want)
+	want := fmt.Sprintf("starting etcd on 10.0.0.21 did not finish: etcd stayed Failed after starting it again, Talos says %q", fakePullFailure)
+	if err == nil || !strings.HasSuffix(err.Error(), want) {
+		t.Fatalf("error %v, want one ending on %q", err, want)
 	}
 	// Every read of etcd after the first bootstrap found it Failed, and each led to one bootstrap.
 	reads, bootstraps := 0, 0

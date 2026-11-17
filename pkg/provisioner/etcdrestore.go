@@ -998,7 +998,11 @@ func (run *restoreRun) succeededMessage() string {
 		m += " The first attempt failed, " + run.retried.Error() + ", and a second restored it."
 	}
 	if run.talos && len(run.nodes) > 1 {
-		m += fmt.Sprintf(" The other %d control-plane nodes joined it again.", len(run.nodes)-1)
+		joined := "The other control-plane node joined"
+		if others := len(run.nodes) - 1; others != 1 {
+			joined = fmt.Sprintf("The other %d control-plane nodes joined", others)
+		}
+		m += " " + joined + " it again."
 	}
 	switch {
 	case len(s.Replaced) == 0:

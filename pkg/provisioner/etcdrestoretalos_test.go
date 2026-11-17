@@ -88,11 +88,28 @@ func TestTalosEtcdRestoreReplacesANodeThatDoesNotAnswer(t *testing.T) {
 			t.Errorf("called %s on a node that does not answer", c)
 		}
 	}
-	if st := f.status(); st.Phase != RestoreSucceeded || !slices.Equal(st.Replaced, []string{"web-cp-2"}) {
+	if st := f.status(); st.Phase != RestoreSucceeded || !slices.Equal(st.Replaced, []string{"web-cp-2"}) ||
+		!strings.Contains(st.Message, " The other control-plane node joined it again.") {
 		t.Errorf("status %+v", st)
 	}
 	if got := f.deleting(); !slices.Equal(got, []string{"web-cp-2"}) {
 		t.Errorf("deleting %v", got)
+	}
+}
+
+// A wait for an etcd that stays Failed is asked again like any node that is not ready. Its text
+// ends on Talos's reason, with nothing after it.
+func TestAFailedEtcdIsNotReadyAndEndsOnTalosReason(t *testing.T) {
+	t.Parallel()
+	err := stayedFailed(TalosService{Event: fakePullFailure}, "a reboot")
+	if !errors.Is(err, errTalosNotReady) {
+		t.Errorf("%v is not a not-ready error", err)
+	}
+	if want := fmt.Sprintf("etcd stayed Failed after a reboot, Talos says %q", fakePullFailure); err.Error() != want {
+		t.Errorf("error %q, want %q", err, want)
+	}
+	if want := "etcd stayed Failed after a reboot"; stayedFailed(TalosService{}, "a reboot").Error() != want {
+		t.Errorf("without an event: %v, want %q", stayedFailed(TalosService{}, "a reboot"), want)
 	}
 }
 
