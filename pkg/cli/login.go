@@ -71,14 +71,16 @@ func readLogin(ctx context.Context) (*login, error) {
 	var raw []byte
 	err = whileHeld(func() error {
 		var readErr error
-		raw, readErr = os.ReadFile(path) //nolint:gosec // the user's own login file
-		return readErr
+		if raw, readErr = os.ReadFile(path); readErr != nil { //nolint:gosec // the user's own login file
+			return fmt.Errorf("reading the login: %w", readErr)
+		}
+		return nil
 	})
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, errors.New(notLoggedIn)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("reading the login: %w", err)
+		return nil, err
 	}
 	var l login
 	if err := json.Unmarshal(raw, &l); err != nil || l.URL == "" {
@@ -369,29 +371,27 @@ func signInTo(ctx context.Context, l *login, user, passwordFile, tokenFile, totp
 	if password == "" {
 		return errors.New("no password: give --password-file or KUBEHENGE_PASSWORD")
 	}
-	res, err := c.open(ctx, http.MethodPost, "/api/session", map[string]string{"username": user, "password": password})
-	if err != nil {
-		return err
-	}
-	pending, err := keepSession(l, res)
+	pending, err := c.signInStep(ctx, "/api/session", map[string]string{"username": user, "password": password})
 	if err != nil || !pending {
 		return err
 	}
 	if totp == "" {
 		return fmt.Errorf("%s has a second factor: give --totp", user)
 	}
-	if res, err = c.open(ctx, http.MethodPost, "/api/session/second-factor", map[string]string{"kind": "totp", "code": totp}); err != nil {
-		return err
-	}
-	_, err = keepSession(l, res)
+	_, err = c.signInStep(ctx, "/api/session/second-factor", map[string]string{"kind": "totp", "code": totp})
 	return err
 }
 
-// keepSession keeps in l the session a sign-in step's answer starts, and tells whether it waits
-// for a second factor. Each step ends the session it came with and starts another, so the last
-// cookie the answer sets is the live one, as a browser would keep it.
-func keepSession(l *login, res *http.Response) (bool, error) {
+// signInStep sends a sign-in step and keeps in the login the session its answer starts, and tells
+// whether that waits for a second factor. Each step ends the session it came with and starts
+// another, so the last cookie the answer sets is the live one, as a browser would keep it.
+func (c *interfaceClient) signInStep(ctx context.Context, path string, body map[string]string) (bool, error) {
+	res, err := c.open(ctx, http.MethodPost, path, body)
+	if err != nil {
+		return false, err
+	}
 	defer func() { _ = res.Body.Close() }()
+	l := c.login
 	var sess struct {
 		CSRF         string `json:"csrf"`
 		SecondFactor any    `json:"secondFactor"`

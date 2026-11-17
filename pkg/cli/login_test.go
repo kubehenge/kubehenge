@@ -147,8 +147,8 @@ func secondFactorInterface(t *testing.T) *httptest.Server {
 	t.Helper()
 	const sessionCookie = "__Host-kubehenge-session"
 	start := func(w http.ResponseWriter, id, body string) {
-		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Path: "/", Secure: true, MaxAge: -1})
-		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: id, Path: "/", Secure: true})
+		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: -1})
+		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: id, Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 		answer(w, http.StatusOK, body)
 	}
 	mux := http.NewServeMux()
@@ -204,7 +204,7 @@ func TestOnlyARefusedLoginSaysToLogInAgain(t *testing.T) {
 		answer(w, http.StatusOK, `{}`)
 	})
 	mux.HandleFunc("POST /api/session", func(w http.ResponseWriter, _ *http.Request) {
-		http.SetCookie(w, &http.Cookie{Name: "__Host-kubehenge-session", Value: "s", Path: "/", Secure: true})
+		http.SetCookie(w, &http.Cookie{Name: "__Host-kubehenge-session", Value: "s", Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 		answer(w, http.StatusOK, `{"csrf":"c"}`)
 	})
 	mux.HandleFunc("GET /api/clusters", func(w http.ResponseWriter, r *http.Request) {
