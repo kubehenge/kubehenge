@@ -702,6 +702,13 @@ Component names are `out_<name>`, with hyphens as underscores. Alloy drops what 
 - **"etcd member … is at …% of its limit"** means the database is over 60 percent of the limit.
   - Free space is defragmented inside the upgrade window. Data needs a higher limit or fewer objects.
 
+### etcd Failed on a Talos node
+
+- **`TalosEtcdFailed`**, "Talos left etcd on … Failed: …", means etcd's start failed, often on an image pull, and Talos does not try again. The text after the colon is Talos's reason.
+  - "Bootstrapped it again" means the cluster's only control-plane node got its bootstrap again.
+  - "Talos refused to bootstrap it again" means etcd on the only node already has data.
+  - "Rebooted the node to start etcd again" means a joining node, or an only node with data, was rebooted. That happens at most once per boot.
+
 ### etcd snapshots and restores
 
 - **`EtcdSnapshotFailed`**, "etcd snapshot failed: …", means no snapshot was taken, for the reason that follows. The controller tries again 15 minutes later.
