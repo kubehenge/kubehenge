@@ -705,9 +705,11 @@ Component names are `out_<name>`, with hyphens as underscores. Alloy drops what 
 ### etcd Failed on a Talos node
 
 - **`TalosEtcdFailed`**, "Talos left etcd on … Failed: …", means etcd's start failed, often on an image pull, and Talos does not try again. The text after the colon is Talos's reason.
-  - "Bootstrapped it again" means the cluster's only control-plane node got its bootstrap again.
+  - "Bootstrapped it again" means a new cluster's only control-plane node got its bootstrap again. A cluster whose control plane was initialised never gets one.
   - "Talos refused to bootstrap it again" means etcd on the only node already has data.
-  - "Rebooted the node to start etcd again" means a joining node, or an only node with data, was rebooted. That happens at most once per boot.
+  - "Rebooted the node to start etcd again" means any other such node was rebooted, at most once per boot.
+  - Nothing happens while the cluster is paused, restoring or upgrading Talos.
+- **`TalosEtcdLeftFailed`**, "… Left it Failed after 3 starts since it last ran", means the controller stopped starting etcd on that node. Read why with `talosctl service etcd` and `talosctl logs etcd`. Once etcd runs, or the machine is replaced, the count starts again.
 
 ### etcd snapshots and restores
 

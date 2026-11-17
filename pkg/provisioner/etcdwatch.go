@@ -82,10 +82,22 @@ type EtcdWatch struct {
 	mu sync.Mutex
 	// silentSince is when each cluster's API first did not answer in the looks since it last did.
 	silentSince map[string]time.Time
-	// etcdLeft is, by control-plane machine, the boot it was rebooted from to start its Failed etcd
-	// again, which still reads Failed while it shuts down. An entry goes once etcd runs or the
-	// machine is gone.
-	etcdLeft map[string]string
+	// etcdRepairs is what was done to start the Failed etcd of each control-plane machine again. An
+	// entry goes once etcd runs or the machine is gone.
+	etcdRepairs map[string]etcdRepair
+}
+
+// maxEtcdRepairs is how often a machine's Failed etcd is started again before it is left to a
+// person. A failure a reboot or a bootstrap cannot fix would otherwise cost a reboot every boot.
+const maxEtcdRepairs = 3
+
+// etcdRepair is the starts of a machine's Failed etcd since it last ran.
+type etcdRepair struct {
+	// boot is the one the machine was last rebooted from, which still reads Failed while it shuts
+	// down.
+	boot    string
+	repairs int
+	gaveUp  bool
 }
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable.
@@ -225,18 +237,18 @@ func (w *EtcdWatch) forgetSilence(c *clusterv1.Cluster) {
 	delete(w.silentSince, remoteKey(c))
 }
 
-// etcdLeftKey is a control-plane machine's key in etcdLeft.
-func etcdLeftKey(c *clusterv1.Cluster, machine string) string { return remoteKey(c) + "/" + machine }
+// etcdRepairKey is a control-plane machine's key in etcdRepairs.
+func etcdRepairKey(c *clusterv1.Cluster, machine string) string { return remoteKey(c) + "/" + machine }
 
-// forgetEtcd drops the boots held of the cluster's machines other than those kept, which are gone
+// forgetEtcd drops the repairs held of the cluster's machines other than those kept, which are gone
 // or being deleted.
 func (w *EtcdWatch) forgetEtcd(c *clusterv1.Cluster, kept []cpMachine) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	for key := range w.etcdLeft {
+	for key := range w.etcdRepairs {
 		machine, ours := strings.CutPrefix(key, remoteKey(c)+"/")
 		if ours && !slices.ContainsFunc(kept, func(m cpMachine) bool { return m.machine.Name == machine }) {
-			delete(w.etcdLeft, key)
+			delete(w.etcdRepairs, key)
 		}
 	}
 }
@@ -340,9 +352,9 @@ func (w *EtcdWatch) talosMember(ctx context.Context, c *clusterv1.Cluster, m *cl
 	case etcd.State == talosEtcdFailed:
 		w.startEtcd(ctx, c, m, node, etcd)
 	case etcd.State == talosEtcdRunning:
-		// etcd that fails again in the same boot, after running, is started again.
+		// etcd that fails again after running is started again, as often as the first time.
 		w.mu.Lock()
-		delete(w.etcdLeft, etcdLeftKey(c, m.Name))
+		delete(w.etcdRepairs, etcdRepairKey(c, m.Name))
 		w.mu.Unlock()
 	}
 	switch {
@@ -355,12 +367,14 @@ func (w *EtcdWatch) talosMember(ctx context.Context, c *clusterv1.Cluster, m *cl
 }
 
 // startEtcd starts etcd again on a node Talos left it Failed on, which Talos never does by itself,
-// as when the image pull of etcd's pre stage could not fetch the image's signature. The cluster's
-// only etcd is bootstrapped again: CACPPT bootstraps once, and a rebooted node would wait for it.
-// Any other node is rebooted once per boot to join again, since a bootstrap would make it a second
-// cluster. A restore owns the nodes while it runs.
+// as when the image pull of etcd's pre stage could not fetch the image's signature. The first etcd
+// of a cluster not yet initialised is bootstrapped again: CACPPT bootstraps once, and a rebooted
+// node would wait for it. Any other node is rebooted, at most once per boot, since a bootstrap
+// would make it a cluster of its own, empty. After maxEtcdRepairs the node is left Failed. A
+// restore or a Talos upgrade owns the nodes while it runs.
 func (w *EtcdWatch) startEtcd(ctx context.Context, c *clusterv1.Cluster, m *clusterv1.Machine, node TalosNode, etcd TalosService) {
-	if ptr.Deref(c.Spec.Paused, false) || RestoreInProgress(c) {
+	_, upgrading := c.Annotations[TalosUpgradingAnnotation]
+	if ptr.Deref(c.Spec.Paused, false) || RestoreInProgress(c) || upgrading {
 		return
 	}
 	log := ctrl.LoggerFrom(ctx).WithName("etcd-watch").WithValues("cluster", c.Namespace+"/"+c.Name, "machine", m.Name)
@@ -369,21 +383,29 @@ func (w *EtcdWatch) startEtcd(ctx context.Context, c *clusterv1.Cluster, m *clus
 		log.Error(err, "reading the boot of a node whose etcd Talos left Failed")
 		return
 	}
-	key := etcdLeftKey(c, m.Name)
+	key := etcdRepairKey(c, m.Name)
 	w.mu.Lock()
-	left := w.etcdLeft[key] == boot
+	r := w.etcdRepairs[key]
 	w.mu.Unlock()
-	if left {
+	if r.gaveUp || r.boot == boot {
+		return
+	}
+	note := "Talos left etcd on " + m.Name + " Failed"
+	if etcd.Event != "" {
+		note += ": " + etcd.Event
+	}
+	if r.repairs >= maxEtcdRepairs {
+		r.gaveUp = true
+		w.keepRepair(key, r)
+		note += fmt.Sprintf(". Left it Failed after %d starts since it last ran.", r.repairs)
+		log.Info(note)
+		w.event(c, "TalosEtcdLeftFailed", note)
 		return
 	}
 	only, err := w.onlyEtcd(ctx, c, m)
 	if err != nil {
 		log.Error(err, "telling whether etcd on the node is the cluster's only one")
 		return
-	}
-	note := "Talos left etcd on " + m.Name + " Failed"
-	if etcd.Event != "" {
-		note += ": " + etcd.Event
 	}
 	// After a bootstrap Talos took, a node whose etcd fails once more in the same boot is
 	// bootstrapped again, as a restore does. Talos refuses one while etcd has data, which a
@@ -406,23 +428,38 @@ func (w *EtcdWatch) startEtcd(ctx context.Context, c *clusterv1.Cluster, m *clus
 			return
 		}
 		note += ". Rebooted the node to start etcd again."
-		w.mu.Lock()
-		if w.etcdLeft == nil {
-			w.etcdLeft = map[string]string{}
-		}
-		w.etcdLeft[key] = boot
-		w.mu.Unlock()
+		r.boot = boot
 	}
+	r.repairs++
+	w.keepRepair(key, r)
 	log.Info(note)
+	w.event(c, "TalosEtcdFailed", note)
+}
+
+func (w *EtcdWatch) keepRepair(key string, r etcdRepair) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.etcdRepairs == nil {
+		w.etcdRepairs = map[string]etcdRepair{}
+	}
+	w.etcdRepairs[key] = r
+}
+
+func (w *EtcdWatch) event(c *clusterv1.Cluster, reason, note string) {
 	if w.Events != nil {
-		w.Events.Eventf(c, nil, corev1.EventTypeWarning, "TalosEtcdFailed", "WatchEtcd", "%s", shorten(note, watchEventMax))
+		w.Events.Eventf(c, nil, corev1.EventTypeWarning, reason, "WatchEtcd", "%s", shorten(note, watchEventMax))
 	}
 }
 
-// onlyEtcd says whether etcd on the machine is the cluster's first and only one: CACPPT recorded
-// the control plane as bootstrapped, and no other control-plane machine exists, not even one being
-// deleted, which may still run a member. The machine's own etcd reads Failed, so none runs.
+// onlyEtcd says whether etcd on the machine is the first of a cluster that has none yet: the
+// control plane is not initialised, CACPPT recorded it as bootstrapped, and no other control-plane
+// machine exists, not even one being deleted, which may still run a member. The machine's own etcd
+// reads Failed, so none runs. Once initialised, a cluster's etcd had data, which a new empty etcd
+// would replace, so only a restore brings it back.
 func (w *EtcdWatch) onlyEtcd(ctx context.Context, c *clusterv1.Cluster, m *clusterv1.Machine) (bool, error) {
+	if meta.IsStatusConditionTrue(c.Status.Conditions, clusterv1.ClusterControlPlaneInitializedCondition) {
+		return false, nil
+	}
 	var machines clusterv1.MachineList
 	err := w.Client.List(ctx, &machines, client.InNamespace(c.Namespace),
 		client.MatchingLabels{clusterv1.ClusterNameLabel: c.Name}, client.HasLabels{clusterv1.MachineControlPlaneLabel})

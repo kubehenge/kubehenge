@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -19,8 +20,9 @@ import (
 
 var talosControlPlaneGVK = schema.GroupVersionKind{Group: "controlplane.cluster.x-k8s.io", Version: "v1alpha3", Kind: "TalosControlPlane"}
 
-// newTalosEtcdFixture is web as a Talos cluster, its TalosControlPlane bootstrapped as given, with
-// the control-plane machines web-cp-0 to web-cp-2 at 10.0.0.11 to 10.0.0.13.
+// newTalosEtcdFixture is web as a new Talos cluster, its control plane not initialised and its
+// TalosControlPlane bootstrapped as given, with the control-plane machines web-cp-0 to web-cp-2 at
+// 10.0.0.11 to 10.0.0.13.
 func newTalosEtcdFixture(t *testing.T, bootstrapped bool, change func(*clusterv1.Cluster)) *etcdWatchFixture {
 	t.Helper()
 	cp := &unstructured.Unstructured{Object: map[string]any{"status": map[string]any{"bootstrapped": bootstrapped}}}
@@ -28,6 +30,7 @@ func newTalosEtcdFixture(t *testing.T, bootstrapped bool, change func(*clusterv1
 	cp.SetNamespace("team-a")
 	cp.SetName("web-cp")
 	return newEtcdWatchFixture(t, func(c *clusterv1.Cluster) {
+		meta.RemoveStatusCondition(&c.Status.Conditions, clusterv1.ClusterControlPlaneInitializedCondition)
 		c.Spec.Topology.ClassRef.Name = ClassPrefix + "talos"
 		c.Spec.ControlPlaneRef = clusterv1.ContractVersionedObjectReference{APIGroup: talosControlPlaneGVK.Group, Kind: talosControlPlaneGVK.Kind, Name: "web-cp"}
 		if change != nil {
@@ -151,8 +154,8 @@ func TestEtcdWatchForgetsRebootedNodes(t *testing.T) {
 	held := func() []string {
 		f.w.mu.Lock()
 		defer f.w.mu.Unlock()
-		keys := make([]string, 0, len(f.w.etcdLeft))
-		for key := range f.w.etcdLeft {
+		keys := make([]string, 0, len(f.w.etcdRepairs))
+		for key := range f.w.etcdRepairs {
 			keys = append(keys, key[strings.LastIndex(key, "/")+1:])
 		}
 		slices.Sort(keys)
@@ -242,7 +245,8 @@ func TestEtcdWatchEventCarriesTalosReason(t *testing.T) {
 	}
 }
 
-// Only Failed is acted on, and never in a cluster being deleted, under a restore or paused.
+// Only Failed is acted on, and never in a cluster being deleted, under a restore or a Talos upgrade,
+// or paused.
 func TestEtcdWatchLeavesEtcdAlone(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -258,6 +262,9 @@ func TestEtcdWatchLeavesEtcdAlone(t *testing.T) {
 		}},
 		"restoring": {talosEtcdFailed, func(c *clusterv1.Cluster) { c.Annotations = map[string]string{EtcdRestoreAnnotation: "{}"} }},
 		"paused":    {talosEtcdFailed, func(c *clusterv1.Cluster) { c.Spec.Paused = new(true) }},
+		"upgrading": {talosEtcdFailed, func(c *clusterv1.Cluster) {
+			c.Annotations = map[string]string{TalosUpgradingAnnotation: "web-cp-0 to v1.14.6 since 2026-11-17T10:00:00Z"}
+		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -277,5 +284,100 @@ func TestEtcdWatchLeavesEtcdAlone(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The only control-plane node of a cluster whose control plane was initialised once had etcd data,
+// which a bootstrap would replace with an empty etcd. It is rebooted instead, whatever Talos says.
+func TestEtcdWatchNeverBootstrapsAnInitialisedCluster(t *testing.T) {
+	t.Parallel()
+	for _, event := range []string{"Failed to run pre stage: failed to build initial etcd cluster: timeout", fakePullFailure} {
+		f := newTalosEtcdFixture(t, true, func(c *clusterv1.Cluster) {
+			meta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{
+				Type: clusterv1.ClusterControlPlaneInitializedCondition, Status: metav1.ConditionTrue, Reason: clusterv1.ClusterControlPlaneInitializedReason,
+			})
+		})
+		f.remove("web-cp-0", "web-cp-1")
+		f.talos.service = map[string]TalosService{"10.0.0.13": {State: talosEtcdFailed, Event: event}}
+		f.look(0)
+		if calls := f.talos.restoreCalls(); len(calls) > 0 {
+			t.Errorf("%s: calls %v", event, calls)
+		}
+		if !slices.Equal(f.talos.rebooted, []string{"10.0.0.13"}) {
+			t.Errorf("%s: rebooted %v", event, f.talos.rebooted)
+		}
+	}
+}
+
+// A bootstrap the only node is not ready for, as before Talos can take one, is asked for again on
+// the next look, and the node is not rebooted.
+func TestEtcdWatchBootstrapsAgainOnceTheNodeIsReady(t *testing.T) {
+	t.Parallel()
+	f := newTalosEtcdFixture(t, true, nil)
+	f.remove("web-cp-1", "web-cp-2")
+	f.failEtcd("10.0.0.11")
+	refused := false
+	f.talos.fail = func(_, call string) error {
+		if call == "plain bootstrap" && !refused {
+			refused = true
+			return notReady(status.Error(codes.FailedPrecondition, "bootstrap is not available yet"))
+		}
+		return nil
+	}
+	f.look(0)
+	if len(f.talos.rebooted) > 0 || len(recorded(f.events)) > 0 {
+		t.Fatalf("not ready: rebooted %v", f.talos.rebooted)
+	}
+	f.look(time.Minute)
+	if calls := f.talos.restoreCalls(); !slices.Equal(calls, []string{"10.0.0.11 plain bootstrap", "10.0.0.11 plain bootstrap"}) {
+		t.Errorf("calls %v", calls)
+	}
+	if len(f.talos.rebooted) > 0 {
+		t.Errorf("rebooted %v", f.talos.rebooted)
+	}
+	if got := recorded(f.events); len(got) != 1 || !strings.Contains(got[0], "Bootstrapped it again.") {
+		t.Errorf("events %v", got)
+	}
+}
+
+// A node whose etcd fails on every boot is started again maxEtcdRepairs times, then left Failed
+// with one event that says so, until its etcd runs again.
+func TestEtcdWatchGivesUpAfterThreeRepairs(t *testing.T) {
+	t.Parallel()
+	f := newTalosEtcdFixture(t, true, nil)
+	f.failEtcd("10.0.0.12")
+	for boot := range 6 {
+		f.talos.boots = map[string]int{"10.0.0.12": boot}
+		f.look(3 * time.Minute)
+	}
+	if len(f.talos.rebooted) != 3 {
+		t.Errorf("rebooted %v", f.talos.rebooted)
+	}
+	got := recorded(f.events)
+	want := "Talos left etcd on web-cp-1 Failed: " + fakePullFailure + ". Left it Failed after 3 starts since it last ran."
+	if len(got) != 4 || !strings.Contains(got[3], "TalosEtcdLeftFailed") || !strings.Contains(got[3], want) {
+		t.Errorf("events %v", got)
+	}
+	f.talos.service["10.0.0.12"] = TalosService{State: talosEtcdRunning, Healthy: true}
+	f.look(time.Minute)
+	f.failEtcd("10.0.0.12")
+	f.talos.boots = map[string]int{"10.0.0.12": 6}
+	f.look(time.Minute)
+	if len(f.talos.rebooted) != 4 {
+		t.Errorf("rebooted %v once etcd ran again", f.talos.rebooted)
+	}
+
+	// The only node's bootstraps count the same, within one boot.
+	g := newTalosEtcdFixture(t, true, nil)
+	g.remove("web-cp-1", "web-cp-2")
+	g.failEtcd("10.0.0.11")
+	for range 10 {
+		g.look(30 * time.Second)
+	}
+	if calls := g.talos.restoreCalls(); len(calls) != 3 || len(g.talos.rebooted) > 0 {
+		t.Errorf("calls %v, rebooted %v", calls, g.talos.rebooted)
+	}
+	if got := recorded(g.events); len(got) != 4 || !strings.Contains(got[3], "TalosEtcdLeftFailed") {
+		t.Errorf("events %v", got)
 	}
 }
