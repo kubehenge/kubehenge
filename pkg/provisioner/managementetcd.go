@@ -128,18 +128,21 @@ func (m *ManagementTalos) Restore(ctx context.Context, admin []byte, nodes []str
 		}
 	}
 	first := up[0]
+	upload := func(ctx context.Context, t TalosNode) error {
+		r, err := open()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = r.Close() }()
+		return t.UploadEtcdSnapshot(ctx, r)
+	}
 	log("Uploading the snapshot to " + first)
 	err := m.wait(ctx, admin, first, "uploading the snapshot", func(ctx context.Context, t TalosNode) (bool, error) {
 		state, _, err := t.Etcd(ctx)
 		if err != nil || state != talosEtcdPreparing {
 			return false, err //nolint:wrapcheck // wait names the node and what it was doing
 		}
-		r, err := open()
-		if err != nil {
-			return false, err
-		}
-		defer func() { _ = r.Close() }()
-		return true, t.UploadEtcdSnapshot(ctx, r)
+		return true, upload(ctx, t)
 	})
 	if err != nil {
 		return err
@@ -153,8 +156,10 @@ func (m *ManagementTalos) Restore(ctx context.Context, admin []byte, nodes []str
 	}
 	log("Waiting for etcd on " + first)
 	return m.wait(ctx, admin, first, "starting etcd", func(ctx context.Context, t TalosNode) (bool, error) {
-		state, healthy, err := t.Etcd(ctx)
-		return state == talosEtcdRunning && healthy, err //nolint:wrapcheck // wait names the node and what it was doing
+		return talosEtcdStarted(ctx, t, func(ctx context.Context, t TalosNode) error {
+			log("Starting etcd again on " + first + " after Talos left it Failed")
+			return upload(ctx, t)
+		})
 	})
 }
 

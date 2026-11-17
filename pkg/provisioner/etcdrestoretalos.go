@@ -21,11 +21,31 @@ import (
 const (
 	// talosRestorePoll is how often a Talos restore looks at the nodes it waits for.
 	talosRestorePoll = 5 * time.Second
-	// talosEtcdRunning and talosEtcdPreparing are the states Talos gives its etcd service: running,
-	// and waiting for a cluster to join or to be bootstrapped, as it does after a wipe.
+	// talosEtcdRunning, talosEtcdPreparing and talosEtcdFailed are states Talos gives its etcd
+	// service: running, waiting for a cluster to join or to be bootstrapped, as it does after a
+	// wipe, and given up after a start that failed.
 	talosEtcdRunning   = "Running"
 	talosEtcdPreparing = "Preparing"
+	talosEtcdFailed    = "Failed"
 )
+
+// talosEtcdStarted says whether etcd runs on the node, restored, and is healthy. Talos leaves etcd
+// Failed when its start fails, as when the image pull lands on a registry backend that lacks the
+// image's signature, and never starts it again by itself. A pull a little later usually works, so
+// a Failed etcd gets the snapshot again from upload and is bootstrapped once more.
+func talosEtcdStarted(ctx context.Context, t TalosNode, upload func(context.Context, TalosNode) error) (bool, error) {
+	state, healthy, err := t.Etcd(ctx)
+	if err != nil || state != talosEtcdFailed {
+		return state == talosEtcdRunning && healthy, err //nolint:wrapcheck // the wait names the node and what it was doing
+	}
+	if err := upload(ctx, t); err != nil {
+		return false, err
+	}
+	if err := t.BootstrapRecovered(ctx); err != nil {
+		return false, err //nolint:wrapcheck // as above
+	}
+	return false, fmt.Errorf("etcd stayed Failed after starting it again: %w", errTalosNotReady)
+}
 
 // planTalosRestore writes out the steps that restore a Talos cluster's etcd by hand with talosctl,
 // as the controller does through the Talos API.
@@ -283,25 +303,13 @@ func (run *restoreRun) wipeTalos(ctx context.Context) error {
 // recoverTalosEtcd uploads the fetched snapshot to the first node once its etcd waits for one, and
 // bootstraps etcd from it.
 func (run *restoreRun) recoverTalosEtcd(ctx context.Context) error {
-	path := run.talosSnapshot
-	if run.reset() && run.own != nil {
-		path = run.own.path
-	}
-	if path == "" {
-		return errors.New("the snapshot was not fetched")
-	}
 	first := run.nodes[0]
 	err := run.waitTalos(ctx, first, "uploading the snapshot", func(ctx context.Context, t TalosNode) (bool, error) {
 		state, _, err := t.Etcd(ctx)
 		if err != nil || state != talosEtcdPreparing {
 			return false, err //nolint:wrapcheck // onTalos names the machine, and the node's error the call
 		}
-		f, err := os.Open(path) //nolint:gosec // the controller's own file of the snapshot
-		if err != nil {
-			return false, fmt.Errorf("reading the fetched snapshot: %w", err)
-		}
-		defer func() { _ = f.Close() }()
-		return true, t.UploadEtcdSnapshot(ctx, f)
+		return true, run.uploadTalosSnapshot(ctx, t)
 	})
 	if err != nil {
 		return err
@@ -311,11 +319,32 @@ func (run *restoreRun) recoverTalosEtcd(ctx context.Context) error {
 	})
 }
 
+// uploadTalosSnapshot hands the node the snapshot its etcd is restored from: a reset's copy of the
+// node's own etcd, or the fetched snapshot.
+func (run *restoreRun) uploadTalosSnapshot(ctx context.Context, t TalosNode) error {
+	path := run.talosSnapshot
+	if run.reset() && run.own != nil {
+		path = run.own.path
+	}
+	if path == "" {
+		return errors.New("the snapshot was not fetched")
+	}
+	f, err := os.Open(path) //nolint:gosec // the controller's own file of the snapshot
+	if err != nil {
+		return fmt.Errorf("reading the fetched snapshot: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	return t.UploadEtcdSnapshot(ctx, f) //nolint:wrapcheck // onTalos names the machine, and the node's error the call
+}
+
 // waitTalosEtcd waits until etcd runs on the first node, restored, and is healthy.
 func (run *restoreRun) waitTalosEtcd(ctx context.Context) error {
-	return run.waitTalos(ctx, run.nodes[0], "starting etcd", func(ctx context.Context, t TalosNode) (bool, error) {
-		state, healthy, err := t.Etcd(ctx)
-		return state == talosEtcdRunning && healthy, err //nolint:wrapcheck // onTalos names the machine, and the node's error the call
+	first := run.nodes[0]
+	return run.waitTalos(ctx, first, "starting etcd", func(ctx context.Context, t TalosNode) (bool, error) {
+		return talosEtcdStarted(ctx, t, func(ctx context.Context, t TalosNode) error {
+			ctrl.LoggerFrom(ctx).Info("starting etcd again after Talos left it Failed", "machine", first.Machine)
+			return run.uploadTalosSnapshot(ctx, t)
+		})
 	})
 }
 

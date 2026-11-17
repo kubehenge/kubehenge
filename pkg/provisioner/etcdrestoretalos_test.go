@@ -96,6 +96,53 @@ func TestTalosEtcdRestoreReplacesANodeThatDoesNotAnswer(t *testing.T) {
 	}
 }
 
+// Each time Talos leaves etcd Failed after a bootstrap, the first node gets the snapshot again and
+// is bootstrapped once more, until etcd runs.
+func TestTalosEtcdRestoreStartsAFailedEtcdAgain(t *testing.T) {
+	t.Parallel()
+	f, talos := newTalosRestoreFixture(t, nil)
+	talos.starting = func(bootstraps int) (string, bool) {
+		if bootstraps < 3 {
+			return talosEtcdFailed, false
+		}
+		return talosEtcdRunning, true
+	}
+	f.reconcile()
+	again := []string{"10.0.0.11 upload", "10.0.0.11 bootstrap"}
+	want := slices.Concat(talosWipes, again, again, again)
+	if got := talos.restoreCalls(); !slices.Equal(got, want) {
+		t.Errorf("called %v, want %v", got, want)
+	}
+	checkBumped(t, talos.uploaded["10.0.0.11"])
+	if st := f.status(); st.Phase != RestoreSucceeded {
+		t.Errorf("status %+v", st)
+	}
+}
+
+// An etcd that is on its way up, or runs but is not healthy yet, is waited on, not bootstrapped
+// again.
+func TestTalosEtcdRestoreWaitsForAStartingEtcd(t *testing.T) {
+	t.Parallel()
+	f, talos := newTalosRestoreFixture(t, nil)
+	states := []string{talosEtcdPreparing, "Waiting", "Starting", talosEtcdRunning}
+	reads := 0
+	talos.starting = func(int) (string, bool) {
+		reads++
+		if reads <= len(states) {
+			return states[reads-1], false
+		}
+		return talosEtcdRunning, true
+	}
+	f.reconcile()
+	want := append(slices.Clone(talosWipes), "10.0.0.11 upload", "10.0.0.11 bootstrap")
+	if got := talos.restoreCalls(); !slices.Equal(got, want) {
+		t.Errorf("called %v, want %v", got, want)
+	}
+	if st := f.status(); st.Phase != RestoreSucceeded || reads <= len(states) {
+		t.Errorf("status %+v after %d reads of etcd", st, reads)
+	}
+}
+
 // A node that is not ready yet is asked again. Any other failure once etcd may be wiped tries the
 // whole restore once more.
 func TestTalosEtcdRestoreTriesAgain(t *testing.T) {

@@ -47,6 +47,10 @@ type fakeTalos struct {
 	// own otherwise. listed is the member list every node answers with.
 	etcd   map[string]EtcdMember
 	listed []EtcdListed
+	// starting, when set, is the state etcd reads in place of a healthy Running once bootstrapped,
+	// given the node's bootstraps so far.
+	starting   func(bootstraps int) (string, bool)
+	bootstraps map[string]int
 }
 
 // call records a restore's call, and fails it as the fake is told to.
@@ -150,6 +154,10 @@ func (n *fakeTalosNode) Etcd(context.Context) (string, bool, error) {
 	if n.f.wiped[n.address] {
 		return talosEtcdPreparing, false, nil
 	}
+	if n.f.starting != nil {
+		state, healthy := n.f.starting(n.f.bootstraps[n.address])
+		return state, healthy, nil
+	}
 	return talosEtcdRunning, true, nil
 }
 
@@ -179,6 +187,10 @@ func (n *fakeTalosNode) BootstrapRecovered(context.Context) error {
 	if n.f.uploaded[n.address] == nil {
 		return errors.New("no snapshot uploaded")
 	}
+	if n.f.bootstraps == nil {
+		n.f.bootstraps = map[string]int{}
+	}
+	n.f.bootstraps[n.address]++
 	n.f.wiped[n.address] = false
 	return nil
 }
