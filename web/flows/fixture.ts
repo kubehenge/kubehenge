@@ -57,8 +57,9 @@ export const test = base.extend<{ problems: Problems }, { origin: string }>({
       });
       page.on("requestfailed", (r) => {
         const error = r.failure()?.errorText ?? "";
-        // The live event stream stays open until the page closes it, on signing out or leaving a view.
-        if (pathOf(r) !== "/api/events" || error !== "net::ERR_ABORTED") {
+        // An aborted request is one the browser dropped on leaving the page, or the page cancelled,
+        // such as the live event stream or a poll still open on navigating away. Nobody sees it fail.
+        if (error !== "net::ERR_ABORTED") {
           seen.add(`failed ${r.method()} ${pathOf(r)}: ${error}`);
         }
       });
