@@ -4,6 +4,33 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-17
+
+### Before you upgrade
+
+- Scripts that sign `kubehenge appliance` or `kubehenge cluster` in with flags or variables run `kubehenge login` first ([clusters.md](clusters.md#signing-in-and-finding-clusters)).
+
+### Highlights
+
+- **One sign-in for the CLI.** `kubehenge login` signs in once, and every `appliance` and `cluster` command uses it.
+- **Talos etcd restores recover.** A restore starts etcd again when an image pull stopped it, instead of leaving the cluster down.
+- **Faster setup.** The setup preselects up to three nodes and fills their addresses.
+
+### Added
+
+- `kubehenge login` signs in once, with a password or a token, and `kubehenge logout` ends it. `appliance` and `cluster` use it.
+
+### Changed
+
+- The setup preselects up to three nodes that answer and fills their addresses and the API address from the bridge's free addresses. You are asked only for the rest.
+- The home page lists the clusters once, without the fleet rail beside it. Every other page keeps the rail.
+- The sign-in flags and variables of `appliance` and `cluster` are gone, and `cluster` no longer reads `KUBEHENGE_PROXMOX_TOKEN`.
+
+### Fixed
+
+- A Talos etcd restore starts etcd again when a failed image pull leaves it stopped, instead of timing out with the cluster down. This covers workload clusters and the management cluster.
+- A Talos etcd restore waits for the other control-plane nodes to rejoin etcd, and reboots one that a failed image pull left stopped. If it runs out of time, it names the node and Talos's reason.
+
 ## [0.5.1] - 2026-11-17
 
 ### Before you upgrade
