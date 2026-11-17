@@ -153,8 +153,8 @@ cli() {
     cli_ok=true
     {
         pct exec "${ctid}" -- /usr/local/bin/kubehenge login https://127.0.0.1 --ca /etc/kubehenge/tls.crt \
-            --user "${who}" --password-file /root/e2e-password \
-            && pct exec "${ctid}" -- /usr/local/bin/kubehenge appliance "$@"
+            --user "${who}" --password-file /root/e2e-password &&
+            pct exec "${ctid}" -- /usr/local/bin/kubehenge appliance "$@"
     } > "${work}/cli" 2>&1 < /dev/null || cli_ok=false
 }
 
