@@ -2574,17 +2574,20 @@ function SetupWizard({
     fixed,
     unreachable: nodes.filter((n) => !n.online).map((n) => n.node),
   };
-  const { bridge } = withDefaults(form, touched, found).effective;
+  const before = withDefaults(form, touched, found);
   const free = useFreeAddresses(
     {
       node: form.nodes[0],
-      bridge,
+      bridge: before.effective.bridge,
       vlan: form.vlan,
       families: form.families,
-      gateway: "",
-      prefix: 0,
-      gateway6: "",
-      prefix6: 0,
+      // The search looks in the gateway's network, at the prefix length a bare node address takes,
+      // so what it fills is in the gateway's network. Until it answers for a changed gateway,
+      // nothing is filled.
+      gateway: before.effective.gateway,
+      prefix: prefixOf(before.nodeNetworks.IPv4),
+      gateway6: before.effective.gateway6,
+      prefix6: prefixOf(before.nodeNetworks.IPv6),
     },
     manage ? 0 : addressesFor(form.nodes.length),
     [],
@@ -3008,6 +3011,9 @@ function withDefaults(
   };
 }
 
+// prefixOf is a network's prefix length, 0 where there is none.
+const prefixOf = (network: string | undefined): number => parseCidr(network ?? "")?.bits ?? 0;
+
 // untagged is the bridge's network for node addresses, which a VLAN's tagged network is not.
 function untagged(vlan: string, cidr: string | undefined): string | undefined {
   return filled(vlan) ? undefined : cidr;
@@ -3040,7 +3046,7 @@ function expandRange(range: string | undefined): string {
 }
 
 // withFreeAddresses fills the node addresses and the API address with those found free on the
-// bridge's network, where none were typed. Only the addresses left over are asked for.
+// gateway's network, where none were typed. Only the addresses left over are asked for.
 function withFreeAddresses(f: SetupForm, free: FreeAddresses | undefined, touched: ReadonlySet<string>): SetupForm {
   const fill = (k: "nodeAddresses" | "nodeAddresses6" | "apiAddress", found: string | undefined): string =>
     f[k] === "" && !touched.has(k) ? (found ?? "") : f[k];

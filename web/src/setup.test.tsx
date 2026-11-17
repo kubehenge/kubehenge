@@ -820,6 +820,29 @@ describe("setup", () => {
     expect(screen.getByLabelText("API address")).toHaveValue("192.0.2.50");
   });
 
+  it("fills the addresses again in the network of a gateway typed over the bridge's", async () => {
+    const calls = fakeServer({
+      ...administrator,
+      ...oneNode,
+      "GET /api/setup": { body: { appliance: true, ready: false, allowed: true } },
+      "POST /api/proxmox/nodes/pve1/bridges/vmbr0/free": freeByGateway,
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await waitFor(() => expect(screen.getByLabelText("VM disks")).toHaveValue("local-lvm"));
+    await next(user);
+    await waitFor(() => expect(screen.getByLabelText("Node addresses")).toHaveValue("192.0.2.11"), { timeout: 3000 });
+    await user.clear(screen.getByLabelText("Gateway"));
+    await user.type(screen.getByLabelText("Gateway"), "198.51.100.1");
+    await waitFor(() => expect(screen.getByLabelText("Node addresses")).toHaveValue("198.51.100.11"), {
+      timeout: 3000,
+    });
+    expect(screen.getByLabelText("API address")).toHaveValue("198.51.100.10");
+    expect(calls.findLast((c) => c.key.endsWith("/free"))?.body).toMatchObject({ gateway: "198.51.100.1", prefix: 24 });
+    await next(user);
+    expect(screen.getByRole("button", { name: "Network" })).not.toHaveAttribute("aria-current", "step");
+  });
+
   it("shows a stored management cluster as it is saved, past a node that does not answer", async () => {
     window.history.replaceState(null, "", "/administration");
     fakeServer({
@@ -2104,3 +2127,9 @@ describe("backup targets", () => {
     );
   });
 });
+
+// The free addresses on the network of the gateway sent: 198.51.100.1's, else the bridge's.
+const freeByGateway: Route = (body) => {
+  const net = JSON.stringify(body).includes('"gateway":"198.51.100.1"') ? "198.51.100" : "192.0.2";
+  return { body: { network: `${net}.0/24`, endpoint: `${net}.10`, addresses: `${net}.11`, answering: [] } };
+};
