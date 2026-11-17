@@ -117,6 +117,23 @@ func TestManagementTalosRestoreUploadsToAFailedEtcd(t *testing.T) {
 	}
 }
 
+// The management cluster's restore waits for each other node to join, and reboots one whose etcd
+// Talos left Failed rather than bootstrapping it.
+func TestManagementTalosRestoreRebootsAJoinerLeftFailed(t *testing.T) {
+	t.Parallel()
+	f := &fakeTalos{pullFailed: map[string]bool{"10.0.0.22": true}}
+	log, err := restoreManagement(f, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(f.rebooted, []string{"10.0.0.22"}) || slices.Contains(f.calls, "10.0.0.22 bootstrap") {
+		t.Errorf("rebooted %v, calls %v", f.rebooted, f.calls)
+	}
+	if !slices.Contains(log, "Rebooting 10.0.0.22 after Talos left its etcd Failed") {
+		t.Errorf("log %q", log)
+	}
+}
+
 // An etcd that stays Failed is bootstrapped again at most once a poll, until the step's time is
 // up. The error then says it stayed Failed, and why as Talos says.
 func TestManagementTalosRestoreGivesUpOnAFailedEtcd(t *testing.T) {
