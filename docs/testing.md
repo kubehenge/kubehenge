@@ -290,7 +290,9 @@ The sample fleet is in `pkg/ui/demo-fleet.json`. Its ClusterClasses are the char
 
 `make screenshots` fixes the window, the colour scheme and both clocks. A second run gives the same images. Run it after a change to a page the docs show.
 
-`make ui-flows` runs the flow tests in `web/flows` against the demo, in CI's fast tier. Each spec follows one flow a user takes. A write runs to its last click, and the spec checks the request the page sent and the demo's refusal as the page shows it. It also fails on a console error or a failed request it did not expect. `FLOWS=flows/sign-in.flow.ts make ui-flows` runs one spec, and a failed CI run uploads Playwright's report as `ui-flows-report`.
+`make ui-flows` runs the flow tests in `web/flows` against the demo, in CI's fast tier. Each spec follows one flow a user takes. A flow that changes something runs to its last click. The spec then checks the request the page sent and how the page shows the demo's refusal. It also fails on a console error or a failed request it did not expect.
+
+`FLOWS=flows/sign-in.flow.ts make ui-flows` runs one spec. A failed CI run uploads Playwright's report as `ui-flows-report`.
 
 ## End to end without a Proxmox VE host
 

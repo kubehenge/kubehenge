@@ -8,13 +8,14 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ### Before you upgrade
 
-- Scripts that sign `kubehenge appliance` or `kubehenge cluster` in with flags or variables run `kubehenge login` first ([clusters.md](clusters.md#signing-in-and-finding-clusters)).
+- `kubehenge appliance` and `kubehenge cluster` no longer take sign-in flags or variables. In scripts, run `kubehenge login` before them ([clusters.md](clusters.md#signing-in-and-finding-clusters)).
+- A password login ends after eight hours by default and when the interface restarts. In scripts that run on a schedule, sign in with `--token-file` ([clusters.md](clusters.md#signing-in-and-finding-clusters)).
 
 ### Highlights
 
-- **One sign-in for the CLI.** `kubehenge login` signs in once, and every `appliance` and `cluster` command uses it.
-- **Talos etcd restores recover.** A restore starts etcd again when an image pull stopped it, instead of leaving the cluster down.
-- **Faster setup.** The setup preselects up to three nodes and fills their addresses.
+- **One sign-in for the CLI.** `kubehenge login` replaces the sign-in flags and variables of the `appliance` and `cluster` commands.
+- **Talos etcd restores finish.** A restore whose image pull failed starts etcd again, instead of leaving the cluster down.
+- **Setup fills in more.** The setup page preselects up to three Proxmox VE nodes and fills in free addresses for the management cluster.
 
 ### Added
 
@@ -22,14 +23,19 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ### Changed
 
-- The setup preselects up to three nodes that answer and fills their addresses and the API address from the bridge's free addresses. You are asked only for the rest.
-- The home page lists the clusters once, without the fleet rail beside it. Every other page keeps the rail.
-- The sign-in flags and variables of `appliance` and `cluster` are gone, and `cluster` no longer reads `KUBEHENGE_PROXMOX_TOKEN`.
+- The setup page preselects up to three Proxmox VE nodes that answer. It fills **Node addresses** and **API address** with free addresses on the bridge, unless a VLAN tag is set.
+- The home page shows the clusters once, without the side list that repeated them.
 
 ### Fixed
 
 - A Talos etcd restore starts etcd again when a failed image pull leaves it stopped, instead of timing out with the cluster down. This covers workload clusters and the management cluster.
 - A Talos etcd restore waits for the other control-plane nodes to rejoin etcd, and reboots one that a failed image pull left stopped. If it runs out of time, it names the node and Talos's reason.
+
+### Removed
+
+- The flags `--user`, `--password-file` and `--totp` of `appliance` are gone, as are `--url` and `--ca` of `cluster`. So are the variables `KUBEHENGE_USER`, `KUBEHENGE_URL` and `KUBEHENGE_CA`.
+- `kubehenge login` reads `KUBEHENGE_PASSWORD` and `KUBEHENGE_PROXMOX_TOKEN`. `appliance` and `cluster` no longer read them.
+- `--cert` and `--address` are flags of `kubehenge appliance health` alone. The other `appliance` commands reach the address given to `kubehenge login`.
 
 ## [0.5.1] - 2026-11-17
 

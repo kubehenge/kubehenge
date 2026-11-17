@@ -79,13 +79,15 @@ After any of them, apply the management cluster again to carry the change to it 
 
 ### From the appliance's shell
 
-`kubehenge appliance` inside the appliance does what the Administration page does, as a client of its interface. It acts as the Proxmox VE user of `kubehenge login` (see [signing in](clusters.md#signing-in-and-finding-clusters)), so the same privileges and refusals apply. In the appliance, the interface's own certificate is the CA.
+`kubehenge appliance` inside the appliance does what the Administration page does, as a client of its interface. It acts as the Proxmox VE user `kubehenge login` signed in ([signing in](clusters.md#signing-in-and-finding-clusters)), so the same privileges and refusals apply. Inside the appliance, give `kubehenge login` the interface's own certificate as `--ca`.
 
 ```sh
 pct exec <ctid> -- kubehenge login https://127.0.0.1 --ca /etc/kubehenge/tls.crt --user root@pam --password-file /root/password
 pct exec <ctid> -- kubehenge appliance upgrades
 pct exec <ctid> -- kubehenge appliance upgrade 0.2.0
 ```
+
+`upgrade` restarts the interface, which ends a password login. Run `kubehenge login` again before `upgrades`.
 
 `upgrades` shows the installed release, the newer ones and the last upgrade, with the reason when it failed or was rolled back. `--json` prints the interface's answer as it is. `upgrade` asks the updater for a release, as **Upgrade to** does. `kubehenge appliance health` runs the check the updater and `install.sh` use, without signing in.
 
