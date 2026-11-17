@@ -377,12 +377,15 @@ func TestTalosWorkerConfiguration(t *testing.T) {
 
 // signatureRule is one of Talos's ImageVerificationConfig rules.
 type signatureRule struct {
-	Image   string `json:"image"`
-	Keyless struct {
-		Issuer       string `json:"issuer"`
-		Subject      string `json:"subject"`
-		SubjectRegex string `json:"subjectRegex"`
-	} `json:"keyless"`
+	Image   string          `json:"image"`
+	Keyless keylessIdentity `json:"keyless"`
+}
+
+// keylessIdentity is the signer a keyless signature rule accepts.
+type keylessIdentity struct {
+	Issuer       string `json:"issuer"`
+	Subject      string `json:"subject"`
+	SubjectRegex string `json:"subjectRegex"`
 }
 
 // checkKubernetesSigners holds registry.k8s.io's images to the image promoter's two production
