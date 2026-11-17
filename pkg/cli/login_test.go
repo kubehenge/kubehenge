@@ -337,7 +337,7 @@ func serving(t *testing.T, f *fakeInterface, cert *tls.Certificate) *httptest.Se
 	return srv
 }
 
-func pemOf(cert tls.Certificate) []byte {
+func pemOf(cert *tls.Certificate) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]})
 }
 
@@ -349,7 +349,7 @@ func TestAnExpiredCAVouchesForNoOtherCertificate(t *testing.T) {
 	ca := signedBy(t, nil, start, time.Now().Add(-24*time.Hour))
 	other := signedBy(t, &ca, start.Add(-time.Hour), start.Add(time.Hour))
 	srv := serving(t, newFakeInterface(t), &other)
-	caFile := writeTemp(t, string(pemOf(ca)))
+	caFile := writeTemp(t, string(pemOf(&ca)))
 	_, err := runIn(t, filepath.Join(t.TempDir(), "login.json"), "login", srv.URL, "--ca", caFile, "--user", "admin@pve", "--password-file", writeTemp(t, fakePassword))
 	if err == nil || !strings.Contains(err.Error(), errOtherCertificate.Error()+": run kubehenge login "+srv.URL+" --ca "+caFile) {
 		t.Errorf("a login through another certificate the expired CA signed: %v", err)
@@ -364,14 +364,14 @@ func TestARenewedCertificateKeepsTheLogin(t *testing.T) {
 	cert := signedBy(t, nil, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
 	srv := serving(t, f, &cert)
 	tlsCrt := filepath.Join(t.TempDir(), "tls.crt")
-	if err := os.WriteFile(tlsCrt, pemOf(cert), 0o600); err != nil {
+	if err := os.WriteFile(tlsCrt, pemOf(&cert), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.run("login", srv.URL, "--ca", tlsCrt, "--user", "admin@pve", "--password-file", writeTemp(t, fakePassword)); err != nil {
 		t.Fatalf("login: %v", err)
 	}
 	cert = signedBy(t, nil, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
-	if err := os.WriteFile(tlsCrt, pemOf(cert), 0o600); err != nil {
+	if err := os.WriteFile(tlsCrt, pemOf(&cert), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := f.run("appliance", "upgrades"); err != nil || !strings.Contains(out, "Installed     0.1.0") {

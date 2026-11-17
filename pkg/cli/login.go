@@ -160,7 +160,7 @@ func newInterfaceClient(l *login) (*interfaceClient, error) {
 	}
 	transport := defaults.Clone()
 	if l.CAFile != "" {
-		if raw, err := os.ReadFile(l.CAFile); err == nil { //nolint:gosec // the file the user named at login
+		if raw, err := os.ReadFile(l.CAFile); err == nil {
 			l.CA = string(raw)
 		}
 	}
@@ -326,7 +326,7 @@ func (c *interfaceClient) call(ctx context.Context, method, path string, body, o
 		return nil, fmt.Errorf("reading the interface's answer: %w", err)
 	}
 	if len(raw) > maxInterfaceAnswer {
-		return nil, fmt.Errorf("the interface's answer is over %d MiB, the most a command reads", maxInterfaceAnswer>>20)
+		return nil, errors.New("the interface's answer is over 64 MiB, the most a command reads")
 	}
 	if out != nil && len(raw) > 0 {
 		if err := json.Unmarshal(raw, out); err != nil {
