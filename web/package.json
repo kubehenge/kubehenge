@@ -7,7 +7,8 @@
     "dev": "vite",
     "fmt": "oxfmt",
     "lint": "oxfmt --check && oxlint --type-aware --deny-warnings --report-unused-disable-directives && tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "flows": "playwright test"
   },
   "dependencies": {
     "@fontsource/atkinson-hyperlegible-next": "5.3.0",
@@ -16,6 +17,7 @@
     "react-dom": "19.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "1.65.1",
     "@testing-library/dom": "10.4.2",
     "@testing-library/jest-dom": "7.0.1",
     "@testing-library/react": "16.3.3",

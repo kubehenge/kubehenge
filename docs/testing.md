@@ -290,6 +290,8 @@ The sample fleet is in `pkg/ui/demo-fleet.json`. Its ClusterClasses are the char
 
 `make screenshots` fixes the window, the colour scheme and both clocks. A second run gives the same images. Run it after a change to a page the docs show.
 
+`make ui-flows` runs the flow tests in `web/flows` against the demo, in CI's fast tier. Each spec follows one flow a user takes. A write runs to its last click, and the spec checks the request the page sent and the demo's refusal as the page shows it. It also fails on a console error or a failed request it did not expect. `FLOWS=flows/sign-in.flow.ts make ui-flows` runs one spec, and a failed CI run uploads Playwright's report as `ui-flows-report`.
+
 ## End to end without a Proxmox VE host
 
 CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e2e.yml`), one lane per machine. A lane is one test, or two short ones run one after the other ([below](#lanes-of-two)). A draft pull request runs only the other tiers. Marking it ready for review starts this one, and each later push reruns it. The `e2e` check stays pending while the pull request is a draft, so auto-merge waits for it.

@@ -5,13 +5,13 @@
 //
 // The window, the colour scheme and both clocks are fixed, so a run gives the same images as the
 // one before unless the interface or the demo changed.
-import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 
 import { type Browser, chromium } from "playwright";
+
+import { demoTime, hostResolverRule, startDemo, viewport } from "./flows/demo.ts";
 
 interface Shot {
   file: string;
@@ -22,13 +22,6 @@ interface Shot {
   clip?: { x: number; y: number; width: number; height: number };
 }
 
-// The demo's clock, which the browser's is set to as well, so that ages read the same in both.
-const demoTime = "2026-10-13T09:00:00Z";
-const port = process.env["SCREENSHOT_PORT"] ?? "18443";
-const origin = `http://localhost:${port}`;
-const viewport = { width: 1440, height: 900 };
-const startDeadline = 30_000;
-const pollInterval = 200;
 const settle = 1500;
 const readyDeadline = 15_000;
 
@@ -58,37 +51,13 @@ if (binary === undefined || outArg === undefined) {
 const out = resolve(outArg);
 mkdirSync(out, { recursive: true });
 
-const server = spawn(binary, ["serve", "--demo", "--demo-time", demoTime, "--listen", `127.0.0.1:${port}`], {
-  stdio: ["ignore", "ignore", "inherit"],
-});
-
-async function waitForServer(): Promise<void> {
-  const until = Date.now() + startDeadline;
-  for (;;) {
-    if (server.exitCode !== null) {
-      throw new Error(`kubehenge serve --demo exited with ${server.exitCode}`);
-    }
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/healthz`);
-      if (res.ok) {
-        return;
-      }
-    } catch {
-      // Not listening yet.
-    }
-    if (Date.now() > until) {
-      throw new Error(`kubehenge serve --demo did not answer on port ${port}`);
-    }
-    await sleep(pollInterval);
-  }
-}
+const { server, origin } = await startDemo(binary);
 
 let browser: Browser | undefined;
 try {
-  await waitForServer();
   browser = await chromium.launch({
     args: [
-      "--host-resolver-rules=MAP localhost 127.0.0.1",
+      hostResolverRule,
       // Rendering on the CPU in one pass, so shadows and rounded corners come out the same pixels each run.
       "--disable-gpu",
       "--disable-partial-raster",
