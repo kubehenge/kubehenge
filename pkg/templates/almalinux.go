@@ -62,7 +62,12 @@ const AlmaLinuxEPELAltArchKeyFingerprint = "68DD137B7690F4735197C4B1B620C02335D4
 
 var almaLinux10EL = &elFamily{
 	distro: "almalinux10", reposPackage: "almalinux-repos",
-	repos:  []elRepository{{"baseos", "BaseOS/x86_64_v2/os/"}, {"appstream", "AppStream/x86_64_v2/os/"}},
+	enabled: []elRepository{
+		{elBaseOS, "BaseOS/x86_64_v2/os/"},
+		{elAppStream, "AppStream/x86_64_v2/os/"},
+		{"crb", "CRB/x86_64_v2/os/"},
+		{"extras", "extras/x86_64_v2/os/"},
+	},
 	mirror: "https://repo.almalinux.org/almalinux/", vault: "https://vault.almalinux.org/",
 	// EPEL's own containerd needs x86-64-v3. AlmaLinux rebuilds it for v2, signed with a key of its
 	// own, and keeps every minor release's folder.

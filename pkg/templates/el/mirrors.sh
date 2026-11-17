@@ -13,16 +13,23 @@ pin_release() {
 }
 
 # use_vault <folders> <lists>: a family moves a minor release to its vault once a newer one replaces
-# it, and Rocky Linux's mirror service then still names mirrors that dropped it. A repository whose
-# own server no longer holds the minor release reads the vault, as the one mirror of its list in
+# it. Rocky Linux's mirror service then still names mirrors that dropped it. A repository whose own
+# server no longer holds the minor release reads the vault, as the one mirror of its list in
 # <lists>. Each line of <folders> (el/vault) is a repository's id, its folder on its own server and
-# its folder in the vault. Any answer but 404 leaves the repository on its mirrors.
+# its folder in the vault. Any answer but 404 leaves the repository on its mirrors. One but 200
+# is named in the log, as a dnf that fails on those mirrors later would not say why.
 use_vault() {
     while read -r id folder vault; do
-        code=$(curl -sS -o /dev/null -w '%{http_code}' --retry 8 --retry-delay 10 "${folder}repodata/repomd.xml") || true
-        [ "${code}" = 404 ] || continue
-        echo "${id}: ${folder} is gone, reading ${vault}" >&2
-        printf '%s\n' "${vault}" > "$2/${id}"
+        code=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 20 --max-time 30 --retry 3 --retry-delay 10 \
+            "${folder}repodata/repomd.xml") || true
+        case "${code}" in
+            200) ;;
+            404)
+                echo "${id}: ${folder} is gone, reading ${vault}" >&2
+                printf '%s\n' "${vault}" > "$2/${id}"
+                ;;
+            *) echo "${id}: ${folder} answered ${code}, staying on its mirrors" >&2 ;;
+        esac
     done < "$1"
 }
 

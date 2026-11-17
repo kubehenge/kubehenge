@@ -236,19 +236,25 @@ has "dnf's other variables stay" "${pinned}/rocky.repo" '/epel/$releasever_major
 # A minor release its own server no longer holds comes from the vault. One still there, or a server
 # that does not answer, leaves the repository on its mirrors.
 repomd vault AppStream "${good}"
+# The server answers a folder's address without its slash with a redirect.
+mkdir -p "${www}/moved/repodata/repomd.xml"
 vaulted=${root}/vaulted
 mkdir "${vaulted}"
 printf '%s\n' "baseos ${site}/one/BaseOS/x86_64/os/ ${site}/vault/BaseOS/x86_64/os/" \
     "appstream ${site}/gone/AppStream/x86_64/os/ ${site}/vault/AppStream/x86_64/os/" \
+    "extras ${site}/moved/ ${site}/vault/extras/" \
     "kubehenge-containerd http://127.0.0.1:1/epel/ ${site}/vault/epel/" > "${root}/vault"
 use_vault "${root}/vault" "${vaulted}" 2> "${root}/said"
 holds "AppStream's one mirror is the vault" "${vaulted}/appstream" "${site}/vault/AppStream/x86_64/os/"
 has "it says why" "${root}/said" "appstream: ${site}/gone/AppStream/x86_64/os/ is gone"
-for id in baseos kubehenge-containerd; do
+for id in baseos extras kubehenge-containerd; do
     listed=no
     [ ! -e "${vaulted}/${id}" ] || listed=yes
     expect "${id} stays on its mirrors" no "${listed}"
 done
+has "an answer but 200 or 404 is named" "${root}/said" "extras: ${site}/moved/ answered 301, staying on its mirrors"
+has "and so is no answer" "${root}/said" "kubehenge-containerd: http://127.0.0.1:1/epel/ answered 000, staying on its mirrors"
+lacks "a folder that is there is not" "${root}/said" "baseos:"
 
 # The vault's list replaces a metalink and a folder alike.
 printf '[appstream]\nmetalink=https://mirrors.rockylinux.org/metalink?arch=$basearch&repo=AppStream-10.1\nenabled=1\n' \

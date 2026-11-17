@@ -65,7 +65,11 @@ const EPEL10KeyFingerprint = "7D8D15CBFC4E62688591FB2633D98517E37ED158"
 
 var rocky10EL = &elFamily{
 	distro: "rocky10", reposPackage: "rocky-repos",
-	repos:  []elRepository{{"baseos", "BaseOS/x86_64/os/"}, {"appstream", "AppStream/x86_64/os/"}},
+	enabled: []elRepository{
+		{elBaseOS, "BaseOS/x86_64/os/"},
+		{elAppStream, "AppStream/x86_64/os/"},
+		{"extras", "extras/x86_64/os/"},
+	},
 	mirror: "https://dl.rockylinux.org/pub/rocky/", vault: "https://dl.rockylinux.org/vault/rocky/",
 	// EPEL moves a minor release's folder to its archive on a day of its own.
 	containerd: func(minor string) *repository {

@@ -1,0 +1,30 @@
+[crb]
+name=AlmaLinux $releasever - CRB
+mirrorlist=https://mirrors.almalinux.org/mirrorlist/$releasever/crb?arch=x86_64_v2
+# baseurl=https://repo.almalinux.org/almalinux/$releasever/CRB/x86_64_v2/os/
+enabled=1
+gpgcheck=1
+countme=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-10
+metadata_expire=86400
+enabled_metadata=0
+
+[crb-debuginfo]
+name=AlmaLinux $releasever - CRB - Debug
+mirrorlist=https://mirrors.almalinux.org/mirrorlist/$releasever/crb-debug?arch=x86_64_v2
+# baseurl=https://vault.almalinux.org/$releasever/CRB/debug/x86_64_v2/
+enabled=0
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-10
+metadata_expire=86400
+enabled_metadata=0
+
+[crb-source]
+name=AlmaLinux $releasever - CRB - Source
+mirrorlist=https://mirrors.almalinux.org/mirrorlist/$releasever/crb-source?arch=x86_64_v2
+# baseurl=https://vault.almalinux.org/$releasever/CRB/Source/
+enabled=0
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-10
+metadata_expire=86400
+enabled_metadata=0

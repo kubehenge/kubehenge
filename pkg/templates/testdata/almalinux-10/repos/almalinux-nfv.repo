@@ -1,0 +1,30 @@
+[nfv]
+name=AlmaLinux $releasever - NFV
+mirrorlist=https://mirrors.almalinux.org/mirrorlist/$releasever/nfv?arch=x86_64_v2
+# baseurl=https://repo.almalinux.org/almalinux/$releasever/NFV/x86_64_v2/os/
+enabled=0
+gpgcheck=1
+countme=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-10
+metadata_expire=86400
+enabled_metadata=0
+
+[nfv-debuginfo]
+name=AlmaLinux $releasever - NFV - Debug
+mirrorlist=https://mirrors.almalinux.org/mirrorlist/$releasever/nfv-debug?arch=x86_64_v2
+# baseurl=https://vault.almalinux.org/$releasever/NFV/debug/x86_64_v2/
+enabled=0
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-10
+metadata_expire=86400
+enabled_metadata=0
+
+[nfv-source]
+name=AlmaLinux $releasever - NFV - Source
+mirrorlist=https://mirrors.almalinux.org/mirrorlist/$releasever/nfv-source?arch=x86_64_v2
+# baseurl=https://vault.almalinux.org/$releasever/NFV/Source/
+enabled=0
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-10
+metadata_expire=86400
+enabled_metadata=0

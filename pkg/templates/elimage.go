@@ -18,19 +18,30 @@ const imageModeFilesDir = "el"
 
 // elFamily is what an Enterprise Linux family in image mode brings to its bake.
 type elFamily struct {
-	// distro, repos and reposPackage compose the minimal root file system: the manifests' name for
-	// the family, the repositories its packages come from and the package that defines them.
+	// distro and reposPackage compose the minimal root file system with elComposeRepos: the
+	// manifests' name for the family and the package that defines its repositories.
 	distro       string
-	repos        []elRepository
 	reposPackage string
-	// mirror and vault hold a folder for each minor release, named by it, with its images and
-	// repositories: the family's own server while the minor release is the newest, and the vault
-	// once a newer one replaces it.
+	// enabled are the repositories the family's files enable. dnf fails on any of them without a
+	// working mirror, so the vault stands in for each.
+	enabled []elRepository
+	// mirror and vault hold a folder for each minor release, named by it. The family's own server
+	// keeps a minor release while it is the newest. The vault keeps it from then on.
 	mirror, vault string
 	// containerd is where a kubeadm node's containerd and runc come from for a minor release,
 	// built for the family's CPU level. The family itself has neither.
 	containerd func(minor string) *repository
 }
+
+// elComposeRepos are the ids of the repositories the minimal root file system is composed from, the
+// same in both families.
+var elComposeRepos = []string{elBaseOS, elAppStream}
+
+// The ids both families give their two main repositories.
+const (
+	elBaseOS    = "baseos"
+	elAppStream = "appstream"
+)
 
 // elRepository is one of the family's repositories: its id in the family's repository files and its
 // folder in a minor release's.
@@ -70,13 +81,13 @@ func (f *elFamily) repositories(r *Release, b *Bake) []*repository {
 	return nil
 }
 
-// releaseFiles tell build.sh and node.sh the minor release every package comes from (el/release),
-// and where each repository with a vault keeps it on its own server and in the vault (el/vault).
+// releaseFiles tell build.sh and node.sh the minor release every package comes from (el/release).
+// el/vault names each repository's folder on its own server and in its vault.
 func (f *elFamily) releaseFiles(files map[string]string, r *Release, repos []*repository) {
 	minor := elMinor(r)
 	files[imageModeFilesDir+"/release"] = minor + "\n"
 	var sb strings.Builder
-	for _, repo := range f.repos {
+	for _, repo := range f.enabled {
 		fmt.Fprintf(&sb, "%s %s%s/%s %s%s/%s\n", repo.id, f.mirror, minor, repo.folder, f.vault, minor, repo.folder)
 	}
 	for _, repo := range repos {
@@ -95,8 +106,8 @@ func (f *elFamily) releaseFiles(files map[string]string, r *Release, repos []*re
 func (f *elFamily) manifest(d Distribution, minor string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "releasever: %s\nrepos:\n", minor)
-	for _, r := range f.repos {
-		fmt.Fprintf(&sb, "  - %s\n", r.id)
+	for _, r := range elComposeRepos {
+		fmt.Fprintf(&sb, "  - %s\n", r)
 	}
 	fmt.Fprintf(&sb, "variables:\n  distro: %q\npackages:\n  - %s\n  - cloud-utils-growpart\n  - kernel-modules-extra\n", f.distro, f.reposPackage)
 	if d == RKE2 || d == K3s {

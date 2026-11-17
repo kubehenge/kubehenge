@@ -5,10 +5,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -636,48 +639,87 @@ func TestTheComposeReadsTheBuildsMinorRelease(t *testing.T) {
 			t.Errorf("%s: containerd comes from another minor release:\n%s", &b, repo)
 		}
 	}
-	// Each pins before its first read of the repositories, fetch_mirrors among them.
-	for name, first := range map[string]string{"el/build.sh": "use_metalinks", "el/node.sh": "dnf -y install"} {
-		content, err := recipeFiles.ReadFile(name)
+	// Each pins the files its dnf reads, before its first read of them, fetch_mirrors among them.
+	// node.sh's dnf reads its copies in ${repos}, never the image's own files.
+	for _, s := range []struct{ name, release, pin, read string }{
+		{"el/build.sh", "\nread -r release < el/release\n", "\npin_release /etc/yum.repos.d \"${release}\"\n", "\nuse_metalinks /etc/yum.repos.d\n"},
+		{"el/node.sh", "\nread -r release < \"${files}/el/release\"\n", "\npin_release \"${repos}\" \"${release}\"\n", "\ndnf -y install --setopt=reposdir=\"${repos}\" "},
+	} {
+		content, err := recipeFiles.ReadFile(s.name)
 		if err != nil {
 			t.Fatal(err)
 		}
 		script := string(content)
-		pin := strings.Index(script, "\npin_release ")
-		if pin < 0 || pin > strings.Index(script, first) || !strings.Contains(script, `el/release`) {
-			t.Errorf("%s does not pin the repositories to el/release before %s", name, first)
+		release, pin, read := strings.Index(script, s.release), strings.Index(script, s.pin), strings.Index(script, s.read)
+		if release < 0 || pin < release || read < pin || strings.Count(script, "\npin_release ") != 1 {
+			t.Errorf("%s does not read %q, then pin with %q once, before %q", s.name, s.release, s.pin, s.read)
 		}
 	}
 }
 
-// A family moves a minor release to its vault once a newer one replaces it, and Rocky Linux's mirror
-// service then still names mirrors that dropped it. Every repository with a vault is listed for
-// use_vault (el/mirrors.sh), which reads the vault only for a folder its own server no longer holds.
-// test/unit/el-mirrors.sh proves that on a server on loopback.
+// enabledRepositories are the sections the family's own repository files enable, in testdata as
+// almalinux-repos and rocky-repos 10.2 ship them. Each comes with the folder of its commented
+// baseurl, the part after the release, for x86-64.
+func enabledRepositories(t *testing.T, dir string) [][2]string {
+	t.Helper()
+	repos := os.DirFS(filepath.Join("testdata", dir, "repos"))
+	names, err := fs.Glob(repos, "*.repo")
+	if err != nil || len(names) == 0 {
+		t.Fatalf("no repository files in testdata/%s/repos: %v", dir, err)
+	}
+	baseurl := regexp.MustCompile(`^#\s*baseurl=\S*/\$releasever/(\S+)$`)
+	var enabled [][2]string
+	for _, name := range names {
+		content, err := fs.ReadFile(repos, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var id, folder string
+		for line := range strings.SplitSeq(string(content)+"\n[", "\n") {
+			line = strings.TrimSpace(line)
+			switch {
+			case strings.HasPrefix(line, "["):
+				id, folder = strings.Trim(line, "[]"), ""
+			case baseurl.MatchString(line):
+				folder = strings.ReplaceAll(baseurl.FindStringSubmatch(line)[1], "$basearch", "x86_64")
+			case line == "enabled=1":
+				if folder == "" {
+					t.Fatalf("%s: [%s] is enabled before its baseurl names its folder", name, id)
+				}
+				enabled = append(enabled, [2]string{id, folder})
+			}
+		}
+	}
+	return enabled
+}
+
+// A family moves a minor release to its vault once a newer one replaces it. Rocky Linux's mirror
+// service then still names mirrors that dropped it. Every repository the family's files enable is
+// listed for use_vault (el/mirrors.sh), since dnf fails on any one without a working mirror.
+// use_vault reads the vault only for a folder its own server no longer holds, which
+// test/unit/el-mirrors.sh proves on a server on loopback.
 func TestAVaultedMinorComposesFromTheVault(t *testing.T) {
 	t.Parallel()
-	want := map[string][]string{
-		"AlmaLinux": {
-			"baseos https://repo.almalinux.org/almalinux/%[1]s/BaseOS/x86_64_v2/os/ https://vault.almalinux.org/%[1]s/BaseOS/x86_64_v2/os/",
-			"appstream https://repo.almalinux.org/almalinux/%[1]s/AppStream/x86_64_v2/os/ https://vault.almalinux.org/%[1]s/AppStream/x86_64_v2/os/",
-		},
-		"Rocky Linux": {
-			"baseos https://dl.rockylinux.org/pub/rocky/%[1]s/BaseOS/x86_64/os/ https://dl.rockylinux.org/vault/rocky/%[1]s/BaseOS/x86_64/os/",
-			"appstream https://dl.rockylinux.org/pub/rocky/%[1]s/AppStream/x86_64/os/ https://dl.rockylinux.org/vault/rocky/%[1]s/AppStream/x86_64/os/",
-		},
+	servers := map[string]struct{ dir, own, vault string }{
+		"AlmaLinux":   {"almalinux-10", "https://repo.almalinux.org/almalinux/", "https://vault.almalinux.org/"},
+		"Rocky Linux": {"rocky-10", "https://dl.rockylinux.org/pub/rocky/", "https://dl.rockylinux.org/vault/rocky/"},
 	}
 	// AlmaLinux's EPEL keeps every minor release's folder. EPEL archives its own.
 	const epel = "kubehenge-containerd https://dl.fedoraproject.org/pub/epel/%[1]s/Everything/x86_64/ https://dl.fedoraproject.org/pub/archive/epel/%[1]s/Everything/x86_64/"
 	for _, b := range elBakes(t) {
+		s := servers[b.family.Title()]
 		var lines []string
-		for _, line := range want[b.family.Title()] {
-			lines = append(lines, fmt.Sprintf(line, b.minor))
+		for _, repo := range enabledRepositories(t, s.dir) {
+			lines = append(lines, fmt.Sprintf("%s %s%s/%s %s%s/%s", repo[0], s.own, b.minor, repo[1], s.vault, b.minor, repo[1]))
 		}
 		if b.family.Name() == rockyName && b.distribution == Kubeadm {
 			lines = append(lines, fmt.Sprintf(epel, b.minor))
 		}
-		if got, want := b.files["el/vault"], strings.Join(lines, "\n")+"\n"; got != want {
-			t.Errorf("%s: el/vault is\n%s\nwant\n%s", &b, got, want)
+		got := strings.Split(strings.TrimSuffix(b.files["el/vault"], "\n"), "\n")
+		slices.Sort(got)
+		slices.Sort(lines)
+		if !slices.Equal(got, lines) {
+			t.Errorf("%s: el/vault is\n%s\nwant\n%s", &b, strings.Join(got, "\n"), strings.Join(lines, "\n"))
 		}
 	}
 	content, err := recipeFiles.ReadFile("el/build.sh")
