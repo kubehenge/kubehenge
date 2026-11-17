@@ -444,6 +444,8 @@ jobs:
             rm -f "$pve2_journal"
           # Proxmox VE logs its API's requests here, not to the journal.
           pve cat /var/log/pveproxy/access.log > "$out/pveproxy-access.log" || true
+          # The VMs' name lookups (test/e2e/pve/dnsmasq.conf).
+          pve cat /var/log/dnsmasq.log > "$out/dnsmasq.log" || true
           pve qm list > "$out/vms.txt" || true
           # What the appliance's Activity pages read, in the lane that installs the appliance as
           # container 900 (test/e2e/ci/run.sh).
