@@ -360,9 +360,6 @@ func (w *EtcdWatch) talosMember(ctx context.Context, c *clusterv1.Cluster, m *cl
 // Each start is counted on the Machine before it is made, so that a controller that stops between
 // the two undercounts rather than starts etcd twice.
 func (w *EtcdWatch) startEtcd(ctx context.Context, c *clusterv1.Cluster, m *clusterv1.Machine, node TalosNode, etcd TalosService) {
-	if leftToOthers(c) {
-		return
-	}
 	log := ctrl.LoggerFrom(ctx).WithName("etcd-watch").WithValues("cluster", c.Namespace+"/"+c.Name, "machine", m.Name)
 	boot, err := node.BootID(ctx)
 	if err != nil {
