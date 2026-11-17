@@ -540,10 +540,11 @@ func TestPolicyRepositoriesSignTheirMetadata(t *testing.T) {
 }
 
 // The compose reads the minor release of the family's pinned build. Fails a manifest that names the
-// major release alone, which reads whichever minor release is newest.
+// major release alone, which reads whichever minor release is newest. The release is a YAML string,
+// since rpm-ostree refuses a float.
 func TestManifest(t *testing.T) {
 	t.Parallel()
-	want := `releasever: 10.2
+	want := `releasever: "10.2"
 repos:
   - baseos
   - appstream
@@ -559,6 +560,13 @@ include:
 `
 	if got := almaLinux10EL.manifest(Kubeadm, "10.2"); got != want {
 		t.Errorf("got\n%s\nwant\n%s", got, want)
+	}
+	var parsed map[string]any
+	if err := yaml.Unmarshal([]byte(want), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := parsed["releasever"].(string); !ok || got != "10.2" {
+		t.Errorf("releasever parses as %T %v, want the string 10.2", parsed["releasever"], parsed["releasever"])
 	}
 	// RKE2 and k3s install into /usr/local at boot, so it lives in /var on their nodes.
 	for _, d := range []Distribution{RKE2, K3s} {
@@ -578,7 +586,7 @@ include:
 				t.Fatal(err)
 			}
 			_, files := parseCloudConfig(t, recipe.UserData)
-			if got, want := files["el/manifest.yaml"], "releasever: "+minor+"\n"; !strings.HasPrefix(got, want) {
+			if got, want := files["el/manifest.yaml"], "releasever: \""+minor+"\"\n"; !strings.HasPrefix(got, want) {
 				t.Errorf("%s %s, build %s: the manifest starts\n%s\nwant %q", f.Title(), r.Name, r.Build, got, want)
 			}
 		}

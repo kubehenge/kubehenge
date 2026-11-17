@@ -102,10 +102,11 @@ func (f *elFamily) releaseFiles(files map[string]string, r *Release, repos []*re
 // minimal manifest, with what grows the root file system to a clone's disk. The kernel's extra
 // modules hold br_netfilter, which every distribution's pod network needs. Composed with the
 // kernel, they come from the same mirror's metadata: a later install can reach a mirror one sync
-// behind, which the metalink still accepts and which lacks a kernel published hours before.
+// behind, which the metalink still accepts and which lacks a kernel published hours before. The
+// release is quoted: rpm-ostree takes it as a string or an integer, and YAML reads 10.2 as a float.
 func (f *elFamily) manifest(d Distribution, minor string) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "releasever: %s\nrepos:\n", minor)
+	fmt.Fprintf(&sb, "releasever: %q\nrepos:\n", minor)
 	for _, r := range elComposeRepos {
 		fmt.Fprintf(&sb, "  - %s\n", r)
 	}
