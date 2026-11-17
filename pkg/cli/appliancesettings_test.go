@@ -24,13 +24,14 @@ func savedBody(f *fakeInterface) map[string]any {
 }
 
 func TestApplianceSettingsShowAndChangeTheSiteDefaults(t *testing.T) {
+	t.Parallel()
 	f := newFakeInterface(t)
-	out, err := run(t, f.args("admin@pve", "settings")...)
+	out, err := f.run(f.args("admin@pve", "settings")...)
 	if err != nil || out != "Site CA     None\nTime zone   Europe/Zurich\nVM ID range None\n" {
 		t.Errorf("show: %v\n%q", err, out)
 	}
 	pem := "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----"
-	out, err = run(t, f.args("admin@pve", "settings", "set", "--site-ca-file", writeTemp(t, pem), "--passphrase-file", writeTemp(t, "right"))...)
+	out, err = f.run(f.args("admin@pve", "settings", "set", "--site-ca-file", writeTemp(t, pem), "--passphrase-file", writeTemp(t, "right"))...)
 	if err != nil || !strings.Contains(out, "Applying the settings") {
 		t.Fatalf("set: %v\n%s", err, out)
 	}
@@ -41,14 +42,15 @@ func TestApplianceSettingsShowAndChangeTheSiteDefaults(t *testing.T) {
 }
 
 func TestApplianceSettingsRefuseWhatTheInterfaceRefuses(t *testing.T) {
+	t.Parallel()
 	f := newFakeInterface(t)
-	if _, err := run(t, f.args("admin@pve", "settings", "set")...); err == nil || !strings.Contains(err.Error(), "--site-ca-file, --time-zone or --vm-id-range") {
+	if _, err := f.run(f.args("admin@pve", "settings", "set")...); err == nil || !strings.Contains(err.Error(), "--site-ca-file, --time-zone or --vm-id-range") {
 		t.Errorf("nothing to set: %v", err)
 	}
-	if _, err := run(t, f.args("admin@pve", "settings", "set", "--time-zone", "Mars/Base")...); err == nil || !strings.Contains(err.Error(), "not an IANA time zone") {
+	if _, err := f.run(f.args("admin@pve", "settings", "set", "--time-zone", "Mars/Base")...); err == nil || !strings.Contains(err.Error(), "not an IANA time zone") {
 		t.Errorf("a bad time zone: %v", err)
 	}
-	if _, err := run(t, f.args("admin@pve", "settings", "set", "--time-zone", "")...); err != nil {
+	if _, err := f.run(f.args("admin@pve", "settings", "set", "--time-zone", "")...); err != nil {
 		t.Errorf("clearing the time zone: %v", err)
 	}
 	if got := field(savedBody(f), "timeZone"); got != "" {
@@ -59,16 +61,16 @@ func TestApplianceSettingsRefuseWhatTheInterfaceRefuses(t *testing.T) {
 func TestApplianceSettingsSetAndClearTheVMIDRange(t *testing.T) {
 	t.Parallel()
 	f := newFakeInterface(t)
-	if _, err := run(t, f.args("admin@pve", "settings", "set", "--vm-id-range", "10000-10999")...); err != nil {
+	if _, err := f.run(f.args("admin@pve", "settings", "set", "--vm-id-range", "10000-10999")...); err != nil {
 		t.Fatal(err)
 	}
 	if got, ok := savedBody(f)["workloadVMIDRange"].(map[string]any); !ok || got["start"] != float64(10000) || got["end"] != float64(10999) {
 		t.Errorf("the range was sent as %v", savedBody(f)["workloadVMIDRange"])
 	}
-	if _, err := run(t, f.args("admin@pve", "settings", "set", "--vm-id-range", "2000-1000")...); err == nil || !strings.Contains(err.Error(), "starts above its end") {
+	if _, err := f.run(f.args("admin@pve", "settings", "set", "--vm-id-range", "2000-1000")...); err == nil || !strings.Contains(err.Error(), "starts above its end") {
 		t.Errorf("an inverted range: %v", err)
 	}
-	if _, err := run(t, f.args("admin@pve", "settings", "set", "--vm-id-range", "")...); err != nil {
+	if _, err := f.run(f.args("admin@pve", "settings", "set", "--vm-id-range", "")...); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := savedBody(f)["workloadVMIDRange"]; ok {

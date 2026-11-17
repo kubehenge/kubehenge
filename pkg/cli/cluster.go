@@ -778,7 +778,7 @@ func (o *clusterOptions) clusterPath(ctx context.Context, name string) (string, 
 
 // call sends a request to the interface as the login's user and returns the answer's body, or the
 // interface's error.
-func (o *clusterOptions) call(ctx context.Context, method, path string, body any) ([]byte, error) {
+func (*clusterOptions) call(ctx context.Context, method, path string, body any) ([]byte, error) {
 	c, err := openInterface(ctx)
 	if err != nil {
 		return nil, err
@@ -788,7 +788,7 @@ func (o *clusterOptions) call(ctx context.Context, method, path string, body any
 
 // open sends a request and returns the answer, its body unread, once it says the request went
 // through. The caller closes the body.
-func (o *clusterOptions) open(ctx context.Context, method, path string, body any) (*http.Response, error) {
+func (*clusterOptions) open(ctx context.Context, method, path string, body any) (*http.Response, error) {
 	c, err := openInterface(ctx)
 	if err != nil {
 		return nil, err

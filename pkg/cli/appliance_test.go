@@ -30,6 +30,8 @@ const (
 type fakeInterface struct {
 	t   *testing.T
 	srv *httptest.Server
+	// loginFile is this fake's own, so tests using one run side by side.
+	loginFile string
 
 	mu       sync.Mutex
 	user     string
@@ -41,7 +43,11 @@ type fakeInterface struct {
 
 func newFakeInterface(t *testing.T) *fakeInterface {
 	t.Helper()
-	f := &fakeInterface{t: t, bodies: map[string]map[string]any{}}
+	f := &fakeInterface{
+		t:         t,
+		loginFile: filepath.Join(t.TempDir(), "login.json"),
+		bodies:    map[string]map[string]any{},
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/session", f.signIn)
 	mux.HandleFunc("DELETE /api/session", f.signedIn(func(w http.ResponseWriter, _ *http.Request) {
@@ -217,13 +223,17 @@ func answer(w http.ResponseWriter, status int, body string) {
 	_, _ = w.Write([]byte(body))
 }
 
-// login runs kubehenge login against the fake as user, into a login file of its own that the
-// commands after it read. A test that logs in cannot run in parallel, since the file is named by the
-// environment.
+// run runs a command with the fake's login file.
+func (f *fakeInterface) run(args ...string) (string, error) {
+	f.t.Helper()
+	return runIn(f.t, f.loginFile, args...)
+}
+
+// login runs kubehenge login against the fake as user, into the login file that the commands after
+// it read.
 func (f *fakeInterface) login(user, password string) error {
 	f.t.Helper()
-	f.t.Setenv(loginFileEnv, filepath.Join(f.t.TempDir(), "login.json"))
-	_, err := run(f.t, "login", f.srv.URL, "--ca", f.certFile(), "--user", user, "--password-file", writeTemp(f.t, password))
+	_, err := f.run("login", f.srv.URL, "--ca", f.certFile(), "--user", user, "--password-file", writeTemp(f.t, password))
 	return err
 }
 
@@ -247,8 +257,9 @@ func (f *fakeInterface) args(user string, rest ...string) []string {
 }
 
 func TestApplianceUpgradesSayARollBackAndWhy(t *testing.T) {
+	t.Parallel()
 	f := newFakeInterface(t)
-	out, err := run(t, f.args("admin@pve", "upgrades")...)
+	out, err := f.run(f.args("admin@pve", "upgrades")...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,11 +275,11 @@ func TestApplianceUpgradesSayARollBackAndWhy(t *testing.T) {
 	if f.signOuts != 0 {
 		t.Errorf("a command signed out, so the login ended with it: %d", f.signOuts)
 	}
-	out, err = run(t, f.args("admin@pve", "upgrades", "--json")...)
+	out, err = f.run(f.args("admin@pve", "upgrades", "--json")...)
 	if err != nil || !json.Valid([]byte(out)) || !strings.Contains(out, `"rolledBack":true`) {
 		t.Errorf("--json: %v\n%s", err, out)
 	}
-	if _, err := run(t, f.args("admin@pve", "upgrade", "0.2.0")...); err != nil {
+	if _, err := f.run(f.args("admin@pve", "upgrade", "0.2.0")...); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.bodies["POST /api/appliance/upgrades"]["version"]; got != "0.2.0" {
@@ -278,6 +289,7 @@ func TestApplianceUpgradesSayARollBackAndWhy(t *testing.T) {
 
 // The command is refused with the interface's own words, by the interface's own checks.
 func TestApplianceRefusalsAreTheInterfaces(t *testing.T) {
+	t.Parallel()
 	f := newFakeInterface(t)
 	for _, c := range []struct {
 		user string
@@ -288,53 +300,55 @@ func TestApplianceRefusalsAreTheInterfaces(t *testing.T) {
 		{"user@pve", []string{"upgrades"}, "user@pve needs Sys.Modify on / (403)"},
 		{"admin@pve", []string{"etcd-backups", "restore", "20270301T120000Z-v1.37.1.db.age", "--passphrase-file", writeTemp(t, "wrong")}, "wrong passphrase (403)"},
 	} {
-		if _, err := run(t, f.args(c.user, c.args...)...); err == nil || err.Error() != c.want {
+		if _, err := f.run(f.args(c.user, c.args...)...); err == nil || err.Error() != c.want {
 			t.Errorf("%v: %v, want %q", c.args[0], err, c.want)
 		}
 	}
 	if err := f.login("admin@pve", "not it"); err == nil || err.Error() != "sign-in failed: check the user name, password and realm (401)" {
 		t.Errorf("a wrong password: %v", err)
 	}
-	if _, err := run(t, "appliance", "etcd-backups"); err == nil || err.Error() != notLoggedIn {
+	if _, err := newFakeInterface(t).run("appliance", "etcd-backups"); err == nil || err.Error() != notLoggedIn {
 		t.Errorf("without a login: %v", err)
 	}
 }
 
 // ready-for-reboot ends with an error, which is exit status 1. The error names the first blocker.
 func TestApplianceReadyForReboot(t *testing.T) {
+	t.Parallel()
 	f := newFakeInterface(t)
-	out, err := run(t, f.args("admin@pve", "ready-for-reboot", "--node", "pve1")...)
+	out, err := f.run(f.args("admin@pve", "ready-for-reboot", "--node", "pve1")...)
 	if err != nil || out != "Ready to reboot pve1\n" {
 		t.Errorf("a node that may go: %v\n%s", err, out)
 	}
-	_, err = run(t, f.args("admin@pve", "ready-for-reboot", "--node", "pve2")...)
+	_, err = f.run(f.args("admin@pve", "ready-for-reboot", "--node", "pve2")...)
 	if !errors.Is(err, errNotReadyForReboot) || !strings.Contains(err.Error(), "team-a/web: stopping pve2 would leave 1 of 3 etcd members") {
 		t.Errorf("a node that holds a quorum: %v", err)
 	}
-	_, err = run(t, f.args("admin@pve", "ready-for-reboot")...)
+	_, err = f.run(f.args("admin@pve", "ready-for-reboot")...)
 	if !errors.Is(err, errNotReadyForReboot) || !strings.Contains(err.Error(), "management: etcd member kubehenge-cp-1 on pve2 is not healthy") {
 		t.Errorf("a member down: %v", err)
 	}
-	if _, err = run(t, f.args("user@pve", "ready-for-reboot")...); err == nil || err.Error() != "user@pve needs Sys.Modify on / (403)" {
+	if _, err = f.run(f.args("user@pve", "ready-for-reboot")...); err == nil || err.Error() != "user@pve needs Sys.Modify on / (403)" {
 		t.Errorf("a user without privileges: %v", err)
 	}
 }
 
 func TestApplianceEtcdBackups(t *testing.T) {
+	t.Parallel()
 	f := newFakeInterface(t)
-	out, err := run(t, f.args("admin@pve", "etcd-backups")...)
+	out, err := f.run(f.args("admin@pve", "etcd-backups")...)
 	if err != nil || !strings.Contains(out, "Schedule       every 6 h, newest 2 kept") || !strings.Contains(out, "Last snapshot  20270301T120000Z-v1.37.1.db.age") {
 		t.Errorf("status: %v\n%s", err, out)
 	}
-	out, err = run(t, f.args("admin@pve", "etcd-backups", "snapshots")...)
+	out, err = f.run(f.args("admin@pve", "etcd-backups", "snapshots")...)
 	if err != nil || !strings.Contains(out, "20270301T120000Z-v1.37.1.db.age  2027-03-01T12:00:00Z  v1.37.1     37482528") {
 		t.Errorf("snapshots: %v\n%s", err, out)
 	}
-	out, err = run(t, f.args("admin@pve", "etcd-backups", "take")...)
+	out, err = f.run(f.args("admin@pve", "etcd-backups", "take")...)
 	if err != nil || out != "Taken: 20270301T130000Z-v1.37.1.db.age\n" {
 		t.Errorf("take: %v\n%s", err, out)
 	}
-	out, err = run(t, f.args("admin@pve", "etcd-backups", "set-up", "--target", "s3", "--every-hours", "4", "--keep", "3",
+	out, err = f.run(f.args("admin@pve", "etcd-backups", "set-up", "--target", "s3", "--every-hours", "4", "--keep", "3",
 		"--access-key-id", "key", "--secret-access-key-file", writeTemp(t, "secret"), "--passphrase-file", writeTemp(t, "right"))...)
 	if err != nil || !strings.Contains(out, "every 4 h, newest 3 kept") {
 		t.Errorf("set-up: %v\n%s", err, out)
@@ -346,7 +360,7 @@ func TestApplianceEtcdBackups(t *testing.T) {
 			t.Errorf("set-up sent %s = %v, want %v", k, got[k], v)
 		}
 	}
-	out, err = run(t, f.args("admin@pve", "etcd-backups", "restore", "20270301T120000Z-v1.37.1.db.age", "--passphrase-file", writeTemp(t, "right"))...)
+	out, err = f.run(f.args("admin@pve", "etcd-backups", "restore", "20270301T120000Z-v1.37.1.db.age", "--passphrase-file", writeTemp(t, "right"))...)
 	wantOut := "Restoring\nThe snapshot matches its checksum\netcd runs\nRestored from 20270301T120000Z-v1.37.1.db.age\n"
 	if err != nil || out != wantOut {
 		t.Errorf("restore: %v\n%q\nwant %q", err, out, wantOut)
@@ -355,14 +369,15 @@ func TestApplianceEtcdBackups(t *testing.T) {
 
 // recover goes through the route the interface's button takes, with no snapshot to name.
 func TestApplianceEtcdBackupsRecover(t *testing.T) {
+	t.Parallel()
 	f := newFakeInterface(t)
-	if _, err := run(t, f.args("admin@pve", "etcd-backups", "recover", "20270301T120000Z-v1.37.1.db.age", "--passphrase-file", writeTemp(t, "right"))...); err == nil {
+	if _, err := f.run(f.args("admin@pve", "etcd-backups", "recover", "20270301T120000Z-v1.37.1.db.age", "--passphrase-file", writeTemp(t, "right"))...); err == nil {
 		t.Error("recover took a snapshot's name")
 	}
-	if _, err := run(t, f.args("admin@pve", "etcd-backups", "recover", "--passphrase-file", writeTemp(t, "wrong"))...); err == nil || !strings.Contains(err.Error(), "wrong passphrase") {
+	if _, err := f.run(f.args("admin@pve", "etcd-backups", "recover", "--passphrase-file", writeTemp(t, "wrong"))...); err == nil || !strings.Contains(err.Error(), "wrong passphrase") {
 		t.Errorf("a wrong passphrase: %v", err)
 	}
-	out, err := run(t, f.args("admin@pve", "etcd-backups", "recover", "--passphrase-file", writeTemp(t, "right"))...)
+	out, err := f.run(f.args("admin@pve", "etcd-backups", "recover", "--passphrase-file", writeTemp(t, "right"))...)
 	if err != nil || !strings.HasSuffix(out, "Recovered the management cluster\n") {
 		t.Errorf("recover: %v\n%s", err, out)
 	}
@@ -403,14 +418,15 @@ func TestApplianceEtcdBackupsShowTheVolume(t *testing.T) {
 
 // take-over needs --overwrite and the passphrase, and says what the next apply does.
 func TestApplianceTakeOver(t *testing.T) {
+	t.Parallel()
 	f := newFakeInterface(t)
-	if _, err := run(t, f.args("admin@pve", "take-over", "--passphrase-file", writeTemp(t, "right"))...); err == nil || !strings.Contains(err.Error(), "Give --overwrite") {
+	if _, err := f.run(f.args("admin@pve", "take-over", "--passphrase-file", writeTemp(t, "right"))...); err == nil || !strings.Contains(err.Error(), "Give --overwrite") {
 		t.Errorf("without --overwrite: %v", err)
 	}
-	if _, err := run(t, f.args("admin@pve", "take-over", "--overwrite", "--passphrase-file", writeTemp(t, "wrong"))...); err == nil || err.Error() != "wrong passphrase (403)" {
+	if _, err := f.run(f.args("admin@pve", "take-over", "--overwrite", "--passphrase-file", writeTemp(t, "wrong"))...); err == nil || err.Error() != "wrong passphrase (403)" {
 		t.Errorf("wrong passphrase: %v", err)
 	}
-	out, err := run(t, f.args("admin@pve", "take-over", "--overwrite", "--passphrase-file", writeTemp(t, "right"))...)
+	out, err := f.run(f.args("admin@pve", "take-over", "--overwrite", "--passphrase-file", writeTemp(t, "right"))...)
 	if err != nil || out != "Taken over. The next apply brings the management cluster to this state\n" {
 		t.Errorf("take-over: %v\n%q", err, out)
 	}
@@ -418,8 +434,9 @@ func TestApplianceTakeOver(t *testing.T) {
 
 // The notification commands show each target's last sending, and a test that a target refused fails.
 func TestApplianceNotifications(t *testing.T) {
+	t.Parallel()
 	f := newFakeInterface(t)
-	out, err := run(t, f.args("admin@pve", "notifications")...)
+	out, err := f.run(f.args("admin@pve", "notifications")...)
 	for _, want := range []string{
 		"Webhook  sent 2027-03-01T12:00:00Z: web: VM paused",
 		"ntfy     nothing sent",
@@ -429,36 +446,37 @@ func TestApplianceNotifications(t *testing.T) {
 			t.Errorf("notifications: %v, output lacks %q:\n%s", err, want, out)
 		}
 	}
-	out, err = run(t, f.args("admin@pve", "notifications", "test")...)
+	out, err = f.run(f.args("admin@pve", "notifications", "test")...)
 	if err == nil || err.Error() != "Email did not take the test" || !strings.Contains(out, "Webhook  sent 2027-03-01T12:05:00Z: Kubehenge test") {
 		t.Errorf("test: %v\n%s", err, out)
 	}
-	if _, err := run(t, f.args("user@pve", "notifications", "test")...); err == nil || err.Error() != "user@pve needs Sys.Modify on / (403)" {
+	if _, err := f.run(f.args("user@pve", "notifications", "test")...); err == nil || err.Error() != "user@pve needs Sys.Modify on / (403)" {
 		t.Errorf("test as user@pve: %v", err)
 	}
 }
 
 func TestApplianceActivity(t *testing.T) {
+	t.Parallel()
 	f := newFakeInterface(t)
-	out, err := run(t, f.args("admin@pve", "activity")...)
+	out, err := f.run(f.args("admin@pve", "activity")...)
 	want := "2027-03-01T12:00:00Z  admin@pve    changed cluster            default/web  \n" +
 		"2027-03-01T11:00:00Z  mallory@pve  sign-in refused                         address 10.0.0.9\n" +
 		"2027-03-01T10:00:00Z  bob@pve      headlamp sign-in (failed)               \n"
 	if err != nil || out != want {
 		t.Errorf("activity: %v\n%q\nwant %q", err, out, want)
 	}
-	out, err = run(t, f.args("admin@pve", "activity", "--json", "--days", "3")...)
+	out, err = f.run(f.args("admin@pve", "activity", "--json", "--days", "3")...)
 	if err != nil || !strings.Contains(out, `"days":"3"`) {
 		t.Errorf("activity --json --days 3: %v\n%s", err, out)
 	}
-	out, err = run(t, f.args("user@pve", "activity", "--cluster", "default/web", "--days", "30")...)
+	out, err = f.run(f.args("user@pve", "activity", "--cluster", "default/web", "--days", "30")...)
 	if err != nil || out != "Nothing done\n" {
 		t.Errorf("a cluster's activity: %v\n%q", err, out)
 	}
-	if _, err := run(t, f.args("user@pve", "activity", "--cluster", "web")...); err == nil || !strings.Contains(err.Error(), "namespace/name") {
+	if _, err := f.run(f.args("user@pve", "activity", "--cluster", "web")...); err == nil || !strings.Contains(err.Error(), "namespace/name") {
 		t.Errorf("--cluster without a namespace: %v", err)
 	}
-	if _, err := run(t, f.args("user@pve", "activity")...); err == nil {
+	if _, err := f.run(f.args("user@pve", "activity")...); err == nil {
 		t.Error("the appliance's activity was shown to a user who may not look after it")
 	}
 }

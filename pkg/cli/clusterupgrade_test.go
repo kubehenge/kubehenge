@@ -18,7 +18,7 @@ func runUpgrade(t *testing.T, fake *fakeClusterAPI, stdin string, args ...string
 	cmd.SetErr(io.Discard)
 	cmd.SetIn(strings.NewReader(stdin))
 	cmd.SetArgs(append([]string{"upgrade", "web"}, args...))
-	err := cmd.ExecuteContext(loggedIn(t, srv.URL, "dev@pve!ci=secret")) //nolint:gosec // the fake interface's own
+	err := cmd.ExecuteContext(loggedIn(t, srv.URL, "dev@pve!ci=secret"))
 	return out.String(), err
 }
 
@@ -45,7 +45,7 @@ func TestClusterAcceptUpgrade(t *testing.T) {
 	cmd.SetOut(&out)
 	cmd.SetErr(io.Discard)
 	cmd.SetArgs([]string{"accept-upgrade", "web", "--version", "v1.35.1"})
-	if err := cmd.ExecuteContext(loggedIn(t, srv.URL, "dev@pve!ci=secret")); err != nil { //nolint:gosec // the fake interface's own
+	if err := cmd.ExecuteContext(loggedIn(t, srv.URL, "dev@pve!ci=secret")); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "podsecuritypolicies") || !strings.Contains(out.String(), "accepted for the automatic upgrade of web to v1.35.1") {

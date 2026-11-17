@@ -45,7 +45,7 @@ type login struct {
 }
 
 // loginFileKey carries a login file's path in a context, for a caller that runs commands side by
-// side and cannot set the environment.
+// side and so cannot share the environment.
 type loginFileKey struct{}
 
 func loginPath(ctx context.Context) (string, error) {
@@ -67,7 +67,7 @@ func readLogin(ctx context.Context) (*login, error) {
 	if err != nil {
 		return nil, err
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // the user's own login file
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, errors.New(notLoggedIn)
 	}
@@ -86,7 +86,7 @@ func (l *login) save(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), loginDirMode); err != nil {
+	if err = os.MkdirAll(filepath.Dir(path), loginDirMode); err != nil {
 		return fmt.Errorf("keeping the login: %w", err)
 	}
 	raw, err := json.Marshal(l)
@@ -174,7 +174,9 @@ func (c *interfaceClient) open(ctx context.Context, method, path string, body an
 	case c.login.Token != "":
 		req.Header.Set("Authorization", "PVEAPIToken="+c.login.Token)
 	case c.login.Cookie != "":
-		req.AddCookie(&http.Cookie{Name: c.login.Cookie, Value: c.login.Value})
+		// A request cookie carries only a name and a value. Secure, HttpOnly and SameSite are
+		// attributes of a Set-Cookie, which the server sets.
+		req.AddCookie(&http.Cookie{Name: c.login.Cookie, Value: c.login.Value}) //nolint:gosec // a request cookie has no attributes
 		req.Header.Set(csrfHeader, c.login.CSRF)
 	}
 	res, err := c.http.Do(req)
@@ -243,7 +245,7 @@ The login is kept in the config folder's kubehenge/login.json, readable by you a
 		RunE: func(cmd *cobra.Command, args []string) error {
 			l := &login{URL: strings.TrimSuffix(args[0], "/")}
 			if caFile != "" {
-				pem, err := os.ReadFile(caFile)
+				pem, err := os.ReadFile(caFile) //nolint:gosec // the file the user named
 				if err != nil {
 					return fmt.Errorf("--ca: %w", err)
 				}
