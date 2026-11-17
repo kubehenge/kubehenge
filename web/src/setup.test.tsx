@@ -749,6 +749,100 @@ describe("setup", () => {
     expect(screen.getByRole("button", { name: "Network" })).toHaveAttribute("aria-current", "step");
   });
 
+  it("preselects up to three Proxmox VE nodes that answer", async () => {
+    const others = ["pve2", "pve3", "pve4"];
+    const routes: Record<string, Route> = {
+      ...administrator,
+      ...oneNode,
+      "GET /api/setup": { body: { appliance: true, ready: false, allowed: true } },
+      "GET /api/proxmox/nodes": {
+        body: [...["pve1", ...others].map((node) => ({ node, online: true })), { node: "pve5", online: false }],
+      },
+    };
+    for (const node of others) {
+      routes[`GET /api/proxmox/nodes/${node}/bridges`] = { body: [] };
+      routes[`GET /api/proxmox/nodes/${node}/dns`] = { body: { servers: [] } };
+    }
+    fakeServer(routes);
+    render(<App />);
+    const first = await screen.findByRole("checkbox", { name: "pve1" });
+    await waitFor(() => expect(first).toBeChecked());
+    expect(screen.getByRole("checkbox", { name: "pve2" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "pve3" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "pve4" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /^pve5/u })).not.toBeChecked();
+  });
+
+  it("fills the addresses of the chosen nodes and the API address from the free range, and asks for no more", async () => {
+    const calls = fakeServer({
+      ...administrator,
+      ...oneNode,
+      "GET /api/setup": { body: { appliance: true, ready: false, allowed: true } },
+      "GET /api/proxmox/nodes": {
+        body: [
+          { node: "pve1", online: true },
+          { node: "pve2", online: true },
+        ],
+      },
+      "GET /api/proxmox/storages": {
+        body: oneNode["GET /api/proxmox/storages"].body.flatMap((s) => [s, { ...s, node: "pve2" }]),
+      },
+      "GET /api/proxmox/nodes/pve2/bridges": {
+        body: [
+          { bridge: "vmbr0", node: "pve2", vlanAware: false, usable: true, cidr: "192.0.2.6/24", gateway: "192.0.2.1" },
+        ],
+      },
+      "GET /api/proxmox/nodes/pve2/dns": { body: { servers: [] } },
+      "POST /api/proxmox/nodes/pve1/bridges/vmbr0/free": {
+        body: { network: "192.0.2.0/24", endpoint: "192.0.2.10", addresses: "192.0.2.11-192.0.2.13", answering: [] },
+      },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await waitFor(() => expect(screen.getByLabelText("VM disks")).toHaveValue("local-lvm"));
+    await next(user);
+    await waitFor(
+      () => expect(screen.getByLabelText("Node addresses")).toHaveValue("192.0.2.11\n192.0.2.12\n192.0.2.13"),
+      {
+        timeout: 3000,
+      },
+    );
+    expect(screen.getByLabelText("API address")).toHaveValue("192.0.2.10");
+    expect(calls.find((c) => c.key === "POST /api/proxmox/nodes/pve1/bridges/vmbr0/free")?.body).toMatchObject({
+      nodes: 3,
+    });
+
+    await user.clear(screen.getByLabelText("API address"));
+    await user.type(screen.getByLabelText("API address"), "192.0.2.50");
+    await user.click(screen.getByRole("button", { name: "Placement" }));
+    await user.click(screen.getByRole("checkbox", { name: "pve2" }));
+    await next(user);
+    expect(screen.getByLabelText("API address")).toHaveValue("192.0.2.50");
+  });
+
+  it("fills the addresses again in the network of a gateway typed over the bridge's", async () => {
+    const calls = fakeServer({
+      ...administrator,
+      ...oneNode,
+      "GET /api/setup": { body: { appliance: true, ready: false, allowed: true } },
+      "POST /api/proxmox/nodes/pve1/bridges/vmbr0/free": freeByGateway,
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await waitFor(() => expect(screen.getByLabelText("VM disks")).toHaveValue("local-lvm"));
+    await next(user);
+    await waitFor(() => expect(screen.getByLabelText("Node addresses")).toHaveValue("192.0.2.11"), { timeout: 3000 });
+    await user.clear(screen.getByLabelText("Gateway"));
+    await user.type(screen.getByLabelText("Gateway"), "198.51.100.1");
+    await waitFor(() => expect(screen.getByLabelText("Node addresses")).toHaveValue("198.51.100.11"), {
+      timeout: 3000,
+    });
+    expect(screen.getByLabelText("API address")).toHaveValue("198.51.100.10");
+    expect(calls.findLast((c) => c.key.endsWith("/free"))?.body).toMatchObject({ gateway: "198.51.100.1", prefix: 24 });
+    await next(user);
+    expect(screen.getByRole("button", { name: "Network" })).not.toHaveAttribute("aria-current", "step");
+  });
+
   it("shows a stored management cluster as it is saved, past a node that does not answer", async () => {
     window.history.replaceState(null, "", "/administration");
     fakeServer({
@@ -1028,6 +1122,9 @@ describe("setup", () => {
     const user = userEvent.setup({ delay: null });
     render(<App />);
 
+    const second = await screen.findByRole("checkbox", { name: "pve2" });
+    await waitFor(() => expect(second).toBeChecked());
+    await user.click(second);
     await waitFor(() => expect(screen.getByLabelText("VM disks")).toHaveValue("local-lvm"));
     await next(user);
     await waitFor(() => expect(screen.getByLabelText("DNS servers")).toHaveValue("192.0.2.53, 198.51.100.53"));
@@ -1249,6 +1346,9 @@ describe("setup", () => {
     });
     const user = userEvent.setup({ delay: null });
     render(<App />);
+    const second = await screen.findByRole("checkbox", { name: "pve2" });
+    await waitFor(() => expect(second).toBeChecked());
+    await user.click(second);
     const disks = await screen.findByLabelText("VM disks");
     await waitFor(() => expect(within(disks).getByRole("option", { name: "fast" })).toBeInTheDocument());
     await user.selectOptions(disks, "fast");
@@ -2027,3 +2127,9 @@ describe("backup targets", () => {
     );
   });
 });
+
+// The free addresses on the network of the gateway sent: 198.51.100.1's, else the bridge's.
+const freeByGateway: Route = (body) => {
+  const net = JSON.stringify(body).includes('"gateway":"198.51.100.1"') ? "198.51.100" : "192.0.2";
+  return { body: { network: `${net}.0/24`, endpoint: `${net}.10`, addresses: `${net}.11`, answering: [] } };
+};

@@ -229,6 +229,10 @@ export function Console({
   if (settingUp) {
     classes.push("shell-setup");
   }
+  const home = path === "/" || path === "/clusters";
+  if (home && !settingUp) {
+    classes.push("shell-home");
+  }
   if (runsShown !== undefined) {
     classes.push(runsShown ? "runs-shown" : "runs-folded");
   }
@@ -247,7 +251,9 @@ export function Console({
         open={open}
         onSignOut={onSignOut}
       />
-      {!settingUp && <FleetRail current={here} canCreate={canCreate} onCreate={() => navigate("/clusters/new")} />}
+      {!settingUp && !home && (
+        <FleetRail current={here} canCreate={canCreate} onCreate={() => navigate("/clusters/new")} />
+      )}
       <main className="content" ref={main} tabIndex={-1}>
         {children}
       </main>

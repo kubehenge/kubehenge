@@ -4021,7 +4021,10 @@ if [ "${replaces_machines}" = true ]; then
         KUBECONFIG=${creator_config} "${kubehenge}" serve --listen 127.0.0.1:18443 \
             --tls-cert "${work}/interface.crt" --tls-key "${work}/interface.key" > "${work}/interface.log" 2>&1 &
         interface_pid=$!
-        kh_all() { KUBEHENGE_URL=https://127.0.0.1:18443 KUBEHENGE_CA="${work}/interface.crt" "${kubehenge}" cluster "$@"; }
+        export KUBEHENGE_LOGIN_FILE="${work}/login.json"
+        logged_in() { "${kubehenge}" login https://127.0.0.1:18443 --ca "${work}/interface.crt" > /dev/null; }
+        until_true 60 "kubehenge login to the interface, with the token" logged_in
+        kh_all() { "${kubehenge}" cluster "$@"; }
         # -n goes last: only the commands that find one cluster by its name take it, never list.
         kh() { kh_all "$@" -n "${ns}"; }
         listed() { kh_all list -o json | jq -e --arg ns "${ns}" --arg n "${name}" 'any(.[]; .namespace == $ns and .name == $n)' > /dev/null; }

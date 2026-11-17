@@ -57,7 +57,6 @@ export passphrase, which you set. The state passphrase comes from --passphrase-f
 	f.StringVarP(&out, "output", "o", "kubehenge-export.age", "where to save the export")
 	f.StringVar(&passphraseFile, "passphrase-file", "", passphraseFileUsage)
 	f.StringVar(&exportFile, "export-passphrase-file", "", exportPassphraseUsage)
-	o.signInFlags(cmd)
 	return cmd
 }
 
@@ -93,7 +92,6 @@ with "kubehenge appliance etcd-backups restore", and apply the settings once to 
 		},
 	}
 	cmd.Flags().StringVar(&exportFile, "export-passphrase-file", "", exportPassphraseUsage)
-	o.signInFlags(cmd)
 	return cmd
 }
 
@@ -168,7 +166,6 @@ func (o *applianceOptions) snapshotRunCommand(spec *snapshotRun) *cobra.Command 
 	}
 	cmd.Flags().BoolVar(&wait, "wait", true, "wait until the run ends, printing its log")
 	cmd.Flags().StringVar(&passphraseFile, "passphrase-file", "", passphraseFileUsage)
-	o.signInFlags(cmd)
 	return cmd
 }
 
@@ -187,7 +184,6 @@ func (o *applianceOptions) dismissWarningCommand() *cobra.Command {
 			})
 		},
 	}
-	o.signInFlags(cmd)
 	o.jsonFlag(cmd)
 	return cmd
 }

@@ -144,15 +144,18 @@ upgrade_rolled_back() {
     runs "$2"
 }
 
-# cli<user> <arguments...>: the kubehenge appliance command in the appliance, signed in as the user
-# with the test's password, the state passphrase at hand; its output in $work/cli and whether it
-# succeeded in $cli_ok.
+# cli<user> <arguments...>: the kubehenge appliance command in the appliance, after a login as the
+# user with the test's password, the state passphrase at hand; its output in $work/cli and whether
+# it succeeded in $cli_ok.
 cli() {
     who=$1
     shift
     cli_ok=true
-    pct exec "${ctid}" -- /usr/local/bin/kubehenge appliance "$@" --user "${who}" --password-file /root/e2e-password \
-        > "${work}/cli" 2>&1 < /dev/null || cli_ok=false
+    {
+        pct exec "${ctid}" -- /usr/local/bin/kubehenge login https://127.0.0.1 --ca /etc/kubehenge/tls.crt \
+            --user "${who}" --password-file /root/e2e-password &&
+            pct exec "${ctid}" -- /usr/local/bin/kubehenge appliance "$@"
+    } > "${work}/cli" 2>&1 < /dev/null || cli_ok=false
 }
 
 # cli_says <true|false> <text> <what>: checks how the last cli ended and that it said the text.

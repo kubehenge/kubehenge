@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"strconv"
@@ -24,11 +23,6 @@ import (
 )
 
 const (
-	// applianceRequestTimeout bounds one request to the interface. Setting the backups up writes
-	// to the target before it answers.
-	applianceRequestTimeout = time.Minute
-	// maxApplianceAnswer bounds what is read of one answer.
-	maxApplianceAnswer = 4 << 20
 	// mib is the bytes of a MiB, the unit sizes are shown in.
 	mib = 1 << 20
 	// appliancePoll is how often a command that waits asks again.
@@ -44,19 +38,12 @@ const (
 // applianceOptions are the flags of the appliance commands, which sign in to the appliance's
 // interface and ask it what its pages ask, so that its checks and refusals hold for both.
 type applianceOptions struct {
-	check        appliance.ServiceCheck
-	user         string
-	passwordFile string
-	totp         string
-	json         bool
+	check appliance.ServiceCheck
+	json  bool
 }
 
-// applianceSession is a signed-in session with the interface.
-type applianceSession struct {
-	http *http.Client
-	base string
-	csrf string
-}
+// applianceSession is the client the commands reach the interface with, as the login's user.
+type applianceSession = interfaceClient
 
 // errSkipPrint ends a command whose answer was printed as JSON.
 var errSkipPrint = errors.New("printed")
@@ -68,13 +55,9 @@ func newApplianceCommand() *cobra.Command {
 		Short: "Look after the appliance from its shell, as its Administration pages do",
 		Long: `Look after the appliance from its shell, as its Administration pages do.
 
-Run it in the appliance. Every command except health signs in to the interface as --user, with the
-password from --password-file or KUBEHENGE_PASSWORD. The user's privileges and the interface's
-checks apply as on its pages.`,
+Run it in the appliance. Every command except health reaches the interface as the user of
+"kubehenge login". The user's privileges and the interface's checks apply as on its pages.`,
 	}
-	f := cmd.PersistentFlags()
-	f.StringVar(&o.check.CertFile, "cert", "/etc/kubehenge/tls.crt", "certificate the interface must present")
-	f.StringVar(&o.check.Address, "address", "127.0.0.1:443", "where the interface listens")
 	cmd.AddCommand(o.healthCommand(), o.upgradesCommand(), o.upgradeCommand(), o.etcdBackupsCommand(), o.notificationsCommand(),
 		o.activityCommand(), o.takeOverCommand(), o.readyForRebootCommand(), o.exportCommand(), o.importCommand(),
 		o.settingsCommand())
@@ -118,16 +101,7 @@ Patch the nodes one at a time. Run it, reboot one node, wait for it to pass agai
 		},
 	}
 	cmd.Flags().StringVar(&node, "node", "", "Proxmox VE node to be rebooted")
-	o.signInFlags(cmd)
 	return cmd
-}
-
-// signInFlags adds the flags of a command that signs in to the interface.
-func (o *applianceOptions) signInFlags(cmd *cobra.Command) {
-	f := cmd.Flags()
-	f.StringVar(&o.user, "user", os.Getenv("KUBEHENGE_USER"), "Proxmox VE user to sign in as, such as root@pam (env KUBEHENGE_USER)")
-	f.StringVar(&o.passwordFile, "password-file", "", "file holding the user's password, else KUBEHENGE_PASSWORD holds it")
-	f.StringVar(&o.totp, "totp", "", "a TOTP code, for an account with a second factor")
 }
 
 // jsonFlag adds --json to a command that prints what the interface answers.
@@ -144,6 +118,8 @@ func (o *applianceOptions) healthCommand() *cobra.Command {
 			return o.check.Healthy(cmd.Context())
 		},
 	}
+	cmd.Flags().StringVar(&o.check.CertFile, "cert", "/etc/kubehenge/tls.crt", "certificate the interface must present")
+	cmd.Flags().StringVar(&o.check.Address, "address", "127.0.0.1:443", "where the interface listens")
 	cmd.Flags().DurationVar(&o.check.Wait, "wait", healthWait, "how long the interface has to answer")
 	cmd.Flags().DurationVar(&o.check.Settle, "settle", healthSettle, "how long the interface must stay up after it answers")
 	return cmd
@@ -178,7 +154,6 @@ func (o *applianceOptions) upgradesCommand() *cobra.Command {
 			})
 		},
 	}
-	o.signInFlags(cmd)
 	o.jsonFlag(cmd)
 	return cmd
 }
@@ -224,7 +199,6 @@ how the upgrade went.`,
 			})
 		},
 	}
-	o.signInFlags(cmd)
 	return cmd
 }
 
@@ -243,7 +217,6 @@ func (o *applianceOptions) etcdBackupsCommand() *cobra.Command {
 			})
 		},
 	}
-	o.signInFlags(cmd)
 	o.jsonFlag(cmd)
 	cmd.AddCommand(o.setUpBackupsCommand(), o.backupsOffCommand(), o.snapshotsCommand(), o.takeSnapshotCommand(), o.restoreEtcdCommand(),
 		o.recreateCommand(), o.recoverCommand(), o.dismissWarningCommand())
@@ -362,7 +335,6 @@ comes from --passphrase-file or KUBEHENGE_PASSPHRASE. The target's secret access
 	f.StringVar(&passphraseFile, "passphrase-file", "", passphraseFileUsage)
 	f.StringArrayVar(&req.SpecRecipients, "spec-recipient", nil, "an age public key (age1...) that every cluster spec's Secrets are also sealed to, repeatable")
 	_ = cmd.MarkFlagRequired("target")
-	o.signInFlags(cmd)
 	o.jsonFlag(cmd)
 	return cmd
 }
@@ -394,7 +366,6 @@ func (o *applianceOptions) backupsOffCommand() *cobra.Command {
 			})
 		},
 	}
-	o.signInFlags(cmd)
 	return cmd
 }
 
@@ -425,7 +396,6 @@ func (o *applianceOptions) snapshotsCommand() *cobra.Command {
 			})
 		},
 	}
-	o.signInFlags(cmd)
 	o.jsonFlag(cmd)
 	return cmd
 }
@@ -457,7 +427,6 @@ func (o *applianceOptions) takeSnapshotCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&wait, "wait", true, "wait until the snapshot is stored")
-	o.signInFlags(cmd)
 	return cmd
 }
 
@@ -523,7 +492,6 @@ backup or a second appliance. Once taken over, the next apply undoes those chang
 	}
 	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "undo the newer changes at the next apply")
 	cmd.Flags().StringVar(&passphraseFile, "passphrase-file", "", passphraseFileUsage)
-	o.signInFlags(cmd)
 	return cmd
 }
 
@@ -566,61 +534,16 @@ func printLog(out io.Writer, job *appliance.JobView, printed int) int {
 	return total
 }
 
-// signedIn signs in, does what the command asks and signs out again.
-func (o *applianceOptions) signedIn(cmd *cobra.Command, do func(context.Context, *applianceSession) error) error {
-	ctx := cmd.Context()
-	s, err := o.signIn(ctx)
+// signedIn does what the command asks as the login's user.
+func (*applianceOptions) signedIn(cmd *cobra.Command, do func(context.Context, *applianceSession) error) error {
+	s, err := openAppliance(cmd.Context())
 	if err != nil {
 		return err
 	}
-	defer func() { _, _ = s.call(context.WithoutCancel(ctx), http.MethodDelete, "/api/session", nil, nil) }()
-	err = do(ctx, s)
-	if errors.Is(err, errSkipPrint) {
+	if err = do(cmd.Context(), s); errors.Is(err, errSkipPrint) {
 		return nil
 	}
 	return err
-}
-
-func (o *applianceOptions) signIn(ctx context.Context) (*applianceSession, error) {
-	if o.user == "" {
-		return nil, errors.New("--user is required (env KUBEHENGE_USER)")
-	}
-	password, err := secretFrom(o.passwordFile, "KUBEHENGE_PASSWORD")
-	if err != nil {
-		return nil, err
-	}
-	if password == "" {
-		return nil, errors.New("no password: give --password-file or KUBEHENGE_PASSWORD")
-	}
-	client, base, err := o.check.Client()
-	if err != nil {
-		return nil, fmt.Errorf("reaching the interface: %w", err)
-	}
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		return nil, fmt.Errorf("starting the session: %w", err)
-	}
-	client.Jar, client.Timeout = jar, applianceRequestTimeout
-	s := &applianceSession{http: client, base: base}
-	var sess struct {
-		CSRF         string `json:"csrf"`
-		SecondFactor any    `json:"secondFactor"`
-	}
-	if _, err := s.call(ctx, http.MethodPost, "/api/session", map[string]string{"username": o.user, "password": password}, &sess); err != nil {
-		return nil, err
-	}
-	s.csrf = sess.CSRF
-	if sess.SecondFactor == nil {
-		return s, nil
-	}
-	if o.totp == "" {
-		return nil, fmt.Errorf("%s has a second factor: give --totp", o.user)
-	}
-	if _, err := s.call(ctx, http.MethodPost, "/api/session/second-factor", map[string]string{"kind": "totp", "code": o.totp}, &sess); err != nil {
-		return nil, err
-	}
-	s.csrf = sess.CSRF
-	return s, nil
 }
 
 // get reads path into v, or prints the answer as it is with --json and returns errSkipPrint.
@@ -636,53 +559,6 @@ func (o *applianceOptions) get(ctx context.Context, cmd *cobra.Command, s *appli
 		return errSkipPrint
 	}
 	return nil
-}
-
-// call sends a request with body as JSON and decodes the answer into out, when given. A refusal
-// comes back as the interface's own message.
-func (s *applianceSession) call(ctx context.Context, method, path string, body, out any) ([]byte, error) {
-	var payload io.Reader = http.NoBody
-	if body != nil {
-		raw, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("encoding the request: %w", err)
-		}
-		payload = bytes.NewReader(raw)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, s.base+path, payload)
-	if err != nil {
-		return nil, fmt.Errorf("a request to the interface: %w", err)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if s.csrf != "" {
-		req.Header.Set("X-Kubehenge-Csrf", s.csrf)
-	}
-	resp, err := s.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("reaching the interface: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxApplianceAnswer))
-	if err != nil {
-		return nil, fmt.Errorf("reading the interface's answer: %w", err)
-	}
-	if resp.StatusCode >= http.StatusMultipleChoices {
-		var refusal struct {
-			Error string `json:"error"`
-		}
-		if json.Unmarshal(raw, &refusal) == nil && refusal.Error != "" {
-			return nil, errors.New(refusal.Error)
-		}
-		return nil, fmt.Errorf("the interface answered %s", resp.Status)
-	}
-	if out != nil && len(raw) > 0 {
-		if err := json.Unmarshal(raw, out); err != nil {
-			return nil, fmt.Errorf("the interface's answer: %w", err)
-		}
-	}
-	return raw, nil
 }
 
 // secretFrom reads a secret from file, when named, else from the environment variable env.

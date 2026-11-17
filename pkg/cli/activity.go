@@ -62,7 +62,6 @@ is enough. --json adds the management cluster's events of the last day.`,
 	}
 	cmd.Flags().IntVar(&days, "days", activityDefaultDays, "how many days back, up to 90")
 	cmd.Flags().StringVar(&cluster, "cluster", "", "only what was done to this cluster, as namespace/name")
-	o.signInFlags(cmd)
 	o.jsonFlag(cmd)
 	return cmd
 }
