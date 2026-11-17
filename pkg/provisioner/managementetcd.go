@@ -97,7 +97,8 @@ func (m *ManagementTalos) Snapshot(ctx context.Context, raw []byte, nodes []stri
 // Restore restores the management cluster's etcd from a snapshot through the Talos API, as an
 // etcd restore of a Talos cluster does: it wipes etcd on every control-plane node that answers,
 // waits for each to boot again, uploads the snapshot to the first and bootstraps etcd from it,
-// and waits until it runs. The others then join. open hands the plain snapshot, checked already.
+// and waits until it runs and the others have joined it. open hands the plain snapshot, checked
+// already.
 func (m *ManagementTalos) Restore(ctx context.Context, admin []byte, nodes []string, open func() (io.ReadCloser, error), log func(string)) error {
 	up := m.answering(ctx, admin, nodes, log)
 	if len(up) == 0 {
@@ -138,8 +139,8 @@ func (m *ManagementTalos) Restore(ctx context.Context, admin []byte, nodes []str
 	}
 	log("Uploading the snapshot to " + first)
 	err := m.wait(ctx, admin, first, "uploading the snapshot", func(ctx context.Context, t TalosNode) (bool, error) {
-		state, _, err := t.Etcd(ctx)
-		if err != nil || state != talosEtcdPreparing {
+		etcd, err := t.Etcd(ctx)
+		if err != nil || !talosEtcdTakesSnapshot(etcd.State) {
 			return false, err //nolint:wrapcheck // wait names the node and what it was doing
 		}
 		return true, upload(ctx, t)
@@ -155,12 +156,34 @@ func (m *ManagementTalos) Restore(ctx context.Context, admin []byte, nodes []str
 		return err
 	}
 	log("Waiting for etcd on " + first)
-	return m.wait(ctx, admin, first, "starting etcd", func(ctx context.Context, t TalosNode) (bool, error) {
+	err = m.wait(ctx, admin, first, "starting etcd", func(ctx context.Context, t TalosNode) (bool, error) {
 		return talosEtcdStarted(ctx, t, func(ctx context.Context, t TalosNode) error {
 			log("Starting etcd again on " + first + " after Talos left it Failed")
 			return upload(ctx, t)
 		})
 	})
+	if err != nil {
+		return err
+	}
+	return m.waitJoined(ctx, admin, up[1:], log)
+}
+
+// waitJoined waits until etcd on each of the nodes has joined the restored one.
+func (m *ManagementTalos) waitJoined(ctx context.Context, admin []byte, nodes []string, log func(string)) error {
+	for _, address := range nodes {
+		log("Waiting for " + address + " to join etcd")
+		from := ""
+		err := m.wait(ctx, admin, address, "joining etcd", func(ctx context.Context, t TalosNode) (bool, error) {
+			return talosEtcdJoined(ctx, t, &from, func(ctx context.Context, t TalosNode) error {
+				log("Rebooting " + address + " after Talos left its etcd Failed")
+				return t.Reboot(ctx)
+			})
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (*ManagementTalos) client(ctx context.Context, raw []byte, address string) (*talosclient.Client, error) {

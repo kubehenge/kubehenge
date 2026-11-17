@@ -34,9 +34,9 @@ const (
 // image's signature, and never starts it again by itself. A pull a little later usually works, so
 // a Failed etcd gets the snapshot again from upload and is bootstrapped once more.
 func talosEtcdStarted(ctx context.Context, t TalosNode, upload func(context.Context, TalosNode) error) (bool, error) {
-	state, healthy, err := t.Etcd(ctx)
-	if err != nil || state != talosEtcdFailed {
-		return state == talosEtcdRunning && healthy, err //nolint:wrapcheck // the wait names the node and what it was doing
+	etcd, err := t.Etcd(ctx)
+	if err != nil || etcd.State != talosEtcdFailed {
+		return etcd.State == talosEtcdRunning && etcd.Healthy, err //nolint:wrapcheck // the wait names the node and what it was doing
 	}
 	if err := upload(ctx, t); err != nil {
 		return false, err
@@ -44,7 +44,45 @@ func talosEtcdStarted(ctx context.Context, t TalosNode, upload func(context.Cont
 	if err := t.BootstrapRecovered(ctx); err != nil {
 		return false, err //nolint:wrapcheck // as above
 	}
-	return false, fmt.Errorf("etcd stayed Failed after starting it again: %w", errTalosNotReady)
+	return false, stayedFailed(etcd, "starting it again")
+}
+
+// talosEtcdTakesSnapshot says whether a wiped node's etcd takes the snapshot: waiting in Preparing,
+// or Failed, as when its first image pull after the wipe failed. Its data directory is empty in
+// both, which is all Talos asks of an upload and a bootstrap.
+func talosEtcdTakesSnapshot(state string) bool {
+	return state == talosEtcdPreparing || state == talosEtcdFailed
+}
+
+// talosEtcdJoined says whether etcd runs healthy on a node that joins the restored one. Talos
+// leaves a joining etcd Failed the same way. A bootstrap would make that node a cluster of its own,
+// so it is rebooted instead, which starts etcd again to join. from is the boot it was last
+// rebooted from, as a node still shutting down reads Failed too.
+func talosEtcdJoined(ctx context.Context, t TalosNode, from *string, reboot func(context.Context, TalosNode) error) (bool, error) {
+	etcd, err := t.Etcd(ctx)
+	if err != nil || etcd.State != talosEtcdFailed {
+		return etcd.State == talosEtcdRunning && etcd.Healthy, err //nolint:wrapcheck // the wait names the node and what it was doing
+	}
+	boot, err := t.BootID(ctx)
+	if err != nil {
+		return false, err //nolint:wrapcheck // as above
+	}
+	if boot != *from {
+		if err := reboot(ctx, t); err != nil {
+			return false, err
+		}
+		*from = boot
+	}
+	return false, stayedFailed(etcd, "a reboot")
+}
+
+// stayedFailed is a not-ready error, so that the wait reads etcd again, which names Talos's reason
+// for when the wait runs out.
+func stayedFailed(etcd TalosService, after string) error {
+	if etcd.Event == "" {
+		return fmt.Errorf("etcd stayed Failed after %s: %w", after, errTalosNotReady)
+	}
+	return fmt.Errorf("etcd stayed Failed after %s, Talos says %q: %w", after, etcd.Event, errTalosNotReady)
 }
 
 // planTalosRestore writes out the steps that restore a Talos cluster's etcd by hand with talosctl,
@@ -300,13 +338,13 @@ func (run *restoreRun) wipeTalos(ctx context.Context) error {
 	return nil
 }
 
-// recoverTalosEtcd uploads the fetched snapshot to the first node once its etcd waits for one, and
+// recoverTalosEtcd uploads the fetched snapshot to the first node once its etcd takes one, and
 // bootstraps etcd from it.
 func (run *restoreRun) recoverTalosEtcd(ctx context.Context) error {
 	first := run.nodes[0]
 	err := run.waitTalos(ctx, first, "uploading the snapshot", func(ctx context.Context, t TalosNode) (bool, error) {
-		state, _, err := t.Etcd(ctx)
-		if err != nil || state != talosEtcdPreparing {
+		etcd, err := t.Etcd(ctx)
+		if err != nil || !talosEtcdTakesSnapshot(etcd.State) {
 			return false, err //nolint:wrapcheck // onTalos names the machine, and the node's error the call
 		}
 		return true, run.uploadTalosSnapshot(ctx, t)
@@ -337,15 +375,32 @@ func (run *restoreRun) uploadTalosSnapshot(ctx context.Context, t TalosNode) err
 	return t.UploadEtcdSnapshot(ctx, f) //nolint:wrapcheck // onTalos names the machine, and the node's error the call
 }
 
-// waitTalosEtcd waits until etcd runs on the first node, restored, and is healthy.
+// waitTalosEtcd waits until etcd runs on the first node, restored, and is healthy, and then until
+// every other node's etcd has joined it.
 func (run *restoreRun) waitTalosEtcd(ctx context.Context) error {
 	first := run.nodes[0]
-	return run.waitTalos(ctx, first, "starting etcd", func(ctx context.Context, t TalosNode) (bool, error) {
+	err := run.waitTalos(ctx, first, "starting etcd", func(ctx context.Context, t TalosNode) (bool, error) {
 		return talosEtcdStarted(ctx, t, func(ctx context.Context, t TalosNode) error {
 			ctrl.LoggerFrom(ctx).Info("starting etcd again after Talos left it Failed", "machine", first.Machine)
 			return run.uploadTalosSnapshot(ctx, t)
 		})
 	})
+	if err != nil {
+		return err
+	}
+	for _, n := range run.nodes[1:] {
+		from := ""
+		err := run.waitTalos(ctx, n, "joining etcd", func(ctx context.Context, t TalosNode) (bool, error) {
+			return talosEtcdJoined(ctx, t, &from, func(ctx context.Context, t TalosNode) error {
+				ctrl.LoggerFrom(ctx).Info("rebooting after Talos left its etcd Failed", "machine", n.Machine)
+				return t.Reboot(ctx)
+			})
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // recoverTalos finishes what a Talos restore that failed did, by the phase it got to. Before

@@ -174,7 +174,7 @@ func EtcdRestoreStatusOf(c *clusterv1.Cluster) (EtcdRestoreStatus, bool) {
 //
 // A Talos cluster is restored through the nodes' Talos API instead, as Talos recovers etcd: every
 // control-plane node is reset with its EPHEMERAL partition wiped, the first is bootstrapped from the
-// snapshot, and the others join it again by themselves.
+// snapshot, and the restore waits until the others have joined it again.
 type EtcdRestorer struct {
 	Client client.Client
 	// Reader reads the cluster past any cache: a reconcile queued while a restore ran can start
@@ -998,7 +998,7 @@ func (run *restoreRun) succeededMessage() string {
 		m += " The first attempt failed, " + run.retried.Error() + ", and a second restored it."
 	}
 	if run.talos && len(run.nodes) > 1 {
-		m += fmt.Sprintf(" The other %d control-plane nodes join it again by themselves.", len(run.nodes)-1)
+		m += fmt.Sprintf(" The other %d control-plane nodes joined it again.", len(run.nodes)-1)
 	}
 	switch {
 	case len(s.Replaced) == 0:

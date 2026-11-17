@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -102,14 +103,29 @@ func TestManagementTalosRestoreStartsAFailedEtcdAgain(t *testing.T) {
 	}
 }
 
+// An etcd Talos left Failed before the upload, as when its first image pull after the wipe failed,
+// takes the snapshot and the bootstrap as one waiting in Preparing does.
+func TestManagementTalosRestoreUploadsToAFailedEtcd(t *testing.T) {
+	t.Parallel()
+	f := &fakeTalos{pullFailed: map[string]bool{"10.0.0.21": true}}
+	if _, err := restoreManagement(f, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"10.0.0.21 wipe", "10.0.0.22 wipe", "10.0.0.21 upload", "10.0.0.21 bootstrap"}
+	if got := f.restoreCalls(); !slices.Equal(got, want) {
+		t.Errorf("calls %v\nwant %v", got, want)
+	}
+}
+
 // An etcd that stays Failed is bootstrapped again at most once a poll, until the step's time is
-// up. The error then says it stayed Failed.
+// up. The error then says it stayed Failed, and why as Talos says.
 func TestManagementTalosRestoreGivesUpOnAFailedEtcd(t *testing.T) {
 	t.Parallel()
 	f := &fakeTalos{starting: func(int) (string, bool) { return talosEtcdFailed, false }}
 	_, err := restoreManagement(f, 300*time.Millisecond)
-	if err == nil || !strings.Contains(err.Error(), "starting etcd on 10.0.0.21 did not finish") || !strings.Contains(err.Error(), "etcd stayed Failed") {
-		t.Fatalf("error %v, want one saying etcd stayed Failed", err)
+	want := fmt.Sprintf("starting etcd on 10.0.0.21 did not finish: 10.0.0.21: etcd stayed Failed after starting it again, Talos says %q", fakePullFailure)
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("error %v, want one naming %q", err, want)
 	}
 	// Every read of etcd after the first bootstrap found it Failed, and each led to one bootstrap.
 	reads, bootstraps := 0, 0
