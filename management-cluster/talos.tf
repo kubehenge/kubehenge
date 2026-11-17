@@ -8,12 +8,15 @@ locals {
   # Talos and the node's container runtime pull these only with their publishers' keyless
   # signatures: the Image Factory's builds of a release differ in their bytes, so no digest of its
   # installer stays valid, and Talos's Kubernetes upgrades name the components by tag. Sidero signs
-  # its images with its release service account or a siderolabs.com account; Kubernetes' image
-  # promoter signs everything on registry.k8s.io. A registry mirror has to serve the signatures too.
+  # its images with its release service account or a siderolabs.com account. Kubernetes' image
+  # promoter signs everything on registry.k8s.io with two accounts that only its production jobs
+  # use: krel-trust for the promotion, promoter-summaries for its verification summary. Talos reads
+  # every bundle and pulls once, so accepting both lets one failed bundle fetch not fail the pull.
+  # A registry mirror has to serve the signatures too.
   image_signatures = [
     { image = "factory.talos.dev/*", keyless = { issuer = "https://accounts.google.com", subject = "image-factory-signing@talos-production.iam.gserviceaccount.com" } },
     { image = "ghcr.io/siderolabs/*", keyless = { issuer = "https://accounts.google.com", subjectRegex = "^(releasemgr-svc@talos-production\\.iam\\.gserviceaccount\\.com|[^@]+@siderolabs\\.com)$" } },
-    { image = "registry.k8s.io/*", keyless = { issuer = "https://accounts.google.com", subject = "krel-trust@k8s-releng-prod.iam.gserviceaccount.com" } },
+    { image = "registry.k8s.io/*", keyless = { issuer = "https://accounts.google.com", subjectRegex = "^(krel-trust|promoter-summaries)@k8s-releng-prod\\.iam\\.gserviceaccount\\.com$" } },
   ]
   # The Talos providers' controllers, which only the management cluster runs, come from Kubehenge's
   # forks of them and are pulled only as each fork's release workflow signed them for a version tag,

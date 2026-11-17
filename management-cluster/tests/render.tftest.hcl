@@ -570,7 +570,7 @@ run "controller_and_clusters_are_least_privilege" {
       talos = { imageSignatures = [
         { image = "factory.talos.dev/*", keyless = { issuer = "https://accounts.google.com", subject = "image-factory-signing@talos-production.iam.gserviceaccount.com" } },
         { image = "ghcr.io/siderolabs/*", keyless = { issuer = "https://accounts.google.com", subjectRegex = "^(releasemgr-svc@talos-production\\.iam\\.gserviceaccount\\.com|[^@]+@siderolabs\\.com)$" } },
-        { image = "registry.k8s.io/*", keyless = { issuer = "https://accounts.google.com", subject = "krel-trust@k8s-releng-prod.iam.gserviceaccount.com" } },
+        { image = "registry.k8s.io/*", keyless = { issuer = "https://accounts.google.com", subjectRegex = "^(krel-trust|promoter-summaries)@k8s-releng-prod\\.iam\\.gserviceaccount\\.com$" } },
       ] }
       watch     = { stallMinutes = 20 }
       interface = { extraNamespaces = [], offerHARules = false, headlampSignIn = false, headlampActions = false, apiAuditLog = false }
@@ -680,7 +680,7 @@ run "controller_and_clusters_are_least_privilege" {
       ] == [[
         ["factory.talos.dev/*", "https://accounts.google.com", "image-factory-signing@talos-production.iam.gserviceaccount.com"],
         ["ghcr.io/siderolabs/*", "https://accounts.google.com", "^(releasemgr-svc@talos-production\\.iam\\.gserviceaccount\\.com|[^@]+@siderolabs\\.com)$"],
-        ["registry.k8s.io/*", "https://accounts.google.com", "krel-trust@k8s-releng-prod.iam.gserviceaccount.com"],
+        ["registry.k8s.io/*", "https://accounts.google.com", "^(krel-trust|promoter-summaries)@k8s-releng-prod\\.iam\\.gserviceaccount\\.com$"],
         ["ghcr.io/kubehenge/cluster-api-bootstrap-provider-talos", "https://token.actions.githubusercontent.com", "^https://github\\.com/kubehenge/cluster-api-bootstrap-provider-talos/\\.github/workflows/release\\.yaml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$"],
         ["ghcr.io/kubehenge/cluster-api-control-plane-provider-talos", "https://token.actions.githubusercontent.com", "^https://github\\.com/kubehenge/cluster-api-control-plane-provider-talos/\\.github/workflows/release\\.yaml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$"],
     ]]

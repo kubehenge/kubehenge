@@ -31,10 +31,11 @@ talos:
       keyless:
         issuer: https://accounts.google.com
         subjectRegex: ^(releasemgr-svc@talos-production\.iam\.gserviceaccount\.com|[^@]+@siderolabs\.com)$
+    # Kubernetes' image promoter signs with two accounts only its production jobs use.
     - image: registry.k8s.io/*
       keyless:
         issuer: https://accounts.google.com
-        subject: krel-trust@k8s-releng-prod.iam.gserviceaccount.com
+        subjectRegex: ^(krel-trust|promoter-summaries)@k8s-releng-prod\.iam\.gserviceaccount\.com$
 
 interface:
   # Namespace the web interface creates clusters in; it changes and hands out kubeconfigs only of
