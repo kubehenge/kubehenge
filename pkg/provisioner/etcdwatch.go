@@ -82,22 +82,24 @@ type EtcdWatch struct {
 	mu sync.Mutex
 	// silentSince is when each cluster's API first did not answer in the looks since it last did.
 	silentSince map[string]time.Time
-	// etcdRepairs is what was done to start the Failed etcd of each control-plane machine again. An
-	// entry goes once etcd runs or the machine is gone.
-	etcdRepairs map[string]etcdRepair
 }
 
 // maxEtcdRepairs is how often a machine's Failed etcd is started again before it is left to a
 // person. A failure a reboot or a bootstrap cannot fix would otherwise cost a reboot every boot.
 const maxEtcdRepairs = 3
 
-// etcdRepair is the starts of a machine's Failed etcd since it last ran.
+// EtcdRepairsAnnotation on a control-plane Machine holds the starts of its Failed etcd since it last
+// ran, as JSON. It lives on the Machine so that a controller restart or a new leader keeps the
+// count, and goes with the Machine. Removing it by hand lets the controller start etcd again.
+const EtcdRepairsAnnotation = "kubehenge.dev/etcd-repairs"
+
+// etcdRepair is the value of EtcdRepairsAnnotation.
 type etcdRepair struct {
-	// boot is the one the machine was last rebooted from, which still reads Failed while it shuts
+	// Boot is the one the machine was last rebooted from, which still reads Failed while it shuts
 	// down.
-	boot    string
-	repairs int
-	gaveUp  bool
+	Boot    string `json:"boot,omitempty"`
+	Repairs int    `json:"repairs"`
+	GaveUp  bool   `json:"gaveUp,omitempty"`
 }
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable.
@@ -205,14 +207,12 @@ func (w *EtcdWatch) controlPlaneVMs(ctx context.Context, c *clusterv1.Cluster, l
 func (w *EtcdWatch) watch(ctx context.Context, c *clusterv1.Cluster, look *pveLook) ([]EtcdMemberHealth, error) {
 	if !c.DeletionTimestamp.IsZero() {
 		w.forgetSilence(c)
-		w.forgetEtcd(c, nil)
 		return nil, nil
 	}
 	cps, err := w.controlPlaneVMs(ctx, c, look)
 	if err != nil {
 		return nil, err
 	}
-	w.forgetEtcd(c, cps)
 	actx, cancel := context.WithTimeout(ctx, watchReadTimeout)
 	defer cancel()
 	apiUp := w.APIs == nil || w.APIs.Ready(actx, c) == nil
@@ -235,22 +235,6 @@ func (w *EtcdWatch) forgetSilence(c *clusterv1.Cluster) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	delete(w.silentSince, remoteKey(c))
-}
-
-// etcdRepairKey is a control-plane machine's key in etcdRepairs.
-func etcdRepairKey(c *clusterv1.Cluster, machine string) string { return remoteKey(c) + "/" + machine }
-
-// forgetEtcd drops the repairs held of the cluster's machines other than those kept, which are gone
-// or being deleted.
-func (w *EtcdWatch) forgetEtcd(c *clusterv1.Cluster, kept []cpMachine) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	for key := range w.etcdRepairs {
-		machine, ours := strings.CutPrefix(key, remoteKey(c)+"/")
-		if ours && !slices.ContainsFunc(kept, func(m cpMachine) bool { return m.machine.Name == machine }) {
-			delete(w.etcdRepairs, key)
-		}
-	}
 }
 
 // quorumNotApplicable is true for a cluster whose silence says nothing: paused, being restored, or
@@ -351,11 +335,11 @@ func (w *EtcdWatch) talosMember(ctx context.Context, c *clusterv1.Cluster, m *cl
 	case err != nil:
 	case etcd.State == talosEtcdFailed:
 		w.startEtcd(ctx, c, m, node, etcd)
-	case etcd.State == talosEtcdRunning:
+	case etcd.State == talosEtcdRunning && m.Annotations[EtcdRepairsAnnotation] != "":
 		// etcd that fails again after running is started again, as often as the first time.
-		w.mu.Lock()
-		delete(w.etcdRepairs, etcdRepairKey(c, m.Name))
-		w.mu.Unlock()
+		if ferr := w.recordRepair(ctx, m.DeepCopy(), nil); ferr != nil {
+			ctrl.LoggerFrom(ctx).WithName("etcd-watch").Error(ferr, "forgetting the starts of etcd that runs again")
+		}
 	}
 	switch {
 	case err != nil:
@@ -372,9 +356,11 @@ func (w *EtcdWatch) talosMember(ctx context.Context, c *clusterv1.Cluster, m *cl
 // node would wait for it. Any other node is rebooted, at most once per boot, since a bootstrap
 // would make it a cluster of its own, empty. After maxEtcdRepairs the node is left Failed. A
 // restore or a Talos upgrade owns the nodes while it runs.
+//
+// Each start is counted on the Machine before it is made, so that a controller that stops between
+// the two undercounts rather than starts etcd twice.
 func (w *EtcdWatch) startEtcd(ctx context.Context, c *clusterv1.Cluster, m *clusterv1.Machine, node TalosNode, etcd TalosService) {
-	_, upgrading := c.Annotations[TalosUpgradingAnnotation]
-	if ptr.Deref(c.Spec.Paused, false) || RestoreInProgress(c) || upgrading {
+	if leftToOthers(c) {
 		return
 	}
 	log := ctrl.LoggerFrom(ctx).WithName("etcd-watch").WithValues("cluster", c.Namespace+"/"+c.Name, "machine", m.Name)
@@ -383,66 +369,128 @@ func (w *EtcdWatch) startEtcd(ctx context.Context, c *clusterv1.Cluster, m *clus
 		log.Error(err, "reading the boot of a node whose etcd Talos left Failed")
 		return
 	}
-	key := etcdRepairKey(c, m.Name)
-	w.mu.Lock()
-	r := w.etcdRepairs[key]
-	w.mu.Unlock()
-	if r.gaveUp || r.boot == boot {
+	// The round listed the cluster a while ago. An upgrade the upgrader recorded since then, or a
+	// start another controller counted, shows only past the cache.
+	live := liveOr(w.Reader, w.Client)
+	fresh, machine := &clusterv1.Cluster{}, &clusterv1.Machine{}
+	if err = live.Get(ctx, client.ObjectKeyFromObject(c), fresh); err == nil {
+		err = live.Get(ctx, client.ObjectKeyFromObject(m), machine)
+	}
+	if err != nil {
+		log.Error(err, "reading the cluster and the machine again")
+		return
+	}
+	r := repairsOf(machine)
+	if leftToOthers(fresh) || r.GaveUp || r.Boot == boot {
 		return
 	}
 	note := "Talos left etcd on " + m.Name + " Failed"
 	if etcd.Event != "" {
 		note += ": " + etcd.Event
 	}
-	if r.repairs >= maxEtcdRepairs {
-		r.gaveUp = true
-		w.keepRepair(key, r)
-		note += fmt.Sprintf(". Left it Failed after %d starts since it last ran.", r.repairs)
+	if r.Repairs >= maxEtcdRepairs {
+		r.GaveUp = true
+		if err = w.recordRepair(ctx, machine, &r); err != nil {
+			log.Error(err, "giving up on etcd")
+			return
+		}
+		note += fmt.Sprintf(". Left it Failed after %d starts since it last ran.", r.Repairs)
 		log.Info(note)
 		w.event(c, "TalosEtcdLeftFailed", note)
 		return
 	}
-	only, err := w.onlyEtcd(ctx, c, m)
+	only, err := w.onlyEtcd(ctx, fresh, machine)
 	if err != nil {
 		log.Error(err, "telling whether etcd on the node is the cluster's only one")
 		return
 	}
-	// After a bootstrap Talos took, a node whose etcd fails once more in the same boot is
-	// bootstrapped again, as a restore does. Talos refuses one while etcd has data, which a
-	// reboot starts from instead.
+	var done string
 	if only {
-		err = node.Bootstrap(ctx)
-		switch {
-		case err == nil:
-			note += ". Bootstrapped it again."
-		case errors.Is(err, errTalosNotReady):
-			log.Error(err, "bootstrapping etcd again")
-			return
-		default:
-			note += fmt.Sprintf(". Talos refused to bootstrap it again: %v", err)
-		}
+		done, err = w.bootstrapEtcd(ctx, machine, node, boot, r)
+	} else {
+		done, err = w.rebootEtcd(ctx, machine, node, boot, r)
 	}
-	if !only || err != nil {
-		if err := node.Reboot(ctx); err != nil {
-			log.Error(err, "rebooting a node whose etcd Talos left Failed")
-			return
-		}
-		note += ". Rebooted the node to start etcd again."
-		r.boot = boot
+	if err != nil {
+		log.Error(err, "starting etcd again")
+		return
 	}
-	r.repairs++
-	w.keepRepair(key, r)
+	note += done
 	log.Info(note)
 	w.event(c, "TalosEtcdFailed", note)
 }
 
-func (w *EtcdWatch) keepRepair(key string, r etcdRepair) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.etcdRepairs == nil {
-		w.etcdRepairs = map[string]etcdRepair{}
+// bootstrapEtcd bootstraps the node's etcd, counting the start on the machine first, and says what
+// it did. After a bootstrap Talos took, a node whose etcd fails once more in the same boot is
+// bootstrapped again, as a restore does. Talos refuses one while etcd has data, which a reboot
+// starts from instead.
+func (w *EtcdWatch) bootstrapEtcd(ctx context.Context, machine *clusterv1.Machine, node TalosNode, boot string, r etcdRepair) (string, error) {
+	counted := r
+	counted.Repairs++
+	if err := w.recordRepair(ctx, machine, &counted); err != nil {
+		return "", err
 	}
-	w.etcdRepairs[key] = r
+	err := node.Bootstrap(ctx)
+	switch {
+	case err == nil:
+		return ". Bootstrapped it again.", nil
+	case errors.Is(err, errTalosNotReady):
+		// Not a start, so it does not count.
+		return "", errors.Join(err, w.recordRepair(ctx, machine, &r))
+	}
+	refused := fmt.Sprintf(". Talos refused to bootstrap it again: %v", err)
+	done, err := w.rebootEtcd(ctx, machine, node, boot, r)
+	return refused + done, err
+}
+
+// rebootEtcd reboots the node, counting the start and the boot on the machine first, and says what
+// it did.
+func (w *EtcdWatch) rebootEtcd(ctx context.Context, machine *clusterv1.Machine, node TalosNode, boot string, r etcdRepair) (string, error) {
+	r.Repairs++
+	r.Boot = boot
+	if err := w.recordRepair(ctx, machine, &r); err != nil {
+		return "", err
+	}
+	if err := node.Reboot(ctx); err != nil {
+		return "", err //nolint:wrapcheck // the node's error names the node and the call
+	}
+	return ". Rebooted the node to start etcd again.", nil
+}
+
+// leftToOthers says whether the cluster's nodes are someone else's to restart: it is paused, being
+// deleted, restored or upgraded.
+func leftToOthers(c *clusterv1.Cluster) bool {
+	_, upgrading := c.Annotations[TalosUpgradingAnnotation]
+	return ptr.Deref(c.Spec.Paused, false) || !c.DeletionTimestamp.IsZero() || RestoreInProgress(c) || upgrading
+}
+
+// repairsOf reads EtcdRepairsAnnotation. A value that does not read, as after a hand edit, counts as
+// none.
+func repairsOf(m *clusterv1.Machine) etcdRepair {
+	var r etcdRepair
+	_ = json.Unmarshal([]byte(m.Annotations[EtcdRepairsAnnotation]), &r)
+	return r
+}
+
+// recordRepair writes r on the machine as read, or removes the annotation for nil. A machine another
+// writer changed since is refused, so that two controllers never act on one count.
+func (w *EtcdWatch) recordRepair(ctx context.Context, m *clusterv1.Machine, r *etcdRepair) error {
+	before := m.DeepCopy()
+	if r == nil {
+		delete(m.Annotations, EtcdRepairsAnnotation)
+	} else {
+		raw, err := json.Marshal(r)
+		if err != nil {
+			return fmt.Errorf("encoding etcd's starts: %w", err)
+		}
+		if m.Annotations == nil {
+			m.Annotations = map[string]string{}
+		}
+		m.Annotations[EtcdRepairsAnnotation] = string(raw)
+	}
+	if err := w.Client.Patch(ctx, m, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+		return fmt.Errorf("recording etcd's starts on machine %s: %w", m.Name, err)
+	}
+	return nil
 }
 
 func (w *EtcdWatch) event(c *clusterv1.Cluster, reason, note string) {

@@ -709,7 +709,9 @@ Component names are `out_<name>`, with hyphens as underscores. Alloy drops what 
   - "Talos refused to bootstrap it again" means etcd on the only node already has data.
   - "Rebooted the node to start etcd again" means any other such node was rebooted, at most once per boot.
   - Nothing happens while the cluster is paused, restoring or upgrading Talos.
-- **`TalosEtcdLeftFailed`**, "… Left it Failed after 3 starts since it last ran", means the controller stopped starting etcd on that node. Read why with `talosctl service etcd` and `talosctl logs etcd`. Once etcd runs, or the machine is replaced, the count starts again.
+- **`TalosEtcdLeftFailed`**, "… Left it Failed after 3 starts since it last ran", means the controller stopped starting etcd on that node. Read why with `talosctl service etcd` and `talosctl logs etcd`.
+  - The count is the Machine's `kubehenge.dev/etcd-repairs` annotation. It starts again once etcd runs or the machine is replaced.
+  - To have the controller try again, remove it: `kubectl --namespace NAMESPACE annotate machine MACHINE kubehenge.dev/etcd-repairs-`.
 
 ### etcd snapshots and restores
 

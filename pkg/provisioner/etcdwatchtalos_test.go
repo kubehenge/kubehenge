@@ -141,9 +141,9 @@ func TestEtcdWatchRebootsOnARefusedBootstrap(t *testing.T) {
 	}
 }
 
-// What is held of a rebooted node goes once its etcd runs, so that etcd failing again in the same
-// boot is started again, and once its machine is gone.
-func TestEtcdWatchForgetsRebootedNodes(t *testing.T) {
+// The starts of a rebooted node are counted on its Machine, with the boot it was rebooted from, and
+// forgotten once its etcd runs, so that etcd failing again in the same boot is started again.
+func TestEtcdWatchForgetsRepairsOnceEtcdRuns(t *testing.T) {
 	t.Parallel()
 	f := newTalosEtcdFixture(t, true, nil)
 	f.talos.service = map[string]TalosService{
@@ -151,41 +151,82 @@ func TestEtcdWatchForgetsRebootedNodes(t *testing.T) {
 		"10.0.0.13": {State: talosEtcdFailed, Event: fakePullFailure},
 	}
 	f.look(0)
-	held := func() []string {
-		f.w.mu.Lock()
-		defer f.w.mu.Unlock()
-		keys := make([]string, 0, len(f.w.etcdRepairs))
-		for key := range f.w.etcdRepairs {
-			keys = append(keys, key[strings.LastIndex(key, "/")+1:])
+	for _, name := range []string{"web-cp-1", "web-cp-2"} {
+		if got := f.machine(name).Annotations[EtcdRepairsAnnotation]; got != `{"boot":"0","repairs":1}` {
+			t.Fatalf("%s: %s %q", name, EtcdRepairsAnnotation, got)
 		}
-		slices.Sort(keys)
-		return keys
-	}
-	if got := held(); !slices.Equal(got, []string{"web-cp-1", "web-cp-2"}) {
-		t.Fatalf("held %v", got)
 	}
 	f.talos.service["10.0.0.12"] = TalosService{State: talosEtcdRunning, Healthy: true}
-	f.remove("web-cp-2")
 	f.look(time.Minute)
-	if got := held(); len(got) > 0 {
-		t.Errorf("held %v once etcd runs and the machine is gone", got)
+	if got, held := f.machine("web-cp-1").Annotations[EtcdRepairsAnnotation]; held {
+		t.Errorf("%s %q once etcd runs", EtcdRepairsAnnotation, got)
+	}
+	if _, held := f.machine("web-cp-2").Annotations[EtcdRepairsAnnotation]; !held {
+		t.Errorf("%s gone while etcd stays Failed", EtcdRepairsAnnotation)
 	}
 	f.talos.service["10.0.0.12"] = TalosService{State: talosEtcdFailed, Event: fakePullFailure}
 	f.look(time.Minute)
 	if !slices.Equal(f.talos.rebooted, []string{"10.0.0.12", "10.0.0.13", "10.0.0.12"}) {
 		t.Errorf("rebooted %v", f.talos.rebooted)
 	}
-	c := f.cluster()
-	c.Finalizers = []string{clusterv1.ClusterFinalizer}
-	if err := f.kube.Update(context.Background(), c); err != nil {
-		t.Fatal(err)
+}
+
+// A controller that starts again, or another one that takes the lease, reads the count from the
+// Machine: two watches one after the other together start etcd maxEtcdRepairs times and give up
+// once.
+func TestEtcdWatchKeepsTheCountAcrossControllers(t *testing.T) {
+	t.Parallel()
+	f := newTalosEtcdFixture(t, true, nil)
+	f.failEtcd("10.0.0.12")
+	first := f.w
+	second := &EtcdWatch{
+		Client: first.Client, Reader: first.Reader, ClassNamespace: first.ClassNamespace, Proxmox: first.Proxmox,
+		APIs: first.APIs, Events: first.Events, Workload: first.Workload, Talos: first.Talos, Now: first.Now,
 	}
-	if err := f.kube.Delete(context.Background(), c); err != nil {
-		t.Fatal(err)
+	for boot := range 6 {
+		f.w = first
+		if boot >= 2 {
+			f.w = second
+		}
+		f.talos.boots = map[string]int{"10.0.0.12": boot}
+		f.look(3 * time.Minute)
 	}
-	f.look(time.Minute)
-	if got := held(); len(got) > 0 {
-		t.Errorf("held %v once the cluster is being deleted", got)
+	if len(f.talos.rebooted) != 3 {
+		t.Errorf("rebooted %v", f.talos.rebooted)
+	}
+	got := recorded(f.events)
+	gaveUp := slices.DeleteFunc(slices.Clone(got), func(e string) bool { return !strings.Contains(e, "TalosEtcdLeftFailed") })
+	if len(got) != 4 || len(gaveUp) != 1 {
+		t.Errorf("events %v", got)
+	}
+}
+
+// An upgrade the upgrader records after the round listed the cluster still keeps the watch off its
+// nodes.
+func TestEtcdWatchReadsTheClusterAgainBeforeAStart(t *testing.T) {
+	t.Parallel()
+	for _, only := range []bool{false, true} {
+		f := newTalosEtcdFixture(t, true, nil)
+		if only {
+			f.remove("web-cp-1", "web-cp-2")
+		}
+		f.failEtcd("10.0.0.11")
+		listed := f.cluster()
+		stored := listed.DeepCopy()
+		stored.Annotations = map[string]string{TalosUpgradingAnnotation: "web-cp-0 to v1.14.6 since 2026-11-17T10:00:00Z"}
+		if err := f.kube.Update(context.Background(), stored); err != nil {
+			t.Fatal(err)
+		}
+		look, err := f.w.readProxmox(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.w.watch(context.Background(), listed, look); err != nil {
+			t.Fatal(err)
+		}
+		if calls := f.talos.restoreCalls(); len(calls) > 0 || len(f.talos.rebooted) > 0 {
+			t.Errorf("only %t: calls %v, rebooted %v", only, calls, f.talos.rebooted)
+		}
 	}
 }
 
