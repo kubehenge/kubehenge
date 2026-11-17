@@ -80,7 +80,7 @@ Each Kubehenge release makes templates from one build of each node OS's cloud im
 
 The image comes from the publisher's mirror (`repo.almalinux.org`, `dl.rockylinux.org`). Once a newer minor release of the node OS replaces it there, it comes from the publisher's vault (`vault.almalinux.org`, `dl.rockylinux.org`).
 
-Every package a build installs comes from the image's minor release, such as 10.2. A newer minor release reaches templates only with a Kubehenge release that pins its image. Once the publisher moves the minor release to its vault, the build reads its packages there. EPEL's containerd follows the same minor release, from EPEL's archive once it moves there.
+Every package a build installs comes from the image's minor release, such as 10.2. A newer minor release reaches templates only with a Kubehenge release that pins its image. Once the publisher moves the minor release to its vault, the build reads every repository of the node OS there. kubeadm's containerd comes from the same minor release's EPEL folder. On Rocky Linux it comes from EPEL's archive once EPEL moves the folder there.
 
 ### Package checks
 
