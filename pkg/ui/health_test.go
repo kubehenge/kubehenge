@@ -707,6 +707,76 @@ func TestPodLogsForThoseWhoMayTakeTheKubeconfig(t *testing.T) {
 	expect(t, dev.do("GET", "/api/clusters/default/one/pods/web/gone/logs?container=api", ""), http.StatusNotFound)
 }
 
+// A crash-looping container read just as the kubelet restarts it has a newest run with no lines
+// yet. The run before it, the one that stopped, tells why, where the kubelet still has it.
+func TestPodLogsOfARunJustStarted(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct {
+		restarts      int32
+		previousLog   string
+		previousFails bool
+		want          []string
+		wantPrevious  bool
+		previousReads int
+	}{
+		"the stopped run's lines": {restarts: 14, previousLog: "exec: no-such-command\n", want: []string{"exec: no-such-command"}, wantPrevious: true, previousReads: 1},
+		"the stopped run gone":    {restarts: 14, previousFails: true, want: []string{}, wantPrevious: true, previousReads: 1},
+		"the stopped run empty":   {restarts: 14, want: []string{}, wantPrevious: true, previousReads: 1},
+		"never restarted":         {want: []string{}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h, workloads := healthHarness(t)
+			pod, err := workloads.kube.CoreV1().Pods("web").Get(t.Context(), "api-7d9", metav1.GetOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			api := &pod.Status.ContainerStatuses[1]
+			api.RestartCount = tc.restarts
+			if tc.restarts == 0 {
+				api.LastTerminationState = corev1.ContainerState{}
+			}
+			if _, err := workloads.kube.CoreV1().Pods("web").UpdateStatus(t.Context(), pod, metav1.UpdateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			var mu sync.Mutex
+			previousReads := 0
+			workloads.kube.PrependReactor("get", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+				g, ok := a.(k8stesting.GenericActionImpl)
+				if !ok || a.GetSubresource() != "log" {
+					return false, nil, nil
+				}
+				opts, ok := g.Value.(*corev1.PodLogOptions)
+				if !ok || !opts.Previous {
+					return true, &runtime.Unknown{}, nil
+				}
+				mu.Lock()
+				previousReads++
+				mu.Unlock()
+				if tc.previousFails {
+					return true, nil, errors.New("unable to retrieve container logs")
+				}
+				return true, &runtime.Unknown{Raw: []byte(tc.previousLog)}, nil
+			})
+			dev := h.browser()
+			dev.signIn("dev@pve")
+			rec := dev.do("GET", "/api/clusters/default/one/pods/web/api-7d9/logs?container=api", "")
+			expect(t, rec, http.StatusOK)
+			var logs podLogView
+			if err := json.Unmarshal(rec.Body.Bytes(), &logs); err != nil {
+				t.Fatal(err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if !slices.Equal(logs.Lines, tc.want) || logs.Previous != tc.wantPrevious || previousReads != tc.previousReads {
+				t.Errorf("logs = %+v after %d reads of the previous run, want lines %q, previous %v, %d reads",
+					logs, previousReads, tc.want, tc.wantPrevious, tc.previousReads)
+			}
+		})
+	}
+}
+
 func TestReadLinesKeepsTheLast(t *testing.T) {
 	t.Parallel()
 	var log strings.Builder

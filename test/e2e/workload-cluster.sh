@@ -1165,11 +1165,15 @@ refused health create pods -n e2e-health
 refused health delete nodes
 refused health-logs list pods -n e2e-health
 refused health-logs get secrets -n kube-system
-# Raw, as kubectl logs would first read the pod, which this identity may not. Without previous=true,
-# as the health page reads: the kubelet hands out the newest run, the crash, which it keeps, while
-# previous=true can name a run it has already removed.
+# Raw, as kubectl logs would first read the pod, which this identity may not. As the health page
+# reads: first the newest run, the crash, which the kubelet keeps. A restart just begun makes that a
+# run with nothing written yet, and then the run before it tells why.
 crash_log=$(KUBECONFIG="${work}/health-logs" kubectl get --raw "/api/v1/namespaces/e2e-health/pods/crasher/log") ||
     fail "the logs identity cannot read the pod's log"
+if [ -z "${crash_log}" ]; then
+    crash_log=$(KUBECONFIG="${work}/health-logs" kubectl get --raw "/api/v1/namespaces/e2e-health/pods/crasher/log?previous=true") ||
+        fail "the logs identity cannot read the pod's previous log"
+fi
 printf '%s' "${crash_log}" | grep -q no-such-command || fail "the pod's log does not tell why it stopped: ${crash_log}"
 wl delete namespace e2e-health --wait=false
 
