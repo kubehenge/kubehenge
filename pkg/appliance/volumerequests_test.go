@@ -1,97 +1,72 @@
 package appliance
 
 import (
-	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
-	"time"
 
-	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
-	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/kubehenge/kubehenge/pkg/backupstore"
 )
 
-// The controller asks for the sleeping store to store the etcd snapshots of clusters without a
-// bucket. The appliance wakes it with its own wake, keeps it awake through its own backup while the
-// request holds, and puts it back to sleep once the request is gone or has run out.
-func TestTheApplianceWakesTheStoreTheControllerAskedFor(t *testing.T) {
+// A look at the clusters' snapshots holds the store for LookLife alone, so that the disk detaches
+// soon after the Backups page closes. The appliance's own backups keep the long life.
+func TestALookAtTheSnapshotsHoldsTheStoreBriefly(t *testing.T) {
 	t.Parallel()
-	a := &Appliance{Dir: t.TempDir(), vmHosts: hostsAt(t, nil)}
-	if err := os.MkdirAll(a.etcdBackupDir(), 0o700); err != nil {
+	a, _ := newAppliance(t)
+	kubeconfig := "apiVersion: v1\nkind: Config\nclusters: [{name: m, cluster: {server: 'https://127.0.0.1:1'}}]\n" +
+		"users: [{name: m, user: {token: t}}]\ncontexts: [{name: m, context: {cluster: m, user: m}}]\ncurrent-context: m\n"
+	if err := os.MkdirAll(filepath.Dir(a.KubeconfigPath()), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeJSONFile(a.etcdBackupFile("volume.json"), &volumeBackupKeys{}); err != nil {
+	if err := os.WriteFile(a.KubeconfigPath(), []byte(kubeconfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
-	asleep := storeDeployment(0, "0")
-	kube := fake.NewClientset(asleep, zonesToken())
+	look, err := a.SnapshotVolume()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := look.(*backupstore.Volume); !ok || v.Life != backupstore.LookLife || v.Annotation != backupstore.InterfaceWakeAnnotation {
+		t.Fatalf("a look holds the store as %+v", look)
+	}
+	if v := a.storeVolume(fake.NewClientset()); v.Life != 0 {
+		t.Fatalf("the appliance's backups hold the store for %s, not WakeRequestLife", v.Life)
+	}
+}
+
+// The controller wakes the store for the clusters' etcd snapshots without the appliance, and the
+// appliance wakes it for its own backups. Each holds it awake under its own request, so that a
+// snapshot ending leaves it up through the appliance's backup, and it sleeps once both are done.
+func TestTheApplianceAndTheControllerShareTheStore(t *testing.T) {
+	t.Parallel()
+	a := &Appliance{vmHosts: hostsAt(t, nil)}
 	// The store's pod is ready as soon as it is started.
-	kube.PrependReactor("get", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
-		obj, err := kube.Tracker().Get(appsv1.SchemeGroupVersion.WithResource("deployments"), backupstore.Namespace, backupstore.Service)
-		if err != nil {
-			return true, nil, err
-		}
-		d, ok := obj.(*appsv1.Deployment)
-		if !ok {
-			return true, nil, fmt.Errorf("the tracker holds %T", obj)
-		}
-		d = d.DeepCopy()
-		d.Status.ReadyReplicas = *d.Spec.Replicas
-		return true, d, nil
-	})
-	deps := kube.AppsV1().Deployments(backupstore.Namespace)
+	store := storeDeployment(0, "0")
+	store.Status.ReadyReplicas = 1
+	kube := fake.NewClientset(store, zonesToken())
 	ctx := t.Context()
 	replicas := func() int32 {
 		t.Helper()
-		d, err := deps.Get(ctx, backupstore.Service, metav1.GetOptions{})
+		d, err := kube.AppsV1().Deployments(backupstore.Namespace).Get(ctx, backupstore.Service, metav1.GetOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return *d.Spec.Replicas
 	}
-	ask := func(at string) {
-		t.Helper()
-		d, err := deps.Get(ctx, backupstore.Service, metav1.GetOptions{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		key := backupstore.WakeRequestKey(backupstore.WakeRequestAnnotation, "snapshots")
-		if at == "" {
-			delete(d.Annotations, key)
-		} else {
-			d.Annotations[key] = at
-		}
-		if _, err := deps.Update(ctx, d, metav1.UpdateOptions{}); err != nil {
-			t.Fatal(err)
-		}
+	controller := &backupstore.Volume{Kube: kube, VMs: hostsAt(t, nil)}
+	const snapshots = "snapshots of a/web"
+	if err := controller.Wake(ctx, snapshots); err == nil || replicas() != 1 {
+		t.Fatalf("the controller's wake left the store at %d replicas: %v", replicas(), err)
 	}
-
-	if err := a.ServeVolumeRequests(ctx, kube, now); err != nil || replicas() != 0 {
-		t.Fatalf("with no request the store runs %d replicas: %v", replicas(), err)
+	if err := a.wakeStore(ctx, kube); err != nil {
+		t.Fatal(err)
 	}
-	ask(now.Format(time.RFC3339))
-	if err := a.ServeVolumeRequests(ctx, kube, now); err != nil || replicas() != 1 {
-		t.Fatalf("the controller's request left the store at %d replicas: %v", replicas(), err)
+	if err := controller.Done(ctx, snapshots); err != nil || replicas() != 1 {
+		t.Fatalf("a snapshot ending put the store the appliance's backup holds to %d replicas: %v", replicas(), err)
 	}
-	// The appliance's own backup ends with the store asked for, and leaves it awake.
-	if err := restStore(ctx, kube, now.Add(time.Minute)); err != nil || replicas() != 1 {
-		t.Fatalf("a backup put the store the controller holds to %d replicas: %v", replicas(), err)
-	}
-	// A request the controller never took away runs out.
-	if err := a.ServeVolumeRequests(ctx, kube, now.Add(backupstore.WakeRequestLife+time.Minute)); err != nil || replicas() != 0 {
-		t.Fatalf("a request that ran out keeps the store at %d replicas: %v", replicas(), err)
-	}
-	ask(now.Format(time.RFC3339))
-	if err := a.ServeVolumeRequests(ctx, kube, now); err != nil || replicas() != 1 {
-		t.Fatalf("a second request left the store at %d replicas: %v", replicas(), err)
-	}
-	ask("")
-	if err := a.ServeVolumeRequests(ctx, kube, now); err != nil || replicas() != 0 {
-		t.Fatalf("once the request is gone the store keeps %d replicas: %v", replicas(), err)
+	if err := a.storeVolume(kube).Done(ctx, applianceHolder); err != nil || replicas() != 0 {
+		t.Fatalf("with no holder left the store keeps %d replicas: %v", replicas(), err)
 	}
 }

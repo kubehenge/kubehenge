@@ -77,8 +77,38 @@ func etcdStalled(err error) bool {
 	return slices.ContainsFunc(etcdStalls, func(s string) bool { return strings.Contains(err.Error(), s) })
 }
 
+// downloadRaced reports whether d is Proxmox VE failing to start a file download's task. Its
+// fork_worker reads the new worker's ID once and gives up when a SIGCHLD of another task ending
+// cuts the read off, which an apply's parallel requests make likely. A download makes nothing
+// before its worker runs, so it is safe to run again. A VM's create leaves its configuration
+// locked, so a run with one fails, as does one with any other error.
+func downloadRaced(d string) bool {
+	return strings.Contains(d, "got no worker upid") && strings.Contains(d, "Error downloading file from url")
+}
+
+// webhookStarting reports whether every error in d is the API server failing to reach an admission
+// webhook. That happens while the webhook's pod starts again after its node restarted, as in a
+// Talos upgrade. Helm's wait passes then, on readiness left from before the restart. Helm joins a
+// release's errors with " && ", so each part has to match. The failed release's next plan upgrades
+// it again, so running again is safe.
+func webhookStarting(d string) bool {
+	return !slices.ContainsFunc(strings.Split(d, " && "), func(part string) bool {
+		return !strings.Contains(part, "failed calling webhook") ||
+			!strings.Contains(part, "connect: no route to host") && !strings.Contains(part, "connect: connection refused")
+	})
+}
+
+// everyDiagnostic reports whether err is a tofu run with errors, all of which match is.
+func everyDiagnostic(err error, is func(string) bool) bool {
+	var f *tofuError
+	if !errors.As(err, &f) || len(f.diagnostics) == 0 {
+		return false
+	}
+	return !slices.ContainsFunc(f.diagnostics, func(d string) bool { return !is(d) })
+}
+
 // applyPlanned runs applyOnce, and again up to applyAttempts in all while a run fails on etcd timing
-// out a request.
+// out a request, on Proxmox VE not starting a download's task, or on a webhook not answering yet.
 func (a *Appliance) applyPlanned(ctx context.Context, j *Job, env []string, t *pve.Ticket, args ...string) error {
 	pause := etcdStallPause
 	if a.stallPause != 0 {
@@ -86,10 +116,21 @@ func (a *Appliance) applyPlanned(ctx context.Context, j *Job, env []string, t *p
 	}
 	for attempt := 1; ; attempt++ {
 		err := a.applyOnce(ctx, j, env, t, args...)
-		if err == nil || attempt == applyAttempts || !etcdStalled(err) {
+		var why string
+		switch {
+		case err == nil:
+			return nil
+		case etcdStalled(err):
+			why = "etcd timed out a request, which slow storage causes"
+		case everyDiagnostic(err, downloadRaced):
+			why = "Proxmox VE did not start a download's task, which another task ending at that moment causes"
+		case everyDiagnostic(err, webhookStarting):
+			why = "a webhook in the management cluster did not answer, which its pod restarting with its node causes"
+		}
+		if why == "" || attempt == applyAttempts {
 			return err
 		}
-		j.Add(fmt.Sprintf("etcd timed out a request, as slow storage makes it do. Running again in %s, attempt %d of %d", pause, attempt+1, applyAttempts))
+		j.Add(fmt.Sprintf("%s. Running again in %s, attempt %d of %d", why, pause, attempt+1, applyAttempts))
 		select {
 		case <-ctx.Done():
 			if errors.Is(context.Cause(ctx), ErrServiceStopped) {

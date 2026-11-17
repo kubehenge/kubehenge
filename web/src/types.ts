@@ -846,6 +846,8 @@ export interface ManagementSettings {
   siteCA?: string;
   /** The IANA time zone of schedules that name none. Empty, UTC. */
   timeZone?: string;
+  /** The VM IDs of new clusters' VMs and the VM templates, both ends included. Unset, the next free ID. */
+  workloadVMIDRange?: { start: number; end: number };
   /**
    * The proxy downloads go through. The address has no credentials. The server never sends the
    * password, only passwordSet. Sent back, an empty password keeps the saved one and clearPassword

@@ -1,0 +1,30 @@
+[highavailability]
+name=AlmaLinux $releasever - HighAvailability
+mirrorlist=https://mirrors.almalinux.org/mirrorlist/$releasever/highavailability?arch=x86_64_v2
+# baseurl=https://repo.almalinux.org/almalinux/$releasever/HighAvailability/x86_64_v2/os/
+enabled=0
+gpgcheck=1
+countme=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-10
+metadata_expire=86400
+enabled_metadata=0
+
+[highavailability-debuginfo]
+name=AlmaLinux $releasever - HighAvailability - Debug
+mirrorlist=https://mirrors.almalinux.org/mirrorlist/$releasever/highavailability-debug?arch=x86_64_v2
+# baseurl=https://vault.almalinux.org/$releasever/HighAvailability/debug/x86_64_v2/
+enabled=0
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-10
+metadata_expire=86400
+enabled_metadata=0
+
+[highavailability-source]
+name=AlmaLinux $releasever - HighAvailability - Source
+mirrorlist=https://mirrors.almalinux.org/mirrorlist/$releasever/highavailability-source?arch=x86_64_v2
+# baseurl=https://vault.almalinux.org/$releasever/HighAvailability/Source/
+enabled=0
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-10
+metadata_expire=86400
+enabled_metadata=0

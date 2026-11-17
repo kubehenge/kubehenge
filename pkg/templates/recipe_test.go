@@ -5,10 +5,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -109,14 +112,14 @@ func TestRecipesOfEveryNodeOS(t *testing.T) {
 				b.NodeOS = NodeOS{Family: f.Name(), Release: r.Name, FIPS: b.NodeOS.FIPS}
 				t.Run(b.NodeOS.String()+"/"+string(b.Distribution), func(t *testing.T) {
 					t.Parallel()
-					checkRecipe(t, f, r, &b)
+					checkRecipe(t, f, &r, &b)
 				})
 			}
 		}
 	}
 }
 
-func checkRecipe(t *testing.T, f Family, r Release, b *Bake) {
+func checkRecipe(t *testing.T, f Family, r *Release, b *Bake) {
 	t.Helper()
 	keys := f.Keys(r, b)
 	names := checkKeys(t, keys)
@@ -328,8 +331,8 @@ func TestFIPSBakes(t *testing.T) {
 			}
 			for _, fips := range []bool{true, false} {
 				b := Bake{Distribution: RKE2, NodeOS: NodeOS{Family: f.Name(), Release: r.Name, FIPS: fips}}
-				keys := f.Keys(r, &b)
-				recipe, err := f.Recipe(r, &b, fakeKeys(keys))
+				keys := f.Keys(&r, &b)
+				recipe, err := f.Recipe(&r, &b, fakeKeys(keys))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -473,23 +476,23 @@ func TestRecipeRefuses(t *testing.T) {
 	kubeadm := Bake{NodeOS: DefaultNodeOS, Distribution: Kubeadm, KubernetesVersion: "v1.37.1"}
 	for name, try := range map[string]func() error{
 		"a missing key": func() error {
-			keys := fakeKeys(alma.Keys(release, &kubeadm))
+			keys := fakeKeys(alma.Keys(&release, &kubeadm))
 			delete(keys, "kubernetes")
-			_, err := alma.Recipe(release, &kubeadm, keys)
+			_, err := alma.Recipe(&release, &kubeadm, keys)
 			return err
 		},
 		"a Kubernetes version that is none": func() error {
 			b := kubeadm
 			b.KubernetesVersion = "1.37"
-			_, err := alma.Recipe(release, &b, fakeKeys(alma.Keys(release, &kubeadm)))
+			_, err := alma.Recipe(&release, &b, fakeKeys(alma.Keys(&release, &kubeadm)))
 			return err
 		},
 		"Talos": func() error {
-			_, err := alma.Recipe(release, &Bake{NodeOS: DefaultNodeOS.Base(), Distribution: Talos, TalosVersion: DefaultTalosVersion}, nil)
+			_, err := alma.Recipe(&release, &Bake{NodeOS: DefaultNodeOS.Base(), Distribution: Talos, TalosVersion: DefaultTalosVersion}, nil)
 			return err
 		},
 		"Talos on Leap": func() error {
-			_, err := leapFamily.Recipe(leapRelease, &Bake{Distribution: Talos}, nil)
+			_, err := leapFamily.Recipe(&leapRelease, &Bake{Distribution: Talos}, nil)
 			return err
 		},
 	} {
@@ -501,10 +504,10 @@ func TestRecipeRefuses(t *testing.T) {
 
 func TestRepositoryFile(t *testing.T) {
 	t.Parallel()
-	got := almaLinux10EL.containerd.file()
+	got := almaLinux10EL.containerd("10.2").file()
 	want := `[kubehenge-containerd]
 name=AlmaLinux EPEL 10 for x86-64-v2 (containerd)
-baseurl=https://epel.repo.almalinux.org/$releasever${releasever_minor:+z}/x86_64_v2/
+baseurl=https://epel.repo.almalinux.org/10.2/x86_64_v2/
 enabled=1
 gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/kubehenge-almalinux-epel.asc
@@ -536,9 +539,12 @@ func TestPolicyRepositoriesSignTheirMetadata(t *testing.T) {
 	}
 }
 
+// The compose reads the minor release of the family's pinned build. Fails a manifest that names the
+// major release alone, which reads whichever minor release is newest. The release is a YAML string,
+// since rpm-ostree refuses a float.
 func TestManifest(t *testing.T) {
 	t.Parallel()
-	want := `releasever: 10
+	want := `releasever: "10.2"
 repos:
   - baseos
   - appstream
@@ -552,17 +558,186 @@ include:
   - minimal/manifest.yaml
   - standard/generic-growfs.yaml
 `
-	if got := almaLinux10EL.manifest(Kubeadm); got != want {
+	if got := almaLinux10EL.manifest(Kubeadm, "10.2"); got != want {
 		t.Errorf("got\n%s\nwant\n%s", got, want)
+	}
+	var parsed map[string]any
+	if err := yaml.Unmarshal([]byte(want), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := parsed["releasever"].(string); !ok || got != "10.2" {
+		t.Errorf("releasever parses as %T %v, want the string 10.2", parsed["releasever"], parsed["releasever"])
 	}
 	// RKE2 and k3s install into /usr/local at boot, so it lives in /var on their nodes.
 	for _, d := range []Distribution{RKE2, K3s} {
-		if got := almaLinux10EL.manifest(d); !strings.Contains(got, "\nopt-usrlocal: \"var\"\n") {
+		if got := almaLinux10EL.manifest(d, "10.2"); !strings.Contains(got, "\nopt-usrlocal: \"var\"\n") {
 			t.Errorf("%s's manifest:\n%s", d, got)
 		}
 	}
-	if got := rocky10EL.manifest(Kubeadm); !strings.Contains(got, "  - rocky-repos\n") || !strings.Contains(got, `distro: "rocky10"`) {
+	if got := rocky10EL.manifest(Kubeadm, "10.2"); !strings.Contains(got, "  - rocky-repos\n") || !strings.Contains(got, `distro: "rocky10"`) {
 		t.Errorf("Rocky Linux's manifest:\n%s", got)
+	}
+	for _, f := range []Family{almaLinux{}, rocky{}} {
+		for _, r := range f.Releases() {
+			minor, _, _ := strings.Cut(r.Build, "-")
+			b := Bake{Distribution: RKE2, NodeOS: NodeOS{Family: f.Name(), Release: r.Name}}
+			recipe, err := f.Recipe(&r, &b, fakeKeys(f.Keys(&r, &b)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, files := parseCloudConfig(t, recipe.UserData)
+			if got, want := files["el/manifest.yaml"], "releasever: \""+minor+"\"\n"; !strings.HasPrefix(got, want) {
+				t.Errorf("%s %s, build %s: the manifest starts\n%s\nwant %q", f.Title(), r.Name, r.Build, got, want)
+			}
+		}
+	}
+}
+
+// elBakes are a bake of each distribution of every EL family's releases, with their recipe's files.
+func elBakes(t *testing.T) []elBake {
+	t.Helper()
+	var bakes []elBake
+	for _, f := range []Family{almaLinux{}, rocky{}} {
+		for _, r := range f.Releases() {
+			for _, d := range []Distribution{RKE2, K3s, Kubeadm, Talos} {
+				b := Bake{Distribution: d, NodeOS: NodeOS{Family: f.Name(), Release: r.Name}, KubernetesVersion: "v1.37.1"}
+				if d == Talos {
+					b = Bake{Distribution: Talos, NodeOS: b.NodeOS, TalosVersion: "v1.14.5", Talos: testTalosPin}
+				}
+				recipe, err := f.Recipe(&r, &b, fakeKeys(f.Keys(&r, &b)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, files := parseCloudConfig(t, recipe.UserData)
+				minor, _, _ := strings.Cut(r.Build, "-")
+				bakes = append(bakes, elBake{f, r, d, minor, files})
+			}
+		}
+	}
+	return bakes
+}
+
+type elBake struct {
+	family       Family
+	release      Release
+	distribution Distribution
+	minor        string
+	files        map[string]string
+}
+
+func (b *elBake) String() string {
+	return fmt.Sprintf("%s %s (build %s), %s", b.family.Title(), b.release.Name, b.release.Build, b.distribution)
+}
+
+// Every package of a bake comes from the minor release of the pinned build: the compose's, the
+// builder's own and node.sh's. Fails a step that reads the family's files as they come, whose
+// $releasever is the major release and so reads whichever minor release is newest.
+func TestTheComposeReadsTheBuildsMinorRelease(t *testing.T) {
+	t.Parallel()
+	for _, b := range elBakes(t) {
+		if got := b.files["el/release"]; got != b.minor+"\n" {
+			t.Errorf("%s: el/release is %q, want %q", &b, got, b.minor+"\n")
+		}
+		for name, content := range b.files {
+			if strings.HasPrefix(name, "repos/") && strings.Contains(content, "$releasever") {
+				t.Errorf("%s: %s reads dnf's release:\n%s", &b, name, content)
+			}
+		}
+		if repo, ok := b.files["repos/containerd.repo"]; ok && !strings.Contains(repo, "/"+b.minor+"/") {
+			t.Errorf("%s: containerd comes from another minor release:\n%s", &b, repo)
+		}
+	}
+	// Each pins the files its dnf reads, before its first read of them, fetch_mirrors among them.
+	// node.sh's dnf reads its copies in ${repos}, never the image's own files.
+	for _, s := range []struct{ name, release, pin, read string }{
+		{"el/build.sh", "\nread -r release < el/release\n", "\npin_release /etc/yum.repos.d \"${release}\"\n", "\nuse_metalinks /etc/yum.repos.d\n"},
+		{"el/node.sh", "\nread -r release < \"${files}/el/release\"\n", "\npin_release \"${repos}\" \"${release}\"\n", "\ndnf -y install --setopt=reposdir=\"${repos}\" "},
+	} {
+		content, err := recipeFiles.ReadFile(s.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		script := string(content)
+		release, pin, read := strings.Index(script, s.release), strings.Index(script, s.pin), strings.Index(script, s.read)
+		if release < 0 || pin < release || read < pin || strings.Count(script, "\npin_release ") != 1 {
+			t.Errorf("%s does not read %q, then pin with %q once, before %q", s.name, s.release, s.pin, s.read)
+		}
+	}
+}
+
+// enabledRepositories are the sections the family's own repository files enable, in testdata as
+// almalinux-repos and rocky-repos 10.2 ship them. Each comes with the folder of its commented
+// baseurl, the part after the release, for x86-64.
+func enabledRepositories(t *testing.T, dir string) [][2]string {
+	t.Helper()
+	repos := os.DirFS(filepath.Join("testdata", dir, "repos"))
+	names, err := fs.Glob(repos, "*.repo")
+	if err != nil || len(names) == 0 {
+		t.Fatalf("no repository files in testdata/%s/repos: %v", dir, err)
+	}
+	baseurl := regexp.MustCompile(`^#\s*baseurl=\S*/\$releasever/(\S+)$`)
+	var enabled [][2]string
+	for _, name := range names {
+		content, err := fs.ReadFile(repos, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var id, folder string
+		for line := range strings.SplitSeq(string(content)+"\n[", "\n") {
+			line = strings.TrimSpace(line)
+			switch {
+			case strings.HasPrefix(line, "["):
+				id, folder = strings.Trim(line, "[]"), ""
+			case baseurl.MatchString(line):
+				folder = strings.ReplaceAll(baseurl.FindStringSubmatch(line)[1], "$basearch", "x86_64")
+			case line == "enabled=1":
+				if folder == "" {
+					t.Fatalf("%s: [%s] is enabled before its baseurl names its folder", name, id)
+				}
+				enabled = append(enabled, [2]string{id, folder})
+			}
+		}
+	}
+	return enabled
+}
+
+// A family moves a minor release to its vault once a newer one replaces it. Rocky Linux's mirror
+// service then still names mirrors that dropped it. Every repository the family's files enable is
+// listed for use_vault (el/mirrors.sh), since dnf fails on any one without a working mirror.
+// use_vault reads the vault only for a folder its own server no longer holds, which
+// test/unit/el-mirrors.sh proves on a server on loopback.
+func TestAVaultedMinorComposesFromTheVault(t *testing.T) {
+	t.Parallel()
+	servers := map[string]struct{ dir, own, vault string }{
+		"AlmaLinux":   {"almalinux-10", "https://repo.almalinux.org/almalinux/", "https://vault.almalinux.org/"},
+		"Rocky Linux": {"rocky-10", "https://dl.rockylinux.org/pub/rocky/", "https://dl.rockylinux.org/vault/rocky/"},
+	}
+	// AlmaLinux's EPEL keeps every minor release's folder. EPEL archives its own.
+	const epel = "kubehenge-containerd https://dl.fedoraproject.org/pub/epel/%[1]s/Everything/x86_64/ https://dl.fedoraproject.org/pub/archive/epel/%[1]s/Everything/x86_64/"
+	for _, b := range elBakes(t) {
+		s := servers[b.family.Title()]
+		var lines []string
+		for _, repo := range enabledRepositories(t, s.dir) {
+			lines = append(lines, fmt.Sprintf("%s %s%s/%s %s%s/%s", repo[0], s.own, b.minor, repo[1], s.vault, b.minor, repo[1]))
+		}
+		if b.family.Name() == rockyName && b.distribution == Kubeadm {
+			lines = append(lines, fmt.Sprintf(epel, b.minor))
+		}
+		got := strings.Split(strings.TrimSuffix(b.files["el/vault"], "\n"), "\n")
+		slices.Sort(got)
+		slices.Sort(lines)
+		if !slices.Equal(got, lines) {
+			t.Errorf("%s: el/vault is\n%s\nwant\n%s", &b, strings.Join(got, "\n"), strings.Join(lines, "\n"))
+		}
+	}
+	content, err := recipeFiles.ReadFile("el/build.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(content)
+	vault, fetch := strings.Index(script, "\nuse_vault el/vault "), strings.Index(script, "\nfetch_mirrors ")
+	if vault < 0 || vault > fetch {
+		t.Error("el/build.sh does not hand el/vault to use_vault before it fetches the mirror lists")
 	}
 }
 

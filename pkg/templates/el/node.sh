@@ -23,6 +23,8 @@ done
 # shellcheck source=pkg/templates/el/mirrors.sh
 . "${files}/el/mirrors.sh"
 use_metalinks "${repos}"
+read -r release < "${files}/el/release"
+pin_release "${repos}" "${release}"
 point_at_mirrors "${repos}" "${files}/mirrors"
 for key in "${files}"/keys/*.asc; do
     install -m 0644 "${key}" "/etc/pki/rpm-gpg/kubehenge-$(basename "${key}")"

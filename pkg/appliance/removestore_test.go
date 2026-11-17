@@ -449,10 +449,7 @@ func TestFollowZonesFindsTheVMByItsUUID(t *testing.T) {
 	f := withNodeVM(backupDisk)
 	kube := fake.NewClientset(
 		&corev1.Node{Name: "cp-0", Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{SystemUUID: strings.ToLower(nodeUUID)}}},
-		&corev1.Secret{
-			Name: zonesSecret, Namespace: backupstore.Namespace,
-			Data: map[string][]byte{zonesKey: []byte("mgmt-management-zones@pve!zones=00000000-0000-0000-0000-000000000000")},
-		},
+		zonesTokenSecret(),
 	)
 	unknown, err := f.appliance(t).followZones(t.Context(), kube, "")
 	if err != nil || len(unknown) > 0 {
@@ -475,8 +472,8 @@ func managementNode(name, uuid string) *corev1.Node {
 
 func zonesTokenSecret() *corev1.Secret {
 	return &corev1.Secret{
-		Name: zonesSecret, Namespace: backupstore.Namespace,
-		Data: map[string][]byte{zonesKey: []byte("mgmt-management-zones@pve!zones=00000000-0000-0000-0000-000000000000")},
+		Name: backupstore.ZonesSecret, Namespace: backupstore.Namespace,
+		Data: map[string][]byte{"token": []byte("mgmt-management-zones@pve!zones=00000000-0000-0000-0000-000000000000"), "nodes": []byte("cp-0,cp-1,cp-2")},
 	}
 }
 
@@ -498,7 +495,7 @@ func TestAVMOnANodeThatIsDownLeavesTheOthersWorking(t *testing.T) {
 	f.vms = append(f.vms, &fakeVM{id: 1500, name: "mgmt-c", node: "pve3", uuid: offlineUUID, offline: true})
 	a := f.appliance(t)
 	store := storeDeployment(0, "0")
-	store.Annotations[volumeZone] = "pve2"
+	store.Annotations[backupstore.VolumeZone] = "pve2"
 	store.Status.ReadyReplicas = 1
 	kube := fake.NewClientset(managementNode("cp-0", nodeUUID), managementNode("cp-2", offlineUUID), zonesTokenSecret(), store)
 	ctx := t.Context()

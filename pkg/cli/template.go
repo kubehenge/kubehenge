@@ -296,6 +296,8 @@ type builderFlags struct {
 	address string
 	gateway string
 	dns     []string
+	// vmIDRange is start-end, the VM IDs the builds take.
+	vmIDRange string
 }
 
 func (b *builderFlags) add(cmd *cobra.Command) {
@@ -307,6 +309,7 @@ func (b *builderFlags) add(cmd *cobra.Command) {
 	poolFlag(cmd, &b.builder.Pool, "pool the template is put in and looked for in, or empty to look in every pool")
 	f.StringVar(&b.builder.Bridge, "bridge", "vmbr0", "bridge for the VM that prepares an image")
 	f.IntVar(&b.builder.VLAN, "vlan", 0, "VLAN tag for the VM that prepares an image")
+	f.StringVar(&b.vmIDRange, "vm-id-range", "", "VM IDs the template's VMs take, as start-end, both included (default: Proxmox VE's next free ID)")
 	f.StringVar(&b.address, "build-address", "", "static address with prefix for the VM that prepares an image, such as 192.0.2.50/24, else DHCP")
 	f.StringVar(&b.gateway, "build-gateway", "", "gateway for --build-address")
 	f.StringSliceVar(&b.dns, "build-dns", nil, "DNS servers for --build-address")
@@ -365,6 +368,19 @@ func (b *builderFlags) hardware(cmd *cobra.Command) error {
 	return nil
 }
 
+// idRange gives the builder the VM IDs of --vm-id-range, none when the flag is empty.
+func (b *builderFlags) idRange() error {
+	if b.vmIDRange == "" {
+		return nil
+	}
+	r, err := provisioner.ParseVMIDRange(b.vmIDRange)
+	if err != nil {
+		return fmt.Errorf("--vm-id-range: %w", err)
+	}
+	b.builder.FirstVMID, b.builder.LastVMID = int(r.Start), int(r.End)
+	return nil
+}
+
 // connect signs the builder in, with its log on the command's standard error.
 func (b *builderFlags) connect(cmd *cobra.Command, conn *pve.Config) (*templates.Builder, error) {
 	// Cobra's required check passes --node "", which would reach the API as /nodes//.
@@ -372,6 +388,9 @@ func (b *builderFlags) connect(cmd *cobra.Command, conn *pve.Config) (*templates
 		return nil, errors.New("--node needs the Proxmox VE node to build on, such as --node pve1")
 	}
 	if err := b.hardware(cmd); err != nil {
+		return nil, err
+	}
+	if err := b.idRange(); err != nil {
 		return nil, err
 	}
 	var err error

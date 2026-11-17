@@ -142,7 +142,7 @@ done
 
 ## Verifying a release
 
-Users check a release before installing it as follows. `install.sh` checks what it downloads. The appliance installs only releases listed in an index signed with the project's release key. What is left to check yourself is the script.
+`install.sh` checks what it downloads. The appliance installs only releases listed in an index signed with the project's release key. What is left to check yourself is the script.
 
 The release workflow built each file and each image Kubehenge runs from the tagged source, on a GitHub-hosted runner (SLSA Build Level 3). Each carries signed build provenance and an SPDX SBOM. They are stored as GitHub attestations and, for the files, in `kubehenge_<version>.intoto.jsonl`.
 

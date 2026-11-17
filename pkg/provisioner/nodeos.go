@@ -367,7 +367,7 @@ func (h *Hooks) checkNodeOS(ctx context.Context, reads *pveReads, c *clusterv1.C
 	}
 	f, r, _ := templates.ReleaseOf(o)
 	return fmt.Errorf("%s %s needs CPU type %s, which no allowed node (%s) offers. Choose another node OS",
-		f.Title(), r.Name, templates.CPUTypeOf(r), strings.Join(names, ", "))
+		f.Title(), r.Name, templates.CPUTypeOf(&r), strings.Join(names, ", "))
 }
 
 // buildableNodeOS is the cluster's node OS once Kubehenge builds templates of it and its FIPS

@@ -26,6 +26,7 @@ type StorageSite struct {
 // TemplateSite is where one template's disks are, and how its clones are configured.
 type TemplateSite struct {
 	Name     string
+	VMID     int
 	Node     string
 	Tags     []string
 	Storages []string
@@ -94,8 +95,9 @@ func (p *Proxmox) Sites(ctx context.Context) (*Sites, error) {
 		tags := templates.ParseTags(r.Tags)
 		at, _ := templates.BuildOf(tags)
 		hw, _ := templates.HardwareOf(templates.ParseAllTags(r.Tags))
+		id, _ := templates.VMID(r)
 		s.Templates = append(s.Templates, TemplateSite{
-			Name: r.Name, Node: r.Node, Tags: tags, Storages: inv.Sites[i].Storages, CPU: inv.Sites[i].CPU, Hardware: hw, Built: at,
+			Name: r.Name, VMID: id, Node: r.Node, Tags: tags, Storages: inv.Sites[i].Storages, CPU: inv.Sites[i].CPU, Hardware: hw, Built: at,
 		})
 	}
 	p.readNetworks(ctx, s)

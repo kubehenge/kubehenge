@@ -191,6 +191,66 @@ func TestApplyRunsAgainWhileEtcdTimesOut(t *testing.T) {
 	}
 }
 
+// Proxmox VE fails to start a task's worker when another task ends at that moment. A run whose
+// every error is a download it did not start runs again, as those made nothing. A VM's create,
+// which leaves its configuration locked, fails the job at once, as does any other error beside a
+// raced download. A webhook that does not answer yet runs it again too. A refusal fails it, also
+// when Helm joins it to a webhook that did not answer. Each line of races is one run:
+//   - d a raced download, v a raced VM create, n a download that found no file
+//   - w a webhook with no route, c a webhook that refused the connection
+//   - r a webhook that refused the change, j w and r joined by Helm
+//   - k the API server itself refusing the connection
+func TestApplyRunsAgainWhenARunMadeNothing(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, races string
+		state       string
+		applies     int
+	}{
+		{"a download raced", "d\n", StateSucceeded, 2},
+		{"two downloads raced", "dd\n", StateSucceeded, 2},
+		{"a VM create raced", "v\n", StateFailed, 1},
+		{"a VM create raced and a download found no file", "vn\n", StateFailed, 1},
+		{"a download raced and a VM create raced", "dv\n", StateFailed, 1},
+		{"a download raced, then found no file", "d\nn\n", StateFailed, 2},
+		{"a webhook did not answer", "ww\n", StateSucceeded, 2},
+		{"a webhook did not answer twice", strings.Repeat("w\n", 2), StateSucceeded, 3},
+		{"a webhook never answered", strings.Repeat("w\n", 3), StateFailed, 3},
+		{"a webhook refused", "r\n", StateFailed, 1},
+		{"a webhook did not answer and another refused", "wr\n", StateFailed, 1},
+		{"a webhook did not answer and a download raced", "wd\n", StateFailed, 1},
+		{"a webhook refused the connection", "c\n", StateSucceeded, 2},
+		{"Helm joined a webhook that did not answer and a refusal", "j\n", StateFailed, 1},
+		{"the API server refused the connection", "k\n", StateFailed, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			a, _ := newAppliance(t)
+			a.stallPause = time.Millisecond
+			writePlan(t, a, change{nodeVMAddress + "[0]", []string{"update"}, 1001})
+			if err := os.WriteFile(filepath.Join(a.Dir, "races"), []byte(tc.races), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			j := applyWith(t, a, "race")
+			if j.State != tc.state {
+				t.Fatalf("apply: %+v", j)
+			}
+			if tc.state == StateFailed && !strings.Contains(j.Error, "Error ") {
+				t.Fatalf("the job's error lacks OpenTofu's: %s", j.Error)
+			}
+			applies := 0
+			for _, args := range tofuCalls(t, a) {
+				if args[0] == "apply" {
+					applies++
+				}
+			}
+			if applies != tc.applies {
+				t.Fatalf("%d applies, want %d", applies, tc.applies)
+			}
+		})
+	}
+}
+
 // A service stop in the pause before the next run ends the job as a stop mid-run does.
 func TestStopDuringTheEtcdPauseSaysRunItAgain(t *testing.T) {
 	t.Parallel()
@@ -295,15 +355,26 @@ func TestModuleLeavesNodeVMProtectionToTheAppliance(t *testing.T) {
 	}
 }
 
-// The appliance and the patched CSI plugin name the plugin's marker alike.
+// The appliance, the patched CSI plugin and the appliance's end-to-end test name the plugin's marker
+// alike.
 func TestCSIMarkerMatchesThePluginPatch(t *testing.T) {
 	t.Parallel()
-	patch, err := os.ReadFile(filepath.Join("..", "..", "scripts", "proxmox-csi-patches", "lift-protection-to-detach.patch"))
+	repo, err := os.OpenRoot(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(patch), "+const liftedMarker = \""+csiLiftedMarker+"\"") {
-		t.Fatal("the plugin patch's liftedMarker is not csiLiftedMarker")
+	t.Cleanup(func() { _ = repo.Close() })
+	for file, want := range map[string]string{
+		filepath.Join("scripts", "proxmox-csi-patches", "lift-protection-to-detach.patch"): "+const liftedMarker = \"" + csiLiftedMarker + "\"",
+		filepath.Join("test", "e2e", "appliance.sh"):                                       "csi_marker=\"" + csiLiftedMarker + "\"",
+	} {
+		content, err := repo.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(content), want) {
+			t.Errorf("%s does not name csiLiftedMarker as %s", file, want)
+		}
 	}
 }
 

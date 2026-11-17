@@ -84,7 +84,7 @@ func diskRoom(fit *Fit, machines []clusterv1.Machine, vmids map[string]int, stor
 		return fmt.Sprintf("Storage %s (%s) reserves each disk's whole size and has %d GiB free. The machines still to be made need %d GiB",
 			fit.Storage, where, free/bytesPerGiB, need), ""
 	}
-	return "", fmt.Sprintf("Storage %s (%s) reserves each disk's whole size and has %d GiB free. At the autoscaler's maximum, the machines still to be made need %d GiB. A worker past that room waits, and the autoscaler gives it up after 30 minutes",
+	return "", fmt.Sprintf("Storage %s (%s) has %d GiB free. The pools at their most workers need %d GiB",
 		fit.Storage, where, free/bytesPerGiB, grown)
 }
 

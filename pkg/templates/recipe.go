@@ -49,6 +49,8 @@ type repository struct {
 	signedMetadata bool
 	// only limits what dnf takes from it.
 	only []string
+	// vault, on an EL family, holds the repository once its publisher drops baseURL's folder.
+	vault string
 }
 
 func (r *repository) file() string {
@@ -77,9 +79,9 @@ func keysOf(repos []*repository) []RepositoryKey {
 
 // containerdRepository is where a kubeadm node's containerd and runc come from on a family that
 // has neither, and nothing else.
-func containerdRepository(name, baseURL string, key *RepositoryKey) *repository {
+func containerdRepository(name, baseURL, vault string, key *RepositoryKey) *repository {
 	const containerd = "containerd"
-	return &repository{id: containerd, name: name + " (" + containerd + ")", baseURL: baseURL, key: key, only: []string{containerd, "runc"}}
+	return &repository{id: containerd, name: name + " (" + containerd + ")", baseURL: baseURL, key: key, only: []string{containerd, "runc"}, vault: vault}
 }
 
 // The Rancher keys sign the repositories of the SELinux policies of RKE2 and of k3s.

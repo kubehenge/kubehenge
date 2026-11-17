@@ -1,4 +1,4 @@
-package appliance
+package backupstore
 
 import (
 	"context"
@@ -9,8 +9,8 @@ import (
 	"github.com/luthermonson/go-proxmox"
 )
 
-// clusterVM is a VM as /cluster/resources lists it.
-type clusterVM struct {
+// VM is a VM as /cluster/resources lists it.
+type VM struct {
 	VMID int    `json:"vmid"`
 	Name string `json:"name"`
 	Node string `json:"node"`
@@ -19,32 +19,34 @@ type clusterVM struct {
 	Status string `json:"status"`
 }
 
-func (v clusterVM) String() string {
+func (v VM) String() string {
 	return fmt.Sprintf("VM %d (%s) on %s", v.VMID, v.Name, v.Node)
 }
 
-func (v clusterVM) path() string {
+// Path is the VM's path in the Proxmox VE API.
+func (v VM) Path() string {
 	return fmt.Sprintf("/nodes/%s/qemu/%d", url.PathEscape(v.Node), v.VMID)
 }
 
-// vmIndex holds the qemu VMs a client may see by their SMBIOS UUID, in lower case. A management
+// VMIndex holds the qemu VMs a client may see by their SMBIOS UUID, in lower case. A management
 // node is its VM's by that UUID alone, as the CSI plugin finds it in capmox mode: the nodes carry no
 // provider ID, and a VM's name may be a leftover's or changed by hand. A live node is no stopped
 // VM, so a stopped copy restored with the node's UUID is never taken for it. A VM on a node that is
 // down has status unknown and counts as unreadable.
-type vmIndex struct {
-	byUUID map[string][]clusterVM
-	// unreadable are the VMs whose configuration could not be read. Proxmox VE reads it on the VM's
+type VMIndex struct {
+	ByUUID map[string][]VM
+	// Unreadable are the VMs whose configuration could not be read. Proxmox VE reads it on the VM's
 	// own node, so these are mostly VMs on a node that is down.
-	unreadable []clusterVM
+	Unreadable []VM
 }
 
-func readVMIndex(ctx context.Context, c *proxmox.Client) (*vmIndex, error) {
-	var vms []clusterVM
+// ReadVMIndex lists the VMs c may see by their SMBIOS UUID.
+func ReadVMIndex(ctx context.Context, c *proxmox.Client) (*VMIndex, error) {
+	var vms []VM
 	if err := c.Get(ctx, "/cluster/resources?type=vm", &vms); err != nil {
 		return nil, fmt.Errorf("listing the VMs: %w", err)
 	}
-	index := &vmIndex{byUUID: make(map[string][]clusterVM, len(vms))}
+	index := &VMIndex{ByUUID: make(map[string][]VM, len(vms))}
 	for _, v := range vms {
 		if v.Type != "qemu" || v.Status == "stopped" {
 			continue
@@ -52,24 +54,24 @@ func readVMIndex(ctx context.Context, c *proxmox.Client) (*vmIndex, error) {
 		var config struct {
 			SMBIOS1 string `json:"smbios1"`
 		}
-		if err := c.Get(ctx, v.path()+"/config", &config); err != nil {
-			index.unreadable = append(index.unreadable, v)
+		if err := c.Get(ctx, v.Path()+"/config", &config); err != nil {
+			index.Unreadable = append(index.Unreadable, v)
 			continue
 		}
 		if uuid := strings.ToLower(smbiosUUID(config.SMBIOS1)); uuid != "" {
-			index.byUUID[uuid] = append(index.byUUID[uuid], v)
+			index.ByUUID[uuid] = append(index.ByUUID[uuid], v)
 		}
 	}
 	return index, nil
 }
 
-// find is the VM with SMBIOS UUID uuid. ok is false when no readable VM has it. Two VMs with one
+// Find is the VM with SMBIOS UUID uuid. ok is false when no readable VM has it. Two VMs with one
 // UUID are an error, since either could be the node's.
-func (x *vmIndex) find(uuid string) (clusterVM, bool, error) {
-	vms := x.byUUID[strings.ToLower(uuid)]
+func (x *VMIndex) Find(uuid string) (VM, bool, error) {
+	vms := x.ByUUID[strings.ToLower(uuid)]
 	switch len(vms) {
 	case 0:
-		return clusterVM{}, false, nil
+		return VM{}, false, nil
 	case 1:
 		return vms[0], true, nil
 	}
@@ -77,18 +79,18 @@ func (x *vmIndex) find(uuid string) (clusterVM, bool, error) {
 	for i, v := range vms {
 		names[i] = v.String()
 	}
-	return clusterVM{}, false, fmt.Errorf("%s share SMBIOS UUID %s. Give each copy its own: qm set <id> --smbios1 uuid=<new>",
+	return VM{}, false, fmt.Errorf("%s share SMBIOS UUID %s. Give each copy its own: qm set <id> --smbios1 uuid=<new>",
 		strings.Join(names, " and "), uuid)
 }
 
-// missing says that no VM has SMBIOS UUID uuid, and names the unreadable VMs, one of which may be
+// Missing says that no VM has SMBIOS UUID uuid, and names the unreadable VMs, one of which may be
 // the node's.
-func (x *vmIndex) missing(uuid string) error {
-	if len(x.unreadable) == 0 {
+func (x *VMIndex) Missing(uuid string) error {
+	if len(x.Unreadable) == 0 {
 		return fmt.Errorf("no VM has SMBIOS UUID %s", uuid)
 	}
-	names := make([]string, len(x.unreadable))
-	for i, v := range x.unreadable {
+	names := make([]string, len(x.Unreadable))
+	for i, v := range x.Unreadable {
 		names[i] = v.String()
 	}
 	return fmt.Errorf("no readable VM has SMBIOS UUID %s. The configuration of %s could not be read, so its Proxmox VE node may be down",

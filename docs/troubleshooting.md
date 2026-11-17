@@ -249,6 +249,8 @@ A run needs these:
 | "The management cluster is being applied or removed" or "the appliance is being upgraded" | A run is going on. Wait for that to finish. |
 | A wrong passphrase | An apply cannot read the state. Repair access and removal answer "the passphrase does not open the management cluster's state". The passphrase has to be the one given when the management cluster was created. After five wrong ones within 15 minutes, repair access refuses further tries until those 15 minutes are up. A lost passphrase cannot be recovered ([what still works, and how to start over](install.md#the-state-passphrase)). |
 | "The appliance stopped during the run" | The appliance restarted while a run was going on. Apply again. |
+| "got no worker upid - start worker failed" | Proxmox VE did not start a task, as happens when another task ends at that moment. A download runs again by itself, up to three runs. For a VM, remove the VM it left locked with `qm destroy <id>`, then apply again. |
+| `failed calling webhook` with `no route to host` or `connection refused` | The webhook's pod was not serving yet, as after a node restart. The apply runs again by itself, up to three runs. If the last one fails the same way, `kubectl get pods -A` shows which pod does not get ready. |
 | "this appliance's state is from apply N, and the management cluster is at apply M" | A newer state changed the cluster since this one was saved. A snapshot rollback, an older backup or a second appliance does that. Restore the newest backup instead, or use the appliance that applied last. To go ahead with this state, [take the cluster over](install-settings.md#a-state-older-than-the-management-cluster). The next apply undoes the newer changes. |
 | "another appliance started applying the management cluster at the same time" | Two appliances act on one cluster. Stop one of them, then apply again from the other. |
 | "job wait-for-providers failed" after ten minutes | A provider was not installed or did not roll out. `kubectl -n capi-operator-system logs job/wait-for-providers` names each one with the Cluster API Operator's reason. A lowered version is a case of its own ([below](#a-provider-version-was-lowered)). |
@@ -273,12 +275,13 @@ The management cluster's Health shows the failure, and **Administration, Backups
 | "the backup volume's token: …" or "the backup volume: …" | The store `kubehenge-system/kubehenge-backup-store` is not running. `kubectl -n kubehenge-system get pods,pvc` shows whether the claim `kubehenge-backups` is bound and the pod ready. A claim that stays pending means the VM `kubehenge-backups` or its disk is gone. Apply again to make a new one. |
 | "exporting Kubehenge's objects: …" | The snapshot was stored, but the export was not. The reason after the colon names the object the interface could not read. |
 | "the appliance's copy of snapshot … would take …, more than its cap of …" | The snapshot, its export and its key take more than 1 GiB. The snapshot went to the volume alone, and the copy before it stays. |
-| "the management cluster is being recovered" or "the management cluster is being removed" | A snapshot is refused while a restore, a recreation, a recovery or a removal runs. Take it once a recovery has finished. |
+| "the management cluster is being recovered" or "the management cluster is being removed" | A snapshot is refused while a restore, a recreation, a recovery or a removal runs. Take it once that has finished. |
 | A recovery says "the appliance's copy holds the backups of a management cluster removed since" | The copy is of the cluster removed before this one was set up, and is never restored onto it. Recover from the backup volume, or recreate from a backup target's snapshot. |
 | A recovery says "it did not answer within 10m0s" | The backup volume's store did not start. Check the claim and the pod as above. The recovery used the appliance's copy, when it held one. |
-| "reading where the management VMs run: …" | The appliance could not ask Proxmox VE where the management VMs run, so it left the store asleep. The reason after the colon says why. The token is in `kubehenge-system/kubehenge-backup-store-zones`. Apply again to make a new one. |
-| "no management VM runs on Proxmox VE node …, which holds the backup volume" | The volume's disk sits on that node's own storage and attaches only to a VM there. Migrate a management VM to that node, or apply again to make the lost ones. |
-| The store's pod stays pending on a node's own storage | No management VM runs on the node that holds the disk. Migrate one back to that node. |
+| "reading where the management VMs run: …" | The appliance or the controller could not ask Proxmox VE where the management VMs run, so it did not attach the backup volume. The reason after the colon says why. The token is in `kubehenge-system/kubehenge-backup-store-zones`. Apply again to make a new one. |
+| "no node named under \"nodes\" in Secret kubehenge-system/kubehenge-backup-store-zones is in the management cluster" | The Secret names no management node that joined, so the backup volume has no node to attach to. Apply again, which sets the names from the management nodes. |
+| "no management VM runs on Proxmox VE node …, which holds the backup volume" | The volume's disk sits on node-local storage of that node and attaches only to a VM there. Migrate a management VM to that node, or apply again to make the lost ones. |
+| The store's pod stays pending on node-local storage | No management VM runs on the node that holds the disk. Migrate one back to that node. |
 
 ### Template missing
 
@@ -343,6 +346,8 @@ A build from the interface or the weekly build is tried three times, 2 and then 
 | "the datacenter option user-tag-access refuses …" or "registered-tags lists …" | The datacenter options keep the builder's token from setting the template's tags. Under Datacenter, Options, add them to **User Tag Access** (list) or remove them from **Registered Tags**. Tags match with their case. With **User Tag Access** set to existing, a tag already on a guest the token can audit also passes. Only `Sys.Modify` on `/` bypasses the options. |
 | "task … failed" for the downloaded image | Proxmox VE downloads the image itself and checks it against its checksum. The message names its reason. The task's log is under the node's **Task History**. The storage under **Downloaded image** (`--import-storage`) must allow the `import` content type ([templates.md](templates.md#requirements)). |
 | "not signed by …'s key", "… serves a key other than …" or "… is not listed in its checksum file" | The publisher's checksum file, or a package repository's key, is not the one Kubehenge knows by its fingerprint. Nothing was imported. Check that nothing between the appliance and the publisher changes downloads, and try again later. A publisher that moved to a new key needs a Kubehenge release that carries it. |
+| "… lists … with the SHA-256 …, not the pinned …" | The publisher's signed checksum for the node OS's cloud image is not the one this Kubehenge release pins. Nothing was imported. Update Kubehenge. If the newest release fails the same way, report it. |
+| "the publisher keeps … in none of its folders" | Neither the publisher's mirror nor its vault holds the cloud image this Kubehenge release pins ([templates.md](templates.md#image-checks)). Check that the appliance reaches both, then try again. If they answer and the image is gone, update Kubehenge. |
 | A command in the build VM failed, such as the package manager, with the end of the build's log below the error | The VM has to reach its node OS's package mirrors and the other addresses the build needs ([architecture.md](architecture.md#hosts-each-part-reaches)). It gets its address by DHCP on its bridge, or the static address given for it. A package whose signature does not check out stops the build the same way. |
 
 ### Node addresses run out
@@ -668,6 +673,8 @@ Kubehenge's controller holds a cluster's backups back, neither installing nor re
 | `BackupsInvalid` | The backup settings are ones Velero would not take, such as a schedule it cannot read. The event says which. Correct them under **Options**, or in the `backups` variable. |
 | `BackupCredentialMissing`, `"no credential of the cluster's own for the backup target, for which the one for every cluster never stands in: type one in for it in the interface, or name a Secret of the cluster's velero namespace in existingSecret"` | Store the cluster's own key, or name such a Secret. Backups wait until then. |
 | "Secret … holds no accessKeyID and secretAccessKey" | The credential named lacks one or both of its keys. Store it again. |
+
+A create that carries a backup key can answer "another create of cluster … is under way". An earlier create of that name was cut short. Create again once 30 seconds have passed.
 
 ### Log outputs
 

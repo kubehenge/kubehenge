@@ -475,7 +475,7 @@ describe("clusters", () => {
     await user.click(await screen.findByRole("button", { name: "Delete" }));
     const dialog = screen.getByRole("dialog", { name: "Delete cluster web" });
     expect(within(dialog).queryByText(/etcd snapshots stay/u)).not.toBeInTheDocument();
-    const drop = within(dialog).getByRole("checkbox", { name: "Delete volume snapshots" });
+    const drop = within(dialog).getByRole("checkbox", { name: "Delete etcd snapshots" });
     expect(drop).not.toBeChecked();
     await user.click(drop);
     await user.type(within(dialog).getByLabelText("Confirm name"), "web");
@@ -1095,6 +1095,7 @@ describe("create", () => {
     storage: "local-lvm",
     place: { placement: "any", haRule: "", nodes: [] },
     hostOutageGrace: "30",
+    vmIDRange: "",
     proxmoxHA: true,
     datastoreAllocate: false,
     volumeSnapshots: false,

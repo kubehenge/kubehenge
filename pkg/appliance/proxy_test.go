@@ -95,7 +95,7 @@ func TestProxyAndChartMirrorAuthoritiesTakeTheClustersLayoutRule(t *testing.T) {
 	}
 	for name, tc := range map[string]struct{ bundle, want string }{
 		"a damaged block beside a good one": {strings.Replace(ca, "-----BEGIN", "----BEGIN", 1) + ca, "has a damaged BEGIN or END line on line 1"},
-		"a BEGIN line inside a comment":     {"# -----BEGIN CERTIFICATE----- follows\n", "block 1 is no complete PEM block"},
+		"a BEGIN line inside a comment":     {"# -----BEGIN CERTIFICATE----- follows\n", "block 1 is not a complete PEM block"},
 		"a body that is no certificate":     {"-----BEGIN CERTIFICATE-----\nMIIBAA==\n-----END CERTIFICATE-----\n", "certificate 1 is no valid X.509 certificate"},
 		"over 256 KiB":                      {strings.Repeat(ca, maxProxyCABundle/len(ca)+1), "at most 256 KiB"},
 	} {

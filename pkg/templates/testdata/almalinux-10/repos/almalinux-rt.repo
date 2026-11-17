@@ -1,0 +1,30 @@
+[rt]
+name=AlmaLinux $releasever - RT
+mirrorlist=https://mirrors.almalinux.org/mirrorlist/$releasever/rt?arch=x86_64_v2
+# baseurl=https://repo.almalinux.org/almalinux/$releasever/RT/x86_64_v2/os/
+enabled=0
+gpgcheck=1
+countme=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-10
+metadata_expire=86400
+enabled_metadata=0
+
+[rt-debuginfo]
+name=AlmaLinux $releasever - RT - Debug
+mirrorlist=https://mirrors.almalinux.org/mirrorlist/$releasever/rt-debug?arch=x86_64_v2
+# baseurl=https://vault.almalinux.org/$releasever/RT/debug/x86_64_v2/
+enabled=0
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-10
+metadata_expire=86400
+enabled_metadata=0
+
+[rt-source]
+name=AlmaLinux $releasever - RT - Source
+mirrorlist=https://mirrors.almalinux.org/mirrorlist/$releasever/rt-source?arch=x86_64_v2
+# baseurl=https://vault.almalinux.org/$releasever/RT/Source/
+enabled=0
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-10
+metadata_expire=86400
+enabled_metadata=0

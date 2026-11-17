@@ -202,8 +202,7 @@ func (s *Server) restoreManagementEtcd(w http.ResponseWriter, r *http.Request, u
 	writeJSON(w, http.StatusAccepted, s.Appliance.Current())
 }
 
-// backUpManagementEtcd takes the management cluster's scheduled snapshots, and wakes the backup
-// volume while the controller asks for it. It looks every minute.
+// backUpManagementEtcd takes the management cluster's scheduled snapshots. It looks every minute.
 func (s *Server) backUpManagementEtcd(ctx context.Context) {
 	a := s.Appliance
 	if a == nil {
@@ -214,9 +213,6 @@ func (s *Server) backUpManagementEtcd(ctx context.Context) {
 	for {
 		if now := time.Now(); a.EtcdBackupDue(now) {
 			s.snapshotManagement(ctx, now)
-		}
-		if err := a.ServeVolumeRequests(ctx, nil, time.Now()); err != nil {
-			s.Log.WarnContext(ctx, "waking the backup volume for the clusters' etcd snapshots", "error", err)
 		}
 		select {
 		case <-ctx.Done():

@@ -87,11 +87,11 @@ function blockTypes(bundle: string): string[] | string {
       }
       open = text.startsWith(begin) ? [text] : undefined;
     } else if (text.startsWith(begin)) {
-      return `block ${types.length + 1} is no complete PEM block`;
+      return `block ${types.length + 1} is not a complete PEM block`;
     } else if (text.startsWith(end)) {
       const type = blockType([...open, text]);
       if (type === undefined) {
-        return `block ${types.length + 1} is no complete PEM block`;
+        return `block ${types.length + 1} is not a complete PEM block`;
       }
       types.push(type);
       open = undefined;
@@ -101,7 +101,7 @@ function blockTypes(bundle: string): string[] | string {
     }
   }
   if (open !== undefined) {
-    return `block ${types.length + 1} is no complete PEM block`;
+    return `block ${types.length + 1} is not a complete PEM block`;
   }
   const trailing = all.slice(after).find((l) => trim(l.text) !== "");
   if (types.length > 0 && trailing !== undefined) {

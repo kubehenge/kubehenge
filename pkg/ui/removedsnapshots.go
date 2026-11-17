@@ -91,7 +91,7 @@ func (s *Server) deleteRemovedEtcdSnapshots(w http.ResponseWriter, r *http.Reque
 	}
 	err = u.kube.Get(r.Context(), client.ObjectKey{Namespace: namespace, Name: name}, &clusterv1.Cluster{})
 	if err == nil {
-		writeError(w, http.StatusConflict, fmt.Sprintf("cluster %s still exists, and only a removed cluster's snapshots are deleted here. Delete the cluster with its volume snapshots instead", name))
+		writeError(w, http.StatusConflict, fmt.Sprintf("cluster %s still exists. Delete it with its etcd snapshots instead", name))
 		return
 	}
 	if !apierrors.IsNotFound(err) {

@@ -10,7 +10,7 @@ import type { ManagementBackups as Backups, ManagementHealth } from "./types";
 
 const passphrase = "correct horse battery staple";
 
-const lostWithHost = /Losing one Proxmox VE host can lose every backup/u;
+const lostWithHost = /Losing one Proxmox VE node can lose every backup/u;
 
 const onVolume: NonNullable<Backups["volume"]> = {
   claim: "kubehenge-system/kubehenge-backups",

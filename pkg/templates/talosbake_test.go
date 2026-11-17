@@ -102,7 +102,7 @@ func TestTalosRecipeWritesTheTemplatesDisk(t *testing.T) {
 	}
 
 	b := bake("v1.14.5", proxy)
-	recipe, err := f.Recipe(r, &b, nil)
+	recipe, err := f.Recipe(&r, &b, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestTalosRecipeWritesTheTemplatesDisk(t *testing.T) {
 	}
 
 	b = bake("v1.12.12", nil)
-	recipe, err = f.Recipe(r, &b, nil)
+	recipe, err = f.Recipe(&r, &b, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

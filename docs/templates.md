@@ -76,7 +76,11 @@ The node's SELinux policy lets the agent read those files and no others of `/var
 
 ### Image checks
 
-Each Kubehenge release makes templates from one build of each node OS's cloud image. Before Proxmox VE downloads it, the image is checked against its publisher's signature over its checksum. The publisher's key is embedded in Kubehenge and known by its fingerprint.
+Each Kubehenge release makes templates from one build of each node OS's cloud image, pinned by its SHA-256. Before Proxmox VE downloads it, the pin is checked against its publisher's signature over its checksum. The publisher's key is embedded in Kubehenge and known by its fingerprint.
+
+The image comes from the publisher's mirror (`repo.almalinux.org`, `dl.rockylinux.org`). Once a newer minor release of the node OS replaces it there, it comes from the publisher's vault (`vault.almalinux.org`, `dl.rockylinux.org`).
+
+Every package a build installs comes from the image's minor release, such as 10.2. A newer minor release reaches templates only with a Kubehenge release that pins its image. Once the publisher moves the minor release to its vault, the build reads every repository of the node OS there. kubeadm's containerd comes from the same minor release's EPEL folder. On Rocky Linux it comes from EPEL's archive once EPEL moves the folder there.
 
 ### Package checks
 

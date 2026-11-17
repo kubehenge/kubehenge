@@ -24,12 +24,15 @@ cd "$(dirname "$0")/.."
 # one serving 50 kB/s keeps a bake past its timeout. Under 100 kB/s they move to the next mirror; a
 # bake that slow on average would not finish in time anyway. node.sh does the same.
 sed -i '/^\[/a minrate=100k' /etc/yum.repos.d/*.repo
+read -r release < el/release
+pin_release /etc/yum.repos.d "${release}"
 
 # A mirror serving a broken repomd.xml is left for the next (mirrors.sh). The lists are in the bake's
 # files, so that node.sh, in the image's build, reads each one where this step left it.
 mirrors=${PWD}/mirrors
 mkdir -p "${mirrors}"
 use_metalinks /etc/yum.repos.d
+use_vault el/vault "${mirrors}"
 fetch_mirrors "${mirrors}"
 point_at_mirrors /etc/yum.repos.d "${mirrors}"
 

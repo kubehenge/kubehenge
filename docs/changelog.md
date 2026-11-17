@@ -4,6 +4,154 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-17
+
+### Before you upgrade
+
+- `kubectl delete`, a GitOps prune and a namespace delete are refused until the cluster carries the annotation `kubehenge.dev/allow-deletion` ([clusters.md](clusters.md#delete-with-kubectl-or-gitops)). The interface and the CLI set it.
+- Existing clusters get the firewall at their next change, which replaces every node once. SSH to the nodes then needs a security group ([clusters.md](clusters.md#ssh-to-the-nodes)), or set `firewall.enabled: false` first.
+- A cluster's certificate bundles are stored without the text between the certificates. Keep that form in Git, or Argo CD shows the cluster as out of sync ([clusters.md](clusters.md#authorities)).
+- With the Terraform/OpenTofu module, an apply or destroy that removes a management VM fails until you run `qm set <vmid> --protection 0` on it. The appliance lifts the protection itself.
+- Template builds now also reach `vault.almalinux.org`. Allow it where a firewall or proxy limits what the appliance, the management cluster and the Proxmox VE nodes reach.
+
+### Highlights
+
+- **Management cluster backups.** Every management cluster backs itself up with no setup, and can be rebuilt from its newest backup once its VMs are lost.
+- **Clusters come up again** on Proxmox VE with libpve-access-control 9.2.1 or newer, and with a host name as the Proxmox VE address.
+- **Firewall on by default.** New clusters get the Proxmox VE firewall on every node, and SSH to them needs a security group.
+- **Site settings.** A site CA, time zone and VM ID range in Setup and Administration.
+- **Setup on slow storage.** Setting up the management cluster runs again by itself after an etcd timeout, a refused download or a webhook that is not up yet, instead of failing.
+
+### Added
+
+- A cluster made with kubectl or GitOps whose disks do not fit its thick storage gets a `StorageLacksSpace` condition. The wizard refuses such a cluster.
+- The management cluster's etcd is backed up every 6 hours onto a backup volume, with no settings. It keeps 28 snapshots, encrypted with the state passphrase.
+- The backup volume is the protected disk of the VM `kubehenge-backups` and outlives every management VM. Its claim is `kubehenge-system/kubehenge-backups`.
+- A bucket target keeps its own schedule and retention.
+- Each snapshot comes with an export of the clusters, their classes, the Secrets Kubehenge owns and the setup settings.
+- On node-local storage the backup volume attaches only during a backup, so the management VMs can migrate.
+- On node-local storage, or with a single Proxmox VE node, losing that node can lose the backup volume. Setup, Administration and Health then suggest a bucket target.
+- The appliance keeps an encrypted copy of the latest snapshot, its export and its key, up to 1 GiB in all. The appliance's disk warning names the copy once it nears that cap.
+- **Recover…** under **Administration, Backups**, and `kubehenge appliance etcd-backups recover`, rebuild the management cluster after its VMs are lost.
+- A recovery restores whichever is newer, the volume's newest snapshot or the appliance's copy.
+- **Administration, Backups**, the management cluster's Health and `kubehenge appliance etcd-backups` show where the backups are and the last one. A failed backup degrades Health.
+- Removing Kubehenge keeps the backup volume. The Remove dialog can delete it too, off by default, with the appliance's copy.
+- The management cluster runs the Proxmox CSI plugin, with the storage class `kubehenge-management` (Retain) on its VMs' storage and a token that deletes no volume.
+- A **Site CA** in Setup and Administration, and `siteCA` in the chart values. Nodes, the release mirror, backup targets and identity providers trust it unless they name their own.
+- Saving a new site CA says how many clusters replace their nodes. At most four roll at once, each inside its upgrade window where it has one.
+- A paused cluster takes a new site CA once unpaused.
+- An expired or damaged site CA is reported on each cluster. Clusters keep the site CA they have until a damaged one is fixed.
+- A site **Time zone** in Setup and Administration, and `timeZone` in the chart values. Schedules and upgrade windows that name none use it, in the wizard and through kubectl.
+- Left empty or set to an unknown zone, the site time zone leaves schedules in UTC and the wizard in the browser's time zone.
+- `kubehenge appliance settings` shows the site CA, time zone and VM ID range. `settings set` changes them with the checks Setup applies.
+- `kubehenge cluster etcd-snapshots` lists, takes, downloads and restores a cluster's snapshots. `kubehenge cluster removed-etcd-snapshots` lists and deletes deleted clusters' snapshots.
+- A site **VM ID range** in Setup and Administration, `workload_vm_id_range` in the module and `--vm-id-range` on `kubehenge appliance settings set`. New clusters and VM templates take their IDs from it.
+- A cluster's own `vmIDRange`, in the wizard and **Options**. A range too narrow for its clusters and templates is refused, and a full one gives the cluster a `VMIDRangeFull` condition ([clusters.md](clusters.md#variables)).
+
+### Changed
+
+- The setup page creates management clusters of 1, 3 or 5 nodes. An existing one can grow to 3 or 5.
+- Every dialog on the cluster page that stages a change says **Add to plan**, and the bar names each change with its numbers, such as `Workers: 4 to 60`.
+- **Review plan** lists the same checks as the dialogs: addresses, memory, offline nodes, removed APIs, webhooks and health. Applying asks to accept the risks.
+- The Scale dialog counts spare addresses and free memory for the pools as the change would leave them, as Review plan does.
+- The cluster page no longer counts a node as ready while its Proxmox VE node is offline. Its tabs wrap on a phone.
+- A cluster with a VM on an offline Proxmox VE node is degraded in the cluster list, the fleet list and the health page, with the node named as the first item.
+- The default worker pool shows as **Workers**. A node's name is no longer cut short on the placement tiles.
+- The Delete dialog and the control-plane warning say machines, not VMs.
+- Dialogs dim the page behind them in both colour schemes.
+- **HA group labels** is now **HA rule labels** in Setup, Administration, the wizard and Options.
+- **Create cluster** starts from **Defaults**. After you choose a cluster to copy, each copied value is marked **Copied from**.
+- In the wizard, the access key for etcd snapshots is optional.
+- The wizard's Confirm step shows the firewall's state.
+- In the wizard, a gateway outside the bridge's network is marked on its own field. The addresses you did not touch stay as they were.
+- The wizard has a **Policies** step for the egress proxy, CIS hardening, Pod security and automatic upgrades.
+- Storing a cluster's own access key in the wizard needs `Sys.Modify` on the workload pool. Without a key, etcd snapshots and Velero wait, and the wizard says so.
+- A credential Secret made with kubectl is never deleted by Kubehenge or owned by its Cluster.
+- The wizard starts with Velero backups on where the class offers a target, and with automatic patch upgrades. It starts with three control-plane nodes where Proxmox VE has three nodes.
+- **Update node images** can be switched off when a cluster is created.
+- The egress proxy offers **Management proxy** only when the management cluster has one.
+- On node-local storage, Kubehenge keeps a worker on every node that holds the cluster's volumes. A replacement or a growing pool's new worker goes to such a node first.
+- The `VolumesWithoutWorker` condition names the volumes whose node has no worker, what keeps the cluster's VMs off that node, and the fix.
+- The create wizard and the change checks warn when a cluster has fewer workers than nodes its volumes are on.
+- New clusters get the Proxmox VE firewall on every node. It opens the serving ports: the API, ingress, load balancer, NodePorts and ping, and Talos's API on Talos.
+- SSH stays closed unless a security group lets it in.
+- The `firewall` variable opens further ports with `ports`, and `enabled: false` turns the firewall off.
+- `servingPorts: false`, or clearing **Serving ports open** in the wizard or the cluster's options, closes the serving ports. The cluster's own traffic, the security groups and the further ports stay.
+- Security groups now apply before the serving ports, so a group can drop or narrow them.
+- With Proxmox VE's datacenter firewall off, a cluster's firewall does nothing. The wizard, the cluster's options, `kubehenge cluster list` and the `FirewallInactive` condition say so.
+- A cluster's registry mirrors, trusted CAs and release mirror can change after creation in the interface, as through kubectl. The nodes are replaced one at a time.
+- A release mirror certificate that is damaged or expired is reported on each cluster and no longer stops the controller.
+- A certificate bundle with a damaged BEGIN or END line is refused, with the line's number. Names, comments and openssl's text between the blocks are accepted, as in curl's `cacert.pem`.
+- The proxy and chart mirror authorities are checked the same way, up to 256 KiB, and stored as the certificates alone.
+- The management cluster's VMs carry Proxmox VE's protection. A run that replaces or removes one lifts it on that VM alone, and sets it again if the run fails.
+- etcd snapshots are on by default for every distribution, also for clusters that never set them. Without a backup target they go to the management cluster's backup volume, encrypted.
+- A cluster with a bucket target keeps its snapshots there only.
+- A snapshot that would leave less than a tenth of the volume free is refused, with the condition reason `VolumeFull`.
+- On node-local storage a cluster's snapshot waits up to a minute for the backup volume to attach, with the condition reason `WaitingForVolume`. It attaches while the appliance is stopped too.
+- Every distribution restores from the volume, also after etcd lost its quorum.
+- A deleted cluster keeps its etcd snapshots on the backup volume. The Delete cluster dialog, `--delete-etcd-snapshots` or the annotation `kubehenge.dev/delete-etcd-snapshots: "true"` deletes them too.
+- The wizard and the etcd snapshots dialog offer **Backup volume** as a target, beside the bucket targets.
+- On RKE2 and k3s, the distribution's own upload of its snapshots needs a bucket target.
+- The setup's **Network** step shows the site's mirrors, proxy, CA and time zone in a **Site** group instead of under **Advanced**. Only the pod and Service ranges stay in **Advanced**.
+- **Administration** lists its sections as links and keeps **Apply** in view while the form scrolls.
+- **Edit settings** keeps the Talos image, cloud-init storage and bridge as saved and marks one no node offers. A node that does not answer no longer empties those lists.
+- Node addresses in the setup take the bridge's prefix length when you leave it out, except on a VLAN, where the tagged network is not the bridge's.
+- After the first setup, an empty passphrase field asks for the state passphrase, not for 16 characters.
+- **Remove Kubehenge** is disabled while clusters exist and says how many to delete.
+- Token, certificate and unreachable-node messages end on what to do.
+- `kubehenge --help` lists only the commands an administrator runs, and `cluster create --help` has examples and names the wizard's **Copy as YAML**.
+
+### Fixed
+
+- `install.sh --upgrade` protects an appliance that an older installer left deletable, as a new install does.
+- A dropped SSH session removes the installer's half-made container, and Ctrl+C no longer waits out the two-minute address check. A `nohup` install ignores the drop.
+- `curl … | sh` asks its questions on the terminal again, instead of running without any.
+- The installer prints one line per step when `TERM` is `dumb` or unset.
+- A default route over a VLAN device such as `vmbr1.20` puts the container on that bridge and VLAN.
+- A VLAN on a bridge that is not VLAN aware is refused, whether found, given by flag or entered in the **VLAN** field.
+- Open vSwitch bridges and VLAN-aware SDN VNets take the route's VLAN.
+- The installer removes only a container it made itself, also after a cancel during the template's extraction.
+- A cancel during the last protection step says the appliance exists and how to protect or remove it. Ctrl+C or a dropped session on the end screen just closes it.
+- After a failure the installer says what it removed and what stays, such as the downloaded template. Ctrl+C on the failure screen keeps the failure's message.
+- A TMPDIR short of room for OpenTofu's download fails early, and a template storage with room is preferred over one without.
+- A node with no bridge stops the installer at once, and a missing DHCP address names `--vlan` again.
+- An API that serves no CA certificate gets a warning. Trusting its own certificate breaks the appliance when Proxmox VE renews it.
+- `apt` in the container waits 20 seconds instead of 120 for each try at an unreachable mirror.
+- The setup check refuses a host name in the Proxmox VE URL that none of the management cluster's DNS servers resolves. It warns when they and the appliance resolve it differently.
+- The setup check warns when the cloud-init images are on node-local storage while the disks are on shared storage and VMs can move between nodes.
+- A cluster that no longer meets a rule, such as one whose trusted authority expired, still takes annotations, labels, finalizers and changes to its other settings.
+- While the controller is away, a cluster still takes labels, finalizers and `kubehenge.dev/allow-deletion`, so it can be deleted.
+- The wizard's first step refuses a cluster name already in use.
+- The wizard's Machines step checks machine sizes against the nodes and storage. It refuses a machine larger than any node's memory and disks beyond a thick storage's free space.
+- The wizard's Confirm step shows machine sizes in GiB and TiB.
+- The wizard's example for the load balancer's addresses lies in the gateway's network.
+- The wizard's access key hint names the bucket folder to limit the key to.
+- A node OS that is not released or has no VM template says so in its option, such as `(no template yet)`. A problem on VLAN tag, MTU or Queues replaces its **Optional** hint.
+- Asking for a missing VM template says the build takes its address from DHCP unless the settings give a build address.
+- The wizard selects the distribution's own load balancer until you enter an address range, then MetalLB, and marks the same one as recommended. A choice you made stays.
+- A patch or `kubectl edit` that drops a cluster's pod or service ranges no longer clears them.
+- A cluster in `minor` mode still takes its own minor version's patch releases where Rancher or its Talos release does not run the next minor. `AutoUpgradeSkipped` says which.
+- A cluster's `storage`, `controlPlaneEndpoint`, bridge, VLAN and pod and service ranges cannot change once it exists, through kubectl and GitOps as in the interface.
+- kubectl and GitOps now refuse what the interface refuses: a spec change on a cluster being deleted, an empty `allowedNodes` list, and a node listed twice or one Proxmox VE lacks.
+- kubectl and GitOps also refuse a VLAN tag on a VNet whose zone tags its traffic already.
+- Where Proxmox VE's certificate lacks the API's address, the installer, sign-in and token checks name what it lists and the fix ([install.md](install.md#an-address-the-certificate-lacks)).
+- The setup check refuses a Proxmox VE address the management cluster's nodes cannot reach, such as an IPv6 one for nodes without IPv6.
+- The management cluster installs on slow storage, where a disk sync takes seconds. etcd waits 15 s for a request instead of 7 s, and a dead leader is replaced after 5 s ([clusters.md](clusters.md#etcd-storage)).
+- An apply that fails on an etcd request timing out runs again by itself.
+- A chart whose install failed is installed again by the next apply. Before, the apply stopped on the release name being in use.
+- A workload cluster whose Proxmox VE address is a host name comes up. Before, no node was initialised.
+- Clusters are created again on Proxmox VE with libpve-access-control 9.2.1 or newer (`pveversion -v` lists it). Each cluster's user creates its own token, which that version requires.
+- A cluster's VM that an administrator took out of Proxmox VE HA by hand no longer stops the cluster's HA updates.
+- Setting up or applying the management cluster runs again when Proxmox VE answers a file download with "got no worker upid", instead of failing ([troubleshooting](troubleshooting.md#setting-up-the-management-cluster-fails)).
+- Template builds no longer fail with `is not listed in its checksum file` once AlmaLinux or Rocky Linux publishes a new minor release. The image then comes from the publisher's vault ([templates.md](templates.md#image-checks)).
+- Applying the management cluster runs again when one of its webhooks does not answer yet, instead of failing. A Talos upgrade that restarts a node causes this ([troubleshooting](troubleshooting.md#setting-up-the-management-cluster-fails)).
+- AlmaLinux and Rocky Linux templates take every package from the pinned image's minor release. A newer one had made FIPS builds fail at boot.
+- The health page shows why a crash-looping container stopped, also when it is opened just as the container restarts. It used to show an empty log then.
+
+### Security
+
+- Each node OS's cloud image is pinned by its SHA-256. A build refuses an image whose signed checksum differs from the pin.
+
 ## [0.5.0] - 2026-11-12
 
 ### Before you upgrade
@@ -44,7 +192,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - The create wizard offers etcd snapshots on its add-ons step, on by default where the class offers a backup target. A cluster started from another copies its snapshot settings.
 - Certificates take an ACME server's external account binding (`acme.externalAccountBinding.keyID`), its HMAC key stored as a credential. A missing key leaves no issuer, with a `NoACMEEABCredential` event.
 - The `external` issuer (`issuerName`, `issuerKind`, `issuerGroup`) uses one you run, such as Vault, ADCS or a ClusterIssuer, in place of Kubehenge's own.
-- Clusters can take their add-ons' Helm charts from a mirror per repository host, with its own CA. `kubehenge charts` lists what to copy ([install.md](clusters.md#mirroring-the-charts)).
+- Clusters can take their add-ons' Helm charts from a mirror per repository host, with its own CA. `kubehenge charts` lists what to copy ([clusters.md](clusters.md#mirroring-the-charts)).
 - cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher go out through a proxy (`egressProxy`), the management cluster's or the cluster's own. Cluster ranges, `.svc` and `.cluster.local` bypass it.
 - Argo CD and Flux trust a certificate authority for the Git server (`gitops.repository.caBundle`).
 - The monitoring add-on takes alert receivers (email, webhook, Slack, Teams), a remote write target and external Alertmanagers. Their secrets are stored as credentials.
@@ -80,7 +228,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A cluster's `network` variable takes an `mtu` (1280 to 65520) and `queues` (1 to 64) for its nodes' interface. The wizard and the controller refuse an MTU above the bridge's.
 - A failure creating a cluster's Proxmox VE pool, user, token or volume owner records a `ProxmoxObjectsFailed` warning event with the error.
 - `--node` of `kubehenge template create` and `refresh`, and the chart's `templateRefresh.node`, take several nodes. The build runs on the first that is online and whose CPU runs the node OS.
-- The management cluster's setup takes an HTTP(S) proxy for every download it makes ([install.md](clusters.md#behind-a-proxy)). The saved password is never shown again.
+- The management cluster's setup takes an HTTP(S) proxy for every download it makes ([clusters.md](clusters.md#behind-a-proxy)). The saved password is never shown again.
 - Machines on a Proxmox VE node that reboots or is in HA maintenance are not replaced for 30 minutes (`RemediationHeld`), and a host removed from the Proxmox VE cluster ends the wait.
 - `hostOutageGraceMinutes` sets that wait, 30 by default, 0 for no ceiling, otherwise 5 to 10080. The wizard, **Options** and `kubehenge cluster create` and `update` (`--host-outage-grace-minutes`) set it.
 - The management cluster's Health says when the controller's token lacks `Sys.Audit` on `/`, which hides HA maintenance and removed hosts.
@@ -137,7 +285,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A cluster whose API is silent for 10 minutes, with under a majority of control-plane VMs running, gets `ControlPlaneQuorumLost`. An event of that name and a Health item come with it.
 - **Recover…** also works on a cluster that lost quorum, through the interface, the CLI and kubectl. It lists the control planes still running and warns that what only the lost members held is gone.
 - The troubleshooting page covers recovering a cluster that lost two of three control planes, with the kubectl annotation.
-- A release mirror serves the RKE2 and k3s releases in place of GitHub ([install.md](clusters.md#mirroring-the-releases)). Nodes, the interface and `kubehenge release pin --mirror` read from it.
+- A release mirror serves the RKE2 and k3s releases in place of GitHub ([clusters.md](clusters.md#mirroring-the-releases)). Nodes, the interface and `kubehenge release pin --mirror` read from it.
 - An RKE2 or k3s cluster can name its own mirror in `releaseMirror`, in the wizard or Options ([clusters.md](clusters.md#a-clusters-own-release-mirror)). It replaces the management cluster's for its nodes.
 - A node whose release download fails names the file and the mirror or GitHub.
 - While Proxmox VE nodes run different major versions, new VMs go to the oldest version's nodes with room, so a drain or HA move back works. Otherwise they go to newer nodes, with a Warning event.
@@ -260,7 +408,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - The health identity may read `/metrics`, webhook configurations and endpoint slices for the upgrade checks.
 - The installer sets up Debian's daily security updates in the container, through its proxy, and `install.sh --upgrade` adds them to appliances that lack them.
 - Release files that do not match their pins are refused before anything is installed.
-- Cluster API's token holds the module's own roles, with only the privileges the provider's calls need ([install.md](architecture.md#what-cluster-apis-token-may-do)). It loses `VM.Migrate`, `VM.Snapshot` and others that Proxmox VE's roles granted.
+- Cluster API's token holds the module's own roles, with only the privileges the provider's calls need ([architecture.md](architecture.md#what-cluster-apis-token-may-do)). It loses `VM.Migrate`, `VM.Snapshot` and others that Proxmox VE's roles granted.
 - Talos templates are baked on your Proxmox VE host from Sidero's images, each pinned by digest. They are no longer imported from the Image Factory without a checksum.
 - Only pinned Talos releases are offered and admitted for a new cluster or a change of release.
 
@@ -333,7 +481,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - **Copy as YAML** on the create wizard's check step copies the cluster for kubectl or a Git repository.
 - Each identity provider has its own sign-in button.
 - A finished backup's or restore's run page shows the end of its Velero log.
-- **Notifications** go to a webhook, an ntfy topic or email ([install.md](install-settings.md#notifications)). They report a cluster problem lasting 5 minutes and its end, a failed run and management cluster problems.
+- **Notifications** go to a webhook, an ntfy topic or email ([install-settings.md](install-settings.md#notifications)). They report a cluster problem lasting 5 minutes and its end, a failed run and management cluster problems.
 - **Administration, Notifications** sets the targets and sends a test, as `kubehenge appliance notifications` does in the shell.
 - A cluster with the monitoring add-on lists its firing alerts on its Health page.
 - `kubehenge cluster` lists, creates, scales and deletes clusters, prints a kubeconfig and acts on machines through the interface.
@@ -377,7 +525,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 - A held Kubernetes upgrade sets `UpgradeHeld`, with the reason `RancherKubernetes`, `RancherElsewhere` or `TalosUpgrade`.
 - The fleet and the Health page show **Upgrade held for Rancher** or **Upgrade waits for Talos**. `kubehenge cluster list` shows the reason in STATUS ([troubleshooting.md](troubleshooting.md#upgrades-held-back)).
 - **Administration, Backups** snapshots the management cluster's etcd on a schedule into a backup target, encrypted, and lists the snapshots there.
-- **Restore…** wipes etcd on the control-plane nodes and restores one with the state passphrase, also while the API is down ([install.md](install-settings.md#back-up-the-management-clusters-etcd)).
+- **Restore…** wipes etcd on the control-plane nodes and restores one with the state passphrase, also while the API is down ([install-settings.md](install-settings.md#back-up-the-management-clusters-etcd)).
 - An appliance upgrade is rolled back unless the new interface answers within 2 minutes and stays up for 20 seconds.
 - The Administration page shows such an upgrade as rolled back, with why ([troubleshooting.md](troubleshooting.md#appliance-upgrades)). `install.sh --upgrade` checks and rolls back the same way.
 - `kubehenge appliance` in the appliance's shell shows the upgrades and how the last went, asks for one and checks the interface.

@@ -112,11 +112,13 @@ type Release struct {
 	// Build pins the published image a bake starts from, by its build in the publisher's file
 	// names, which never changes once published. Renovate moves it.
 	Build string
+	// SHA256 pins the bytes of that image. A bake uses it only once the publisher's signed checksum
+	// file lists the same. Renovate moves it with Build.
+	SHA256 string
 	// CPUType is the QEMU CPU type the release needs at the least; "" means DefaultCPUType.
 	CPUType string
 	Mode    BuildMode
-	// FIPS says templates of the release are also built in FIPS mode. It sits beside Mode, so
-	// the two bytes share one word and Release stays small enough to pass by value.
+	// FIPS says templates of the release are also built in FIPS mode.
 	FIPS bool
 	// Unreleased, when set, says why no template of the release can be built yet: the family is
 	// complete, but its publisher has not released it.
@@ -135,14 +137,14 @@ type Family interface {
 	Releases() []Release
 	// MAC is what the family's nodes enforce.
 	MAC() MAC
-	// Image resolves the image a bake of the release boots, checked against the publisher's
-	// signature over its checksum.
-	Image(ctx context.Context, s *Sources, r Release) (Resolved, error)
+	// Image resolves the image a bake of the release boots, its pinned SHA-256 checked against the
+	// publisher's signature over its checksum.
+	Image(ctx context.Context, s *Sources, r *Release) (Resolved, error)
 	// Keys are the signing keys of the package repositories a bake of the release adds, fetched
 	// and checked against their fingerprints before the bake starts.
-	Keys(r Release, b *Bake) []RepositoryKey
+	Keys(r *Release, b *Bake) []RepositoryKey
 	// Recipe is what the bake of a template does: keys holds each of Keys's, armoured, by name.
-	Recipe(r Release, b *Bake, keys map[string]string) (Recipe, error)
+	Recipe(r *Release, b *Bake, keys map[string]string) (Recipe, error)
 }
 
 // Recipe is the work of one bake, which the builder carries out through Proxmox VE and the guest
@@ -252,7 +254,7 @@ func NodeOSes() []NodeOSInfo {
 		for _, r := range f.Releases() {
 			o := NodeOS{Family: f.Name(), Release: r.Name}
 			info := NodeOSInfo{
-				NodeOS: o, Title: f.Title() + " " + r.Name, CPUType: CPUTypeOf(r), MAC: f.MAC(),
+				NodeOS: o, Title: f.Title() + " " + r.Name, CPUType: CPUTypeOf(&r), MAC: f.MAC(),
 				Default: o == DefaultNodeOS, Unreleased: r.Unreleased,
 			}
 			out = append(out, info)
@@ -286,7 +288,7 @@ func nodeOSesWhere(keep func(NodeOS) bool) []string {
 }
 
 // CPUTypeOf is the QEMU CPU type a release's templates and machines get.
-func CPUTypeOf(r Release) string {
+func CPUTypeOf(r *Release) string {
 	if r.CPUType != "" {
 		return r.CPUType
 	}

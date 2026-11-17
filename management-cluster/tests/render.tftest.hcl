@@ -89,6 +89,48 @@ run "no_site_ca_leaves_the_chart_without_one" {
   }
 }
 
+run "workload_vm_id_range_reaches_the_chart" {
+  command = plan
+
+  variables {
+    workload_vm_id_range = { start = 10000, end = 10999 }
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).vmIDRange.start == 10000 && yamldecode(helm_release.kubehenge.values[0]).vmIDRange.end == 10999
+    error_message = "the chart is given the workload VM ID range"
+  }
+}
+
+run "no_workload_vm_id_range_leaves_the_chart_without_one" {
+  command = plan
+
+  assert {
+    condition     = !contains(keys(yamldecode(helm_release.kubehenge.values[0])), "vmIDRange")
+    error_message = "without a workload VM ID range the chart gets none"
+  }
+}
+
+run "workload_vm_id_range_refuses_start_above_end" {
+  command = plan
+
+  variables {
+    workload_vm_id_range = { start = 2000, end = 1000 }
+  }
+
+  expect_failures = [var.workload_vm_id_range]
+}
+
+run "workload_vm_id_range_refuses_ids_outside_proxmox_ve_limits" {
+  command = plan
+
+  variables {
+    workload_vm_id_range = { start = 99, end = 1000 }
+  }
+
+  expect_failures = [var.workload_vm_id_range]
+}
+
 run "site_ca_refuses_text_that_is_no_certificate" {
   command = plan
 
@@ -528,7 +570,7 @@ run "controller_and_clusters_are_least_privilege" {
       talos = { imageSignatures = [
         { image = "factory.talos.dev/*", keyless = { issuer = "https://accounts.google.com", subject = "image-factory-signing@talos-production.iam.gserviceaccount.com" } },
         { image = "ghcr.io/siderolabs/*", keyless = { issuer = "https://accounts.google.com", subjectRegex = "^(releasemgr-svc@talos-production\\.iam\\.gserviceaccount\\.com|[^@]+@siderolabs\\.com)$" } },
-        { image = "registry.k8s.io/*", keyless = { issuer = "https://accounts.google.com", subject = "krel-trust@k8s-releng-prod.iam.gserviceaccount.com" } },
+        { image = "registry.k8s.io/*", keyless = { issuer = "https://accounts.google.com", subjectRegex = "^(krel-trust|promoter-summaries)@k8s-releng-prod\\.iam\\.gserviceaccount\\.com$" } },
       ] }
       watch     = { stallMinutes = 20 }
       interface = { extraNamespaces = [], offerHARules = false, headlampSignIn = false, headlampActions = false, apiAuditLog = false }
@@ -638,7 +680,7 @@ run "controller_and_clusters_are_least_privilege" {
       ] == [[
         ["factory.talos.dev/*", "https://accounts.google.com", "image-factory-signing@talos-production.iam.gserviceaccount.com"],
         ["ghcr.io/siderolabs/*", "https://accounts.google.com", "^(releasemgr-svc@talos-production\\.iam\\.gserviceaccount\\.com|[^@]+@siderolabs\\.com)$"],
-        ["registry.k8s.io/*", "https://accounts.google.com", "krel-trust@k8s-releng-prod.iam.gserviceaccount.com"],
+        ["registry.k8s.io/*", "https://accounts.google.com", "^(krel-trust|promoter-summaries)@k8s-releng-prod\\.iam\\.gserviceaccount\\.com$"],
         ["ghcr.io/kubehenge/cluster-api-bootstrap-provider-talos", "https://token.actions.githubusercontent.com", "^https://github\\.com/kubehenge/cluster-api-bootstrap-provider-talos/\\.github/workflows/release\\.yaml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$"],
         ["ghcr.io/kubehenge/cluster-api-control-plane-provider-talos", "https://token.actions.githubusercontent.com", "^https://github\\.com/kubehenge/cluster-api-control-plane-provider-talos/\\.github/workflows/release\\.yaml@refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$"],
     ]]

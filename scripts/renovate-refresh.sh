@@ -7,7 +7,7 @@
 #   tigera-operator chart in charts/kubehenge/values.yaml carries, each by its digest. Calico pushes
 #   a release's images days before it publishes the release and its chart, so they never move alone.
 # - The AlmaLinux checksum file and its signature the template tests serve, which have to list the
-#   build pkg/templates/almalinux.go names.
+#   build pkg/templates/almalinux.go names. They come from the folder of that build's minor release.
 #
 # make release-pins refreshes the Kubernetes and Talos release pins beside this.
 set -eu
@@ -70,14 +70,15 @@ done < "${work}/calico-images"
 cmp -s "${work}/values.yaml" "${values}" || cp "${work}/values.yaml" "${values}"
 
 alma=pkg/templates/testdata/almalinux-10
-for file in CHECKSUM CHECKSUM.asc; do
-    curl_get -o "${work}/${file}" "https://repo.almalinux.org/almalinux/10/cloud/x86_64_v2/images/${file}"
-done
 build=$(sed -n 's/^[[:space:]]*Build: *"\(.*\)",$/\1/p' pkg/templates/almalinux.go)
-grep -qF "AlmaLinux-10-GenericCloud-${build}.x86_64_v2.qcow2" "${work}/CHECKSUM" || {
-    echo "renovate-refresh: AlmaLinux's CHECKSUM no longer lists build ${build}" >&2
-    exit 1
-}
-for file in CHECKSUM CHECKSUM.asc; do
-    cmp -s "${work}/${file}" "${alma}/${file}" || cp "${work}/${file}" "${alma}/${file}"
-done
+image="AlmaLinux-10-GenericCloud-${build}.x86_64_v2.qcow2"
+if ! grep -qF "${image}" "${alma}/CHECKSUM"; then
+    for file in CHECKSUM CHECKSUM.asc; do
+        curl_get -o "${work}/${file}" "https://repo.almalinux.org/almalinux/${build%%-*}/cloud/x86_64_v2/images/${file}"
+    done
+    grep -qF "${image}" "${work}/CHECKSUM" || {
+        echo "renovate-refresh: AlmaLinux's CHECKSUM of ${build%%-*} does not list build ${build}" >&2
+        exit 1
+    }
+    cp "${work}/CHECKSUM" "${work}/CHECKSUM.asc" "${alma}/"
+fi

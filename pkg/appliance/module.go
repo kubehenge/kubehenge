@@ -66,6 +66,7 @@ module "management" {
   release_mirror         = var.settings.releaseMirror
   site_ca                = try(var.settings.siteCA, "")
   time_zone              = try(var.settings.timeZone, "")
+  workload_vm_id_range   = try(var.settings.workloadVMIDRange, null)
   controller_image       = var.settings.controllerImage
   vm_id_range            = var.settings.vmIdRange
   pod_subnets            = var.settings.podSubnets
@@ -176,7 +177,8 @@ func (a *Appliance) setUpBackups(ctx context.Context, j *Job, admin, talos []byt
 		j.Add("Setting up the backups on the backup volume failed: " + err.Error())
 		a.volumeBackupFailed(err)
 	}
-	// The next wake of the backup store tries again, so a failure holds no apply up.
+	// The controller tries again within a minute, and before each wake of the backup store, so a
+	// failure holds no apply up.
 	unknown, err := a.labelZones(ctx, admin)
 	if err != nil {
 		j.Add("Setting the management nodes' zones failed: " + err.Error())
@@ -263,6 +265,9 @@ func (a *Appliance) writeConfig(s *Settings, ids VMIDRange) error {
 	}
 	if s.TimeZone != "" {
 		values["timeZone"] = s.TimeZone
+	}
+	if s.WorkloadVMIDRange != nil {
+		values["workloadVMIDRange"] = s.WorkloadVMIDRange
 	}
 	if s.HasIPv6() {
 		// An IPv4 cluster leaves these out, so its variables stay as they were and the module's
@@ -433,12 +438,23 @@ func (a *Appliance) tofu(ctx context.Context, j *Job, env []string, message func
 	case err != nil && run.Err() != nil && ctx.Err() == nil:
 		return fmt.Errorf("tofu %s: interrupted before the Proxmox VE sign-in it runs on expires, so run it again: %w", args[0], err)
 	case err != nil && len(failures) > 0:
-		return fmt.Errorf("tofu %s: %w: %s", args[0], err, strings.Join(failures, "; "))
+		return &tofuError{fmt.Errorf("tofu %s: %w: %s", args[0], err, strings.Join(failures, "; ")), failures}
 	case err != nil:
 		return fmt.Errorf("tofu %s: %w", args[0], err)
 	}
 	return nil
 }
+
+// tofuError is a tofu run that failed with the error diagnostics it printed, each as
+// errorDiagnostic reads it.
+type tofuError struct {
+	err         error
+	diagnostics []string
+}
+
+func (e *tofuError) Error() string { return e.err.Error() }
+
+func (e *tofuError) Unwrap() error { return e.err }
 
 // errorDiagnostic is the summary and detail of a line of OpenTofu's -json output that reports an
 // error, or "" for any other line. The job's error carries them, as the log scrolls out of view.

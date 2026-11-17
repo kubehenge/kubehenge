@@ -31,10 +31,11 @@ talos:
       keyless:
         issuer: https://accounts.google.com
         subjectRegex: ^(releasemgr-svc@talos-production\.iam\.gserviceaccount\.com|[^@]+@siderolabs\.com)$
+    # Kubernetes' image promoter signs with two accounts only its production jobs use.
     - image: registry.k8s.io/*
       keyless:
         issuer: https://accounts.google.com
-        subject: krel-trust@k8s-releng-prod.iam.gserviceaccount.com
+        subjectRegex: ^(krel-trust|promoter-summaries)@k8s-releng-prod\.iam\.gserviceaccount\.com$
 
 interface:
   # Namespace the web interface creates clusters in; it changes and hands out kubeconfigs only of
@@ -149,6 +150,11 @@ siteCA: ""
 # snapshots. The wizard starts from it. Empty, schedules run in UTC and the wizard starts from the
 # user's browser time zone.
 timeZone: ""
+
+# The Proxmox VE VM IDs a new cluster's VMs take, start and end both included, and the VM templates
+# the weekly build makes. A cluster may set its own (its vmIDRange variable), and a cluster made
+# before this changes keeps what it has. Empty, VMs take Proxmox VE's next free ID.
+vmIDRange: {}
 
 proxmox:
   # The Proxmox VE API, such as https://pve.example.org:8006. Required.

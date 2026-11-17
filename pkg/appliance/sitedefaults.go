@@ -8,8 +8,8 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 )
 
-// checkSiteDefaults holds the site CA to PEM certificates valid now and the site time zone to an
-// IANA name. A site CA that passes is rewritten as the chart and the module take it.
+// checkSiteDefaults holds the site CA to PEM certificates valid now, the site time zone to an
+// IANA name and the VM ID range to Proxmox VE's limits. A site CA that passes is rewritten as the chart and the module take it.
 func (s *Settings) checkSiteDefaults(p *problems, now time.Time) {
 	if s.SiteCA != "" {
 		plain, err := provisioner.NormaliseCertificateBundle(s.SiteCA)
@@ -27,9 +27,15 @@ func (s *Settings) checkSiteDefaults(p *problems, now time.Time) {
 			p.addf("Time zone: %s", err)
 		}
 	}
+	if s.WorkloadVMIDRange != nil {
+		if err := s.WorkloadVMIDRange.Check(); err != nil {
+			p.addf("%s", err)
+		}
+	}
 }
 
-// ValidateSiteDefaults refuses a site CA or time zone that Validate refuses, with its message.
+// ValidateSiteDefaults refuses a site CA, time zone or VM ID range that Validate refuses, with its
+// message.
 func (s *Settings) ValidateSiteDefaults() error {
 	var p problems
 	s.checkSiteDefaults(&p, time.Now())

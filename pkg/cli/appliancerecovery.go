@@ -112,9 +112,9 @@ func (o *applianceOptions) recoverCommand() *cobra.Command {
 		use:   "recover",
 		short: "Make the management cluster again from the backup volume or the appliance's copy",
 		long: `Recover the management cluster after its VMs were lost, from Kubehenge's own backups. It applies the
-management cluster, waits for the backup volume, restores the newest snapshot of the volume and the
-appliance's copy, then applies again. The log names the snapshot and where it was read. The state
-passphrase comes from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
+management cluster and waits for the backup volume. It then restores whichever is newer, the volume's
+newest snapshot or the appliance's copy, and applies again. The log names the snapshot and where it was
+read. The state passphrase comes from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
 		action: "recover", started: "Recovering the management cluster", done: "Recovered the management cluster",
 		own: true,
 	})
@@ -133,7 +133,7 @@ func (o *applianceOptions) snapshotRunCommand(spec *snapshotRun) *cobra.Command 
 	var passphraseFile string
 	takes := argsSay(cobra.ExactArgs(1), "give the snapshot's name")
 	if spec.own {
-		takes = argsSay(cobra.NoArgs, "it takes no snapshot: the newest of the appliance's own is restored")
+		takes = argsSay(cobra.NoArgs, "recover takes no snapshot name")
 	}
 	cmd := &cobra.Command{
 		Use:   spec.use,
