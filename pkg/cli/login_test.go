@@ -316,7 +316,7 @@ func TestALoginIsReadWholeWhileAnotherIsSaved(t *testing.T) {
 	var failed error
 	go func() {
 		defer close(done)
-		for range 100 {
+		for range 1000 {
 			if _, err := readLogin(ctx); err != nil {
 				failed = err
 				return
