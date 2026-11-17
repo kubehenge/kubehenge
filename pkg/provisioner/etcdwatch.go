@@ -455,7 +455,7 @@ func (w *EtcdWatch) event(c *clusterv1.Cluster, reason, note string) {
 // control plane is not initialised, CACPPT recorded it as bootstrapped, and no other control-plane
 // machine exists, not even one being deleted, which may still run a member. The machine's own etcd
 // reads Failed, so none runs. Once initialised, a cluster's etcd had data, which a new empty etcd
-// would replace, so only a restore brings it back.
+// would replace, so its node is rebooted instead.
 func (w *EtcdWatch) onlyEtcd(ctx context.Context, c *clusterv1.Cluster, m *clusterv1.Machine) (bool, error) {
 	if meta.IsStatusConditionTrue(c.Status.Conditions, clusterv1.ClusterControlPlaneInitializedCondition) {
 		return false, nil
