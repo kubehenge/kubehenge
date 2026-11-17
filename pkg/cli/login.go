@@ -399,7 +399,6 @@ func (c *interfaceClient) signInStep(ctx context.Context, path string, body map[
 	if err := json.NewDecoder(io.LimitReader(res.Body, maxInterfaceAnswer)).Decode(&sess); err != nil {
 		return false, fmt.Errorf("the interface's answer: %w", err)
 	}
-	l.Cookie, l.Value = "", ""
 	for _, cookie := range res.Cookies() {
 		l.Cookie, l.Value = cookie.Name, cookie.Value
 	}
