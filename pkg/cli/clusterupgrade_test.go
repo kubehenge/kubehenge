@@ -6,21 +6,19 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
 func runUpgrade(t *testing.T, fake *fakeClusterAPI, stdin string, args ...string) (string, error) {
 	t.Helper()
 	srv := httptest.NewServer(fake)
 	t.Cleanup(srv.Close)
-	cmd := newClusterCommand(&pve.Config{Token: "dev@pve!ci=secret"}) //nolint:gosec // the fake interface's own
+	cmd := newClusterCommand()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(io.Discard)
 	cmd.SetIn(strings.NewReader(stdin))
-	cmd.SetArgs(append([]string{"--url", srv.URL, "upgrade", "web"}, args...))
-	err := cmd.ExecuteContext(t.Context())
+	cmd.SetArgs(append([]string{"upgrade", "web"}, args...))
+	err := cmd.ExecuteContext(loggedIn(t, srv.URL, "dev@pve!ci=secret"))
 	return out.String(), err
 }
 
@@ -42,12 +40,12 @@ func TestClusterAcceptUpgrade(t *testing.T) {
 	fake := &fakeClusterAPI{}
 	srv := httptest.NewServer(fake)
 	t.Cleanup(srv.Close)
-	cmd := newClusterCommand(&pve.Config{Token: "dev@pve!ci=secret"}) //nolint:gosec // the fake interface's own
+	cmd := newClusterCommand()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(io.Discard)
-	cmd.SetArgs([]string{"--url", srv.URL, "accept-upgrade", "web", "--version", "v1.35.1"})
-	if err := cmd.ExecuteContext(t.Context()); err != nil {
+	cmd.SetArgs([]string{"accept-upgrade", "web", "--version", "v1.35.1"})
+	if err := cmd.ExecuteContext(loggedIn(t, srv.URL, "dev@pve!ci=secret")); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "podsecuritypolicies") || !strings.Contains(out.String(), "accepted for the automatic upgrade of web to v1.35.1") {

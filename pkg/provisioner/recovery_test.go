@@ -199,6 +199,31 @@ func TestTalosControlPlaneReset(t *testing.T) {
 	}
 }
 
+// A Talos reset whose etcd Talos leaves Failed gets the node's own etcd again, as nothing was
+// fetched.
+func TestTalosControlPlaneResetStartsAFailedEtcdAgain(t *testing.T) {
+	t.Parallel()
+	f, talos := newTalosRestoreFixture(t, askReset("web-cp-1"))
+	f.apis.down = 1
+	talos.starting = func(bootstraps int) (string, bool) {
+		if bootstraps < 2 {
+			return talosEtcdFailed, false
+		}
+		return talosEtcdRunning, true
+	}
+	f.reconcile()
+	want := []string{"10.0.0.12 snapshot", "10.0.0.12 wipe", "10.0.0.12 upload", "10.0.0.12 bootstrap", "10.0.0.12 upload", "10.0.0.12 bootstrap"}
+	if got := talos.restoreCalls(); !slices.Equal(got, want) {
+		t.Errorf("called %v, want %v", got, want)
+	}
+	if string(talos.uploaded["10.0.0.12"]) != "snapshot" {
+		t.Errorf("uploaded %q, not the node's own etcd", talos.uploaded["10.0.0.12"])
+	}
+	if st := f.status(); st.Phase != RestoreSucceeded {
+		t.Errorf("status %+v", st)
+	}
+}
+
 func TestPlanControlPlaneReset(t *testing.T) {
 	t.Parallel()
 	f := newRestoreFixture(t, nil)

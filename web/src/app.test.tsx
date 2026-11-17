@@ -703,7 +703,9 @@ describe("clusters", () => {
     render(<App />);
     const main = await screen.findByRole("main");
     await expect(within(main).findByText("Waiting for ClusterClass")).resolves.toBeInTheDocument();
-    const rail = screen.getByRole("navigation", { name: "Fleet" });
+    window.history.pushState(null, "", "/clusters/new");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    const rail = await screen.findByRole("navigation", { name: "Fleet" });
     expect(within(within(rail).getByRole("region", { name: "Running" })).getByRole("link")).toHaveTextContent(
       "webWaiting for ClusterClass",
     );

@@ -453,8 +453,10 @@ func TestUIVLANFieldRefusesTheRouteVLAN(t *testing.T) {
 	u.key('2')
 	u.key('0')
 	u.enter(1)
+	// The refusal is drawn after the key is handled, so it is waited for, not read at once.
+	u.waitFor("vmbr1 is not VLAN aware")
 	screen := u.rec.screen()
-	if !strings.Contains(screen, "vmbr1 is not VLAN aware") || !strings.Contains(screen, "MTU") {
+	if !strings.Contains(screen, "MTU") {
 		t.Fatalf("the VLAN field let the route's VLAN on vmbr1 through:\n%s", screen)
 	}
 	u.press(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})

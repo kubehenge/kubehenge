@@ -28,7 +28,7 @@ concurrency:
 jobs:
   # Lint, unit and integration tiers: Go, the frontend, the OpenTofu module against mocked
   # providers, the Helm charts, the shell scripts, and the chart and controllers against a real API
-  # server.
+  # server. The interface's flow tests run in a browser against the demo.
   # End-to-end tests need a Proxmox VE host (docs/testing.md).
   # Each tier on its own runner, side by side: on one runner they took over 30 minutes from a cold
   # cache, and a pull request's runs always start cold.
@@ -45,6 +45,7 @@ jobs:
           - {name: gopls, target: lint-gopls, cache: lint-gopls}
           - {name: Lint, target: lint-other, cache: lint-other}
           - {name: Unit, target: unit, cache: unit}
+          - {name: Interface flows, target: ui-flows, cache: ui-flows}
           - {name: Integration, target: ci-integration, cache: integration}
     env:
       LINT_GO_OS: ${{ matrix.os }}
@@ -97,6 +98,15 @@ jobs:
       - env:
           TARGET: ${{ matrix.target }}
         run: make "${TARGET}"
+      - if: failure() && matrix.target == 'ui-flows'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ui-flows-report
+          path: |
+            dist/ui-flows/report
+            dist/ui-flows/results
+          if-no-files-found: ignore
+          retention-days: 7
       - if: github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

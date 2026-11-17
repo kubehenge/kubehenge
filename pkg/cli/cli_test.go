@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"io/fs"
@@ -22,12 +23,22 @@ const archiveSHA = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab
 
 func run(t *testing.T, args ...string) (string, error) {
 	t.Helper()
+	return runIn(t, "", args...)
+}
+
+// runIn is run with the login kept in loginFile, else where the environment says.
+func runIn(t *testing.T, loginFile string, args ...string) (string, error) {
+	t.Helper()
+	ctx := t.Context()
+	if loginFile != "" {
+		ctx = context.WithValue(ctx, loginFileKey{}, loginFile)
+	}
 	root := NewRoot()
 	var out bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&out)
 	root.SetArgs(args)
-	err := root.ExecuteContext(t.Context())
+	err := root.ExecuteContext(ctx)
 	return out.String(), err
 }
 

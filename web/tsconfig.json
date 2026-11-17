@@ -17,6 +17,8 @@
     "exactOptionalPropertyTypes": true,
     "allowUnreachableCode": false,
     "allowUnusedLabels": false,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
     "erasableSyntaxOnly": true,
     "forceConsistentCasingInFileNames": true,
     "verbatimModuleSyntax": true,
@@ -24,5 +26,5 @@
     "skipLibCheck": false,
     "types": ["vite/client"]
   },
-  "include": ["src", "vite.config.ts", "screenshots.ts"]
+  "include": ["src", "vite.config.ts", "screenshots.ts", "playwright.config.ts", "flows"]
 }

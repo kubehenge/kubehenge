@@ -4,6 +4,39 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-17
+
+### Before you upgrade
+
+- `kubehenge appliance` and `kubehenge cluster` no longer take sign-in flags or variables. In scripts, run `kubehenge login` before them ([clusters.md](clusters.md#signing-in-and-finding-clusters)).
+- A password login ends after eight hours by default and when the interface restarts. In scripts that run on a schedule, sign in with `--token-file` ([clusters.md](clusters.md#signing-in-and-finding-clusters)).
+
+### Highlights
+
+- **One sign-in for the CLI.** `kubehenge login` replaces the sign-in flags and variables of the `appliance` and `cluster` commands.
+- **Talos etcd restores finish.** A restore whose image pull failed starts etcd again, instead of leaving the cluster down.
+- **Setup fills in more.** The setup page preselects up to three Proxmox VE nodes and fills in free addresses for the management cluster.
+
+### Added
+
+- `kubehenge login` signs in once, with a password or a token, and `kubehenge logout` ends it. `appliance` and `cluster` use it.
+
+### Changed
+
+- The setup page preselects up to three Proxmox VE nodes that answer. It fills **Node addresses** and **API address** with free addresses on the bridge, unless a VLAN tag is set.
+- The home page shows the clusters once, without the side list that repeated them.
+
+### Fixed
+
+- A Talos etcd restore starts etcd again when a failed image pull leaves it stopped, instead of timing out with the cluster down. This covers workload clusters and the management cluster.
+- A Talos etcd restore waits for the other control-plane nodes to rejoin etcd, and reboots one that a failed image pull left stopped. If it runs out of time, it names the node and Talos's reason.
+
+### Removed
+
+- The flags `--user`, `--password-file` and `--totp` of `appliance` are gone, as are `--url` and `--ca` of `cluster`. So are the variables `KUBEHENGE_USER`, `KUBEHENGE_URL` and `KUBEHENGE_CA`.
+- `kubehenge login` reads `KUBEHENGE_PASSWORD` and `KUBEHENGE_PROXMOX_TOKEN`. `appliance` no longer reads `KUBEHENGE_PASSWORD`, nor `cluster` `KUBEHENGE_PROXMOX_TOKEN`.
+- `--cert` and `--address` are flags of `kubehenge appliance health` alone. The other `appliance` commands reach the address given to `kubehenge login`.
+
 ## [0.5.1] - 2026-11-17
 
 ### Before you upgrade

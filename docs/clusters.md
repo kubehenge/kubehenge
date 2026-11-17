@@ -2031,11 +2031,10 @@ An administrator can let cluster creators choose among more namespaces than `clu
 
 ## From the command line
 
-`kubehenge cluster` lists, creates, scales, upgrades and deletes clusters through the interface, signed in with a Proxmox VE API token instead of a password. The token is held to the privileges above as a user is. With privilege separation it holds only what both it and its user are given. A token without it holds its user's. A token revoked in Proxmox VE stops working within a minute.
+`kubehenge cluster` lists, creates, scales, upgrades and deletes clusters through the interface, as the user `kubehenge login` signed in. That user is held to the privileges above. A Proxmox VE API token with privilege separation holds only what both it and its user are given. A token without it holds its user's. A token revoked in Proxmox VE stops working within a minute.
 
 ```sh
-export KUBEHENGE_URL=https://kubehenge.example.org
-export KUBEHENGE_PROXMOX_TOKEN='ci@pve!kubehenge=<secret>'
+kubehenge login https://kubehenge.example.org --token-file ~/kubehenge-token
 kubehenge cluster list
 kubehenge cluster create -f web.yaml
 kubehenge cluster scale web --control-planes 3 --workers workers=5
@@ -2050,7 +2049,13 @@ kubehenge cluster delete web --yes
 
 ### Signing in and finding clusters
 
-- The token is read only from `KUBEHENGE_PROXMOX_TOKEN` and never shows in a process list. `--ca` (or `KUBEHENGE_CA`) names the CA of the interface's certificate where the system does not trust it.
+- `kubehenge login <url>` signs in once for every command, `appliance` and `cluster` alike. `kubehenge logout` ends it.
+- Sign in as a user with `--user root@pam --password-file <file>` (or `KUBEHENGE_PASSWORD`). Add `--totp <code>` for a second factor.
+- A password login ends after the interface's session time, eight hours by default, and when the interface restarts ([Sessions](architecture.md#sessions)). Run `kubehenge login` again when a command says the login has ended.
+- Sign in with a Proxmox VE API token through `--token-file <file>` (or `KUBEHENGE_PROXMOX_TOKEN`), written as `<user>@<realm>!<name>=<secret>`. That login lasts as long as the token.
+- Neither the password nor the token shows in a process list.
+- `--ca <file>` names the CA of the interface's certificate where the system does not trust it.
+- The login, with its session or token, is kept in `kubehenge/login.json` in the user's config folder (`~/.config` on Linux), readable by that user alone. `KUBEHENGE_LOGIN_FILE` names another file.
 - A cluster is found by its name. `-n` names its namespace where more than one has a cluster of that name.
 - Any HTTP client can do the same: send `Authorization: PVEAPIToken=<user>@<realm>!<name>=<secret>` to the interface's `/api/clusters`.
 

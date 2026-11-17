@@ -143,6 +143,15 @@ screenshots: web gateway-api
 	cd web && npm exec --no -- playwright install --only-shell chromium
 	cd web && node screenshots.ts ../dist/screenshots/kubehenge$(shell go env GOEXE) ../docs/images
 
+# The interface's flow tests (web/flows): `kubehenge serve --demo` in a headless Chromium, the one
+# Playwright pins in web/package-lock.json. FLOWS names the specs to run, such as
+# FLOWS=flows/sign-in.flow.ts. A failed run leaves its report and traces in dist/ui-flows.
+.PHONY: ui-flows
+ui-flows: web gateway-api
+	CGO_ENABLED=0 go build -trimpath -o dist/ui-flows/kubehenge$(shell go env GOEXE) ./cmd/kubehenge
+	cd web && npm exec --no -- playwright install --only-shell chromium
+	cd web && KUBEHENGE_BIN=../dist/ui-flows/kubehenge$(shell go env GOEXE) npm exec --no -- playwright test $(FLOWS)
+
 # The appliance's release archive, which appliance/install.sh installs: the binary, the
 # management-cluster module with the charts it installs, the shared Headlamp (its server and
 # frontend, taken from its Linux release) and the service units.

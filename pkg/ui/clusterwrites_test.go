@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -300,4 +301,24 @@ func TestAskingForASnapshotChecksTheClusterAgainOnEachAttempt(t *testing.T) {
 	if _, ok := h.cluster().Annotations[provisioner.EtcdSnapshotRequestAnnotation]; ok {
 		t.Error("the snapshot is asked for during a restore")
 	}
+}
+
+// Applying the waiting add-on changes now asks the controller with the time it was asked at, and
+// needs the right to change the cluster.
+func TestApplyingAddonChangesNow(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, cluster("default", "one"))
+	viewer := h.browser()
+	viewer.signIn("viewer@pve")
+	expect(t, viewer.do("POST", "/api/clusters/default/one/addon-changes", ""), http.StatusForbidden)
+	if _, ok := storedCluster(t, h, "one").Annotations[provisioner.ApplyAddonChangesAnnotation]; ok {
+		t.Error("a viewer asked for the add-on changes")
+	}
+	dev := h.browser()
+	dev.signIn("dev@pve")
+	expect(t, dev.do("POST", "/api/clusters/default/one/addon-changes", ""), http.StatusAccepted)
+	if got := storedCluster(t, h, "one").Annotations[provisioner.ApplyAddonChangesAnnotation]; got != h.clock.Format(time.RFC3339) {
+		t.Errorf("asked at %q, want %q", got, h.clock.Format(time.RFC3339))
+	}
+	expect(t, dev.do("POST", "/api/clusters/default/gone/addon-changes", ""), http.StatusNotFound)
 }

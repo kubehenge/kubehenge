@@ -47,7 +47,6 @@ func (o *applianceOptions) settingsCommand() *cobra.Command {
 			})
 		},
 	}
-	o.signInFlags(cmd)
 	o.jsonFlag(cmd)
 	cmd.AddCommand(o.settingsSetCommand())
 	return cmd
@@ -169,6 +168,5 @@ windows. The state passphrase comes from --passphrase-file or KUBEHENGE_PASSPHRA
 	f.StringVar(&zone, "time-zone", "", "IANA time zone schedules use unless they name their own, empty to clear")
 	f.StringVar(&vmIDs, "vm-id-range", "", "VM IDs of new clusters' VMs and the VM templates, as start-end, empty to clear")
 	f.StringVar(&passphraseFile, "passphrase-file", "", passphraseFileUsage)
-	o.signInFlags(cmd)
 	return cmd
 }

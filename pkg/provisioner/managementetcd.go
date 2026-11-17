@@ -97,7 +97,8 @@ func (m *ManagementTalos) Snapshot(ctx context.Context, raw []byte, nodes []stri
 // Restore restores the management cluster's etcd from a snapshot through the Talos API, as an
 // etcd restore of a Talos cluster does: it wipes etcd on every control-plane node that answers,
 // waits for each to boot again, uploads the snapshot to the first and bootstraps etcd from it,
-// and waits until it runs. The others then join. open hands the plain snapshot, checked already.
+// and waits until it runs and the others have joined it. open hands the plain snapshot, checked
+// already.
 func (m *ManagementTalos) Restore(ctx context.Context, admin []byte, nodes []string, open func() (io.ReadCloser, error), log func(string)) error {
 	up := m.answering(ctx, admin, nodes, log)
 	if len(up) == 0 {
@@ -128,18 +129,21 @@ func (m *ManagementTalos) Restore(ctx context.Context, admin []byte, nodes []str
 		}
 	}
 	first := up[0]
-	log("Uploading the snapshot to " + first)
-	err := m.wait(ctx, admin, first, "uploading the snapshot", func(ctx context.Context, t TalosNode) (bool, error) {
-		state, _, err := t.Etcd(ctx)
-		if err != nil || state != talosEtcdPreparing {
-			return false, err //nolint:wrapcheck // wait names the node and what it was doing
-		}
+	upload := func(ctx context.Context, t TalosNode) error {
 		r, err := open()
 		if err != nil {
-			return false, err
+			return err
 		}
 		defer func() { _ = r.Close() }()
-		return true, t.UploadEtcdSnapshot(ctx, r)
+		return t.UploadEtcdSnapshot(ctx, r)
+	}
+	log("Uploading the snapshot to " + first)
+	err := m.wait(ctx, admin, first, "uploading the snapshot", func(ctx context.Context, t TalosNode) (bool, error) {
+		etcd, err := t.Etcd(ctx)
+		if err != nil || !talosEtcdTakesSnapshot(etcd.State) {
+			return false, err //nolint:wrapcheck // wait names the node and what it was doing
+		}
+		return true, upload(ctx, t)
 	})
 	if err != nil {
 		return err
@@ -152,10 +156,34 @@ func (m *ManagementTalos) Restore(ctx context.Context, admin []byte, nodes []str
 		return err
 	}
 	log("Waiting for etcd on " + first)
-	return m.wait(ctx, admin, first, "starting etcd", func(ctx context.Context, t TalosNode) (bool, error) {
-		state, healthy, err := t.Etcd(ctx)
-		return state == talosEtcdRunning && healthy, err //nolint:wrapcheck // wait names the node and what it was doing
+	err = m.wait(ctx, admin, first, "starting etcd", func(ctx context.Context, t TalosNode) (bool, error) {
+		return talosEtcdStarted(ctx, t, func(ctx context.Context, t TalosNode) error {
+			log("Starting etcd again on " + first + " after Talos left it Failed")
+			return upload(ctx, t)
+		})
 	})
+	if err != nil {
+		return err
+	}
+	return m.waitJoined(ctx, admin, up[1:], log)
+}
+
+// waitJoined waits until etcd on each of the nodes has joined the restored one.
+func (m *ManagementTalos) waitJoined(ctx context.Context, admin []byte, nodes []string, log func(string)) error {
+	for _, address := range nodes {
+		log("Waiting for " + address + " to join etcd")
+		from := ""
+		err := m.wait(ctx, admin, address, "joining etcd", func(ctx context.Context, t TalosNode) (bool, error) {
+			return talosEtcdJoined(ctx, t, &from, func(ctx context.Context, t TalosNode) error {
+				log("Rebooting " + address + " after Talos left its etcd Failed")
+				return t.Reboot(ctx)
+			})
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (*ManagementTalos) client(ctx context.Context, raw []byte, address string) (*talosclient.Client, error) {
@@ -184,19 +212,24 @@ func (m *ManagementTalos) answering(ctx context.Context, admin []byte, nodes []s
 }
 
 func (m *ManagementTalos) on(ctx context.Context, raw []byte, address string, do func(context.Context, TalosNode) error) error {
+	if err := m.with(ctx, raw, address, do); err != nil {
+		return fmt.Errorf("%s: %w", address, err)
+	}
+	return nil
+}
+
+// with is on with an error that does not name the node, for a caller that does.
+func (m *ManagementTalos) with(ctx context.Context, raw []byte, address string, do func(context.Context, TalosNode) error) error {
 	dial := m.Dial
 	if dial == nil {
 		dial = DialTalos
 	}
 	t, err := dial(ctx, raw, address)
 	if err != nil {
-		return fmt.Errorf("%s: %w", address, err)
+		return err
 	}
 	defer func() { _ = t.Close() }()
-	if err := do(ctx, t); err != nil {
-		return fmt.Errorf("%s: %w", address, err)
-	}
-	return nil
+	return do(ctx, t)
 }
 
 // wait does something on a node until it says it is done. A node that does not answer, or is not
@@ -207,7 +240,7 @@ func (m *ManagementTalos) wait(ctx context.Context, raw []byte, address, what st
 	poll := cmp.Or(m.Poll, talosRestorePoll)
 	for {
 		done := false
-		err := m.on(ctx, raw, address, func(ctx context.Context, t TalosNode) error {
+		err := m.with(ctx, raw, address, func(ctx context.Context, t TalosNode) error {
 			var err error
 			done, err = do(ctx, t)
 			return err
@@ -216,7 +249,7 @@ func (m *ManagementTalos) wait(ctx context.Context, raw []byte, address, what st
 		case err == nil && done:
 			return nil
 		case err != nil && !errors.Is(err, errTalosNotReady) && ctx.Err() == nil:
-			return fmt.Errorf("%s: %w", what, err)
+			return fmt.Errorf("%s: %s: %w", what, address, err)
 		}
 		select {
 		case <-ctx.Done():

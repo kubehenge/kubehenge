@@ -26,7 +26,8 @@ import (
 )
 
 // fakeTalos records what the upgrader and the restorer do on each node through the Talos API. Its
-// nodes run etcd until wiped, boot again at once, and wait in Preparing until bootstrapped.
+// nodes run etcd until wiped, boot again at once, and wait in Preparing until one of them is
+// bootstrapped, which the others then join.
 type fakeTalos struct {
 	mu         sync.Mutex
 	installed  map[string]string
@@ -47,7 +48,17 @@ type fakeTalos struct {
 	// own otherwise. listed is the member list every node answers with.
 	etcd   map[string]EtcdMember
 	listed []EtcdListed
+	// starting, when set, is the state etcd reads in place of a healthy Running once bootstrapped,
+	// given the node's bootstraps so far.
+	starting   func(bootstraps int) (string, bool)
+	bootstraps map[string]int
+	// pullFailed are the nodes whose etcd reads Failed once wiped, as after its image pull failed,
+	// until bootstrapped or rebooted.
+	pullFailed map[string]bool
 }
+
+// fakePullFailure is the last event of a fake etcd that reads Failed.
+const fakePullFailure = "Failed to run pre stage: failed to pull image \"registry.k8s.io/etcd\": signature not found"
 
 // call records a restore's call, and fails it as the fake is told to.
 func (f *fakeTalos) call(address, name string) error {
@@ -141,16 +152,26 @@ func (n *fakeTalosNode) WipeEtcd(context.Context) error {
 	return nil
 }
 
-func (n *fakeTalosNode) Etcd(context.Context) (string, bool, error) {
+func (n *fakeTalosNode) Etcd(context.Context) (TalosService, error) {
 	if err := n.f.call(n.address, "etcd"); err != nil {
-		return "", false, err
+		return TalosService{}, err
 	}
 	n.f.mu.Lock()
 	defer n.f.mu.Unlock()
-	if n.f.wiped[n.address] {
-		return talosEtcdPreparing, false, nil
+	etcd := TalosService{State: talosEtcdRunning, Healthy: true}
+	switch {
+	case n.f.wiped[n.address] && n.f.pullFailed[n.address] && !slices.Contains(n.f.rebooted, n.address):
+		etcd = TalosService{State: talosEtcdFailed}
+	case n.f.wiped[n.address] && len(n.f.bootstraps) == 0:
+		etcd = TalosService{State: talosEtcdPreparing}
+	case n.f.wiped[n.address]:
+	case n.f.starting != nil:
+		etcd.State, etcd.Healthy = n.f.starting(n.f.bootstraps[n.address])
 	}
-	return talosEtcdRunning, true, nil
+	if etcd.State == talosEtcdFailed {
+		etcd.Event = fakePullFailure
+	}
+	return etcd, nil
 }
 
 func (n *fakeTalosNode) UploadEtcdSnapshot(_ context.Context, snapshot io.Reader) error {
@@ -179,6 +200,10 @@ func (n *fakeTalosNode) BootstrapRecovered(context.Context) error {
 	if n.f.uploaded[n.address] == nil {
 		return errors.New("no snapshot uploaded")
 	}
+	if n.f.bootstraps == nil {
+		n.f.bootstraps = map[string]int{}
+	}
+	n.f.bootstraps[n.address]++
 	n.f.wiped[n.address] = false
 	return nil
 }

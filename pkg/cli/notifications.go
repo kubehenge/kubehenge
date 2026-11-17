@@ -38,7 +38,6 @@ as the Secrets kubehenge-notify-webhook, kubehenge-notify-ntfy and kubehenge-not
 			})
 		},
 	}
-	o.signInFlags(cmd)
 	o.jsonFlag(cmd)
 	cmd.AddCommand(o.testNotificationsCommand())
 	return cmd
@@ -74,7 +73,6 @@ func (o *applianceOptions) testNotificationsCommand() *cobra.Command {
 			})
 		},
 	}
-	o.signInFlags(cmd)
 	o.jsonFlag(cmd)
 	return cmd
 }

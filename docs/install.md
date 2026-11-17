@@ -218,12 +218,12 @@ Session lengths and sign-in limits are under [Sessions](architecture.md#sessions
 
 On first sign-in, an administrator sees the setup page. It creates the management cluster with the `management-cluster/` module and OpenTofu, inside the appliance.
 
-The page goes through five steps: **Placement**, **Network**, **Clusters**, **Services** and **Passphrase**. It fills in what the first chosen node reports about itself, all of which can be changed:
+The page goes through five steps: **Placement**, **Network**, **Clusters**, **Services** and **Passphrase**. It preselects up to three Proxmox VE nodes that answer, so that the management cluster survives the loss of one. It then fills in what the first chosen node reports about itself, all of which can be changed:
 
 - A shared storage for the VM disks, or else the one with the most free space.
 - The bridge the node reaches its gateway through, with that gateway.
 - The node's own DNS servers.
-- The network the node addresses go in.
+- The network the node addresses go in, with free addresses in it as **Node addresses** and **API address**. With a VLAN tag, the page fills in no addresses.
 
 For clusters, it offers the same storage and bridge to start with. Administration shows the same settings on one page, with one section per step.
 
