@@ -2,6 +2,10 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -126,6 +130,59 @@ func TestLoginKeepsAToken(t *testing.T) {
 	}
 	if _, err := f.run("login", f.srv.URL, "--ca", f.certFile(), "--token-file", writeTemp(t, "dev@pve!ci=guess")); err == nil {
 		t.Error("a refused token was kept")
+	}
+}
+
+// secondFactorInterface signs in as the interface does for a user with a TOTP code: the password
+// starts a challenge session, and the right code ends it and starts the session commands use.
+func secondFactorInterface(t *testing.T) *httptest.Server {
+	t.Helper()
+	const sessionCookie = "__Host-kubehenge-session"
+	start := func(w http.ResponseWriter, id, body string) {
+		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Path: "/", Secure: true, MaxAge: -1})
+		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: id, Path: "/", Secure: true})
+		answer(w, http.StatusOK, body)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/session", func(w http.ResponseWriter, _ *http.Request) {
+		start(w, "challenge", `{"csrf":"c1","secondFactor":{"totp":true}}`)
+	})
+	mux.HandleFunc("POST /api/session/second-factor", func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]string
+		if c, err := r.Cookie(sessionCookie); err != nil || c.Value != "challenge" || json.NewDecoder(r.Body).Decode(&req) != nil {
+			answer(w, http.StatusUnauthorized, `{"error":"sign in with your password first"}`)
+			return
+		}
+		if req["code"] != "123456" {
+			answer(w, http.StatusUnauthorized, `{"error":"Wrong code, a locked factor or a cluster without quorum."}`)
+			return
+		}
+		start(w, "signed-in", `{"csrf":"c2"}`)
+	})
+	mux.HandleFunc("GET /api/clusters", func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie(sessionCookie); err != nil || c.Value != "signed-in" {
+			answer(w, http.StatusUnauthorized, `{"error":"not signed in"}`)
+			return
+		}
+		w.Header().Set("X-Kubehenge-Version", "0.1.0")
+		answer(w, http.StatusOK, `{"clusters":[]}`)
+	})
+	srv := httptest.NewTLSServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// A login with a second factor keeps the session the code starts, not the challenge's.
+func TestASecondFactorLoginKeepsTheSessionTheCodeStarts(t *testing.T) {
+	t.Parallel()
+	srv := secondFactorInterface(t)
+	file := filepath.Join(t.TempDir(), "login.json")
+	ca := writeTemp(t, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})))
+	if out, err := runIn(t, file, "login", srv.URL, "--ca", ca, "--user", "otp@pve", "--password-file", writeTemp(t, "pw"), "--totp", "123456"); err != nil {
+		t.Fatalf("login: %v\n%s", err, out)
+	}
+	if out, err := runIn(t, file, "cluster", "list", "-o", "json"); err != nil || !strings.Contains(out, `"clusters"`) {
+		t.Errorf("cluster list after the login: %v\n%s", err, out)
 	}
 }
 

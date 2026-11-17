@@ -325,42 +325,45 @@ func signInTo(ctx context.Context, l *login, user, passwordFile, tokenFile, totp
 	if password == "" {
 		return errors.New("no password: give --password-file or KUBEHENGE_PASSWORD")
 	}
-	var sess struct {
-		CSRF         string `json:"csrf"`
-		SecondFactor any    `json:"secondFactor"`
-	}
 	res, err := c.open(ctx, http.MethodPost, "/api/session", map[string]string{"username": user, "password": password})
 	if err != nil {
 		return err
 	}
-	defer func() { _ = res.Body.Close() }()
-	if err := json.NewDecoder(io.LimitReader(res.Body, maxInterfaceAnswer)).Decode(&sess); err != nil {
-		return fmt.Errorf("the interface's answer: %w", err)
-	}
-	for _, cookie := range res.Cookies() {
-		l.Cookie, l.Value = cookie.Name, cookie.Value
-	}
-	l.CSRF = sess.CSRF
-	if l.Cookie == "" {
-		return errors.New("the interface set no session")
-	}
-	if sess.SecondFactor == nil {
-		return nil
+	pending, err := keepSession(l, res)
+	if err != nil || !pending {
+		return err
 	}
 	if totp == "" {
 		return fmt.Errorf("%s has a second factor: give --totp", user)
 	}
-	c.login = l
-	var after struct {
-		CSRF string `json:"csrf"`
-	}
-	if _, err := c.call(ctx, http.MethodPost, "/api/session/second-factor", map[string]string{"kind": "totp", "code": totp}, &after); err != nil {
+	if res, err = c.open(ctx, http.MethodPost, "/api/session/second-factor", map[string]string{"kind": "totp", "code": totp}); err != nil {
 		return err
 	}
-	if after.CSRF != "" {
-		l.CSRF = after.CSRF
+	_, err = keepSession(l, res)
+	return err
+}
+
+// keepSession keeps in l the session a sign-in step's answer starts, and tells whether it waits
+// for a second factor. Each step ends the session it came with and starts another, so the last
+// cookie the answer sets is the live one, as a browser would keep it.
+func keepSession(l *login, res *http.Response) (bool, error) {
+	defer func() { _ = res.Body.Close() }()
+	var sess struct {
+		CSRF         string `json:"csrf"`
+		SecondFactor any    `json:"secondFactor"`
 	}
-	return nil
+	if err := json.NewDecoder(io.LimitReader(res.Body, maxInterfaceAnswer)).Decode(&sess); err != nil {
+		return false, fmt.Errorf("the interface's answer: %w", err)
+	}
+	l.Cookie, l.Value = "", ""
+	for _, cookie := range res.Cookies() {
+		l.Cookie, l.Value = cookie.Name, cookie.Value
+	}
+	l.CSRF = sess.CSRF
+	if l.Value == "" {
+		return false, errors.New("the interface set no session")
+	}
+	return sess.SecondFactor != nil, nil
 }
 
 func newLogoutCommand() *cobra.Command {
