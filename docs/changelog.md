@@ -34,7 +34,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 ### Removed
 
 - The flags `--user`, `--password-file` and `--totp` of `appliance` are gone, as are `--url` and `--ca` of `cluster`. So are the variables `KUBEHENGE_USER`, `KUBEHENGE_URL` and `KUBEHENGE_CA`.
-- `kubehenge login` reads `KUBEHENGE_PASSWORD` and `KUBEHENGE_PROXMOX_TOKEN`. `appliance` and `cluster` no longer read them.
+- `kubehenge login` reads `KUBEHENGE_PASSWORD` and `KUBEHENGE_PROXMOX_TOKEN`. `appliance` no longer reads `KUBEHENGE_PASSWORD`, nor `cluster` `KUBEHENGE_PROXMOX_TOKEN`.
 - `--cert` and `--address` are flags of `kubehenge appliance health` alone. The other `appliance` commands reach the address given to `kubehenge login`.
 
 ## [0.5.1] - 2026-11-17
