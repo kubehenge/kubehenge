@@ -300,13 +300,13 @@ Use **Recover…** in the backup volume's box, or `kubehenge appliance etcd-back
 
 After a restore, and then daily, the controller compares each cluster with its VMs. A cluster whose VMs are all gone shows **VMs missing** on its Health page. VMs in Kubehenge's pools that no cluster owns show as **Unowned VMs** on the management cluster's Health. Nothing deletes them.
 
+A restore asks for the state passphrase and counts as a run of the management cluster. It needs only the nodes' Talos API, so it works while the management cluster's own API does not answer.
+
 ### The warning while backups are off
 
 While neither a target nor the backup volume takes the backups, a warning stands on **Administration, Backups** and above the cluster list. Every cluster's CAs, kubeconfigs and backup keys live only in this etcd.
 
 An administrator can dismiss the warning for 30 days. The page records who did and when. Notifications repeat it weekly.
-
-It asks for the state passphrase and counts as a run of the management cluster. It needs only the nodes' Talos API, so it works while the management cluster's own API does not answer.
 
 The appliance's shell has the same commands, with the page's privileges and refusals ([signing in there](upgrading.md#from-the-appliances-shell)):
 

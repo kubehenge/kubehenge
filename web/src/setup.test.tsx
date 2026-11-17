@@ -845,7 +845,7 @@ describe("setup", () => {
       bootstrapDatastore: "local",
     });
     await expect(
-      screen.findByText("etcd snapshots go to the backup volume. A target keeps a copy off the host."),
+      screen.findByText("etcd snapshots go to the backup volume. A target keeps a copy off its storage."),
     ).resolves.toBeInTheDocument();
   });
 

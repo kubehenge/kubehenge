@@ -40,7 +40,7 @@ Kubehenge gives every node of every cluster a static address, with no DHCP serve
 
 #### Addresses for the management cluster
 
-- **The management cluster** needs one free address per node (one, three or five for high availability) and one for its Kubernetes API's virtual IP. All are in one subnet on one bridge, with a gateway and DNS servers.
+- **The management cluster** needs one free address per node (one, or three or five for high availability) and one for its Kubernetes API's virtual IP. All are in one subnet on one bridge, with a gateway and DNS servers.
   - Its VMs can run on several Proxmox VE nodes. Each of those needs that bridge, in the same layer-2 network.
   - The bridge can be an SDN VNet. Cluster API's token gets `SDN.Use` (its network role) on `/sdn/zones/<zone>/<vnet>`, or on `/sdn/zones/localnetwork/<bridge>` for a node's bridge.
   - The appliance reaches its nodes on ports 50000 (Talos API) and 6443 (Kubernetes API).
@@ -280,6 +280,9 @@ They also bring the warnings about the [backup](install-settings.md#back-up-the-
 | Time servers | NTP servers the nodes keep their clocks with, as host names or addresses separated by commas. Empty keeps Talos's default public servers. |
 | Site: Registry mirrors | `registry=endpoint`, one per line, such as `ghcr.io=https://mirror.example.org:5000`. The management cluster's nodes try them before the registry itself. They cover images, not charts. |
 | Site: Chart mirrors, Chart mirror certificate | `host=address`, one per line, such as `ghcr.io=oci://registry.example.org/ghcr`. Clusters fetch that host's charts from the address, and trust the certificate authority (PEM) for it. See [Mirroring the charts](clusters.md#mirroring-the-charts). |
+| Site: Site CA | PEM certificates. Every cluster's nodes, the release mirror, backup targets and identity providers trust it unless they name an authority of their own. |
+| Site: Time zone | An IANA time zone, such as `Europe/Berlin`. Schedules and upgrade windows that name none use it. Empty leaves them in UTC. |
+| Site: VM ID range | Such as `100000-100999`. New clusters' VMs and the VM templates take their IDs from it. Empty takes Proxmox VE's next free ID. Keep it clear of the management VMs' IDs ([details](install-settings.md#management-cluster-vm-ids)). |
 | Site: Release mirror, Release mirror certificate | An `https://` or `http://` address, such as `https://mirror.example.org/github`. RKE2 and k3s nodes download their release from it in place of GitHub, and trust the certificate authority (PEM) for it. See [Mirroring the releases](clusters.md#mirroring-the-releases). |
 | Site: Proxy address, Proxy user, Proxy password, Proxy exceptions, Proxy certificate | The proxy every download goes through. The address has no credentials, so write `http://proxy.example:3128` and put the user and password in their fields. A saved password shows as set, and the page can replace or remove it but never shows it. See [Behind a proxy](clusters.md#behind-a-proxy). |
 | Advanced: Pod ranges, Service ranges | The management cluster's own, one per family. When empty, `10.244.0.0/16` and `10.96.0.0/12`, and `fd5e:4b1c:9a20::/56` and `fd5e:4b1c:9a21::/112` for IPv6. Where those overlap the nodes' network, the API address or the gateway, the first clear one of a few other private ranges. |

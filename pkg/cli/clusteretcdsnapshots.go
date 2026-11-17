@@ -105,12 +105,12 @@ to what the snapshot holds, and what changed since is lost.`,
 func (o *clusterOptions) removedEtcdSnapshotsCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "removed-etcd-snapshots",
-		Short: "List and delete the etcd snapshots the backup volume keeps of removed clusters",
+		Short: "List and delete the etcd snapshots the backup volume keeps of deleted clusters",
 	}
-	cmd.PersistentFlags().StringVarP(&o.namespace, "namespace", "n", "", "the namespace the removed clusters were in")
+	cmd.PersistentFlags().StringVarP(&o.namespace, "namespace", "n", "", "the namespace the deleted clusters were in")
 	list := &cobra.Command{
 		Use:   "list --namespace NAMESPACE",
-		Short: "List the removed clusters of a namespace whose snapshots the backup volume keeps",
+		Short: "List the deleted clusters of a namespace whose snapshots the backup volume keeps",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.listRemovedEtcdSnapshots(cmd.Context(), cmd.OutOrStdout())
@@ -119,10 +119,10 @@ func (o *clusterOptions) removedEtcdSnapshotsCommand() *cobra.Command {
 	var yes bool
 	del := &cobra.Command{
 		Use:   "delete NAME --namespace NAMESPACE --yes",
-		Short: "Delete a removed cluster's snapshots and its backup keys",
-		Long: `Delete a removed cluster's etcd snapshots on the backup volume and its backup keys, which the
-snapshots open with. They cannot be brought back.`,
-		Args: argsSay(cobra.ExactArgs(1), "give the removed cluster, as list names it"),
+		Short: "Delete the snapshots and backup keys of a deleted cluster",
+		Long: `Delete the etcd snapshots a deleted cluster left on the backup volume, and its backup keys, which
+the snapshots open with. They cannot be brought back.`,
+		Args: argsSay(cobra.ExactArgs(1), "give the deleted cluster, as list names it"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !yes {
 				return errors.New("deleting the snapshots and backup keys cannot be undone: add --yes")
@@ -144,7 +144,7 @@ snapshots open with. They cannot be brought back.`,
 			if err = json.Unmarshal(body, &a); err != nil {
 				return fmt.Errorf("reading the interface's answer: %w", err)
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "removed cluster %s: deleted %d snapshots and its backup keys\n", args[0], a.Deleted)
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "deleted %d snapshots and the backup keys of cluster %s\n", a.Deleted, args[0])
 			return writeErr(err)
 		},
 	}
@@ -154,7 +154,7 @@ snapshots open with. They cannot be brought back.`,
 }
 
 // errNoRemovedNamespace asks for the namespace, which a removed cluster no longer shows.
-var errNoRemovedNamespace = errors.New("--namespace is required: the namespace the removed cluster was in")
+var errNoRemovedNamespace = errors.New("--namespace is required: the namespace the deleted cluster was in")
 
 func (o *clusterOptions) listRemovedEtcdSnapshots(ctx context.Context, out io.Writer) error {
 	if o.namespace == "" {
@@ -169,7 +169,7 @@ func (o *clusterOptions) listRemovedEtcdSnapshots(ctx context.Context, out io.Wr
 		return fmt.Errorf("reading the interface's answer: %w", err)
 	}
 	if len(removed) == 0 {
-		_, err := fmt.Fprintf(out, "the backup volume keeps no snapshots of removed clusters in %s\n", o.namespace)
+		_, err := fmt.Fprintf(out, "the backup volume keeps no snapshots of deleted clusters in %s\n", o.namespace)
 		return writeErr(err)
 	}
 	w := tabwriter.NewWriter(out, 0, 0, columnGap, ' ', 0)

@@ -3314,7 +3314,7 @@ function setupFields({
         </fieldset>
         <fieldset className="group">
           <legend>Backup targets</legend>
-          <p className="muted">etcd snapshots go to the backup volume. A target keeps a copy off the host.</p>
+          <p className="muted">etcd snapshots go to the backup volume. A target keeps a copy off its storage.</p>
           <BackupTargets
             initial={form.backupTargets}
             showAll={more.attempted}

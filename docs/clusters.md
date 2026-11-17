@@ -47,7 +47,7 @@ Without `VM.Allocate` on the workload pool, **Create cluster** is off and says s
 
 | Field | What it is |
 | --- | --- |
-| Start from | Once there is a cluster: the cluster to copy settings from, or **Defaults**, which is chosen until another is. The later steps say **Copied from** that cluster. It copies the distribution, node OS, node counts and sizes, bridge, VLAN, MTU, queues, prefix length, gateway, DNS servers, load balancer, pod network and storage. It also copies placement, Proxmox VE HA, HA rule labels, Headlamp, monitoring, logs, Pod Security, CIS hardening, Istio, Rancher registration and identity providers. Everything else starts at its default. Choosing another cluster keeps the name, the namespace, and the Kubernetes version while the distribution stays. |
+| Start from | Once there is a cluster: the cluster to copy settings from, or **Defaults**, which is chosen until another is. The later steps say **Copied from** that cluster. It copies the distribution, node OS, node counts and sizes, bridge, VLAN, MTU, queues, prefix length, gateway, DNS servers, load balancer, pod network and storage. It also copies placement, Proxmox VE HA, HA rule labels, Headlamp, monitoring, logs, Pod Security, CIS hardening, Istio, Rancher registration and identity providers. Everything else starts at its default. Choosing another cluster keeps the name and the namespace. It keeps the Kubernetes version too where the distribution stays the same. |
 | Namespace | Only where an administrator has named [more namespaces for clusters](#more-namespaces-for-clusters): the namespace in the management cluster the cluster goes to, `clusters` unless another is chosen. |
 | Name | Lowercase letters, digits and dashes, starting with a letter and ending with a letter or digit, at most 40 characters. It also names the cluster's Proxmox VE pool and VMs. |
 | Distribution | kubeadm, RKE2, k3s or Talos: one per ClusterClass in the management cluster. A distribution without a VM template in the template pool says so. Its clusters cannot be created until an administrator builds one ([templates.md](templates.md)). Where cluster creators may have missing templates built, **Build template** does it from the wizard. |
@@ -458,9 +458,9 @@ Choose the target, the schedule, its time zone, how long each backup is kept and
 
 #### etcd snapshot settings
 
-[etcd snapshots](#etcd-snapshots) are on by default wherever an administrator set a backup target, and absent without one. Choose the target, the schedule, its time zone (the browser's to start with) and how many snapshots are kept. On RKE2 and k3s, also choose [the distribution's own upload](#the-distributions-own-upload).
+[etcd snapshots](#etcd-snapshots) are on by default. Choose the target (a backup target or **Backup volume**), the schedule, its time zone (the site time zone to start with, else the browser's) and how many snapshots are kept. On RKE2 and k3s, also choose [the distribution's own upload](#the-distributions-own-upload).
 
-They use the backups' access key, entered once for both. Without `Sys.Modify` on the workload pool to store it, they wait as backups do. With backups on, the snapshots go to the backups' target, since one access key reaches one store. A cluster started from another takes that cluster's snapshot settings, or the default where it never set any.
+On a backup target they use the backups' access key, entered once for both. Without `Sys.Modify` on the workload pool to store it, they wait as backups do. With backups on, the snapshots go to the backups' target, since one access key reaches one store. A cluster started from another takes that cluster's snapshot settings, or the default where it never set any.
 
 #### Pod security
 
@@ -881,7 +881,7 @@ A network that reaches few hosts needs four settings. Each works on every distri
 | Time servers | `network.ntp` | NTP servers, with the hypervisor's clock as the fallback. |
 | Proxy | `egressProxy` | The proxy for the container runtime, the installers of RKE2 and k3s, and the distribution's service. The add-ons use it too. |
 | Registry mirrors | `registryMirrors` | Mirrors that images are pulled from before the registry itself. |
-| Trusted CAs | `trustedCAs` | Authorities in the node OS's trust store, which the container runtime and the distribution read. A cluster that sets none gets the management cluster's site CA . Set it as `siteCA` in the chart values, **Site CA** in Setup or `kubehenge appliance settings set --site-ca-file`. |
+| Trusted CAs | `trustedCAs` | Authorities in the node OS's trust store, which the container runtime and the distribution read. A cluster that sets none gets the management cluster's site CA. Set the site CA as `siteCA` in the chart values, **Site CA** in Setup or `kubehenge appliance settings set --site-ca-file`. |
 
 Where each lands on a node:
 
@@ -1720,7 +1720,7 @@ Every distribution restores from the volume through the interface, kubectl and t
 
 Where the API server does not answer, most often after etcd lost its quorum, the controller first stops every control plane. It resets etcd on the first node to that node alone on its own data, so its API server answers, and streams the snapshot in. This needs the first node's own etcd data to be readable. Should the restore fail after that reset, etcd runs on the first node alone, the other control planes stay stopped, and the cluster carries the condition `EtcdOnOneNode`. Restore again from the same snapshot. The other control planes are then made again.
 
-`kubehenge cluster etcd-snapshots` lists, takes, downloads and restores snapshots from the CLI. The distributions' own upload needs a bucket target.
+`kubehenge cluster etcd-snapshots` lists, takes, downloads and restores snapshots from the CLI. [The distribution's own upload](#the-distributions-own-upload) needs a bucket target.
 
 Deleting a cluster keeps its snapshots on the volume and its backup keys, as in a bucket. Three ways delete them too:
 
