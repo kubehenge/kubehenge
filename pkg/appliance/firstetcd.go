@@ -22,9 +22,24 @@ const nodeModuleAddress = moduleAddress + "module.talos_node_"
 // firstEtcdPoll is how often the watch of the first etcd start looks at the nodes.
 const firstEtcdPoll = 20 * time.Second
 
-// etcdStartsPath keeps the watch's starts by node, so that a service restart mid-apply neither
-// loses the count nor starts etcd twice in one boot.
+// etcdStartsPath keeps the watch's starts by node: the count across the applies of one run, and
+// each node's boot and whether its etcd ran across runs, so that no run reboots a node twice in
+// one boot or bootstraps beside etcd data.
 func (a *Appliance) etcdStartsPath() string { return filepath.Join(a.workdir(), "etcd-starts.json") }
+
+// freshEtcdStarts gives each node a new count of starts for a run, which the user starts once the
+// cause of the last run's give-up is fixed. A service restart ends a run, so the count is the run's
+// own.
+func (a *Appliance) freshEtcdStarts() error {
+	saved, err := readJSONFile[map[string]provisioner.EtcdStart](a.etcdStartsPath())
+	if err != nil {
+		return nil //nolint:nilerr // the watch starts from no count then too
+	}
+	for address, s := range *saved {
+		(*saved)[address] = provisioner.EtcdStart{Boot: s.Boot, Ran: s.Ran}
+	}
+	return writeJSONFile(a.etcdStartsPath(), *saved)
+}
 
 // createsCluster reports whether a plan, as `tofu show -json` prints it, bootstraps the management
 // cluster: its first apply, or the next after one that failed before the cluster was up. Every

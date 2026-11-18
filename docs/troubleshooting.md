@@ -714,8 +714,8 @@ Component names are `out_<name>`, with hyphens as underscores. Alloy drops what 
   - To have the controller try again, remove it: `kubectl --namespace NAMESPACE annotate machine MACHINE kubehenge.dev/etcd-repairs-`.
 - **The management cluster's setup** logs the same lines, naming the node by its address, while the apply that creates the cluster runs. No other apply does this, nor one that also replaces or changes a node.
   - The first node is bootstrapped again only while etcd has run on no node, again in the same boot if etcd fails once more. Any other node is rebooted, once per boot.
-  - A node whose etcd ran is left alone. After 3 starts the log says "Left it Failed after 3 starts", and the run times out.
-  - The count is in `/var/lib/kubehenge/management/etcd-starts.json`, so a restart mid-run keeps it. Removing the management cluster deletes it.
+  - A node whose etcd ran is left alone. After 3 starts in one run the log says "Left it Failed after 3 starts", and the run times out. Fix the cause the line names, then run the setup again, which gives each node 3 more starts.
+  - Each node's boot and starts are in `/var/lib/kubehenge/management/etcd-starts.json`, so no run reboots a node twice in one boot. Removing the management cluster deletes the file.
 
 ### etcd snapshots and restores
 

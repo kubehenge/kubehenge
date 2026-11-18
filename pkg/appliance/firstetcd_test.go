@@ -310,8 +310,8 @@ func TestFirstEtcdWatchEndsWithTheApply(t *testing.T) {
 	}
 }
 
-// A restart of the service mid-apply keeps the count: the next apply starts no node again in the
-// boot it was started from, and counts on from there.
+// A restart of the service keeps each node's boot: the next run starts no node again in the boot
+// it was started from, and counts its own starts.
 func TestFirstEtcdStartsSurviveARestart(t *testing.T) {
 	t.Parallel()
 	a, _ := newAppliance(t)
@@ -336,7 +336,29 @@ func TestFirstEtcdStartsSurviveARestart(t *testing.T) {
 	eventually(t, "rebooted in the next boot", func() bool { return len(nodes.made()) == 2 })
 	releaseApply(t, b)
 	waitFor(t, b)
-	if got := readStarts(t, b)["10.0.0.12"]; got != (provisioner.EtcdStart{Boot: "1", Repairs: 2}) {
+	if got := readStarts(t, b)["10.0.0.12"]; got != (provisioner.EtcdStart{Boot: "1", Repairs: 1}) {
+		t.Errorf("recorded %+v", got)
+	}
+}
+
+// A setup run after one that gave up on a node starts that node again, with three starts of its
+// own.
+func TestFirstEtcdStartsAgainInTheRunAfterAGiveUp(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	if err := os.MkdirAll(a.workdir(), privateDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONFile(a.etcdStartsPath(), map[string]provisioner.EtcdStart{"10.0.0.12": {Boot: "2", Repairs: 3, GaveUp: true}}); err != nil {
+		t.Fatal(err)
+	}
+	nodes := newFirstNodes(map[string]string{"10.0.0.12": "Failed"})
+	nodes.set("10.0.0.12", "Failed", 3)
+	firstApply(t, a, nodes, "held", createsTheCluster)
+	eventually(t, "rebooted", func() bool { return slices.Equal(nodes.made(), []string{"10.0.0.12 reboot"}) })
+	releaseApply(t, a)
+	waitFor(t, a)
+	if got := readStarts(t, a)["10.0.0.12"]; got != (provisioner.EtcdStart{Boot: "3", Repairs: 1}) {
 		t.Errorf("recorded %+v", got)
 	}
 }
