@@ -161,7 +161,8 @@ const csiLiftedMarker = "proxmox-csi-plugin lifted this VM's protection to detac
 // protection again on each lifted VM that is still there, so that no run leaves one unprotected.
 // The module leaves protection to the appliance, so each run first sets it again on every other
 // node VM found without it, as a run cut off after a lift leaves one. A VM whose protection the CSI
-// plugin lifted for a detach is the plugin's to protect again.
+// plugin lifted for a detach is the plugin's to protect again. The apply that bootstraps the
+// cluster runs beside watchFirstEtcd.
 func (a *Appliance) applyOnce(ctx context.Context, j *Job, env []string, t *pve.Ticket, args ...string) error {
 	defer func() { _ = os.Remove(filepath.Join(a.workdir(), planFile)) }()
 	plan := append([]string{"plan", "-input=false", "-json", "-out=" + planFile}, args...)
@@ -190,8 +191,15 @@ func (a *Appliance) applyOnce(ctx context.Context, j *Job, env []string, t *pve.
 		}
 		lifted = append(lifted, vm)
 	}
-	if err := a.tofu(ctx, j, env, jsonMessage, "apply", "-auto-approve", "-input=false", "-json", planFile); err != nil {
-		return errors.Join(err, a.protectAgain(ctx, j, t, lifted))
+	stopWatch := func() {}
+	// Nodes the apply replaces or removes are its own to restart.
+	if len(deleted) == 0 && createsCluster(shown) {
+		stopWatch = a.watchFirstEtcd(ctx, j, env)
+	}
+	applied := a.tofu(ctx, j, env, jsonMessage, "apply", "-auto-approve", "-input=false", "-json", planFile)
+	stopWatch()
+	if applied != nil {
+		return errors.Join(applied, a.protectAgain(ctx, j, t, lifted))
 	}
 	return nil
 }

@@ -712,6 +712,10 @@ Component names are `out_<name>`, with hyphens as underscores. Alloy drops what 
 - **`TalosEtcdLeftFailed`**, "… Left it Failed after 3 starts since it last ran", means the controller stopped starting etcd on that node. Read why with `talosctl service etcd` and `talosctl logs etcd`.
   - The count is the Machine's `kubehenge.dev/etcd-repairs` annotation. It starts again once etcd runs or the machine is replaced.
   - To have the controller try again, remove it: `kubectl --namespace NAMESPACE annotate machine MACHINE kubehenge.dev/etcd-repairs-`.
+- **The management cluster's setup** logs the same lines, naming the node by its address, while the apply that creates the cluster runs. No other apply does this.
+  - The first node is bootstrapped again only while etcd has run on no node. Any other node is rebooted.
+  - A node whose etcd ran is left alone. After 3 starts the log says "Left it Failed after 3 starts", and the run times out.
+  - The count is in `/var/lib/kubehenge/management/etcd-starts.json`, so a restart mid-run keeps it. Removing the management cluster deletes it.
 
 ### etcd snapshots and restores
 

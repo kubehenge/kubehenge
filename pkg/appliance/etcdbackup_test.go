@@ -140,6 +140,9 @@ func (f *fakeManagementTalos) Restore(_ context.Context, admin []byte, nodes []s
 	return nil
 }
 
+func (*fakeManagementTalos) StartFirstEtcd(context.Context, []byte, []string, map[string]provisioner.EtcdStart, func() error, func(string)) {
+}
+
 // backupAppliance is an appliance with a management cluster, state and a backup target, and the
 // bucket of that target.
 func backupAppliance(t *testing.T, store *memoryStore) (*Appliance, *fakeManagementTalos) {
