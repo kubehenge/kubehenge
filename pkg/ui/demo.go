@@ -273,7 +273,7 @@ func (s *Server) demoSignIn(w http.ResponseWriter, r *http.Request) (*http.Reque
 	if err != nil {
 		return r, fmt.Errorf("signing in the demo's administrator: %w", err)
 	}
-	d.session = s.sessions.start(w, ticket, nil)
+	d.session = s.sessions.start(w, ticket, nil, false)
 	return withSession(ctx, r, d.session.id), nil
 }
 

@@ -490,12 +490,13 @@ func newHarness(t *testing.T, objects ...client.Object) *harness {
 	objects = append(objects, rke2Class())
 	h.kube = fake.NewClientBuilder().WithScheme(scheme).WithRESTMapper(mapper).WithObjects(objects...).Build()
 	h.server = &Server{
-		Accounts:       h.accounts,
-		Kube:           h.kube,
-		WorkloadPool:   "kubehenge",
-		ClassNamespace: "kubehenge-system",
-		Namespace:      "default",
-		SessionMaxAge:  8 * time.Hour,
+		Accounts:         h.accounts,
+		Kube:             h.kube,
+		WorkloadPool:     "kubehenge",
+		ClassNamespace:   "kubehenge-system",
+		Namespace:        "default",
+		SessionMaxAge:    8 * time.Hour,
+		CLISessionMaxAge: 7 * 24 * time.Hour,
 		Assets: fstest.MapFS{
 			"index.html":       {Data: []byte("<!doctype html><title>Kubehenge</title>")},
 			"assets/app-1.js":  {Data: []byte("console.log(1)")},
@@ -573,6 +574,8 @@ type browser struct {
 	generation string
 	// token, when set, is sent with each request as a Proxmox VE API token, as a script would.
 	token string
+	// cli, when set, says with each request that it comes from the kubehenge CLI.
+	cli bool
 }
 
 func (h *harness) browser() *browser { return &browser{h: h} }
@@ -601,6 +604,9 @@ func (b *browser) do(method, path, body string) *httptest.ResponseRecorder {
 	}
 	if b.token != "" {
 		req.Header.Set("Authorization", tokenPrefix+b.token)
+	}
+	if b.cli {
+		req.Header.Set(clientHeader, cliClient)
 	}
 	rec := httptest.NewRecorder()
 	b.h.handler.ServeHTTP(rec, req)
@@ -795,7 +801,7 @@ func TestSlowRenewalHoldsUpNobodyElse(t *testing.T) {
 				return
 			}
 		}
-		h.server.sessions.prune()
+		h.server.sessions.tend(t.Context())
 		beside <- nil
 	}()
 	if err := <-beside; err != nil {

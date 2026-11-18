@@ -955,15 +955,21 @@ Users sign in through the Proxmox VE API, with no second user directory. Every P
 
 #### Sessions
 
-- The Proxmox VE ticket stays on the server, in memory only. The browser holds a random session ID in a `__Host-` cookie (Secure, HttpOnly, SameSite=Strict).
+- The Proxmox VE ticket stays on the server. The browser holds a random session ID in a `__Host-` cookie (Secure, HttpOnly, SameSite=Strict).
 - Every change also carries a per-session CSRF token.
-- Proxmox VE renews a ticket without asking the realm or the second factor again. A session therefore ends after a fixed time (eight hours by default) however active it is.
+- Proxmox VE renews a ticket without asking the realm or the second factor again. A session therefore ends after a fixed time however active it is: eight hours by default (`--session-max-age`).
+- A password sign-in by `kubehenge login` lasts seven days by default (`--cli-session-max-age`). A token sign-in keeps the browser's time.
 - Failed sign-ins are limited per user at an address and per address, never per user alone. Nobody can lock an administrator out from elsewhere.
 - The address is the connection's peer. From a peer listed in `--trusted-proxy` it is the right-most `X-Forwarded-For` entry that is not listed.
 - The frontend loads no inline script or style. The Content-Security-Policy allows none.
 - **Five failed sign-ins** for one user from one address within 15 minutes block that user from that address for the rest of the 15 minutes.
 - **Twenty failed sign-ins** from one address in that time refuse the address, whatever users they name.
-- Sessions also end when the interface restarts on an upgrade or a certificate renewal.
+- Browser sessions end when the interface restarts on an upgrade or a certificate renewal.
+- The appliance keeps the sessions of `kubehenge login` across restarts. They are sealed (AES-256-GCM) in its state directory, with the key on the key volume that backups leave out.
+- A ticket lasts two hours. The interface renews the ticket of a `kubehenge login` password session every 15 minutes, used or not. The session ends when Proxmox VE refuses the renewal.
+- A renewal that gets no answer is tried again in the next round, until the ticket has run out. A break of an hour and a half therefore ends no session.
+- A round starts every minute, or once the round before it has ended. A round waits ten seconds for an answer, for eight sessions at a time.
+- A kept session works after a restart only while its ticket is still valid. A file that does not open is discarded.
 
 #### Behind a reverse proxy
 

@@ -164,7 +164,7 @@ func (a *Appliance) KeepUnattended(u Unattended) error {
 	if err != nil {
 		return fmt.Errorf("encoding what automatic upgrades keep: %w", err)
 	}
-	sealed, err := seal(key, plain)
+	sealed, err := seal(key, plain, unattendedSealing)
 	if err != nil {
 		return err
 	}
@@ -193,19 +193,20 @@ func (a *Appliance) ForgetUnattended() error {
 	return nil
 }
 
-func seal(key, plain []byte) ([]byte, error) {
+// seal encrypts plain with key for one use, whose name only unseal with the same use takes back.
+func seal(key, plain, use []byte) ([]byte, error) {
 	gcm, err := sealCipher(key)
 	if err != nil {
 		return nil, err
 	}
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("sealing what automatic upgrades keep: %w", err)
+		return nil, fmt.Errorf("sealing: %w", err)
 	}
-	return gcm.Seal(nonce, nonce, plain, unattendedSealing), nil
+	return gcm.Seal(nonce, nonce, plain, use), nil
 }
 
-func unseal(key, sealed []byte) ([]byte, error) {
+func unseal(key, sealed, use []byte) ([]byte, error) {
 	gcm, err := sealCipher(key)
 	if err != nil {
 		return nil, err
@@ -213,7 +214,7 @@ func unseal(key, sealed []byte) ([]byte, error) {
 	if len(sealed) < gcm.NonceSize() {
 		return nil, ErrUnattendedKey
 	}
-	plain, err := gcm.Open(nil, sealed[:gcm.NonceSize()], sealed[gcm.NonceSize():], unattendedSealing)
+	plain, err := gcm.Open(nil, sealed[:gcm.NonceSize()], sealed[gcm.NonceSize():], use)
 	if err != nil {
 		return nil, ErrUnattendedKey
 	}
@@ -288,7 +289,7 @@ func (a *Appliance) unattended() (*Unattended, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading the key of automatic upgrades: %w", err)
 	}
-	plain, err := unseal(key, f.Sealed)
+	plain, err := unseal(key, f.Sealed, unattendedSealing)
 	if err != nil {
 		return nil, err
 	}

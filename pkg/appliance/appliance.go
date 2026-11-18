@@ -41,8 +41,9 @@ const (
 type Appliance struct {
 	// Dir holds everything the appliance keeps. Only its user may read it.
 	Dir string
-	// KeyDir holds the key that seals what automatic upgrades of the management cluster keep, on a
-	// volume the container's backups leave out. It is empty where there is none.
+	// KeyDir holds the keys that seal what automatic upgrades of the management cluster keep and the
+	// interface's kept sessions, on a volume the container's backups leave out. It is empty where
+	// there is none.
 	KeyDir string
 	// Module is the management-cluster module, as released with this binary.
 	Module string

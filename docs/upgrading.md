@@ -18,7 +18,7 @@ Before 1.0.0, any release may change behaviour, a patch release included. Read i
 - **Newer releases** lists those published since, or why they are unknown (the release index could not be fetched or checked).
 - **Last upgrade** gives from which release to which, with the time. It also says when the installed release is already the newest allowed, when one is in progress, or why it failed.
 
-**Upgrade to `<version>`** installs the newest release, once confirmed. The interface restarts and is unavailable for about a minute. The restart signs everyone out. No upgrade starts while the management cluster is being applied or removed or a VM template is being built. A page left open across an upgrade says so and offers to reload.
+**Upgrade to `<version>`** installs the newest release, once confirmed. The interface restarts and is unavailable for about a minute. The restart signs browsers out, but not `kubehenge login`. No upgrade starts while the management cluster is being applied or removed or a VM template is being built. A page left open across an upgrade says so and offers to reload.
 
 ### Automatically
 
@@ -86,8 +86,6 @@ pct exec <ctid> -- kubehenge login https://127.0.0.1 --ca /etc/kubehenge/tls.crt
 pct exec <ctid> -- kubehenge appliance upgrades
 pct exec <ctid> -- kubehenge appliance upgrade 0.2.0
 ```
-
-`upgrade` restarts the interface, which ends a password login. Run `kubehenge login` again before `upgrades`.
 
 `upgrades` shows the installed release, the newer ones and the last upgrade, with the reason when it failed or was rolled back. `--json` prints the interface's answer as it is. `upgrade` asks the updater for a release, as **Upgrade to** does. `kubehenge appliance health` runs the check the updater and `install.sh` use, without signing in.
 

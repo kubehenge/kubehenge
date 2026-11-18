@@ -74,6 +74,18 @@ func TestOneLoginServesEveryCommand(t *testing.T) {
 	}
 }
 
+// A password login says it is the CLI's, which the interface keeps for longer than a browser's.
+func TestAPasswordLoginSaysItIsTheCLIs(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	if err := f.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	if f.client != "cli" {
+		t.Errorf("the sign-in came from %q", f.client)
+	}
+}
+
 // A login ends with kubehenge logout, which also ends the session at the interface.
 func TestLogoutEndsTheSessionAndForgetsTheLogin(t *testing.T) {
 	t.Parallel()
@@ -92,6 +104,115 @@ func TestLogoutEndsTheSessionAndForgetsTheLogin(t *testing.T) {
 	}
 }
 
+// A new login ends the session of the one it replaces, which nothing could use any more. A login
+// that failed ends nothing, and an interface that is gone holds no new login up.
+func TestANewLoginEndsTheOneItReplaces(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	if err := f.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.login("admin@pve", "wrong"); err == nil || f.state() != "signed in [session-1], ended []" {
+		t.Fatalf("a refused login: %v, %s", err, f.state())
+	}
+	for range 2 {
+		if err := f.login("admin@pve", fakePassword); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := f.state(); got != "signed in [session-3], ended [session-1 session-2]" {
+		t.Errorf("after two more logins: %s", got)
+	}
+	if _, err := f.run("appliance", "upgrades"); err != nil {
+		t.Errorf("with the newest login: %v", err)
+	}
+
+	gone := newFakeInterface(t)
+	gone.loginFile = f.loginFile
+	if err := gone.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	gone.srv.Close()
+	if err := f.login("admin@pve", fakePassword); err != nil {
+		t.Fatalf("a login replacing one at an interface that is gone: %v", err)
+	}
+	if _, err := f.run("appliance", "upgrades"); err != nil {
+		t.Errorf("after the new login: %v", err)
+	}
+}
+
+// A login that cannot be kept ends its own session and leaves the one on file, which still works.
+func TestALoginThatCannotBeKeptEndsItself(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("root writes to a read-only folder")
+	}
+	f := newFakeInterface(t)
+	if err := f.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	// Windows refuses to replace a read-only file, the others to write into a read-only folder.
+	dir := filepath.Dir(f.loginFile)
+	for path, mode := range map[string]os.FileMode{f.loginFile: 0o400, dir: 0o500} {
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(dir, 0o700) //nolint:gosec // the test's own folder
+		_ = os.Chmod(f.loginFile, 0o600)
+	})
+	if err := f.login("admin@pve", fakePassword); err == nil || !strings.Contains(err.Error(), "keeping the login") {
+		t.Fatalf("a login into a read-only folder: %v", err)
+	}
+	if got := f.state(); got != "signed in [session-1], ended [session-2]" {
+		t.Errorf("after the login that was not kept: %s", got)
+	}
+	if _, err := f.run("appliance", "upgrades"); err != nil {
+		t.Errorf("with the login on file: %v", err)
+	}
+}
+
+// A command still running when kubehenge login replaces its login carries on with the new one. It
+// stops once no other login for its interface is on file.
+func TestARunningCommandTakesOverANewLogin(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	if err := f.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(t.Context(), loginFileKey{}, f.loginFile)
+	running, err := openInterface(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upgrades := func() error {
+		_, err := running.call(ctx, http.MethodGet, "/api/appliance/upgrades", nil, nil)
+		return err
+	}
+	if err := f.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	if err := upgrades(); err != nil {
+		t.Fatalf("after a new login, %s: %v", f.state(), err)
+	}
+
+	// A login at another interface ends this one's, and the command does not go on there.
+	other := newFakeInterface(t)
+	other.loginFile = f.loginFile
+	if err := other.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	if err := upgrades(); err == nil || err.Error() != "the login has ended: run kubehenge login "+f.srv.URL+" again" {
+		t.Errorf("after a login at another interface, %s: %v", f.state(), err)
+	}
+	other.mu.Lock()
+	defer other.mu.Unlock()
+	if len(other.bodies) != 0 {
+		t.Errorf("the command went on at the other interface: %v", other.bodies)
+	}
+}
+
 // A session the interface has ended says to log in again, not that the user is refused.
 func TestAnEndedLoginSaysToLogInAgain(t *testing.T) {
 	t.Parallel()
@@ -104,7 +225,7 @@ func TestAnEndedLoginSaysToLogInAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(strings.Replace(string(raw), `"value":"session"`, `"value":"expired"`, 1)), 0o600); err != nil { //nolint:gosec // the test's own login file
+	if err := os.WriteFile(path, []byte(strings.Replace(string(raw), `"value":"session-1"`, `"value":"expired"`, 1)), 0o600); err != nil { //nolint:gosec // the test's own login file
 		t.Fatal(err)
 	}
 	if _, err := f.run("cluster", "list"); err == nil || !strings.Contains(err.Error(), "run kubehenge login "+f.srv.URL+" again") {
@@ -331,6 +452,116 @@ func TestAnExpiredApplianceCertificateKeepsTheApplianceCommands(t *testing.T) {
 	}
 	if err := login(expiredCertificate(t)); err == nil || !strings.Contains(err.Error(), "unknown authority") {
 		t.Errorf("login with another expired certificate: %v", err)
+	}
+}
+
+// expiredFakeInterface is a fake that presents a certificate expired an hour ago, as an appliance
+// does whose own certificate ran out.
+func expiredFakeInterface(t *testing.T) *fakeInterface {
+	t.Helper()
+	f := newFakeInterface(t)
+	f.srv.Close()
+	srv := httptest.NewUnstartedServer(f.srv.Config.Handler)
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{expiredCertificate(t)}, MinVersion: tls.VersionTLS12}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	f.srv = srv
+	return f
+}
+
+// Through the appliance's expired certificate, a new login still ends the one it replaces and
+// logout still ends the session.
+func TestSessionsEndThroughAnExpiredApplianceCertificate(t *testing.T) {
+	t.Parallel()
+	f := expiredFakeInterface(t)
+	for range 2 {
+		if err := f.login("admin@pve", fakePassword); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := f.state(); got != "signed in [session-2], ended [session-1]" {
+		t.Errorf("after a second login: %s", got)
+	}
+	if out, err := f.run("logout"); err != nil || strings.TrimSpace(out) != "Signed out" {
+		t.Errorf("logout: %q, %v", out, err)
+	}
+	if got := f.state(); got != "signed in [], ended [session-1 session-2]" {
+		t.Errorf("after logout: %s", got)
+	}
+}
+
+// Logout says when it could not end the session, and forgets the login all the same. A session the
+// interface has ended already is signed out.
+func TestLogoutSaysWhenTheSessionLivesOn(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	if err := f.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	delete(f.sessions, "session-1")
+	f.mu.Unlock()
+	if out, err := f.run("logout"); err != nil || strings.TrimSpace(out) != "Signed out" {
+		t.Errorf("logout from a session that has ended: %q, %v", out, err)
+	}
+
+	if err := f.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	f.srv.Close()
+	out, err := f.run("logout")
+	if err == nil || !strings.HasPrefix(err.Error(), "the login is forgotten, but its session at "+f.srv.URL+" was not ended: ") || strings.Contains(out, "Signed out") {
+		t.Errorf("logout from an interface that is gone: %q, %v", out, err)
+	}
+	if out, err := f.run("logout"); err != nil || strings.TrimSpace(out) != "Not signed in" {
+		t.Errorf("a second logout: %q, %v", out, err)
+	}
+}
+
+// A running command keeps trusting the interface as it did when it started, whatever the login it
+// takes over says: the appliance's expired certificate stays trusted, and another CA on file is not
+// taken.
+func TestARunningCommandKeepsItsTrust(t *testing.T) {
+	t.Parallel()
+	f := expiredFakeInterface(t)
+	if err := f.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(t.Context(), loginFileKey{}, f.loginFile)
+	running, err := openAppliance(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upgrades := func() error {
+		_, callErr := running.call(ctx, http.MethodGet, "/api/appliance/upgrades", nil, nil)
+		return callErr
+	}
+	if err = f.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	if err = upgrades(); err != nil {
+		t.Fatalf("after a new login, %s: %v", f.state(), err)
+	}
+
+	// A third login, kept in the command's file with a CA that does not vouch for the interface.
+	elsewhere := filepath.Join(t.TempDir(), "login.json")
+	if _, err = runIn(t, elsewhere, "login", f.srv.URL, "--ca", f.certFile(), "--user", "admin@pve", "--password-file", writeTemp(t, fakePassword)); err != nil {
+		t.Fatal(err)
+	}
+	l, err := readLogin(context.WithValue(t.Context(), loginFileKey{}, elsewhere))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := expiredCertificate(t)
+	l.CA, l.CAFile = "", writeTemp(t, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: other.Certificate[0]})))
+	if err = l.save(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	delete(f.sessions, "session-2")
+	f.mu.Unlock()
+	if err = upgrades(); err != nil {
+		t.Fatalf("after a login naming another CA, %s: %v", f.state(), err)
 	}
 }
 
