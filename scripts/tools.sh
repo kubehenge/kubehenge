@@ -93,7 +93,7 @@ GO_SHA256=7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840
 tree go "https://go.dev/dl/go${GO}.linux-amd64.tar.gz" "${GO_SHA256}" bin go gofmt
 
 # renovate: datasource=node-version depName=node
-NODE=26.13.0
+NODE=26.13.1
 NODE_SHA256=5848553868b402d3fabb5b09270649977780a390f832155721025a08b5104455
 tree node "https://nodejs.org/dist/v${NODE}/node-v${NODE}-linux-x64.tar.gz" "${NODE_SHA256}" bin node npm npx
 
@@ -108,7 +108,7 @@ TOFU_SHA256=b34b327cc1ef07178207b6f2cd1f5276537d3e5b7be316500f6dac50d4c0a857
 release tofu opentofu/opentofu "${TOFU}" "tofu_${TOFU#v}_linux_amd64.tar.gz" "${TOFU_SHA256}" tofu
 
 # renovate: datasource=github-releases depName=helm/helm
-HELM=v4.3.1
+HELM=v4.3.2
 HELM_SHA256=0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b
 tool helm "https://get.helm.sh/helm-${HELM}-linux-amd64.tar.gz" "${HELM_SHA256}" linux-amd64/helm
 
