@@ -112,14 +112,19 @@ func TestANewLoginEndsTheOneItReplaces(t *testing.T) {
 	if err := f.login("admin@pve", fakePassword); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.login("admin@pve", "wrong"); err == nil || f.signOuts != 0 {
-		t.Fatalf("a refused login: %v, signed out %d times", err, f.signOuts)
+	if err := f.login("admin@pve", "wrong"); err == nil || f.state() != "signed in [session-1], ended []" {
+		t.Fatalf("a refused login: %v, %s", err, f.state())
 	}
-	if err := f.login("user@pve", fakePassword); err != nil {
-		t.Fatal(err)
+	for range 2 {
+		if err := f.login("admin@pve", fakePassword); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if f.signOuts != 1 {
-		t.Errorf("signed out %d times, want 1", f.signOuts)
+	if got := f.state(); got != "signed in [session-3], ended [session-1 session-2]" {
+		t.Errorf("after two more logins: %s", got)
+	}
+	if _, err := f.run("appliance", "upgrades"); err != nil {
+		t.Errorf("with the newest login: %v", err)
 	}
 
 	gone := newFakeInterface(t)
@@ -136,6 +141,78 @@ func TestANewLoginEndsTheOneItReplaces(t *testing.T) {
 	}
 }
 
+// A login that cannot be kept ends its own session and leaves the one on file, which still works.
+func TestALoginThatCannotBeKeptEndsItself(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("root writes to a read-only folder")
+	}
+	f := newFakeInterface(t)
+	if err := f.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	// Windows refuses to replace a read-only file, the others to write into a read-only folder.
+	dir := filepath.Dir(f.loginFile)
+	for path, mode := range map[string]os.FileMode{f.loginFile: 0o400, dir: 0o500} {
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(dir, 0o700) //nolint:gosec // the test's own folder
+		_ = os.Chmod(f.loginFile, 0o600)
+	})
+	if err := f.login("admin@pve", fakePassword); err == nil || !strings.Contains(err.Error(), "keeping the login") {
+		t.Fatalf("a login into a read-only folder: %v", err)
+	}
+	if got := f.state(); got != "signed in [session-1], ended [session-2]" {
+		t.Errorf("after the login that was not kept: %s", got)
+	}
+	if _, err := f.run("appliance", "upgrades"); err != nil {
+		t.Errorf("with the login on file: %v", err)
+	}
+}
+
+// A command still running when kubehenge login replaces its login carries on with the new one. It
+// stops once no other login for its interface is on file.
+func TestARunningCommandTakesOverANewLogin(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	if err := f.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(t.Context(), loginFileKey{}, f.loginFile)
+	running, err := openInterface(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upgrades := func() error {
+		_, err := running.call(ctx, http.MethodGet, "/api/appliance/upgrades", nil, nil)
+		return err
+	}
+	if err := f.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	if err := upgrades(); err != nil {
+		t.Fatalf("after a new login, %s: %v", f.state(), err)
+	}
+
+	// A login at another interface ends this one's, and the command does not go on there.
+	other := newFakeInterface(t)
+	other.loginFile = f.loginFile
+	if err := other.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	if err := upgrades(); err == nil || err.Error() != "the login has ended: run kubehenge login "+f.srv.URL+" again" {
+		t.Errorf("after a login at another interface, %s: %v", f.state(), err)
+	}
+	other.mu.Lock()
+	defer other.mu.Unlock()
+	if len(other.bodies) != 0 {
+		t.Errorf("the command went on at the other interface: %v", other.bodies)
+	}
+}
+
 // A session the interface has ended says to log in again, not that the user is refused.
 func TestAnEndedLoginSaysToLogInAgain(t *testing.T) {
 	t.Parallel()
@@ -148,7 +225,7 @@ func TestAnEndedLoginSaysToLogInAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(strings.Replace(string(raw), `"value":"session"`, `"value":"expired"`, 1)), 0o600); err != nil { //nolint:gosec // the test's own login file
+	if err := os.WriteFile(path, []byte(strings.Replace(string(raw), `"value":"session-1"`, `"value":"expired"`, 1)), 0o600); err != nil { //nolint:gosec // the test's own login file
 		t.Fatal(err)
 	}
 	if _, err := f.run("cluster", "list"); err == nil || !strings.Contains(err.Error(), "run kubehenge login "+f.srv.URL+" again") {

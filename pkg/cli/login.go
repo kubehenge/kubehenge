@@ -148,6 +148,9 @@ type interfaceClient struct {
 	// signingIn is set while `kubehenge login` makes the login, where a refused certificate is fixed
 	// by the --ca it is given and not by repeating the command.
 	signingIn bool
+	// pinsExpired is set for a client that trusts the login's expired certificate (pinExpired), so
+	// that a login it takes over is trusted the same way.
+	pinsExpired bool
 }
 
 // openInterface is a client for the login on file.
@@ -235,6 +238,7 @@ var errOtherCertificate = errors.New("the interface serves a certificate other t
 // clock. Only the very certificate is trusted then. An expired CA vouches for nothing it signed,
 // which a clock turned back would otherwise take.
 func (c *interfaceClient) pinExpired() {
+	c.pinsExpired = true
 	leaf := firstCertificate(c.login.CA)
 	transport, ok := c.http.Transport.(*http.Transport)
 	if leaf == nil || !ok || transport.TLSClientConfig == nil || time.Now().Before(leaf.NotAfter) {
@@ -264,9 +268,36 @@ func caPath(file string) string {
 // token it took.
 const versionHeader = "X-Kubehenge-Version"
 
+// errLoginEnded says the interface no longer takes the login's session.
+var errLoginEnded = errors.New("the login has ended")
+
 // open sends a request and returns the answer, its body unread, once it says the request went
-// through. The caller closes the body.
+// through. The caller closes the body. A command still running when kubehenge login replaces its
+// login is told that the login has ended, and carries on with the one on file.
 func (c *interfaceClient) open(ctx context.Context, method, path string, body any) (*http.Response, error) {
+	res, err := c.send(ctx, method, path, body)
+	if errors.Is(err, errLoginEnded) && c.adoptLoginOnFile(ctx) {
+		return c.send(ctx, method, path, body)
+	}
+	return res, err
+}
+
+// adoptLoginOnFile takes over the login on file where that is another one for the same interface,
+// and tells whether it did. A login for another interface is not taken: the command would go on
+// there.
+func (c *interfaceClient) adoptLoginOnFile(ctx context.Context) bool {
+	fresh, err := openInterface(ctx)
+	if err != nil || fresh.login.URL != c.login.URL || fresh.login.Value == c.login.Value && fresh.login.Token == c.login.Token {
+		return false
+	}
+	if c.pinsExpired {
+		fresh.pinExpired()
+	}
+	c.login, c.http = fresh.login, fresh.http
+	return true
+}
+
+func (c *interfaceClient) send(ctx context.Context, method, path string, body any) (*http.Response, error) {
 	var payload io.Reader = http.NoBody
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -318,7 +349,7 @@ func (c *interfaceClient) open(ctx context.Context, method, path string, body an
 	// A 401 without the version refused the login itself. One with it refused something else, such
 	// as nodes whose clocks disagree, and its reason says what. So does a sign-in step's refusal.
 	if res.StatusCode == http.StatusUnauthorized && res.Header.Get(versionHeader) == "" && !strings.HasPrefix(path, "/api/session") {
-		return nil, fmt.Errorf("the login has ended: run kubehenge login %s again", c.login.URL)
+		return nil, fmt.Errorf("%w: run kubehenge login %s again", errLoginEnded, c.login.URL)
 	}
 	if json.Unmarshal(answer, &e) == nil && e.Error != "" {
 		return nil, errors.New(e.Error)
@@ -386,13 +417,19 @@ you alone. It holds the session or the token. Set ` + loginFileEnv + ` to keep i
 			if err := signInTo(cmd.Context(), l, user, passwordFile, tokenFile, totp); err != nil {
 				return err
 			}
-			// The login this one replaces would stay signed in for the rest of its seven days. An
-			// interface that is gone must not hold up the new login for long.
+			// One of two sessions is left without a file to use it, and would stay signed in for the
+			// rest of its seven days: the one this login replaces or, when the new one cannot be
+			// kept, the new one. An interface that is gone must not hold the command up for long.
+			unused, _ := readLogin(cmd.Context())
+			saveErr := l.save(cmd.Context())
+			if saveErr != nil {
+				unused = l
+			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), replacedLoginTimeout)
-			endLogin(ctx)
+			endSession(ctx, unused)
 			cancel()
-			if err := l.save(cmd.Context()); err != nil {
-				return err
+			if saveErr != nil {
+				return saveErr
 			}
 			return say(cmd, "Signed in to "+l.URL)
 		},
@@ -483,10 +520,13 @@ func (c *interfaceClient) signInStep(ctx context.Context, path string, body map[
 	return sess.SecondFactor != nil, nil
 }
 
-// endLogin ends the session of the login on file, if it holds one. A session that cannot be reached
+// endSession ends the session l holds, if it is a login with one. A session that cannot be reached
 // is left to end by itself.
-func endLogin(ctx context.Context) {
-	if c, err := openInterface(ctx); err == nil && c.login.Cookie != "" {
+func endSession(ctx context.Context, l *login) {
+	if l == nil || l.Cookie == "" {
+		return
+	}
+	if c, err := newInterfaceClient(l); err == nil {
 		_, _ = c.call(ctx, http.MethodDelete, "/api/session", nil, nil)
 	}
 }
@@ -497,7 +537,8 @@ func newLogoutCommand() *cobra.Command {
 		Short: "End the login and forget it",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			endLogin(cmd.Context())
+			l, _ := readLogin(cmd.Context())
+			endSession(cmd.Context(), l)
 			path, err := loginPath(cmd.Context())
 			if err != nil {
 				return err
