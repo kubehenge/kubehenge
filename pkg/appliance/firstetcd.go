@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
@@ -14,6 +15,9 @@ import (
 // clusterAddress is the module's resource whose create bootstraps the management cluster and waits
 // for its etcd.
 const clusterAddress = moduleAddress + "talos_cluster.this"
+
+// nodeModuleAddress starts the address of each node's Talos configuration and OS version.
+const nodeModuleAddress = moduleAddress + "module.talos_node_"
 
 // firstEtcdPoll is how often the watch of the first etcd start looks at the nodes.
 const firstEtcdPoll = 20 * time.Second
@@ -24,15 +28,24 @@ func (a *Appliance) etcdStartsPath() string { return filepath.Join(a.workdir(), 
 
 // createsCluster reports whether a plan, as `tofu show -json` prints it, bootstraps the management
 // cluster: its first apply, or the next after one that failed before the cluster was up. Every
-// other apply has the cluster in its state already.
+// other apply has the cluster in its state already. A plan that changes a node in any other way
+// than creating it is left out, since such an apply reboots or replaces the node itself.
 func createsCluster(shown []byte) bool {
 	var plan struct {
 		ResourceChanges []plannedChange `json:"resource_changes"`
 	}
 	_ = json.Unmarshal(shown, &plan) // plannedNodeVMs refused a plan that does not read
-	return slices.ContainsFunc(plan.ResourceChanges, func(rc plannedChange) bool {
-		return rc.Address == clusterAddress && slices.Contains(rc.Change.Actions, "create")
-	})
+	creates := false
+	for _, rc := range plan.ResourceChanges {
+		switch {
+		case rc.Address == clusterAddress:
+			creates = slices.Contains(rc.Change.Actions, "create")
+		case !strings.HasPrefix(rc.Address, nodeVMAddress+"[") && !strings.HasPrefix(rc.Address, nodeModuleAddress):
+		case slices.ContainsFunc(rc.Change.Actions, func(action string) bool { return action != "create" && action != "no-op" }):
+			return false
+		}
+	}
+	return creates
 }
 
 // watchFirstEtcd starts etcd again on the management nodes Talos left it Failed on, while the apply

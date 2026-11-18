@@ -192,8 +192,7 @@ func (a *Appliance) applyOnce(ctx context.Context, j *Job, env []string, t *pve.
 		lifted = append(lifted, vm)
 	}
 	stopWatch := func() {}
-	// Nodes the apply replaces or removes are its own to restart.
-	if len(deleted) == 0 && createsCluster(shown) {
+	if createsCluster(shown) {
 		stopWatch = a.watchFirstEtcd(ctx, j, env)
 	}
 	applied := a.tofu(ctx, j, env, jsonMessage, "apply", "-auto-approve", "-input=false", "-json", planFile)

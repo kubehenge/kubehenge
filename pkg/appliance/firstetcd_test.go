@@ -199,13 +199,17 @@ func TestFirstApplyStartsAFailedEtcdAgain(t *testing.T) {
 }
 
 // Only the apply whose plan creates the cluster watches etcd. An upgrade, the apply after a
-// restore or of a recreated cluster's VMs, and one that replaces a node leave the nodes alone.
+// restore or of a recreated cluster's VMs, and one that replaces, updates or reboots a node leave
+// the nodes alone.
 func TestOnlyTheApplyThatCreatesTheClusterWatchesEtcd(t *testing.T) {
 	t.Parallel()
+	talosMachine := nodeModuleAddress + "1.talos_machine.this"
 	for name, changes := range map[string][]change{
-		"upgrade":          {{address: clusterAddress, actions: []string{"update"}}},
-		"recreate":         {{address: nodeVMAddress + "[0]", actions: []string{"create"}}},
-		"replacing a node": {createsTheCluster, {address: nodeVMAddress + "[1]", actions: []string{"delete", "create"}, id: 101}},
+		"upgrade":                   {{address: clusterAddress, actions: []string{"update"}}},
+		"recreate":                  {{address: nodeVMAddress + "[0]", actions: []string{"create"}}},
+		"replacing a node":          {createsTheCluster, {address: nodeVMAddress + "[1]", actions: []string{"delete", "create"}, id: 101}},
+		"rebooting a node in place": {createsTheCluster, {address: talosMachine, actions: []string{"update"}}},
+		"replacing a node's Talos":  {createsTheCluster, {address: talosMachine, actions: []string{"create", "delete"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
