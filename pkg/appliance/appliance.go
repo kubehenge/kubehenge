@@ -68,8 +68,8 @@ type Appliance struct {
 	// NextID reads the datacenter's next-id option as the ticket's user, for the range the
 	// management VMs' IDs are drawn from. Nil keeps the default range.
 	NextID func(ctx context.Context, t *pve.Ticket) (pve.NextID, error)
-	// Talos reaches the management cluster's nodes for its etcd backups. OpenStore opens their
-	// target, provisioner.OpenTarget when nil.
+	// Talos reaches the management cluster's nodes for its etcd backups and its first etcd start.
+	// OpenStore opens the backups' target, provisioner.OpenTarget when nil.
 	Talos     TalosAccess
 	OpenStore provisioner.OpenStore
 	// OpenVolume reaches the store on the management cluster's backup volume, through the
@@ -85,6 +85,8 @@ type Appliance struct {
 	// stallPause is the wait before an apply runs again after etcd timed out a request,
 	// etcdStallPause when 0.
 	stallPause time.Duration
+	// etcdPoll is how often watchFirstEtcd looks at the nodes, firstEtcdPoll when 0.
+	etcdPoll time.Duration
 	// vmHosts reads with token the VMs it may see, with the Proxmox VE node each runs on, by their
 	// SMBIOS UUID. Nil asks the Proxmox VE API.
 	vmHosts backupstore.VMReader
@@ -391,7 +393,7 @@ func (a *Appliance) removalEnv(ctx context.Context, j *Job, passphrase string, t
 // latest backups stays for the removed cluster alone (forgetRemovedWithCopy deletes it).
 func (a *Appliance) forgetRemoved() error {
 	for _, name := range []string{
-		a.KubeconfigPath(), a.TokenPath(), filepath.Join(a.workdir(), "terraform.tfstate"), filepath.Join(a.workdir(), "terraform.tfstate.backup"), a.appliedPath(),
+		a.KubeconfigPath(), a.TokenPath(), filepath.Join(a.workdir(), "terraform.tfstate"), filepath.Join(a.workdir(), "terraform.tfstate.backup"), a.appliedPath(), a.etcdStartsPath(),
 		a.etcdBackupFile("volume.json"), a.etcdBackupFile("volume-status.json"), a.etcdBackupFile(volumeTalosconfig),
 	} {
 		if err := os.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {

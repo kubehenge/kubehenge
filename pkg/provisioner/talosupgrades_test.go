@@ -29,10 +29,12 @@ import (
 // nodes run etcd until wiped, boot again at once, and wait in Preparing until one of them is
 // bootstrapped, which the others then join.
 type fakeTalos struct {
-	mu         sync.Mutex
-	installed  map[string]string
-	rebooted   []string
-	installErr error
+	mu        sync.Mutex
+	installed map[string]string
+	rebooted  []string
+	// rebootFails, when set, gives the error of each reboot, which nil lets through.
+	rebootFails func() error
+	installErr  error
 	// installing, when set, runs in place of each install, as a node that is slow or goes away.
 	installing func(ctx context.Context) error
 
@@ -119,6 +121,11 @@ func (n *fakeTalosNode) Install(ctx context.Context, image string) error {
 func (n *fakeTalosNode) Reboot(context.Context) error {
 	n.f.mu.Lock()
 	defer n.f.mu.Unlock()
+	if n.f.rebootFails != nil {
+		if err := n.f.rebootFails(); err != nil {
+			return err
+		}
+	}
 	n.f.rebooted = append(n.f.rebooted, n.address)
 	return nil
 }

@@ -18,6 +18,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 ### Fixed
 
 - Kubehenge starts etcd again on a Talos control-plane node where its start failed, as on a failed image pull. It bootstraps a new cluster's first node again and reboots any other ([troubleshooting.md](troubleshooting.md#etcd-failed-on-a-talos-node)).
+- The management cluster's setup no longer times out on the same fault. The appliance starts etcd again the same way and says so in the run's log.
 
 ## [0.5.2] - 2026-11-17
 

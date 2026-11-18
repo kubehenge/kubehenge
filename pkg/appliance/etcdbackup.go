@@ -101,12 +101,13 @@ func (a *Appliance) stopEtcdSnapshot(ctx context.Context, j *Job) error {
 	}
 }
 
-// TalosAccess reaches the management cluster's control-plane nodes for its etcd backups.
-// provisioner.ManagementTalos is the real one.
+// TalosAccess reaches the management cluster's control-plane nodes for its etcd backups, and for
+// its first etcd start. provisioner.ManagementTalos is the real one.
 type TalosAccess interface {
 	BackupConfig(ctx context.Context, admin []byte, address string, ttl time.Duration) ([]byte, error)
 	Snapshot(ctx context.Context, talosconfig []byte, nodes []string) (io.ReadCloser, error)
 	Restore(ctx context.Context, admin []byte, nodes []string, open func() (io.ReadCloser, error), log func(string)) error
+	StartFirstEtcd(ctx context.Context, admin []byte, nodes []string, starts map[string]provisioner.EtcdStart, record func() error, log func(string))
 }
 
 // EtcdBackupSettings is how the management cluster's etcd is backed up: into which of the backup

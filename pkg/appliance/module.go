@@ -131,6 +131,9 @@ func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase str
 	if err = a.claimLease(ctx, j, env); err != nil {
 		return nil, err
 	}
+	if err = a.freshEtcdStarts(); err != nil {
+		return nil, err
+	}
 	j.Add("Applying the management cluster")
 	err = a.applyPlanned(ctx, j, env, ticket)
 	if err != nil {

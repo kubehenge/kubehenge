@@ -63,6 +63,9 @@ func (m *managementTalos) Restore(_ context.Context, _ []byte, _ []string, open 
 	return err
 }
 
+func (*managementTalos) StartFirstEtcd(context.Context, []byte, []string, map[string]provisioner.EtcdStart, func() error, func(string)) {
+}
+
 func managementBackupsOf(t *testing.T, b *browser) managementBackupsView {
 	t.Helper()
 	rec := b.do("GET", "/api/appliance/etcd-backups", "")
