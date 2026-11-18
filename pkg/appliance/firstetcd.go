@@ -161,8 +161,6 @@ func (a *Appliance) watchFirstEtcd(ctx context.Context, j *Job, env []string, sh
 }
 
 func (a *Appliance) firstEtcd(ctx context.Context, j *Job, env []string, shown []byte) {
-	var admin []byte
-	var nodes []string
 	for {
 		select {
 		case <-ctx.Done():
@@ -170,23 +168,20 @@ func (a *Appliance) firstEtcd(ctx context.Context, j *Job, env []string, shown [
 		case <-time.After(cmp.Or(a.etcdPoll, firstEtcdPoll)):
 		}
 		// The plan holds the client configuration when OpenTofu read it while planning, which it does
-		// once the cluster's secrets exist. The state keeps the last apply's until this one ends.
-		// Before the secrets exist, the read waits for the apply, and the state holds it from
-		// OpenTofu's first write. The apply's outputs reach the state only once it ends.
+		// once the cluster's secrets exist and stay. Otherwise the read waits for the apply, and the
+		// state holds the last apply's until OpenTofu writes this one's, so every look reads it again.
+		// The apply's outputs reach the state only once it ends.
+		admin := planTalosconfig(shown)
 		if admin == nil {
-			out := planTalosconfig(shown)
-			if out == nil {
-				pulled, err := a.read(ctx, env, "state", "pull")
-				if err != nil {
-					continue
-				}
-				out = stateTalosconfig(pulled)
-			}
-			var err error
-			if nodes, err = provisioner.TalosEndpoints(out); err != nil {
+			pulled, err := a.read(ctx, env, "state", "pull")
+			if err != nil {
 				continue
 			}
-			admin = out
+			admin = stateTalosconfig(pulled)
+		}
+		nodes, err := provisioner.TalosEndpoints(admin)
+		if err != nil {
+			continue
 		}
 		starts := map[string]provisioner.EtcdStart{}
 		if saved, err := readJSONFile[map[string]provisioner.EtcdStart](a.etcdStartsPath()); err == nil {

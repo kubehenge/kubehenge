@@ -243,6 +243,36 @@ func TestFirstEtcdReachesThePlannedNodes(t *testing.T) {
 	waitFor(t, a)
 }
 
+// A rerun whose plan waits to read the client configuration finds the last apply's in the state
+// until OpenTofu writes this one's, so the watch reads the state again on later looks.
+func TestFirstEtcdReadsTheStateAgain(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	pulled := func(endpoints string) {
+		t.Helper()
+		state, err := json.Marshal(map[string]any{"resources": []any{map[string]any{
+			"module": "module.management", "mode": "data", "type": "talos_client_configuration", "name": "this",
+			"instances": []any{map[string]any{"attributes": map[string]any{
+				"talos_config": "context: management\ncontexts:\n  management:\n    endpoints: [" + endpoints + "]\n",
+			}}},
+		}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(a.Dir, "pulled-state.json"), state, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pulled("10.9.9.1, 10.9.9.2")
+	nodes := newFirstNodes(map[string]string{"10.0.0.11": "Failed"})
+	firstApply(t, a, nodes, "held", createsTheCluster)
+	eventually(t, "looked at the last apply's nodes", func() bool { return nodes.looked() > 0 })
+	pulled("10.0.0.11, 10.0.0.12")
+	eventually(t, "bootstrapped", func() bool { return slices.Equal(nodes.made(), []string{"10.0.0.11 bootstrap"}) })
+	releaseApply(t, a)
+	waitFor(t, a)
+}
+
 // Only the apply whose plan creates the cluster watches etcd. An upgrade, the apply after a
 // restore or of a recreated cluster's VMs, and one that replaces, updates or reboots a node leave
 // the nodes alone.
