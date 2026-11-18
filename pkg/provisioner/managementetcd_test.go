@@ -450,6 +450,26 @@ func TestStartFirstEtcdPassesByANodeThatDoesNotAnswer(t *testing.T) {
 	}
 }
 
+// A reboot whose boot cannot be written down after it is still logged, before the failure.
+func TestStartFirstEtcdLogsARebootItCouldNotRecord(t *testing.T) {
+	t.Parallel()
+	f := &fakeTalos{service: map[string]TalosService{"10.0.0.21": {State: talosEtcdPreparing}, "10.0.0.22": firstFailed}}
+	records := 0
+	log := firstStart(f, map[string]EtcdStart{}, func() error {
+		if records++; records > 1 {
+			return errors.New("disk full")
+		}
+		return nil
+	})
+	want := []string{
+		"Talos left etcd on 10.0.0.22 Failed: " + fakePullFailure + ". Rebooted the node to start etcd again.",
+		"Starting etcd again on 10.0.0.22 failed: disk full",
+	}
+	if !slices.Equal(f.rebooted, []string{"10.0.0.22"}) || !slices.Equal(log, want) {
+		t.Errorf("rebooted %v, log %q", f.rebooted, log)
+	}
+}
+
 // A count that cannot be written stops the start, which the log says.
 func TestStartFirstEtcdStartsNothingUncounted(t *testing.T) {
 	t.Parallel()
