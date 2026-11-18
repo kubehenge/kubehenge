@@ -75,8 +75,52 @@ func stateTalosconfig(pulled []byte) []byte {
 		return nil
 	}
 	for _, r := range state.Resources {
-		if r.Module+"."+r.Mode+"."+r.Type+"."+r.Name == moduleAddress+"data.talos_client_configuration.this" && len(r.Instances) == 1 {
+		if r.Module+"."+r.Mode+"."+r.Type+"."+r.Name == talosconfigAddress && len(r.Instances) == 1 {
 			return []byte(r.Instances[0].Attributes.TalosConfig)
+		}
+	}
+	return nil
+}
+
+// talosconfigAddress is the module's client configuration, which holds its talosconfig.
+const talosconfigAddress = moduleAddress + "data.talos_client_configuration.this"
+
+// shownModule is a module of a plan's prior state, as `tofu show -json` prints it.
+type shownModule struct {
+	Resources    []shownResource `json:"resources"`
+	ChildModules []shownModule   `json:"child_modules"`
+}
+
+type shownResource struct {
+	Address string              `json:"address"`
+	Values  clientConfiguration `json:"values"`
+}
+
+type shownValues struct {
+	RootModule shownModule `json:"root_module"`
+}
+
+type shownState struct {
+	Values shownValues `json:"values"`
+}
+
+// planTalosconfig is the module's talosconfig in the prior state of a plan, as `tofu show -json`
+// prints it, or nil where the plan read none.
+func planTalosconfig(shown []byte) []byte {
+	var plan struct {
+		PriorState shownState `json:"prior_state"`
+	}
+	if json.Unmarshal(shown, &plan) != nil {
+		return nil
+	}
+	modules := []shownModule{plan.PriorState.Values.RootModule}
+	for len(modules) > 0 {
+		m := modules[0]
+		modules = append(modules[1:], m.ChildModules...)
+		for _, r := range m.Resources {
+			if r.Address == talosconfigAddress && r.Values.TalosConfig != "" {
+				return []byte(r.Values.TalosConfig)
+			}
 		}
 	}
 	return nil
@@ -85,7 +129,7 @@ func stateTalosconfig(pulled []byte) []byte {
 // watchFirstEtcd starts etcd again on the management nodes Talos left it Failed on, while the apply
 // that first starts it runs. Talos does not start a Failed etcd again by itself, and the apply would
 // wait for it until its time ran out. The func it returns ends the watch and waits until it has stopped.
-func (a *Appliance) watchFirstEtcd(ctx context.Context, j *Job, env []string) func() {
+func (a *Appliance) watchFirstEtcd(ctx context.Context, j *Job, env []string, shown []byte) func() {
 	if a.Talos == nil {
 		return func() {}
 	}
@@ -93,7 +137,7 @@ func (a *Appliance) watchFirstEtcd(ctx context.Context, j *Job, env []string) fu
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		a.firstEtcd(ctx, j, env)
+		a.firstEtcd(ctx, j, env, shown)
 	}()
 	return func() {
 		cancel()
@@ -101,7 +145,7 @@ func (a *Appliance) watchFirstEtcd(ctx context.Context, j *Job, env []string) fu
 	}
 }
 
-func (a *Appliance) firstEtcd(ctx context.Context, j *Job, env []string) {
+func (a *Appliance) firstEtcd(ctx context.Context, j *Job, env []string, shown []byte) {
 	var admin []byte
 	var nodes []string
 	for {
@@ -110,15 +154,20 @@ func (a *Appliance) firstEtcd(ctx context.Context, j *Job, env []string) {
 			return
 		case <-time.After(cmp.Or(a.etcdPoll, firstEtcdPoll)):
 		}
-		// The apply's outputs reach the state only once it ends. The client configuration they are
-		// made of is there as soon as OpenTofu first writes the state, minutes before any node
-		// runs etcd.
+		// The plan holds the client configuration when OpenTofu read it while planning, which it does
+		// once the cluster's secrets exist. The state keeps the last apply's until this one ends.
+		// Before the secrets exist, the read waits for the apply, and the state holds it from
+		// OpenTofu's first write. The apply's outputs reach the state only once it ends.
 		if admin == nil {
-			pulled, err := a.read(ctx, env, "state", "pull")
-			if err != nil {
-				continue
+			out := planTalosconfig(shown)
+			if out == nil {
+				pulled, err := a.read(ctx, env, "state", "pull")
+				if err != nil {
+					continue
+				}
+				out = stateTalosconfig(pulled)
 			}
-			out := stateTalosconfig(pulled)
+			var err error
 			if nodes, err = provisioner.TalosEndpoints(out); err != nil {
 				continue
 			}

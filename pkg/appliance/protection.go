@@ -193,7 +193,7 @@ func (a *Appliance) applyOnce(ctx context.Context, j *Job, env []string, t *pve.
 	}
 	stopWatch := func() {}
 	if createsCluster(shown) {
-		stopWatch = a.watchFirstEtcd(ctx, j, env)
+		stopWatch = a.watchFirstEtcd(ctx, j, env, shown)
 	}
 	applied := a.tofu(ctx, j, env, jsonMessage, "apply", "-auto-approve", "-input=false", "-json", planFile)
 	stopWatch()

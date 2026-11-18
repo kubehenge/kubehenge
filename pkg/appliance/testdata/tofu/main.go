@@ -192,15 +192,19 @@ func run(dir string, args []string) int {
 			held, _ := os.ReadFile(filepath.Join(dir, "..", "state-list"))
 			fmt.Print(string(held))
 		}
-		// The state an apply has written holds the module's client configuration.
+		// The state an apply has written holds the module's client configuration, or what a test
+		// left in <dir>/../pulled-state.json.
 		if _, err := os.Stat(filepath.Join(dir, "..", "state-pushed")); err == nil && len(args) > 1 && args[1] == "pull" {
 			if !opens() {
 				return 1
 			}
-			pulled, _ := json.Marshal(map[string]any{"version": 4, "resources": []any{map[string]any{
-				"module": "module.management", "mode": "data", "type": "talos_client_configuration", "name": "this",
-				"instances": []any{map[string]any{"attributes": map[string]any{"talos_config": talosconfig}}},
-			}}})
+			pulled, err := os.ReadFile(filepath.Join(dir, "..", "pulled-state.json"))
+			if err != nil {
+				pulled, _ = json.Marshal(map[string]any{"version": 4, "resources": []any{map[string]any{
+					"module": "module.management", "mode": "data", "type": "talos_client_configuration", "name": "this",
+					"instances": []any{map[string]any{"attributes": map[string]any{"talos_config": talosconfig}}},
+				}}})
+			}
 			fmt.Print(string(pulled))
 		}
 	case "output":

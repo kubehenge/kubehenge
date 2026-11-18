@@ -2,6 +2,7 @@ package appliance
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -124,9 +125,15 @@ func (f firstTalos) StartFirstEtcd(ctx context.Context, admin []byte, nodes []st
 // apply again after. a's watch reaches the nodes.
 func firstApply(t *testing.T, a *Appliance, nodes *firstNodes, word string, changes ...change) {
 	t.Helper()
+	writePlan(t, a, changes...)
+	startFirstApply(t, a, nodes, word)
+}
+
+// startFirstApply is firstApply of the plan the test left.
+func startFirstApply(t *testing.T, a *Appliance, nodes *firstNodes, word string) {
+	t.Helper()
 	a.Talos = firstTalos{fakeManagementTalos: &fakeManagementTalos{}, nodes: nodes}
 	a.etcdPoll = time.Millisecond
-	writePlan(t, a, changes...)
 	s := settings("pve1")
 	s.ControllerImage = "held"
 	switch word {
@@ -198,6 +205,42 @@ func TestFirstApplyStartsAFailedEtcdAgain(t *testing.T) {
 	if got := readStarts(t, a)["10.0.0.11"]; got.Repairs != 1 {
 		t.Errorf("recorded %+v", got)
 	}
+}
+
+// The apply after one that failed with other node addresses reaches the nodes its plan read, while
+// the state it writes keeps the last apply's talosconfig until it ends.
+func TestFirstEtcdReachesThePlannedNodes(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	talosconfig := func(endpoints string) string {
+		return "context: management\ncontexts:\n  management:\n    endpoints: [" + endpoints + "]\n"
+	}
+	stale, err := json.Marshal(map[string]any{"resources": []any{map[string]any{
+		"module": "module.management", "mode": "data", "type": "talos_client_configuration", "name": "this",
+		"instances": []any{map[string]any{"attributes": map[string]any{"talos_config": talosconfig("10.9.9.1, 10.9.9.2")}}},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := json.Marshal(map[string]any{
+		"resource_changes": []any{map[string]any{"address": clusterAddress, "change": map[string]any{"actions": []string{"create"}}}},
+		"prior_state": map[string]any{"values": map[string]any{"root_module": map[string]any{"child_modules": []any{map[string]any{
+			"resources": []any{map[string]any{"address": talosconfigAddress, "values": map[string]any{"talos_config": talosconfig("10.0.0.11, 10.0.0.12")}}},
+		}}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string][]byte{"pulled-state.json": stale, "plan.json": plan} {
+		if err := os.WriteFile(filepath.Join(a.Dir, name), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	nodes := newFirstNodes(map[string]string{"10.0.0.11": "Failed"})
+	startFirstApply(t, a, nodes, "held")
+	eventually(t, "bootstrapped", func() bool { return slices.Equal(nodes.made(), []string{"10.0.0.11 bootstrap"}) })
+	releaseApply(t, a)
+	waitFor(t, a)
 }
 
 // Only the apply whose plan creates the cluster watches etcd. An upgrade, the apply after a
