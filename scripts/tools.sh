@@ -98,8 +98,8 @@ NODE_SHA256=5848553868b402d3fabb5b09270649977780a390f832155721025a08b5104455
 tree node "https://nodejs.org/dist/v${NODE}/node-v${NODE}-linux-x64.tar.gz" "${NODE_SHA256}" bin node npm npx
 
 # renovate: datasource=github-release-attachments depName=astral-sh/uv
-UV=0.13.8
-UV_SHA256=5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91
+UV=0.13.9
+UV_SHA256=a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5
 tree uv "https://github.com/astral-sh/uv/releases/download/${UV}/uv-x86_64-unknown-linux-gnu.tar.gz" "${UV_SHA256}" . uv
 
 # renovate: datasource=github-release-attachments depName=opentofu/opentofu
@@ -186,6 +186,6 @@ release cosign sigstore/cosign "${COSIGN}" cosign-linux-amd64 "${COSIGN_SHA256}"
 
 # The release writes the SBOMs of its archive and images with it (scripts/sbom.sh).
 # renovate: datasource=github-release-attachments depName=anchore/syft
-SYFT=v1.57.1
-SYFT_SHA256=bf52519eb57f675d47c07d43213cb6dff6449f3d6d1147ff6701ed91f44eef0c
+SYFT=v1.57.2
+SYFT_SHA256=ad92bd3ec1b94a3df01d4d0aec199afa9c42b72e86da436ff5f837914d32706b
 release syft anchore/syft "${SYFT}" "syft_${SYFT#v}_linux_amd64.tar.gz" "${SYFT_SHA256}" syft

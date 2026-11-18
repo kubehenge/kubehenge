@@ -5,7 +5,7 @@ terraform {
   required_providers {
     proxmox = {
       source  = "bpg/proxmox"
-      version = "~> 0.122"
+      version = "~> 0.123"
     }
     talos = {
       source  = "siderolabs/talos"
@@ -38,7 +38,7 @@ locals {
     # renovate: datasource=github-releases depName=kubernetes-sigs/cluster-api-ipam-provider-in-cluster
     ipam_in_cluster = "v1.1.1"
     # renovate: datasource=github-releases depName=kubernetes-sigs/cluster-api-addon-provider-helm
-    helm_addon = "v0.6.4"
+    helm_addon = "v0.6.6"
     # Talos's providers come from Kubehenge's forks of them: upstream's releases are on Cluster
     # API's v1beta1 contract, which Cluster API's core removes, and its control-plane provider has
     # no TalosControlPlaneTemplate, which a ClusterClass's control plane needs.
@@ -73,10 +73,10 @@ locals {
     # upstream publishes the chart only there and in a Helm repository, whose index Helm checks no
     # archive against.
     # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api-operator
-    chart        = "v0.30.0"
-    chart_sha256 = "d91da9022021a8c9d48830047314ac5cb73bb38a19f450d5a3186cc2c3b570d5"
+    chart        = "v0.30.1"
+    chart_sha256 = "4caf236c5f917a0b68c79fbff6d1be5f735c7d119d970be2d3feb69e1ed8d51f"
     # renovate: datasource=docker depName=registry.k8s.io/capi-operator/cluster-api-operator
-    image = "v0.30.0@sha256:2dd577d7bd9cf65deb45b8cd6444f5c89c3de3237ed8e150bd3d34df24fbce10"
+    image = "v0.30.1@sha256:88e20168e29736275fb1fbd7982d584a06f036ffc7c0f3a6d205549cef5e861f"
   }
 
   # Where the providers of each component in the tested set are released.
@@ -123,9 +123,9 @@ locals {
     # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api-ipam-provider-in-cluster
     "kubernetes-sigs/cluster-api-ipam-provider-in-cluster/releases/download/v1.1.1/ipam-components.yaml" = "8a0656a39d9e85ee07219702254669b7e543d09957e86315f3d20b4bf6aebfa5"
     # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api-addon-provider-helm
-    "kubernetes-sigs/cluster-api-addon-provider-helm/releases/download/v0.6.4/metadata.yaml" = "d50a44ee0db2f0368699d15ff011b9b5a61d9969483de1c4f6e4e6046390530f"
+    "kubernetes-sigs/cluster-api-addon-provider-helm/releases/download/v0.6.6/metadata.yaml" = "d50a44ee0db2f0368699d15ff011b9b5a61d9969483de1c4f6e4e6046390530f"
     # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api-addon-provider-helm
-    "kubernetes-sigs/cluster-api-addon-provider-helm/releases/download/v0.6.4/addon-components.yaml" = "a70f4eb77eac626231daca1e2a046b4b069bb84320efa327cc8c56a9c4ca03e6"
+    "kubernetes-sigs/cluster-api-addon-provider-helm/releases/download/v0.6.6/addon-components.yaml" = "d3d6d5e15074407f586066a8b0226b717fcaf7de4bf72ebe357ccb37b8482de5"
     # renovate: datasource=github-release-attachments depName=kubehenge/cluster-api-bootstrap-provider-talos
     "kubehenge/cluster-api-bootstrap-provider-talos/releases/download/v0.7.0/metadata.yaml" = "d5774698bf60bd884217a24870366979b5c2ba9dc90fb1bf94e5edc13a7fe152"
     # renovate: datasource=github-release-attachments depName=kubehenge/cluster-api-bootstrap-provider-talos
@@ -159,7 +159,7 @@ locals {
     # renovate: datasource=docker depName=registry.k8s.io/capi-ipam-ic/cluster-api-ipam-in-cluster-controller
     "IPAMProvider/in-cluster" = "registry.k8s.io/capi-ipam-ic/cluster-api-ipam-in-cluster-controller:v1.1.1@sha256:49a4cc0c5d7cd8deef20105e71ce168407ddcaab612f5819947163bd4b66ff0b"
     # renovate: datasource=docker depName=registry.k8s.io/cluster-api-helm/cluster-api-helm-controller
-    "AddonProvider/helm" = "registry.k8s.io/cluster-api-helm/cluster-api-helm-controller:v0.6.4@sha256:97d2a86f8e35d23bb4656b26f4564b35f109e47a0dc4860b71089e52eb6e6a24"
+    "AddonProvider/helm" = "registry.k8s.io/cluster-api-helm/cluster-api-helm-controller:v0.6.6@sha256:7723bae58324592304fea89fd6f46e4252dd9fe3b91a03ea9392819e87fe4164"
     # renovate: datasource=docker depName=ghcr.io/kubehenge/cluster-api-bootstrap-provider-talos
     "BootstrapProvider/talos" = "ghcr.io/kubehenge/cluster-api-bootstrap-provider-talos:v0.7.0@sha256:bda9e12fd1050afa0cffac31b53ed37c58b3a3fe23438ff9ab6cdedde41c170d"
     # renovate: datasource=docker depName=ghcr.io/kubehenge/cluster-api-control-plane-provider-talos

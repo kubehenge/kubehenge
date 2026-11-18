@@ -3,7 +3,7 @@
   "private": true,
   "description": "The Node linters `make lint` runs, installed from package-lock.json with every package's hash checked.",
   "devDependencies": {
-    "renovate": "44.239.1"
+    "renovate": "44.252.0"
   },
   "overrides": {
     "glob@>=9.0.0 <14.0.2": "^14.0.2",

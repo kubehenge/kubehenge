@@ -30,8 +30,8 @@ func (rocky) Releases() []Release {
 		// The build of Rocky Linux 10's GenericCloud image, which the bake boots to build the node
 		// image in, named by its file on dl.rockylinux.org, and that file's SHA-256.
 		// renovate: datasource=custom.rocky-cloud-images depName=rocky-10
-		Build:  "10.2-20260525.0",
-		SHA256: "9fc9e9ff16888bb68ac39b0392e25c9c92684d50c85f1cce6ab549363bbc4b48",
+		Build:  "10.3-20261112.0",
+		SHA256: "68eae06d402c8b19e7dca06e85bdc43a3476089afa3ee20d93d0d43cf9871e9e",
 		// Rocky Linux 10 is built for x86-64-v3 and stops at boot on anything less.
 		CPUType: "x86-64-v3",
 		Mode:    ImageMode,
