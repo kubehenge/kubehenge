@@ -94,7 +94,7 @@ tree go "https://go.dev/dl/go${GO}.linux-amd64.tar.gz" "${GO_SHA256}" bin go gof
 
 # renovate: datasource=node-version depName=node
 NODE=26.13.1
-NODE_SHA256=5848553868b402d3fabb5b09270649977780a390f832155721025a08b5104455
+NODE_SHA256=518674de2b621728a5e4486f5fb3b7d2900bb3cc4aa97969edaa463db99f9778
 tree node "https://nodejs.org/dist/v${NODE}/node-v${NODE}-linux-x64.tar.gz" "${NODE_SHA256}" bin node npm npx
 
 # renovate: datasource=github-release-attachments depName=astral-sh/uv
@@ -109,7 +109,7 @@ release tofu opentofu/opentofu "${TOFU}" "tofu_${TOFU#v}_linux_amd64.tar.gz" "${
 
 # renovate: datasource=github-releases depName=helm/helm
 HELM=v4.3.2
-HELM_SHA256=0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b
+HELM_SHA256=d1c0278d46beab79582d7e50f5b3dc206944ba8e577cde618513fd07daa53983
 tool helm "https://get.helm.sh/helm-${HELM}-linux-amd64.tar.gz" "${HELM_SHA256}" linux-amd64/helm
 
 # renovate: datasource=github-release-attachments depName=terraform-linters/tflint
