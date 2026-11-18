@@ -339,7 +339,7 @@ func TestStartFirstEtcdBootstrapsAgainInTheSameBoot(t *testing.T) {
 	t.Parallel()
 	f := &fakeTalos{service: map[string]TalosService{"10.0.0.21": firstFailed, "10.0.0.22": {State: talosEtcdPreparing}}}
 	starts := map[string]EtcdStart{}
-	var log []string
+	log := make([]string, 0, 4)
 	for range 5 {
 		log = append(log, firstStart(f, starts, nil)...)
 	}
