@@ -13,7 +13,8 @@ depends() {
 }
 
 install() {
-    # 00-fips-boot.sh, then this, then 01-fips-noboot.sh, which runs the check.
+    # Around dracut's own 01-fips-noboot.sh, which runs the check.
+    # shellcheck disable=SC2154 # dracut sets moddir for a module's install.
     inst_hook pre-pivot 00 "${moddir}/kubehenge-fips-boot.sh"
     inst_hook pre-pivot 02 "${moddir}/kubehenge-fips-unboot.sh"
 }

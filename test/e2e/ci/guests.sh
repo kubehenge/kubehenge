@@ -187,12 +187,14 @@ consoles() {
             for socket in ${sockets}; do
                 vmid=${socket%.serial0}
                 log=$1/${container#kubehenge-e2e-}-${vmid}.log
-                if [ -s "${log}.pid" ] && kill -0 "$(cat "${log}.pid")" 2> /dev/null; then
+                reader=$(cat "${log}.pid" 2> /dev/null) || reader=
+                if [ -n "${reader}" ] && kill -0 "${reader}" 2> /dev/null; then
                     continue
                 fi
                 name=$(timeout -k 5 20 docker exec "${container}" qm config "${vmid}" < /dev/null 2> /dev/null |
                     sed -n 's/^name: //p') || true
-                printf '== %s %s\n' "$(date -u +%T)" "${name}" >> "${log}"
+                now=$(date -u +%T)
+                printf '== %s %s\n' "${now}" "${name}" >> "${log}"
                 docker exec "${container}" socat -u "UNIX-CONNECT:/var/run/qemu-server/${socket}" STDOUT \
                     < /dev/null 2> /dev/null | redact >> "${log}" &
                 echo $! > "${log}.pid"

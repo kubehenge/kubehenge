@@ -469,7 +469,8 @@ jobs:
             "$out/" 2>/dev/null || true
           # What each VM's boot loader and kernel printed, which a VM that stops early leaves alone.
           mkdir -p "$out/consoles"
-          cp "$RUNNER_TEMP"/consoles/*.log "$RUNNER_TEMP/consoles.log" "$out/consoles/" 2>/dev/null || true
+          cp "$RUNNER_TEMP"/consoles/*.log "$RUNNER_TEMP/consoles.log" "$out/consoles/" \
+            2>/dev/null || true
           # From inside the VMs, which answers even when a cluster's API does not.
           test/e2e/ci/guests.sh collect "$out/guests" || true
           # The management-cluster tests keep their kubeconfig only while they run, and leave the

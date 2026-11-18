@@ -338,7 +338,7 @@ func (w *EtcdWatch) talosMember(ctx context.Context, c *clusterv1.Cluster, m *cl
 	case etcd.State == talosEtcdRunning && m.Annotations[EtcdRepairsAnnotation] != "":
 		// etcd that fails again after running is started again, as often as the first time.
 		if ferr := w.recordRepair(ctx, m.DeepCopy(), nil); ferr != nil {
-			ctrl.LoggerFrom(ctx).WithName("etcd-watch").Error(ferr, "forgetting the starts of etcd that runs again")
+			ctrl.LoggerFrom(ctx).WithName("etcd-watch").Error(ferr, "removing the etcd-repairs annotation of a machine whose etcd runs again")
 		}
 	}
 	switch {
@@ -381,9 +381,9 @@ func (w *EtcdWatch) startEtcd(ctx context.Context, c *clusterv1.Cluster, m *clus
 	if leftToOthers(fresh) || r.GaveUp || r.Boot == boot {
 		return
 	}
-	note := "Talos left etcd on " + m.Name + " Failed"
+	note := "etcd on " + m.Name + " is Failed"
 	if etcd.Event != "" {
-		note += ": " + etcd.Event
+		note += `, Talos says "` + etcd.Event + `"`
 	}
 	if r.Repairs >= maxEtcdRepairs {
 		r.GaveUp = true
@@ -391,7 +391,7 @@ func (w *EtcdWatch) startEtcd(ctx context.Context, c *clusterv1.Cluster, m *clus
 			log.Error(err, "giving up on etcd")
 			return
 		}
-		note += fmt.Sprintf(". Left it Failed after %d starts since it last ran.", r.Repairs)
+		note += fmt.Sprintf(". Kubehenge started it %d times without etcd running and has stopped trying.", r.Repairs)
 		log.Info(note)
 		w.event(c, "TalosEtcdLeftFailed", note)
 		return
@@ -429,12 +429,12 @@ func (w *EtcdWatch) bootstrapEtcd(ctx context.Context, machine *clusterv1.Machin
 	err := node.Bootstrap(ctx)
 	switch {
 	case err == nil:
-		return ". Bootstrapped it again.", nil
+		return ". Kubehenge bootstrapped it again.", nil
 	case errors.Is(err, errTalosNotReady):
 		// Not a start, so it does not count.
 		return "", errors.Join(err, w.recordRepair(ctx, machine, &r))
 	}
-	refused := fmt.Sprintf(". Talos refused to bootstrap it again: %v", err)
+	refused := fmt.Sprintf(". Talos did not bootstrap it again: %v", err)
 	done, err := w.rebootEtcd(ctx, machine, node, boot, r)
 	return refused + done, err
 }
@@ -450,7 +450,7 @@ func (w *EtcdWatch) rebootEtcd(ctx context.Context, machine *clusterv1.Machine, 
 	if err := node.Reboot(ctx); err != nil {
 		return "", err //nolint:wrapcheck // the node's error names the node and the call
 	}
-	return ". Rebooted the node to start etcd again.", nil
+	return ". Kubehenge rebooted the node to start etcd again.", nil
 }
 
 // leftToOthers says whether the cluster's nodes are someone else's to restart: it is paused, being

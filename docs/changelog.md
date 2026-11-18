@@ -8,17 +8,16 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ### Highlights
 
-- **Templates on 10.3.** AlmaLinux and Rocky Linux nodes, FIPS ones included, get the current packages again.
+- **AlmaLinux and Rocky Linux 10.3.** Node templates move to 10.3, FIPS ones included.
 - **New Talos clusters start.** A first etcd start that fails no longer leaves a new cluster stuck.
 
 ### Changed
 
-- AlmaLinux and Rocky Linux node templates are built from 10.3 packages, which carry the current security fixes.
+- AlmaLinux and Rocky Linux node templates are built from 10.3, FIPS ones included. Clusters move to the new build at their next node image refresh ([clusters.md](clusters.md#node-image-refresh)).
 
 ### Fixed
 
-- A new Talos cluster no longer stays stuck when a failed image pull stops etcd on a control-plane node. Kubehenge bootstraps the first node again or reboots a joining one, and says why in an event.
-- FIPS node templates on AlmaLinux and Rocky Linux 10.3 boot. Their initramfs found no checksum of the kernel and switched the node off.
+- Kubehenge starts etcd again on a Talos control-plane node where its start failed, as on a failed image pull. It bootstraps a new cluster's first node again and reboots any other ([troubleshooting.md](troubleshooting.md#etcd-failed-on-a-talos-node)).
 
 ## [0.5.2] - 2026-11-17
 

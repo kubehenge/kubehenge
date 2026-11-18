@@ -704,14 +704,14 @@ Component names are `out_<name>`, with hyphens as underscores. Alloy drops what 
 
 ### etcd Failed on a Talos node
 
-- **`TalosEtcdFailed`**, "Talos left etcd on … Failed: …", means etcd's start failed, often on an image pull, and Talos does not try again. The text after the colon is Talos's reason.
-  - "Bootstrapped it again" means a new cluster's only control-plane node got its bootstrap again. A cluster whose control plane was initialised never gets one.
-  - "Talos refused to bootstrap it again" means etcd on the only node already has data.
-  - "Rebooted the node to start etcd again" means any other such node was rebooted, at most once per boot.
-  - Nothing happens while the cluster is paused, restoring or upgrading Talos.
-- **`TalosEtcdLeftFailed`**, "… Left it Failed after 3 starts since it last ran", means the controller stopped starting etcd on that node. Read why with `talosctl service etcd` and `talosctl logs etcd`.
-  - The count is the Machine's `kubehenge.dev/etcd-repairs` annotation. It starts again once etcd runs or the machine is replaced.
-  - To have the controller try again, remove it: `kubectl --namespace NAMESPACE annotate machine MACHINE kubehenge.dev/etcd-repairs-`.
+- **`TalosEtcdFailed`**, "etcd on … is Failed, Talos says …", means etcd's start failed, often on an image pull, and Talos does not try again. The quoted text is Talos's reason.
+  - "Kubehenge bootstrapped it again" means a new cluster's only control-plane node got its bootstrap again. A cluster whose control plane was initialised never gets one.
+  - "Talos did not bootstrap it again" gives Talos's reason, most often that etcd on the node already has data. The node is rebooted instead.
+  - "Kubehenge rebooted the node to start etcd again" means the controller rebooted the node. It reboots a node once for each boot that ends with etcd Failed.
+  - The controller leaves etcd alone while the cluster is paused, being restored or upgrading Talos.
+- **`TalosEtcdLeftFailed`**, "… Kubehenge started it 3 times without etcd running and has stopped trying", means the controller no longer starts etcd on that node. Read why on the node: `talosctl --talosconfig prod.talosconfig --nodes 192.0.2.21 service etcd`, then `logs etcd` the same way.
+  - The count is kept in the Machine's `kubehenge.dev/etcd-repairs` annotation. The controller removes it once etcd runs, and a replaced machine has none.
+  - To have the controller try again, remove it: `kubectl -n clusters annotate machine prod-cp-abcde kubehenge.dev/etcd-repairs-`.
 
 ### etcd snapshots and restores
 

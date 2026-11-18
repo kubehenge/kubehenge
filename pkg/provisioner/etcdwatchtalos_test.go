@@ -134,8 +134,8 @@ func TestEtcdWatchRebootsOnARefusedBootstrap(t *testing.T) {
 	if !slices.Equal(f.talos.rebooted, []string{"10.0.0.11"}) {
 		t.Errorf("rebooted %v", f.talos.rebooted)
 	}
-	want := "Talos left etcd on web-cp-0 Failed: " + fakePullFailure +
-		". Talos refused to bootstrap it again: rpc error: code = AlreadyExists desc = etcd data directory is not empty. Rebooted the node to start etcd again."
+	want := `etcd on web-cp-0 is Failed, Talos says "` + fakePullFailure +
+		`". Talos did not bootstrap it again: rpc error: code = AlreadyExists desc = etcd data directory is not empty. Kubehenge rebooted the node to start etcd again.`
 	if got := recorded(f.events); len(got) != 1 || !strings.Contains(got[0], want) {
 		t.Errorf("events %v", got)
 	}
@@ -270,7 +270,7 @@ func TestEtcdWatchEventCarriesTalosReason(t *testing.T) {
 	f := newTalosEtcdFixture(t, true, nil)
 	f.failEtcd("10.0.0.13")
 	f.look(0)
-	want := "Talos left etcd on web-cp-2 Failed: " + fakePullFailure + ". Rebooted the node to start etcd again."
+	want := `etcd on web-cp-2 is Failed, Talos says "` + fakePullFailure + `". Kubehenge rebooted the node to start etcd again.`
 	if got := recorded(f.events); len(got) != 1 || !strings.Contains(got[0], "TalosEtcdFailed") || !strings.Contains(got[0], want) {
 		t.Errorf("events %v", got)
 	}
@@ -280,7 +280,7 @@ func TestEtcdWatchEventCarriesTalosReason(t *testing.T) {
 	f.remove("web-cp-2")
 	f.failEtcd("10.0.0.11")
 	f.look(0)
-	want = "Talos left etcd on web-cp-0 Failed: " + fakePullFailure + ". Bootstrapped it again."
+	want = `etcd on web-cp-0 is Failed, Talos says "` + fakePullFailure + `". Kubehenge bootstrapped it again.`
 	if got := recorded(f.events); len(got) != 1 || !strings.Contains(got[0], want) {
 		t.Errorf("events %v", got)
 	}
@@ -376,7 +376,7 @@ func TestEtcdWatchBootstrapsAgainOnceTheNodeIsReady(t *testing.T) {
 	if len(f.talos.rebooted) > 0 {
 		t.Errorf("rebooted %v", f.talos.rebooted)
 	}
-	if got := recorded(f.events); len(got) != 1 || !strings.Contains(got[0], "Bootstrapped it again.") {
+	if got := recorded(f.events); len(got) != 1 || !strings.Contains(got[0], "Kubehenge bootstrapped it again.") {
 		t.Errorf("events %v", got)
 	}
 	// The answer that came before Talos could take a bootstrap is not a start.
@@ -399,7 +399,7 @@ func TestEtcdWatchGivesUpAfterThreeRepairs(t *testing.T) {
 		t.Errorf("rebooted %v", f.talos.rebooted)
 	}
 	got := recorded(f.events)
-	want := "Talos left etcd on web-cp-1 Failed: " + fakePullFailure + ". Left it Failed after 3 starts since it last ran."
+	want := `etcd on web-cp-1 is Failed, Talos says "` + fakePullFailure + `". Kubehenge started it 3 times without etcd running and has stopped trying.`
 	if len(got) != 4 || !strings.Contains(got[3], "TalosEtcdLeftFailed") || !strings.Contains(got[3], want) {
 		t.Errorf("events %v", got)
 	}

@@ -62,7 +62,7 @@ run() {
     env PATH="${bin}:${PATH}" sh "${guests}" consoles "${root}/consoles" > /dev/null 2>&1 || true
     rm -f "${root}/hold"
     i=0
-    while [ -s "${root}/consoles/pve-101.log.pid" ] && kill -0 "$(cat "${root}/consoles/pve-101.log.pid")" 2> /dev/null &&
+    while reader=$(cat "${root}/consoles/pve-101.log.pid" 2> /dev/null) && kill -0 "${reader}" 2> /dev/null &&
         [ "${i}" -lt 100 ]; do
         sleep 0.1
         i=$((i + 1))
@@ -72,16 +72,18 @@ asks() { if [ -f "${root}/asked" ]; then grep -c . "${root}/asked"; else echo 0;
 
 touch "${root}/hold"
 run
-same "a console stays with its one reader over the rounds" 1 "$(asks)"
-same "each reading starts with the time and the VM's name" 1 "$(grep -c '^== [0-9][0-9]:[0-9][0-9]:[0-9][0-9] cp$' "${root}/consoles/pve-101.log")"
-same "what the console printed is kept" 1 "$(grep -cx 'dracut: FATAL: FIPS integrity test failed' "${root}/consoles/pve-101.log")"
-same "a token on the console is redacted" 1 "$(grep -cx 'token: <redacted>' "${root}/consoles/pve-101.log")"
-same "a container that is not there gives no log" "pve-101.log pve-101.log.pid" "$(cd "${root}/consoles" && echo *)"
+asked=$(asks)
+same "a console stays with its one reader over the rounds" 1 "${asked}"
+same "each reading starts with the time and the VM's name" 1 "$(grep -c '^== [0-9][0-9]:[0-9][0-9]:[0-9][0-9] cp$' "${root}/consoles/pve-101.log" || true)"
+same "what the console printed is kept" 1 "$(grep -cx 'dracut: FATAL: FIPS integrity test failed' "${root}/consoles/pve-101.log" || true)"
+same "a token on the console is redacted" 1 "$(grep -cx 'token: <redacted>' "${root}/consoles/pve-101.log" || true)"
+same "a container that is not there gives no log" "pve-101.log pve-101.log.pid" "$(cd "${root}/consoles" && echo * || true)"
 
 touch "${root}/hold"
 run
-same "a console whose reader ended is read again" 2 "$(asks)"
-same "the second reading follows the first in the same log" 2 "$(grep -c '^== ' "${root}/consoles/pve-101.log")"
+asked=$(asks)
+same "a console whose reader ended is read again" 2 "${asked}"
+same "the second reading follows the first in the same log" 2 "$(grep -c '^== ' "${root}/consoles/pve-101.log" || true)"
 
 echo "guests-consoles: ${passes} passed, ${failures} failed"
 [ "${failures}" -eq 0 ]
