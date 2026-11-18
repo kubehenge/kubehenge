@@ -380,9 +380,9 @@ func TestStartFirstEtcdOnACutOffStart(t *testing.T) {
 			cut := func() error {
 				if tc.stop {
 					cancel()
-					return status.Error(codes.Canceled, "context canceled")
+					return status.Error(codes.Canceled, context.Canceled.Error())
 				}
-				return status.Error(codes.DeadlineExceeded, "context deadline exceeded")
+				return status.Error(codes.DeadlineExceeded, context.DeadlineExceeded.Error())
 			}
 			f := &fakeTalos{service: map[string]TalosService{"10.0.0.21": {State: talosEtcdPreparing}, "10.0.0.22": {State: talosEtcdPreparing}}}
 			f.service[tc.node] = firstFailed
