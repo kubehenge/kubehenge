@@ -456,7 +456,8 @@ func TestStartFirstEtcdLogsARebootItCouldNotRecord(t *testing.T) {
 	f := &fakeTalos{service: map[string]TalosService{"10.0.0.21": {State: talosEtcdPreparing}, "10.0.0.22": firstFailed}}
 	records := 0
 	log := firstStart(f, map[string]EtcdStart{}, func() error {
-		if records++; records > 1 {
+		records++
+		if records > 1 {
 			return errors.New("disk full")
 		}
 		return nil
