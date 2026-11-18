@@ -38,7 +38,7 @@ locals {
     # renovate: datasource=github-releases depName=kubernetes-sigs/cluster-api-ipam-provider-in-cluster
     ipam_in_cluster = "v1.1.1"
     # renovate: datasource=github-releases depName=kubernetes-sigs/cluster-api-addon-provider-helm
-    helm_addon = "v0.6.4"
+    helm_addon = "v0.6.6"
     # Talos's providers come from Kubehenge's forks of them: upstream's releases are on Cluster
     # API's v1beta1 contract, which Cluster API's core removes, and its control-plane provider has
     # no TalosControlPlaneTemplate, which a ClusterClass's control plane needs.
@@ -123,9 +123,9 @@ locals {
     # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api-ipam-provider-in-cluster
     "kubernetes-sigs/cluster-api-ipam-provider-in-cluster/releases/download/v1.1.1/ipam-components.yaml" = "8a0656a39d9e85ee07219702254669b7e543d09957e86315f3d20b4bf6aebfa5"
     # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api-addon-provider-helm
-    "kubernetes-sigs/cluster-api-addon-provider-helm/releases/download/v0.6.4/metadata.yaml" = "d50a44ee0db2f0368699d15ff011b9b5a61d9969483de1c4f6e4e6046390530f"
+    "kubernetes-sigs/cluster-api-addon-provider-helm/releases/download/v0.6.6/metadata.yaml" = "d50a44ee0db2f0368699d15ff011b9b5a61d9969483de1c4f6e4e6046390530f"
     # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api-addon-provider-helm
-    "kubernetes-sigs/cluster-api-addon-provider-helm/releases/download/v0.6.4/addon-components.yaml" = "a70f4eb77eac626231daca1e2a046b4b069bb84320efa327cc8c56a9c4ca03e6"
+    "kubernetes-sigs/cluster-api-addon-provider-helm/releases/download/v0.6.6/addon-components.yaml" = "d3d6d5e15074407f586066a8b0226b717fcaf7de4bf72ebe357ccb37b8482de5"
     # renovate: datasource=github-release-attachments depName=kubehenge/cluster-api-bootstrap-provider-talos
     "kubehenge/cluster-api-bootstrap-provider-talos/releases/download/v0.7.0/metadata.yaml" = "d5774698bf60bd884217a24870366979b5c2ba9dc90fb1bf94e5edc13a7fe152"
     # renovate: datasource=github-release-attachments depName=kubehenge/cluster-api-bootstrap-provider-talos
@@ -159,7 +159,7 @@ locals {
     # renovate: datasource=docker depName=registry.k8s.io/capi-ipam-ic/cluster-api-ipam-in-cluster-controller
     "IPAMProvider/in-cluster" = "registry.k8s.io/capi-ipam-ic/cluster-api-ipam-in-cluster-controller:v1.1.1@sha256:49a4cc0c5d7cd8deef20105e71ce168407ddcaab612f5819947163bd4b66ff0b"
     # renovate: datasource=docker depName=registry.k8s.io/cluster-api-helm/cluster-api-helm-controller
-    "AddonProvider/helm" = "registry.k8s.io/cluster-api-helm/cluster-api-helm-controller:v0.6.4@sha256:97d2a86f8e35d23bb4656b26f4564b35f109e47a0dc4860b71089e52eb6e6a24"
+    "AddonProvider/helm" = "registry.k8s.io/cluster-api-helm/cluster-api-helm-controller:v0.6.6@sha256:7723bae58324592304fea89fd6f46e4252dd9fe3b91a03ea9392819e87fe4164"
     # renovate: datasource=docker depName=ghcr.io/kubehenge/cluster-api-bootstrap-provider-talos
     "BootstrapProvider/talos" = "ghcr.io/kubehenge/cluster-api-bootstrap-provider-talos:v0.7.0@sha256:bda9e12fd1050afa0cffac31b53ed37c58b3a3fe23438ff9ab6cdedde41c170d"
     # renovate: datasource=docker depName=ghcr.io/kubehenge/cluster-api-control-plane-provider-talos
@@ -210,12 +210,12 @@ locals {
   helm_addon_build = {
     upstream = "kubernetes-sigs/cluster-api-addon-provider-helm"
     package  = "."
-    release  = "v0.6.4"
-    commit   = "825662962a26dc339f3871184c91ed4bd2f83a4f"
-    # The provider's own image is built with Go 1.25 on distroless static.
-    go         = "go1.25.14"
+    release  = "v0.6.6"
+    commit   = "5fc90df594c01b441c1e67f776251a15bd2e1374"
+    # The provider's own image is built with Go 1.26 on distroless static.
+    go         = "go1.26.11"
     base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
-    image      = "ghcr.io/kubehenge/cluster-api-addon-provider-helm@sha256:6c78cee77e4be012c3960954fb823688724992858b9d5d876ac3bb374267baef"
+    image      = "ghcr.io/kubehenge/cluster-api-addon-provider-helm@sha256:743369d9353f48b962a8d4b925a547b6631cac7a9a266fe73cebdd223f921002"
   }
 
   # Proxmox VE refuses to remove a drive from a protected VM, and every management node VM is
