@@ -801,7 +801,7 @@ func TestSlowRenewalHoldsUpNobodyElse(t *testing.T) {
 				return
 			}
 		}
-		h.server.sessions.prune()
+		h.server.sessions.tend(t.Context())
 		beside <- nil
 	}()
 	if err := <-beside; err != nil {

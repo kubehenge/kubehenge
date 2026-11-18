@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kubehenge/kubehenge/pkg/pve"
@@ -26,6 +27,14 @@ const (
 	challengeLifetime = 5 * time.Minute
 	// Renewing a ticket this old leaves room for requests that run long before it expires.
 	renewAfter = pve.TicketLifetime / 2
+	// A CLI session's ticket is renewed unused once it is this old, as often as Proxmox VE's own
+	// interface does. The session then outlasts a break of an hour and a half, in which the
+	// interface is stopped or cannot reach Proxmox VE.
+	renewUnusedAfter = 15 * time.Minute
+	// renewalsAtOnce and renewalTimeout bound a round of unused renewals, so that a Proxmox VE node
+	// which hangs holds up few of them and none for long.
+	renewalsAtOnce = 8
+	renewalTimeout = 10 * time.Second
 )
 
 type session struct {
@@ -38,7 +47,7 @@ type session struct {
 	// every few hours, so it lasts longer and is kept across restarts.
 	cli bool
 
-	// mu is held only for moments, never across a call to Proxmox VE: lookup and prune wait on it.
+	// mu is held only for moments, never across a call to Proxmox VE: lookup and tend wait on it.
 	mu        sync.Mutex
 	ticket    *pve.Ticket
 	challenge *pve.Challenge
@@ -221,30 +230,21 @@ func (s *sessions) lookup(r *http.Request) *session {
 	return sess
 }
 
-// prune forgets ended sessions. lookup does it for the ones still asked for. Every user's requests
-// look their session up under s.mu, so no session's lock is waited for while holding it.
-func (s *sessions) prune() {
-	now := s.now()
-	s.mu.Lock()
-	all := slices.Collect(maps.Values(s.byID))
-	s.mu.Unlock()
-	for _, sess := range all {
-		if s.ended(sess, now) {
-			s.forget(sess)
-		}
+func (s *sessions) forget(sess *session) {
+	if s.drop(sess) {
+		s.save()
 	}
 }
 
-func (s *sessions) forget(sess *session) {
+// drop takes sess out of memory and tells whether store still keeps it.
+func (s *sessions) drop(sess *session) bool {
 	s.mu.Lock()
-	found := s.byID[sess.id] == sess
-	if found {
-		delete(s.byID, sess.id)
+	defer s.mu.Unlock()
+	if s.byID[sess.id] != sess {
+		return false
 	}
-	s.mu.Unlock()
-	if found && sess.cli {
-		s.save()
-	}
+	delete(s.byID, sess.id)
+	return sess.cli
 }
 
 func (s *sessions) ended(sess *session, now time.Time) bool {
@@ -266,22 +266,45 @@ func (s *sessions) ended(sess *session, now time.Time) bool {
 	}
 }
 
-// tend prunes, then renews the old tickets of the CLI's sessions that are left: a script may leave
-// its sign-in unused for longer than a ticket lasts. One that Proxmox VE refuses ends. A browser's
-// ticket is renewed by its own requests alone, so a closed tab's session runs out.
+// tend forgets ended sessions, which lookup does for the ones still asked for, and renews the
+// tickets of the CLI's sessions that are left: a script may leave its sign-in unused for longer than
+// a ticket lasts. One that Proxmox VE refuses ends. A browser's ticket is renewed by its own
+// requests alone, so a closed tab's session runs out. Every user's requests look their session up
+// under s.mu, so no session's lock is waited for while holding it. The kept sessions are written
+// once, however many changed.
 func (s *sessions) tend(ctx context.Context) {
-	s.prune()
+	now := s.now()
 	s.mu.Lock()
 	all := slices.Collect(maps.Values(s.byID))
 	s.mu.Unlock()
+	var changed atomic.Bool
+	var renewals sync.WaitGroup
+	slots := make(chan struct{}, renewalsAtOnce)
 	for _, sess := range all {
-		if !sess.cli {
-			continue
+		switch {
+		case s.ended(sess, now):
+			if s.drop(sess) {
+				changed.Store(true)
+			}
+		case sess.cli:
+			slots <- struct{}{}
+			renewals.Go(func() {
+				defer func() { <-slots }()
+				bounded, cancel := context.WithTimeout(ctx, renewalTimeout)
+				defer cancel()
+				_, renewed := s.renew(bounded, sess, renewUnusedAfter)
+				if s.ended(sess, s.now()) {
+					renewed = s.drop(sess)
+				}
+				if renewed {
+					changed.Store(true)
+				}
+			})
 		}
-		s.signedIn(ctx, sess)
-		if s.ended(sess, s.now()) {
-			s.forget(sess)
-		}
+	}
+	renewals.Wait()
+	if changed.Load() {
+		s.save()
 	}
 }
 
@@ -305,11 +328,22 @@ func (s *sessions) pruneEvery(ctx context.Context, d time.Duration) {
 // One request renews at a time, without the session's lock: a slow Proxmox VE holds up that request
 // alone.
 func (s *sessions) signedIn(ctx context.Context, sess *session) *pve.Ticket {
+	ticket, changed := s.renew(ctx, sess, renewAfter)
+	// A kept session needs its renewed ticket after a restart, since the old one runs out sooner.
+	if changed && sess.cli {
+		s.save()
+	}
+	return ticket
+}
+
+// renew is signedIn for a ticket at least after old, and tells whether the ticket changed. It does
+// not save.
+func (s *sessions) renew(ctx context.Context, sess *session, after time.Duration) (*pve.Ticket, bool) {
 	sess.mu.Lock()
 	ticket := sess.ticket
-	if ticket == nil || sess.renewing || s.now().Sub(ticket.Issued) < renewAfter {
+	if ticket == nil || sess.renewing || s.now().Sub(ticket.Issued) < after {
 		sess.mu.Unlock()
-		return ticket
+		return ticket, false
 	}
 	sess.renewing = true
 	sess.mu.Unlock()
@@ -324,11 +358,7 @@ func (s *sessions) signedIn(ctx context.Context, sess *session) *pve.Ticket {
 	}
 	current := sess.ticket
 	sess.mu.Unlock()
-	// A kept session needs its renewed ticket after a restart, since the old one runs out sooner.
-	if sess.cli && current != ticket {
-		s.save()
-	}
-	return current
+	return current, current != ticket
 }
 
 // csrfHeader carries a session's CSRF token, in the canonical form Go reads header names in.

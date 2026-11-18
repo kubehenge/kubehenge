@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -251,7 +252,7 @@ func TestEndedSessionsLeaveTheDisk(t *testing.T) {
 
 	cli.signIn("admin@pve")
 	h.clock = h.clock.Add(pve.TicketLifetime)
-	h.server.sessions.prune()
+	h.tend()
 	if kept := keptOn(t, a); len(kept) != 0 {
 		t.Fatalf("%d sessions kept after pruning", len(kept))
 	}
@@ -346,7 +347,7 @@ func TestKeptSessionsAreRenewedAfterARestart(t *testing.T) {
 		defer h.accounts.mu.Unlock()
 		return h.accounts.renewals
 	}
-	h.clock = h.clock.Add(renewAfter - time.Minute)
+	h.clock = h.clock.Add(renewUnusedAfter - time.Minute)
 	h.restart(a)
 	h.tend()
 	if n := renewals(); n != 0 {
@@ -528,6 +529,178 @@ func TestTheSessionLoopRenewsAndStops(t *testing.T) {
 	<-stopped
 	if issued := keptIssued(t, a); !issued.Equal(h.clock) {
 		t.Fatalf("the kept ticket is of %s, want %s", issued, h.clock)
+	}
+}
+
+// A CLI session outlasts a break of an hour and a half, whenever in its ticket's life the break
+// starts.
+func TestAnUnusedCLISessionOutlastsALongBreak(t *testing.T) {
+	t.Parallel()
+	h, a, cli := cliOnAppliance(t)
+	for range 59 {
+		h.clock = h.clock.Add(time.Minute)
+		h.tend()
+	}
+	h.clock = h.clock.Add(100 * time.Minute)
+	h.restart(a)
+	h.tend()
+	expect(t, cli.do("GET", "/api/session", ""), http.StatusOK)
+}
+
+// unused adds n signed-in CLI sessions of username that nobody uses.
+func (h *harness) unused(n int, username string) {
+	s := h.server.sessions
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for range n {
+		sess := &session{id: randomToken(), csrf: randomToken(), created: h.clock, cli: true}
+		sess.ticket = &pve.Ticket{Username: username, Ticket: "ticket:" + username, Issued: h.clock}
+		s.byID[sess.id] = sess
+	}
+}
+
+// countedStore counts how often the sessions are kept.
+type countedStore struct {
+	sessionStore
+
+	saves atomic.Int32
+}
+
+func (c *countedStore) KeepSessions(plain []byte) error {
+	c.saves.Add(1)
+	return c.sessionStore.KeepSessions(plain)
+}
+
+// A round writes the kept sessions once, however many it renewed and ended.
+func TestARoundKeepsTheSessionsOnce(t *testing.T) {
+	t.Parallel()
+	h, a, _ := cliOnAppliance(t)
+	h.unused(20, "admin@pve")
+	h.clock = h.clock.Add(pve.TicketLifetime)
+	h.unused(5, "admin@pve")
+	store := &countedStore{sessionStore: h.server.sessions.store}
+	h.server.sessions.store = store
+	h.tend()
+	if saves, kept := store.saves.Swap(0), keptOn(t, a); saves != 1 || len(kept) != 5 {
+		t.Fatalf("%d writes for the sessions that ran out, %d kept", saves, len(kept))
+	}
+
+	// gone@pve is a user Proxmox VE refuses.
+	h.unused(20, "admin@pve")
+	h.unused(5, "gone@pve")
+	h.clock = h.clock.Add(renewUnusedAfter)
+	h.tend()
+	if saves, kept := store.saves.Swap(0), keptOn(t, a); saves != 1 || len(kept) != 25 {
+		t.Fatalf("%d writes for the renewals and refusals, %d kept", saves, len(kept))
+	}
+	h.tend()
+	if saves := store.saves.Load(); saves != 0 {
+		t.Fatalf("%d writes in a round that changed nothing", saves)
+	}
+}
+
+// hangingRenewals leaves the renewals of hang@pve unanswered until released or given up, and
+// answers the others.
+type hangingRenewals struct {
+	*fakeAccounts
+
+	hanging  chan struct{}
+	answered chan struct{}
+	release  chan struct{}
+	// unbounded counts the renewals that came without a time limit. most is the most that hung at
+	// once.
+	count                 sync.Mutex
+	unbounded, hung, most int
+}
+
+func (f *hangingRenewals) Renew(ctx context.Context, t *pve.Ticket) (*pve.Ticket, error) {
+	if t.Username != "hang@pve" {
+		renewed, err := f.fakeAccounts.Renew(ctx, t)
+		f.answered <- struct{}{}
+		return renewed, err
+	}
+	f.count.Lock()
+	if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > renewalTimeout {
+		f.unbounded++
+	}
+	f.hung++
+	f.most = max(f.most, f.hung)
+	f.count.Unlock()
+	f.hanging <- struct{}{}
+	select {
+	case <-f.release:
+	case <-ctx.Done():
+	}
+	f.count.Lock()
+	f.hung--
+	f.count.Unlock()
+	return nil, context.DeadlineExceeded
+}
+
+// Renewals that Proxmox VE leaves unanswered hold up no other session's, and each has a time limit.
+// The sessions left unanswered stay.
+func TestHangingRenewalsHoldUpNoOthers(t *testing.T) {
+	t.Parallel()
+	h, a, _ := cliOnAppliance(t)
+	const hang, others = renewalsAtOnce - 1, 6
+	h.unused(hang, "hang@pve")
+	h.unused(others-1, "admin@pve")
+	h.server.sessions.save()
+	slow := &hangingRenewals{fakeAccounts: h.accounts, hanging: make(chan struct{}, hang), answered: make(chan struct{}, others), release: make(chan struct{})}
+	h.server.sessions.accounts = slow
+	h.clock = h.clock.Add(renewUnusedAfter)
+	tended := make(chan struct{})
+	go func() {
+		defer close(tended)
+		h.server.sessions.tend(t.Context())
+	}()
+	for range others {
+		<-slow.answered
+	}
+	for range hang {
+		<-slow.hanging
+	}
+	close(slow.release)
+	<-tended
+	if slow.unbounded != 0 {
+		t.Errorf("%d renewals without a time limit of %s", slow.unbounded, renewalTimeout)
+	}
+	renewed := 0
+	for _, k := range keptOn(t, a) {
+		if k.Issued.Equal(h.clock) {
+			renewed++
+		}
+	}
+	if h.held() != hang+others || renewed != others {
+		t.Fatalf("%d held, want %d, %d renewed, want %d", h.held(), hang+others, renewed, others)
+	}
+}
+
+// No more renewals wait on Proxmox VE at once than a round allows.
+func TestARoundBoundsItsRenewals(t *testing.T) {
+	t.Parallel()
+	h, _, _ := cliOnAppliance(t)
+	const hang = 3 * renewalsAtOnce
+	h.unused(hang, "hang@pve")
+	slow := &hangingRenewals{fakeAccounts: h.accounts, hanging: make(chan struct{}, hang), answered: make(chan struct{}, 1), release: make(chan struct{})}
+	h.server.sessions.accounts = slow
+	h.clock = h.clock.Add(renewUnusedAfter)
+	tended := make(chan struct{})
+	go func() {
+		defer close(tended)
+		h.server.sessions.tend(t.Context())
+	}()
+	for range renewalsAtOnce {
+		<-slow.hanging
+	}
+	// A round without a bound would have started more by the time these yields are over.
+	for range 100 {
+		runtime.Gosched()
+	}
+	close(slow.release)
+	<-tended
+	if slow.most != renewalsAtOnce {
+		t.Fatalf("%d renewals hung at once, want %d", slow.most, renewalsAtOnce)
 	}
 }
 
