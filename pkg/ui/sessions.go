@@ -42,8 +42,8 @@ type session struct {
 	mu        sync.Mutex
 	ticket    *pve.Ticket
 	challenge *pve.Challenge
-	// renewing is set while one request renews the ticket. The session's other requests go on with
-	// the ticket they have, which still holds for as long again.
+	// renewing is set while one request, or tend, renews the ticket. The session's requests go on
+	// with the ticket they have, which still holds for as long again.
 	renewing bool
 }
 
@@ -266,7 +266,26 @@ func (s *sessions) ended(sess *session, now time.Time) bool {
 	}
 }
 
-// pruneEvery prunes until ctx ends.
+// tend prunes, then renews the old tickets of the CLI's sessions that are left: a script may leave
+// its sign-in unused for longer than a ticket lasts. One that Proxmox VE refuses ends. A browser's
+// ticket is renewed by its own requests alone, so a closed tab's session runs out.
+func (s *sessions) tend(ctx context.Context) {
+	s.prune()
+	s.mu.Lock()
+	all := slices.Collect(maps.Values(s.byID))
+	s.mu.Unlock()
+	for _, sess := range all {
+		if !sess.cli {
+			continue
+		}
+		s.signedIn(ctx, sess)
+		if s.ended(sess, s.now()) {
+			s.forget(sess)
+		}
+	}
+}
+
+// pruneEvery tends the sessions until ctx ends.
 func (s *sessions) pruneEvery(ctx context.Context, d time.Duration) {
 	t := time.NewTicker(d)
 	defer t.Stop()
@@ -275,7 +294,7 @@ func (s *sessions) pruneEvery(ctx context.Context, d time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			s.prune()
+			s.tend(ctx)
 		}
 	}
 }

@@ -966,7 +966,8 @@ Users sign in through the Proxmox VE API, with no second user directory. Every P
 - **Twenty failed sign-ins** from one address in that time refuse the address, whatever users they name.
 - Browser sessions end when the interface restarts on an upgrade or a certificate renewal.
 - The appliance keeps the sessions of `kubehenge login` across restarts. They are sealed (AES-256-GCM) in its state directory, with the key on the key volume that backups leave out.
-- A kept session works after a restart only while its ticket is still valid or renews. A ticket lasts two hours and renews on use. A file that does not open is discarded.
+- A ticket lasts two hours. The interface renews the ticket of a `kubehenge login` password session every hour, used or not. The session ends when Proxmox VE refuses the renewal.
+- A kept session works after a restart only while its ticket is still valid. A file that does not open is discarded.
 
 #### Behind a reverse proxy
 

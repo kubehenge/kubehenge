@@ -2,13 +2,17 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -250,6 +254,280 @@ func TestEndedSessionsLeaveTheDisk(t *testing.T) {
 	h.server.sessions.prune()
 	if kept := keptOn(t, a); len(kept) != 0 {
 		t.Fatalf("%d sessions kept after pruning", len(kept))
+	}
+}
+
+// tend runs one round of what the interface does every minute.
+func (h *harness) tend() {
+	h.t.Helper()
+	h.server.sessions.tend(h.t.Context())
+}
+
+// held counts the sessions in memory.
+func (h *harness) held() int {
+	s := h.server.sessions
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.byID)
+}
+
+// cliOnAppliance signs the CLI in to an interface that keeps its sessions on a.
+func cliOnAppliance(t *testing.T) (*harness, *appliance.Appliance, *browser) {
+	t.Helper()
+	h := newHarness(t)
+	a := onAppliance(t)
+	h.restart(a)
+	cli := h.browser()
+	cli.cli = true
+	cli.signIn("admin@pve")
+	return h, a, cli
+}
+
+// keptIssued is when the ticket of the one session a keeps was issued.
+func keptIssued(t *testing.T, a *appliance.Appliance) time.Time {
+	t.Helper()
+	kept := keptOn(t, a)
+	if len(kept) != 1 {
+		t.Fatalf("%d sessions kept, want 1", len(kept))
+	}
+	return kept[0].Issued
+}
+
+// unansweredRenewals counts the renewals and fails them with err while it is set, as a Proxmox VE
+// that cannot be reached.
+type unansweredRenewals struct {
+	Accounts
+
+	mu    sync.Mutex
+	err   error
+	calls int
+}
+
+func (f *unansweredRenewals) Renew(ctx context.Context, t *pve.Ticket) (*pve.Ticket, error) {
+	f.mu.Lock()
+	f.calls++
+	err := f.err
+	f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return f.Accounts.Renew(ctx, t)
+}
+
+func (f *unansweredRenewals) answer(err error) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.err = err
+	return f.calls
+}
+
+// A CLI session nobody uses has its ticket renewed before it runs out, and the renewed ticket is
+// what is kept.
+func TestAnUnusedCLISessionIsRenewed(t *testing.T) {
+	t.Parallel()
+	h, a, cli := cliOnAppliance(t)
+	for range 5 {
+		h.clock = h.clock.Add(renewAfter + time.Minute)
+		h.tend()
+		if issued := keptIssued(t, a); !issued.Equal(h.clock) {
+			t.Fatalf("the kept ticket is of %s, want %s", issued, h.clock)
+		}
+	}
+	expect(t, cli.do("GET", "/api/session", ""), http.StatusOK)
+}
+
+// After a restart a kept session is renewed when its ticket is as old as before the restart. One
+// whose ticket ran out while the interface was down ends without a renewal.
+func TestKeptSessionsAreRenewedAfterARestart(t *testing.T) {
+	t.Parallel()
+	h, a, cli := cliOnAppliance(t)
+	renewals := func() int {
+		h.accounts.mu.Lock()
+		defer h.accounts.mu.Unlock()
+		return h.accounts.renewals
+	}
+	h.clock = h.clock.Add(renewAfter - time.Minute)
+	h.restart(a)
+	h.tend()
+	if n := renewals(); n != 0 {
+		t.Fatalf("%d renewals of a young ticket", n)
+	}
+	h.clock = h.clock.Add(time.Minute)
+	h.tend()
+	if issued := keptIssued(t, a); renewals() != 1 || !issued.Equal(h.clock) {
+		t.Fatalf("%d renewals, the kept ticket is of %s", renewals(), issued)
+	}
+
+	h.clock = h.clock.Add(pve.TicketLifetime)
+	h.restart(a)
+	h.tend()
+	if n := renewals(); n != 1 {
+		t.Errorf("%d renewals, a ticket that ran out was renewed", n)
+	}
+	if kept := keptOn(t, a); len(kept) != 0 || h.held() != 0 {
+		t.Errorf("%d kept, %d held after the ticket ran out", len(kept), h.held())
+	}
+	expect(t, cli.do("GET", "/api/session", ""), http.StatusUnauthorized)
+}
+
+// A renewal Proxmox VE refuses ends the session at once, in memory and on the disk.
+func TestARefusedRenewalEndsAnUnusedCLISession(t *testing.T) {
+	t.Parallel()
+	h, a, cli := cliOnAppliance(t)
+	h.clock = h.clock.Add(renewAfter + time.Minute)
+	h.accounts.mu.Lock()
+	delete(h.accounts.passwords, "admin@pve")
+	h.accounts.mu.Unlock()
+	h.tend()
+	if kept := keptOn(t, a); len(kept) != 0 || h.held() != 0 {
+		t.Fatalf("%d kept, %d held after the refusal", len(kept), h.held())
+	}
+	expect(t, cli.do("GET", "/api/session", ""), http.StatusUnauthorized)
+}
+
+// A renewal Proxmox VE does not answer keeps the session and is tried again every round, until the
+// ticket runs out.
+func TestAnUnansweredRenewalIsTriedAgain(t *testing.T) {
+	t.Parallel()
+	h, a, cli := cliOnAppliance(t)
+	down := &unansweredRenewals{Accounts: h.accounts, err: errors.New("no route to host")}
+	h.server.sessions.accounts = down
+	issued := h.clock
+	h.clock = h.clock.Add(renewAfter + time.Minute)
+	h.tend()
+	h.clock = h.clock.Add(time.Minute)
+	h.tend()
+	if calls, kept := down.answer(nil), keptIssued(t, a); calls != 2 || !kept.Equal(issued) {
+		t.Fatalf("%d renewals tried, the kept ticket is of %s", calls, kept)
+	}
+	h.clock = h.clock.Add(time.Minute)
+	h.tend()
+	if kept := keptIssued(t, a); !kept.Equal(h.clock) {
+		t.Fatalf("the kept ticket is of %s once Proxmox VE answers, want %s", kept, h.clock)
+	}
+
+	down.answer(errors.New("no route to host"))
+	h.clock = h.clock.Add(pve.TicketLifetime - time.Minute)
+	h.tend()
+	keptIssued(t, a)
+	h.clock = h.clock.Add(time.Minute)
+	h.tend()
+	if kept := keptOn(t, a); len(kept) != 0 || h.held() != 0 {
+		t.Fatalf("%d kept, %d held after the ticket ran out", len(kept), h.held())
+	}
+	expect(t, cli.do("GET", "/api/session", ""), http.StatusUnauthorized)
+}
+
+// Only the CLI's password sessions are renewed unused. A browser's, an OpenID and a token session
+// run out with their ticket.
+func TestOtherSessionsAreNotRenewedUnused(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.server.PublicURL = "https://kubehenge.example"
+	counted := &unansweredRenewals{Accounts: h.accounts}
+	h.server.sessions.accounts = counted
+	web := h.browser()
+	web.signIn("admin@pve")
+	token := h.browser()
+	token.cli = true
+	expect(t, token.do("POST", "/api/session/token", tokenSignIn), http.StatusOK)
+	rec := get(t, h, "/api/openid/start?realm=sso")
+	rec = get(t, h, "/api/openid/callback?code=good&state="+url.QueryEscape(`"st-sso"`), cookie(rec, openIDCookie))
+	openID := h.browser()
+	if c := cookie(rec, sessionCookie); c != nil {
+		openID.cookie = c.Value
+	}
+	for _, b := range []*browser{web, token, openID} {
+		expect(t, b.do("GET", "/api/session", ""), http.StatusOK)
+	}
+
+	h.clock = h.clock.Add(renewAfter + time.Minute)
+	h.tend()
+	if calls := counted.answer(nil); calls != 0 || h.held() != 3 {
+		t.Fatalf("%d renewals, %d sessions held", calls, h.held())
+	}
+	h.clock = h.clock.Add(renewAfter)
+	h.tend()
+	if calls := counted.answer(nil); calls != 0 || h.held() != 0 {
+		t.Fatalf("%d renewals, %d sessions held after the tickets ran out", calls, h.held())
+	}
+}
+
+// The demo's session is not renewed unused either.
+func TestTheDemosSessionIsNotRenewedUnused(t *testing.T) {
+	t.Parallel()
+	s, b := newDemo(t)
+	b.signIn()
+	counted := &unansweredRenewals{Accounts: s.sessions.accounts}
+	s.sessions.accounts = counted
+	// The demo's ticket is of the machine's own time.
+	later := time.Now().Add(renewAfter + time.Minute)
+	s.sessions.now = func() time.Time { return later }
+	s.sessions.tend(t.Context())
+	if calls := counted.answer(nil); calls != 0 {
+		t.Fatalf("%d renewals", calls)
+	}
+}
+
+// Renewals never carry a CLI session past its week.
+func TestAnUnusedCLISessionEndsAfterAWeek(t *testing.T) {
+	t.Parallel()
+	h, a, cli := cliOnAppliance(t)
+	start := h.clock
+	for h.clock.Sub(start) < week-renewAfter {
+		h.clock = h.clock.Add(renewAfter)
+		h.tend()
+	}
+	keptIssued(t, a)
+	h.clock = start.Add(week)
+	h.tend()
+	if kept := keptOn(t, a); len(kept) != 0 || h.held() != 0 {
+		t.Fatalf("%d kept, %d held after a week", len(kept), h.held())
+	}
+	expect(t, cli.do("GET", "/api/session", ""), http.StatusUnauthorized)
+}
+
+// A sign-out while the ticket is renewed unused leaves the session ended, in memory and on the disk.
+func TestSignOutDuringAnUnusedRenewal(t *testing.T) {
+	t.Parallel()
+	h, a, cli := cliOnAppliance(t)
+	slow := &slowRenewals{fakeAccounts: h.accounts, started: make(chan struct{}, 1), release: make(chan struct{})}
+	h.server.sessions.accounts = slow
+	h.clock = h.clock.Add(renewAfter + time.Minute)
+	tended := make(chan struct{})
+	go func() {
+		defer close(tended)
+		h.server.sessions.tend(t.Context())
+	}()
+	<-slow.started
+	expect(t, cli.do("DELETE", "/api/session", ""), http.StatusNoContent)
+	close(slow.release)
+	<-tended
+	if kept := keptOn(t, a); len(kept) != 0 || h.held() != 0 {
+		t.Fatalf("%d kept, %d held after signing out", len(kept), h.held())
+	}
+	expect(t, cli.do("GET", "/api/session", ""), http.StatusUnauthorized)
+}
+
+// The interface's loop renews unused CLI sessions and returns once its context ends.
+func TestTheSessionLoopRenewsAndStops(t *testing.T) {
+	t.Parallel()
+	h, a, _ := cliOnAppliance(t)
+	slow := &slowRenewals{fakeAccounts: h.accounts, started: make(chan struct{}, 1), release: make(chan struct{})}
+	h.server.sessions.accounts = slow
+	h.clock = h.clock.Add(renewAfter + time.Minute)
+	ctx, cancel := context.WithCancel(t.Context())
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		h.server.sessions.pruneEvery(ctx, time.Millisecond)
+	}()
+	<-slow.started
+	cancel()
+	close(slow.release)
+	<-stopped
+	if issued := keptIssued(t, a); !issued.Equal(h.clock) {
+		t.Fatalf("the kept ticket is of %s, want %s", issued, h.clock)
 	}
 }
 
