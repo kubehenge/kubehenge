@@ -133,7 +133,7 @@ func (s *Server) openIDCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.sessions.end(w, r)
-	s.sessions.start(w, ticket, nil)
+	s.sessions.start(w, ticket, nil, false)
 	s.Log.InfoContext(r.Context(), "signed in", "user", ticket.Username, "address", clientAddress(r), "via", "openid")
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }

@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"maps"
 	"net/http"
 	"slices"
@@ -32,6 +34,9 @@ type session struct {
 	// another origin can make the browser send the cookie but cannot read or set this.
 	csrf    string
 	created time.Time
+	// cli marks a password sign-in by the kubehenge CLI. A script cannot type the password again
+	// every few hours, so it lasts longer and is kept across restarts.
+	cli bool
 
 	// mu is held only for moments, never across a call to Proxmox VE: lookup and prune wait on it.
 	mu        sync.Mutex
@@ -42,21 +47,110 @@ type session struct {
 	renewing bool
 }
 
-// sessions holds every session in memory only: tickets never touch the disk, and a restart signs
-// everyone out.
+// sessions holds every session in memory. The CLI's alone are also kept sealed in store, so that a
+// restart signs browsers out but not scripts.
 type sessions struct {
 	accounts Accounts
 	// maxAge ends a session however often its ticket was renewed: Proxmox VE renews tickets without
-	// asking the realm or the second factor again.
-	maxAge time.Duration
-	now    func() time.Time
+	// asking the realm or the second factor again. cliMaxAge does so for the CLI's.
+	maxAge    time.Duration
+	cliMaxAge time.Duration
+	now       func() time.Time
+	// store keeps the CLI's sessions across restarts. Nil keeps them in memory only.
+	store sessionStore
+	log   *slog.Logger
 
-	mu   sync.Mutex
-	byID map[string]*session
+	// saving lets one save at a time write, each with what holds when it starts, so the last one
+	// written is the newest.
+	saving sync.Mutex
+	mu     sync.Mutex
+	byID   map[string]*session
 }
 
-func newSessions(accounts Accounts, maxAge time.Duration) *sessions {
-	return &sessions{accounts: accounts, maxAge: maxAge, now: time.Now, byID: map[string]*session{}}
+// sessionStore keeps the CLI's sessions encrypted, so that a ticket never touches the disk in the
+// clear.
+type sessionStore interface {
+	KeepSessions(plain []byte) error
+	KeptSessions() ([]byte, error)
+}
+
+// keptSession is what is kept of a CLI session and its Proxmox VE ticket. A password sign-in's
+// ticket has no API token.
+type keptSession struct {
+	ID         string    `json:"id"`
+	CSRF       string    `json:"csrf"`
+	Created    time.Time `json:"created"`
+	User       string    `json:"user"`
+	Ticket     string    `json:"ticket"`
+	TicketCSRF string    `json:"ticketCsrf"`
+	Issued     time.Time `json:"issued"`
+}
+
+// newSessions reads back the sessions store keeps. A zero cliMaxAge gives the CLI's the browser's.
+func newSessions(accounts Accounts, maxAge, cliMaxAge time.Duration, store sessionStore, log *slog.Logger) *sessions {
+	if cliMaxAge == 0 {
+		cliMaxAge = maxAge
+	}
+	s := &sessions{accounts: accounts, maxAge: maxAge, cliMaxAge: cliMaxAge, now: time.Now, store: store, log: log, byID: map[string]*session{}}
+	s.load()
+	return s
+}
+
+// load reads back the kept sessions. What does not open or parse is discarded, and the interface
+// starts without them.
+func (s *sessions) load() {
+	if s.store == nil {
+		return
+	}
+	raw, err := s.store.KeptSessions()
+	var kept []keptSession
+	if err == nil && raw != nil {
+		err = json.Unmarshal(raw, &kept)
+	}
+	if err != nil {
+		s.log.Warn("the kept sessions are discarded", "error", err)
+		s.save()
+		return
+	}
+	for i := range kept {
+		k := &kept[i]
+		ticket := &pve.Ticket{Username: k.User, Ticket: k.Ticket, CSRF: k.TicketCSRF, Issued: k.Issued}
+		s.byID[k.ID] = &session{id: k.ID, csrf: k.CSRF, created: k.Created, cli: true, ticket: ticket}
+	}
+}
+
+// save replaces what store keeps with the CLI's signed-in sessions. Call it without holding s.mu
+// or a session's lock.
+func (s *sessions) save() {
+	if s.store == nil {
+		return
+	}
+	s.saving.Lock()
+	defer s.saving.Unlock()
+	s.mu.Lock()
+	all := slices.Collect(maps.Values(s.byID))
+	s.mu.Unlock()
+	kept := []keptSession{}
+	for _, sess := range all {
+		if !sess.cli {
+			continue
+		}
+		sess.mu.Lock()
+		if sess.ticket != nil {
+			t := sess.ticket
+			kept = append(kept, keptSession{
+				ID: sess.id, CSRF: sess.csrf, Created: sess.created, User: t.Username, Ticket: t.Ticket, TicketCSRF: t.CSRF, Issued: t.Issued,
+			})
+		}
+		sess.mu.Unlock()
+	}
+	raw, err := json.Marshal(kept)
+	if err == nil {
+		err = s.store.KeepSessions(raw)
+	}
+	if err != nil {
+		s.log.Error("keeping the CLI's sessions", "error", err)
+	}
 }
 
 // tokenBytes makes session IDs and CSRF tokens 256 bits long.
@@ -69,12 +163,16 @@ func randomToken() string {
 }
 
 // start opens a session with a ticket or a pending challenge, and sets its cookie. Every sign-in
-// step gets a new ID, so an ID seen before sign-in is worthless after it.
-func (s *sessions) start(w http.ResponseWriter, ticket *pve.Ticket, challenge *pve.Challenge) *session {
-	sess := &session{id: randomToken(), csrf: randomToken(), created: s.now(), ticket: ticket, challenge: challenge}
+// step gets a new ID, so an ID seen before sign-in is worthless after it. A CLI session is kept once
+// it holds a ticket, never while it waits for a second factor.
+func (s *sessions) start(w http.ResponseWriter, ticket *pve.Ticket, challenge *pve.Challenge, cli bool) *session { //nolint:revive // flag-parameter: cli is what the session is, which it keeps, not a mode of start
+	sess := &session{id: randomToken(), csrf: randomToken(), created: s.now(), cli: cli, ticket: ticket, challenge: challenge}
 	s.mu.Lock()
 	s.byID[sess.id] = sess
 	s.mu.Unlock()
+	if cli && ticket != nil {
+		s.save()
+	}
 	setSessionCookie(w, sess.id)
 	return sess
 }
@@ -94,8 +192,12 @@ func setSessionCookie(w http.ResponseWriter, id string) {
 func (s *sessions) end(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		s.mu.Lock()
+		sess := s.byID[c.Value]
 		delete(s.byID, c.Value)
 		s.mu.Unlock()
+		if sess != nil && sess.cli {
+			s.save()
+		}
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: -1})
 }
@@ -135,17 +237,25 @@ func (s *sessions) prune() {
 
 func (s *sessions) forget(sess *session) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.byID[sess.id] == sess {
+	found := s.byID[sess.id] == sess
+	if found {
 		delete(s.byID, sess.id)
+	}
+	s.mu.Unlock()
+	if found && sess.cli {
+		s.save()
 	}
 }
 
 func (s *sessions) ended(sess *session, now time.Time) bool {
+	maxAge := s.maxAge
+	if sess.cli {
+		maxAge = s.cliMaxAge
+	}
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 	switch {
-	case now.Sub(sess.created) >= s.maxAge:
+	case now.Sub(sess.created) >= maxAge:
 		return true
 	case sess.challenge != nil:
 		return now.Sub(sess.created) >= challengeLifetime
@@ -186,21 +296,30 @@ func (s *sessions) signedIn(ctx context.Context, sess *session) *pve.Ticket {
 	sess.mu.Unlock()
 	renewed, err := s.accounts.Renew(ctx, ticket)
 	sess.mu.Lock()
-	defer sess.mu.Unlock()
 	sess.renewing = false
 	switch {
 	case errors.Is(err, pve.ErrAuthentication):
 		sess.ticket = nil
-		return nil
-	case err != nil:
-		return ticket
+	case err == nil:
+		sess.ticket = renewed
 	}
-	sess.ticket = renewed
-	return renewed
+	current := sess.ticket
+	sess.mu.Unlock()
+	// A kept session needs its renewed ticket after a restart, since the old one runs out sooner.
+	if sess.cli && current != ticket {
+		s.save()
+	}
+	return current
 }
 
 // csrfHeader carries a session's CSRF token, in the canonical form Go reads header names in.
 const csrfHeader = "X-Kubehenge-Csrf"
+
+// clientHeader set to cliClient on a password sign-in makes it a CLI session.
+const (
+	clientHeader = "X-Kubehenge-Client"
+	cliClient    = "cli"
+)
 
 func (sess *session) checkCSRF(r *http.Request) bool {
 	got := r.Header.Get(csrfHeader)

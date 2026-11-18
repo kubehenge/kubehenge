@@ -32,6 +32,7 @@ const (
 	heldTries    = 100
 	heldPause    = 10 * time.Millisecond
 	csrfHeader   = "X-Kubehenge-Csrf"
+	clientHeader = "X-Kubehenge-Client"
 	notLoggedIn  = "not signed in: run kubehenge login <url>"
 )
 
@@ -279,6 +280,9 @@ func (c *interfaceClient) open(ctx context.Context, method, path string, body an
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	// A password sign-in that says it is the CLI's lasts longer than a browser's and outlives a
+	// restart of the interface.
+	req.Header.Set(clientHeader, "cli")
 	switch {
 	case c.login.Token != "":
 		req.Header.Set("Authorization", "PVEAPIToken="+c.login.Token)
@@ -351,8 +355,9 @@ func newLoginCommand() *cobra.Command {
 until it ends or kubehenge logout removes it.
 
 Give --user to sign in as a Proxmox VE user, with the password from --password-file or
-KUBEHENGE_PASSWORD, and --totp for an account with a second factor. That login ends after the
-interface's session time, eight hours by default, and when the interface restarts.
+KUBEHENGE_PASSWORD, and --totp for an account with a second factor. That login lasts seven days
+by default, or until it goes unused for two hours. On the appliance it outlives a restart of the
+interface.
 
 Give --token-file or set KUBEHENGE_PROXMOX_TOKEN to sign in with a Proxmox VE API token
 (user@realm!name=secret) instead. That login lasts as long as the token.

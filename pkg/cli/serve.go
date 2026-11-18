@@ -39,6 +39,8 @@ import (
 
 const (
 	defaultSessionMaxAge = 8 * time.Hour
+	// defaultCLISessionMaxAge lets a script signed in once a week keep running.
+	defaultCLISessionMaxAge = 7 * 24 * time.Hour
 	// releaseChannelTimeout bounds a read of RKE2's and k3s's release channels, which a wizard
 	// waits on.
 	releaseChannelTimeout = 30 * time.Second
@@ -107,6 +109,7 @@ The interface acts in the management cluster with its own kubeconfig.`,
 	f.StringVar(&s.Namespace, "namespace", provisioner.InterfaceNamespace,
 		"namespace clusters are created in, the chart's interface.namespace. A list in the chart's ConfigMap kubehenge-interface in --class-namespace (interface.extraNamespaces) takes its place. The interface changes only the clusters in these namespaces")
 	f.DurationVar(&s.SessionMaxAge, "session-max-age", defaultSessionMaxAge, "how long a sign-in lasts, however active the user")
+	f.DurationVar(&s.CLISessionMaxAge, "cli-session-max-age", defaultCLISessionMaxAge, "how long a password sign-in by kubehenge login lasts, however active the user")
 	f.StringVar(&s.PublicURL, "public-url", os.Getenv("KUBEHENGE_PUBLIC_URL"),
 		"address users reach the interface at, such as https://kubehenge.example. OpenID sign-in needs it, for identity providers to send users back (env KUBEHENGE_PUBLIC_URL)")
 	f.StringSliceVar(&o.trustedProxies, "trusted-proxy", trustedProxiesDefault(),
@@ -114,7 +117,7 @@ The interface acts in the management cluster with its own kubeconfig.`,
 			"so one person's failures no longer lock out everyone behind the proxy. Without it forwarding headers are ignored (env KUBEHENGE_TRUSTED_PROXIES, comma-separated)")
 	f.StringVar(&a.Dir, "appliance-dir", "", "run as Kubehenge's appliance, keeping the management cluster's state in this directory and setting it up from the interface. "+
 		"Without it, the management cluster is the one in KUBECONFIG")
-	f.StringVar(&a.KeyDir, "key-dir", "", "with --appliance-dir, a directory on a volume the appliance's backups leave out. It holds the key that seals what automatic upgrades of the management cluster keep. Empty, those upgrades cannot be switched on")
+	f.StringVar(&a.KeyDir, "key-dir", "", "with --appliance-dir, a directory on a volume the appliance's backups leave out. It holds the keys that seal what automatic upgrades of the management cluster keep and the sessions of kubehenge login. Empty, those upgrades cannot be switched on and those sessions end when the interface restarts")
 	f.StringVar(&o.headlampListen, "headlamp-listen", "", "address to serve the shared Headlamp on, behind the interface's sign-in, or empty for none")
 	f.StringVar(&o.headlampUpstream, "headlamp-upstream", "", "the Headlamp server, such as http://127.0.0.1:4466")
 	f.StringVar(&o.headlampKubeconfig, "headlamp-kubeconfig", "", "file the Headlamp server reads its clusters from, written by the interface")

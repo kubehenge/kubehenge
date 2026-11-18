@@ -136,6 +136,36 @@ func TestTrustedProxiesComeFromFlagsOrTheEnvironment(t *testing.T) {
 	}
 }
 
+// A browser's sign-in lasts eight hours and the CLI's a week, unless the flags say otherwise.
+func TestSessionLifetimesComeFromTheFlags(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		args     []string
+		browser  time.Duration
+		cli      time.Duration
+		scenario string
+	}{
+		{nil, 8 * time.Hour, 7 * 24 * time.Hour, "defaults"},
+		{[]string{"--session-max-age=1h", "--cli-session-max-age=48h"}, time.Hour, 48 * time.Hour, "flags"},
+	} {
+		cmd := newServeCommand(&pve.Config{})
+		if err := cmd.Flags().Parse(c.args); err != nil {
+			t.Fatal(err)
+		}
+		browser, err := cmd.Flags().GetDuration("session-max-age")
+		if err != nil {
+			t.Fatal(err)
+		}
+		cli, err := cmd.Flags().GetDuration("cli-session-max-age")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if browser != c.browser || cli != c.cli {
+			t.Errorf("%s: browser %v, CLI %v", c.scenario, browser, cli)
+		}
+	}
+}
+
 func TestServeStopsCleanlyWhenItsContextEnds(t *testing.T) {
 	t.Parallel()
 	o, conn := serveOptionsIn(t, t.TempDir())

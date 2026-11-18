@@ -39,6 +39,8 @@ type fakeInterface struct {
 	bodies   map[string]map[string]any
 	signOuts int
 	setups   int
+	// client is the client a password sign-in said it came from.
+	client string
 }
 
 func newFakeInterface(t *testing.T) *fakeInterface {
@@ -176,6 +178,7 @@ func (f *fakeInterface) signIn(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Lock()
 	f.user = req["username"]
+	f.client = r.Header.Get("X-Kubehenge-Client")
 	f.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: "__Host-kubehenge-session", Value: "session", Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 	answer(w, http.StatusOK, `{"user":"`+req["username"]+`","csrf":"`+fakeCSRF+`"}`)

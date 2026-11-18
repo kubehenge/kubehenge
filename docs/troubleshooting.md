@@ -8,7 +8,7 @@ The appliance is the container tagged `kubehenge`. It runs no SSH server. Reach 
 
 | Unit | What it runs |
 | --- | --- |
-| `kubehenge.service` | The interface on port 443 and the gate in front of the shared Headlamp on port 8443. It also runs the management cluster's applies and the VM template builds. A restart signs everyone out. |
+| `kubehenge.service` | The interface on port 443 and the gate in front of the shared Headlamp on port 8443. It also runs the management cluster's applies and the VM template builds. A restart signs browsers out, but not `kubehenge login`. |
 | `kubehenge-headlamp.service` | The shared Headlamp server, on loopback only. `kubehenge-headlamp.socket` starts it on the first visit, through `kubehenge-headlamp-proxy.service`. The proxy and Headlamp stop after 15 minutes without an open Headlamp page. `inactive` is therefore normal. |
 | `kubehenge-update.path` | Watches for upgrade requests from the interface. |
 | `kubehenge-update.service` | Installs a newer signed release on request. |

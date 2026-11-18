@@ -74,6 +74,18 @@ func TestOneLoginServesEveryCommand(t *testing.T) {
 	}
 }
 
+// A password login says it is the CLI's, which the interface keeps for longer than a browser's.
+func TestAPasswordLoginSaysItIsTheCLIs(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	if err := f.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	if f.client != "cli" {
+		t.Errorf("the sign-in came from %q", f.client)
+	}
+}
+
 // A login ends with kubehenge logout, which also ends the session at the interface.
 func TestLogoutEndsTheSessionAndForgetsTheLogin(t *testing.T) {
 	t.Parallel()
