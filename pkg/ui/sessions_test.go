@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/kubehenge/kubehenge/pkg/appliance"
@@ -607,10 +608,8 @@ type hangingRenewals struct {
 	hanging  chan struct{}
 	answered chan struct{}
 	release  chan struct{}
-	// unbounded counts the renewals that came without a time limit. most is the most that hung at
-	// once.
-	count                 sync.Mutex
-	unbounded, hung, most int
+	// unbounded counts the renewals that came without a time limit.
+	unbounded atomic.Int32
 }
 
 func (f *hangingRenewals) Renew(ctx context.Context, t *pve.Ticket) (*pve.Ticket, error) {
@@ -619,21 +618,14 @@ func (f *hangingRenewals) Renew(ctx context.Context, t *pve.Ticket) (*pve.Ticket
 		f.answered <- struct{}{}
 		return renewed, err
 	}
-	f.count.Lock()
 	if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > renewalTimeout {
-		f.unbounded++
+		f.unbounded.Add(1)
 	}
-	f.hung++
-	f.most = max(f.most, f.hung)
-	f.count.Unlock()
 	f.hanging <- struct{}{}
 	select {
 	case <-f.release:
 	case <-ctx.Done():
 	}
-	f.count.Lock()
-	f.hung--
-	f.count.Unlock()
 	return nil, context.DeadlineExceeded
 }
 
@@ -662,8 +654,8 @@ func TestHangingRenewalsHoldUpNoOthers(t *testing.T) {
 	}
 	close(slow.release)
 	<-tended
-	if slow.unbounded != 0 {
-		t.Errorf("%d renewals without a time limit of %s", slow.unbounded, renewalTimeout)
+	if n := slow.unbounded.Load(); n != 0 {
+		t.Errorf("%d renewals without a time limit of %s", n, renewalTimeout)
 	}
 	renewed := 0
 	for _, k := range keptOn(t, a) {
@@ -676,32 +668,49 @@ func TestHangingRenewalsHoldUpNoOthers(t *testing.T) {
 	}
 }
 
-// No more renewals wait on Proxmox VE at once than a round allows.
+// stuckRenewals answers no renewal until released, and counts the ones that reached it.
+type stuckRenewals struct {
+	Accounts
+
+	release chan struct{}
+	reached atomic.Int32
+}
+
+func (f *stuckRenewals) Renew(ctx context.Context, _ *pve.Ticket) (*pve.Ticket, error) {
+	f.reached.Add(1)
+	select {
+	case <-f.release:
+	case <-ctx.Done():
+	}
+	return nil, context.DeadlineExceeded
+}
+
+// No more renewals wait on Proxmox VE at once than a round allows. The others wait for their turn.
 func TestARoundBoundsItsRenewals(t *testing.T) {
 	t.Parallel()
-	h, _, _ := cliOnAppliance(t)
-	const hang = 3 * renewalsAtOnce
-	h.unused(hang, "hang@pve")
-	slow := &hangingRenewals{fakeAccounts: h.accounts, hanging: make(chan struct{}, hang), answered: make(chan struct{}, 1), release: make(chan struct{})}
-	h.server.sessions.accounts = slow
-	h.clock = h.clock.Add(renewUnusedAfter)
-	tended := make(chan struct{})
-	go func() {
-		defer close(tended)
-		h.server.sessions.tend(t.Context())
-	}()
-	for range renewalsAtOnce {
-		<-slow.hanging
-	}
-	// A round without a bound would have started more by the time these yields are over.
-	for range 100 {
-		runtime.Gosched()
-	}
-	close(slow.release)
-	<-tended
-	if slow.most != renewalsAtOnce {
-		t.Fatalf("%d renewals hung at once, want %d", slow.most, renewalsAtOnce)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		const due = 3 * renewalsAtOnce
+		stuck := &stuckRenewals{release: make(chan struct{})}
+		s := newSessions(stuck, 8*time.Hour, week, nil, slog.New(slog.DiscardHandler))
+		now := time.Now()
+		for range due {
+			sess := &session{id: randomToken(), created: now, cli: true}
+			sess.ticket = &pve.Ticket{Username: "admin@pve", Issued: now.Add(-renewUnusedAfter)}
+			s.byID[sess.id] = sess
+		}
+		go s.tend(t.Context())
+		// Wait returns once the round can do no more: every renewal it started waits on Proxmox
+		// VE, and the round waits to start the next.
+		synctest.Wait()
+		if n := stuck.reached.Load(); n != renewalsAtOnce {
+			t.Errorf("%d renewals wait on Proxmox VE at once, want %d", n, renewalsAtOnce)
+		}
+		close(stuck.release)
+		synctest.Wait()
+		if n := stuck.reached.Load(); n != due {
+			t.Errorf("%d of %d renewals reached Proxmox VE", n, due)
+		}
+	})
 }
 
 // A sign-in waiting for its second factor is never kept. The session the code starts is the CLI's.
