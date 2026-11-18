@@ -23,8 +23,8 @@ CLUSTER_API_CONTROL_PLANE_SHA256=7fecb41843dcff7e05ab539dbe497c050a9aa7c888d4fb6
 CAPMOX=v0.9.2
 CAPMOX_SHA256=6817322435b42cfda07a8f94006bacb709afb83445ce24545af253c7904755d8
 # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api-addon-provider-helm
-HELM_ADDON=v0.6.4
-HELM_ADDON_SHA256=a70f4eb77eac626231daca1e2a046b4b069bb84320efa327cc8c56a9c4ca03e6
+HELM_ADDON=v0.6.6
+HELM_ADDON_SHA256=d3d6d5e15074407f586066a8b0226b717fcaf7de4bf72ebe357ccb37b8482de5
 # renovate: datasource=github-release-attachments depName=rancher/cluster-api-provider-rke2
 RKE2_BOOTSTRAP=v0.27.2
 RKE2_BOOTSTRAP_SHA256=0ba4c73bfe335bfa1b8a277b4df5f35e9a475f47f93038809010a1dc111063a2
@@ -47,8 +47,8 @@ TALOS_CONTROL_PLANE_SHA256=806f88d687dd87862004aee1a557d8a7974df7bdb6bfb28f1f44e
 CERT_MANAGER=v1.21.3
 CERT_MANAGER_SHA256=29810b2a84c8ee0731a79679ee1dfd7e93cd750eb0244542eec47fa8700f2749
 # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api-operator
-CAPI_OPERATOR=v0.30.0
-CAPI_OPERATOR_SHA256=6628cbbad5ae283a032fbe4f9ff94635038a0f09d7f6679b748e22010863f733
+CAPI_OPERATOR=v0.30.1
+CAPI_OPERATOR_SHA256=e1c91ebc22ced777c7f3be5c45bcaa8a04687e124b453c5b351f9f727ae1f63e
 
 goos=$(go env GOOS)
 goarch=$(go env GOARCH)

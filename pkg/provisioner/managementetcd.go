@@ -13,6 +13,8 @@ import (
 	talosclient "github.com/siderolabs/talos/pkg/machinery/client"
 	talosconfig "github.com/siderolabs/talos/pkg/machinery/client/config"
 	"github.com/siderolabs/talos/pkg/machinery/role"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
@@ -166,6 +168,148 @@ func (m *ManagementTalos) Restore(ctx context.Context, admin []byte, nodes []str
 		return err
 	}
 	return m.waitJoined(ctx, admin, up[1:], log)
+}
+
+// EtcdStart is what StartFirstEtcd keeps of one node's etcd while a new management cluster starts.
+type EtcdStart struct {
+	// Boot is the node's boot of the last reboot, which is made once per boot.
+	Boot    string `json:"boot,omitempty"`
+	Repairs int    `json:"repairs,omitempty"`
+	GaveUp  bool   `json:"gaveUp,omitempty"`
+	// Ran is set once etcd was seen running on the node, which then holds data.
+	Ran bool `json:"ran,omitempty"`
+}
+
+// StartFirstEtcd looks once at etcd on each node of a management cluster whose first apply runs,
+// nodes[0] the one the module bootstraps, and starts etcd again where Talos left it Failed, as the
+// workload clusters' etcd watch does. nodes[0] is bootstrapped again while etcd has run on no node.
+// Any other node, or one whose bootstrap Talos refuses, is rebooted. A node is rebooted once per
+// boot, started at most maxEtcdRepairs times, and never once its etcd ran. starts holds the count by node,
+// and record writes it down before each start, so that an appliance that stops between the two
+// counts a start it never made rather than makes one twice. A reboot's boot is written down only
+// once the reboot was made, so that a reboot cut off is made on a later look. A node that does not
+// answer is looked at next time.
+func (m *ManagementTalos) StartFirstEtcd(ctx context.Context, admin []byte, nodes []string, starts map[string]EtcdStart, record func() error, log func(string)) {
+	ran := false
+	for _, address := range nodes {
+		m.onNode(ctx, admin, address, func(ctx context.Context, t TalosNode) {
+			if etcd, err := t.Etcd(ctx); err == nil && etcd.State == talosEtcdRunning && !starts[address].Ran {
+				s := starts[address]
+				s.Ran = true
+				starts[address] = s
+				_ = record() // the next record writes it too
+			}
+		})
+		ran = ran || starts[address].Ran
+	}
+	for i, address := range nodes {
+		start := rebootEtcd
+		if i == 0 && !ran {
+			start = bootstrapEtcd
+		}
+		m.onNode(ctx, admin, address, func(call context.Context, t TalosNode) {
+			// A stopped run says nothing of the start it cut off.
+			if err := startFirstEtcd(call, t, address, start, starts, record, log); err != nil && ctx.Err() == nil {
+				log(fmt.Sprintf("Starting etcd again on %s failed: %v", address, err))
+			}
+		})
+	}
+}
+
+// bootstrapEtcd bootstraps etcd on the node and says so, or reboots the node where Talos refuses.
+// A node not ready for a bootstrap, or a call cut off before Talos answered, is left as it is. A
+// bootstrap leaves the boot unrecorded, so that an etcd failing once more in the same boot is
+// bootstrapped again, as the workload watch does.
+func bootstrapEtcd(ctx context.Context, t TalosNode, rebooted func() error) (string, error) {
+	err := t.Bootstrap(ctx)
+	switch {
+	case err == nil:
+		return ". Bootstrapped it again.", nil
+	case errors.Is(err, errTalosNotReady), unanswered(ctx, err):
+		return "", err //nolint:wrapcheck // the node's error names the node and the call
+	}
+	done, rebootErr := rebootEtcd(ctx, t, rebooted)
+	if rebootErr != nil {
+		return "", rebootErr
+	}
+	return fmt.Sprintf(". Talos refused to bootstrap it again: %v%s", err, done), nil
+}
+
+// rebootEtcd reboots the node, then records its boot with rebooted, and says so.
+func rebootEtcd(ctx context.Context, t TalosNode, rebooted func() error) (string, error) {
+	if err := t.Reboot(ctx); err != nil {
+		return "", err //nolint:wrapcheck // the node's error names the node and the call
+	}
+	return ". Rebooted the node to start etcd again.", rebooted()
+}
+
+// unanswered reports whether a call ended before Talos answered it: the run stopped, or the call
+// ran out of time. Neither is Talos refusing it.
+func unanswered(ctx context.Context, err error) bool {
+	switch status.Code(err) { //nolint:exhaustive // every other code is Talos's answer
+	case codes.Canceled, codes.DeadlineExceeded:
+		return true
+	}
+	return ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// onNode does something on a node within watchReadTimeout, if its Talos API answers.
+func (m *ManagementTalos) onNode(ctx context.Context, admin []byte, address string, do func(context.Context, TalosNode)) {
+	ctx, cancel := context.WithTimeout(ctx, watchReadTimeout)
+	defer cancel()
+	_ = m.on(ctx, admin, address, func(ctx context.Context, t TalosNode) error {
+		do(ctx, t)
+		return nil
+	})
+}
+
+// startFirstEtcd starts etcd on one node again with start if Talos left it Failed.
+func startFirstEtcd(ctx context.Context, t TalosNode, address string, start func(context.Context, TalosNode, func() error) (string, error), starts map[string]EtcdStart, record func() error, log func(string)) error {
+	s := starts[address]
+	if s.Ran || s.GaveUp {
+		return nil
+	}
+	etcd, err := t.Etcd(ctx)
+	if err != nil || etcd.State != talosEtcdFailed {
+		return nil //nolint:nilerr // a node not ready yet is looked at next time
+	}
+	boot, err := t.BootID(ctx)
+	if err != nil || boot == s.Boot {
+		return nil //nolint:nilerr // as above
+	}
+	note := "Talos left etcd on " + address + " Failed"
+	if etcd.Event != "" {
+		note += ": " + etcd.Event
+	}
+	if s.Repairs >= maxEtcdRepairs {
+		gaveUp := s
+		gaveUp.GaveUp = true
+		starts[address] = gaveUp
+		if err = record(); err != nil {
+			return err
+		}
+		log(fmt.Sprintf("%s. Left it Failed after %d starts.", note, s.Repairs))
+		return nil
+	}
+	counted := EtcdStart{Boot: s.Boot, Repairs: s.Repairs + 1}
+	starts[address] = counted
+	if err = record(); err != nil {
+		return err
+	}
+	done, err := start(ctx, t, func() error {
+		counted.Boot = boot
+		starts[address] = counted
+		return record()
+	})
+	if errors.Is(err, errTalosNotReady) {
+		// Not a start, so it does not count.
+		starts[address] = s
+		return record()
+	}
+	if done != "" {
+		log(note + done)
+	}
+	return err
 }
 
 // waitJoined waits until etcd on each of the nodes has joined the restored one.

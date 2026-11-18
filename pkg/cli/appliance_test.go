@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +24,7 @@ import (
 )
 
 const (
+	fakeCookie   = "__Host-kubehenge-session"
 	fakeCSRF     = "csrf-token"
 	fakePassword = "the password"
 )
@@ -33,12 +37,19 @@ type fakeInterface struct {
 	// loginFile is this fake's own, so tests using one run side by side.
 	loginFile string
 
-	mu       sync.Mutex
-	user     string
-	token    string
-	bodies   map[string]map[string]any
+	mu     sync.Mutex
+	user   string
+	token  string
+	bodies map[string]map[string]any
+	// sessions are the signed-in sessions by cookie, each sign-in's its own. ended are the ones
+	// signed out, in order.
+	sessions map[string]bool
+	ended    []string
+	signIns  int
 	signOuts int
 	setups   int
+	// client is the client a password sign-in said it came from.
+	client string
 }
 
 func newFakeInterface(t *testing.T) *fakeInterface {
@@ -47,10 +58,15 @@ func newFakeInterface(t *testing.T) *fakeInterface {
 		t:         t,
 		loginFile: filepath.Join(t.TempDir(), "login.json"),
 		bodies:    map[string]map[string]any{},
+		sessions:  map[string]bool{},
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/session", f.signIn)
-	mux.HandleFunc("DELETE /api/session", f.signedIn(func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("DELETE /api/session", f.signedIn(func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie(fakeCookie); err == nil {
+			delete(f.sessions, c.Value)
+			f.ended = append(f.ended, c.Value)
+		}
 		f.signOuts++
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -176,9 +192,27 @@ func (f *fakeInterface) signIn(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Lock()
 	f.user = req["username"]
+	f.client = r.Header.Get("X-Kubehenge-Client")
+	f.signIns++
+	id := fmt.Sprintf("session-%d", f.signIns)
+	f.sessions[id] = true
 	f.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: "__Host-kubehenge-session", Value: "session", Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	http.SetCookie(w, &http.Cookie{Name: fakeCookie, Value: id, Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 	answer(w, http.StatusOK, `{"user":"`+req["username"]+`","csrf":"`+fakeCSRF+`"}`)
+}
+
+// state is the sessions signed in, sorted, and those signed out, in order.
+func (f *fakeInterface) state() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return fmt.Sprintf("signed in %v, ended %v", slices.Sorted(maps.Keys(f.sessions)), f.ended)
+}
+
+// signedInAs tells whether session id is signed in.
+func (f *fakeInterface) signedInAs(id string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.sessions[id]
 }
 
 // signedIn holds a request to the session and, unless it only reads, its CSRF token, and records
@@ -186,7 +220,7 @@ func (f *fakeInterface) signIn(w http.ResponseWriter, r *http.Request) {
 func (f *fakeInterface) signedIn(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		byToken := f.token != "" && r.Header.Get("Authorization") == "PVEAPIToken="+f.token
-		if c, err := r.Cookie("__Host-kubehenge-session"); !byToken && (err != nil || c.Value != "session") {
+		if c, err := r.Cookie(fakeCookie); !byToken && (err != nil || !f.signedInAs(c.Value)) {
 			answer(w, http.StatusUnauthorized, `{"error":"not signed in"}`)
 			return
 		}

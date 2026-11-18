@@ -120,6 +120,7 @@ func (s *Server) signIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.sessions.end(w, r)
+	cli := r.Header.Get(clientHeader) == cliClient
 	ticket, challenge, err := s.Accounts.SignIn(r.Context(), username, req.Password)
 	refused := errors.Is(err, pve.ErrAuthentication) || refusedAsClient(err)
 	done(refused)
@@ -133,7 +134,7 @@ func (s *Server) signIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ticket != nil {
-		sess := s.sessions.start(w, ticket, nil)
+		sess := s.sessions.start(w, ticket, nil, cli)
 		s.Log.InfoContext(r.Context(), "signed in", "user", ticket.Username, "address", clientAddress(r))
 		writeJSON(w, http.StatusOK, s.signedInView(r.Context(), ticket.Username, sess))
 		return
@@ -142,7 +143,7 @@ func (s *Server) signIn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "security keys work only in Proxmox VE. Sign in with an API token instead")
 		return
 	}
-	sess := s.sessions.start(w, nil, challenge)
+	sess := s.sessions.start(w, nil, challenge, cli)
 	writeJSON(w, http.StatusOK, sessionView{
 		User: challenge.Username,
 		CSRF: sess.csrf,
@@ -175,7 +176,7 @@ func (s *Server) signInWithToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.sessions.end(w, r)
-	sess := s.sessions.start(w, ticket, nil)
+	sess := s.sessions.start(w, ticket, nil, false)
 	s.Log.InfoContext(r.Context(), "signed in", "user", ticket.Username, "address", clientAddress(r), "via", "token")
 	writeJSON(w, http.StatusOK, s.signedInView(r.Context(), ticket.Username, sess))
 }
@@ -254,7 +255,7 @@ func (s *Server) secondFactor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.sessions.end(w, r)
-	next := s.sessions.start(w, ticket, nil)
+	next := s.sessions.start(w, ticket, nil, sess.cli)
 	s.Log.InfoContext(r.Context(), "signed in", "user", ticket.Username, "address", clientAddress(r), "secondFactor", req.Kind)
 	writeJSON(w, http.StatusOK, s.signedInView(r.Context(), ticket.Username, next))
 }

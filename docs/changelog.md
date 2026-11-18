@@ -4,6 +4,27 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-18
+
+### Highlights
+
+- **AlmaLinux and Rocky Linux 10.3.** Node templates move to 10.3, FIPS ones included.
+- **New Talos clusters start.** A first etcd start that fails no longer leaves a new cluster stuck.
+- **CLI logins last seven days.** They also survive appliance upgrades.
+
+### Changed
+
+- AlmaLinux and Rocky Linux node templates are built from 10.3, FIPS ones included. Clusters move to the new build at their next node image refresh ([clusters.md](clusters.md#node-image-refresh)).
+- A password login by `kubehenge login` lasts seven days, set by `--cli-session-max-age`. Browser sign-ins keep their eight hours ([Sessions](architecture.md#sessions)).
+- On the appliance, a password login by `kubehenge login` outlives upgrades and certificate renewals of the interface ([clusters.md](clusters.md#signing-in-and-finding-clusters)).
+- A new `kubehenge login` ends the password login it replaces. A command already running switches to the new login if it is for the same address.
+- `kubehenge logout` says when it could not end the session at the interface. It forgets the login all the same.
+
+### Fixed
+
+- Kubehenge starts etcd again on a Talos control-plane node where its start failed, as on a failed image pull. It bootstraps a new cluster's first node again and reboots any other ([troubleshooting.md](troubleshooting.md#etcd-failed-on-a-talos-node)).
+- The management cluster's setup no longer times out when etcd fails to start. The appliance starts etcd again as above and notes it in the setup log.
+
 ## [0.5.2] - 2026-11-17
 
 ### Before you upgrade

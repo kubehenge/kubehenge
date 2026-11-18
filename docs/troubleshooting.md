@@ -8,7 +8,7 @@ The appliance is the container tagged `kubehenge`. It runs no SSH server. Reach 
 
 | Unit | What it runs |
 | --- | --- |
-| `kubehenge.service` | The interface on port 443 and the gate in front of the shared Headlamp on port 8443. It also runs the management cluster's applies and the VM template builds. A restart signs everyone out. |
+| `kubehenge.service` | The interface on port 443 and the gate in front of the shared Headlamp on port 8443. It also runs the management cluster's applies and the VM template builds. A restart signs browsers out, but not `kubehenge login`. |
 | `kubehenge-headlamp.service` | The shared Headlamp server, on loopback only. `kubehenge-headlamp.socket` starts it on the first visit, through `kubehenge-headlamp-proxy.service`. The proxy and Headlamp stop after 15 minutes without an open Headlamp page. `inactive` is therefore normal. |
 | `kubehenge-update.path` | Watches for upgrade requests from the interface. |
 | `kubehenge-update.service` | Installs a newer signed release on request. |
@@ -701,6 +701,21 @@ Component names are `out_<name>`, with hyphens as underscores. Alloy drops what 
   - Data in use above the limit is not given back. Raise the limit with `kubehenge cluster etcd set NAME --quota-gib 8`, then delete what fills the database.
 - **"etcd member … is at …% of its limit"** means the database is over 60 percent of the limit.
   - Free space is defragmented inside the upgrade window. Data needs a higher limit or fewer objects.
+
+### etcd Failed on a Talos node
+
+- **`TalosEtcdFailed`**, "etcd on … is Failed, Talos says …", means etcd's start failed, often on an image pull, and Talos does not try again. The quoted text is Talos's reason.
+  - "Kubehenge bootstrapped it again" means a new cluster's only control-plane node got its bootstrap again. A cluster whose control plane was initialised never gets one.
+  - "Talos did not bootstrap it again" gives Talos's reason, most often that etcd on the node already has data. The node is rebooted instead.
+  - "Kubehenge rebooted the node to start etcd again" means the controller rebooted the node. It reboots a node once for each boot that ends with etcd Failed.
+  - The controller leaves etcd alone while the cluster is paused, being restored or upgrading Talos.
+- **`TalosEtcdLeftFailed`**, "… Kubehenge started it 3 times without etcd running and has stopped trying", means the controller no longer starts etcd on that node. Read why on the node: `talosctl --talosconfig prod.talosconfig --nodes 192.0.2.21 service etcd`, then `logs etcd` the same way.
+  - The count is kept in the Machine's `kubehenge.dev/etcd-repairs` annotation. The controller removes it once etcd runs, and a replaced machine has none.
+  - To have the controller try again, remove it: `kubectl -n clusters annotate machine prod-cp-abcde kubehenge.dev/etcd-repairs-`.
+- **The management cluster's setup** starts etcd again when Talos leaves it Failed. It does so only in the apply that creates the cluster, and not when that apply also replaces or changes a node. Its log says "Talos left etcd on 192.0.2.21 Failed: …", then what was done.
+  - If etcd has run on no node, the first node is bootstrapped again, also when it fails again in the same boot. Any other node is rebooted, at most once per boot.
+  - A node whose etcd ran is left alone. After 3 starts the log says "Left it Failed after 3 starts" and the setup times out. Fix the cause the line names and run the setup again. Each node then gets 3 more starts.
+  - `/var/lib/kubehenge/management/etcd-starts.json` records each node's boot and starts, so a node is never rebooted twice in one boot. Removing the management cluster deletes the file.
 
 ### etcd snapshots and restores
 

@@ -224,13 +224,20 @@ unmarked() {
 # lift_management_protection <node> <vmid>: checks that a management VM carries the protection the
 # setup gives it, then lifts it. A step that loses a VM by accident stands for an administrator who
 # lifted it first, since Proxmox VE refuses to delete a protected VM. The lift waits for a detach on
-# the VM to end, as volume_settled waits for one to come, and the digest has Proxmox VE refuse it
-# once the plugin changed the configuration since.
+# the VM to end, as volume_settled waits for one to come. The digest has Proxmox VE refuse the lift
+# once the plugin changed the configuration since it was read, and the next round reads it again.
 lift_management_protection() {
-    until_true 300 "no CSI detach in flight on management VM $2" unmarked "$1" "$2"
+    until_true 300 "the protection of management VM $2 lifted" protection_lifted "$1" "$2"
+}
+
+# protection_lifted <node> <vmid>: lifts a management VM's protection when no CSI detach is in
+# flight, against the configuration just read.
+protection_lifted() {
+    # shellcheck disable=SC2310 # unmarked is a predicate here; its status is the answer.
+    unmarked "$1" "$2" || return 1
     jq -e '.protection == 1' "${work}/vm-config" > /dev/null || fail "management VM $2 is not protected"
     digest=$(jq -r .digest "${work}/vm-config")
-    pvesh set "/nodes/$1/qemu/$2/config" --protection 0 --digest "${digest}" < /dev/null > /dev/null
+    seen=$(pvesh set "/nodes/$1/qemu/$2/config" --protection 0 --digest "${digest}" < /dev/null 2>&1 > /dev/null)
 }
 
 # delete_management_vm <node> <vmid>: deletes a stopped management VM whose protection was lifted,
@@ -786,9 +793,14 @@ job_was apply succeeded true
 # shellcheck disable=SC2016 # jq's variables, not the shell's.
 body_has "the management cluster is not recorded as applied by ${version}" \
     --arg new "${version}" '(.upgrade.behind | not) and .upgrade.applied == $new'
-# The apply made the snapshots' talosconfig again, which takes one still.
+# The apply made the snapshots' talosconfig again, which takes one still. It is the snapshot the
+# recreation below starts from, since the target keeps only the newest two and the steps since
+# second took more.
+expect 200 "the etcd backups before the snapshot" request "${work}/admin.jar" "${ui}/api/appliance/etcd-backups"
+before=$(jq -r '.last.name // ""' "${work}/body")
 expect 202 "a snapshot after the upgrade" post "${work}/admin.jar" "${admin_csrf}" "${backups}/snapshots" ''
-until_true 300 "the snapshot after the upgrade" snapshot_taken "${second}"
+until_true 300 "the snapshot after the upgrade" snapshot_taken "${before}"
+latest=$(jq -r .last.name "${work}/body")
 
 # lose_management_vms: deletes every management node VM, as a lost host or storage would. The
 # backup volume's VM stays.
@@ -820,7 +832,7 @@ case "${KUBEHENGE_E2E_RECREATE:-}" in
     bucket)
         step "the management cluster recreated from the bucket's snapshot, all its VMs lost"
         lose_management_vms
-        expect 202 "recreating from ${second}" post "${work}/admin.jar" "${admin_csrf}" "${backups}/snapshots/${second}/recreate" "${recreate_body}"
+        expect 202 "recreating from ${latest}" post "${work}/admin.jar" "${admin_csrf}" "${backups}/snapshots/${latest}/recreate" "${recreate_body}"
         until_true 3600 "the recreation to end" job_ended
         job_was recreate succeeded true
         management_back

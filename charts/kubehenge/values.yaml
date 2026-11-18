@@ -377,7 +377,7 @@ addons:
   monitoring:
     repository: https://prometheus-community.github.io/helm-charts
     chart: kube-prometheus-stack
-    version: 93.3.0@sha256:2d40be0b19523cb4fed25b4db09e3ca35f471a06872baf7048b916a62c7af0eb
+    version: 93.4.0@sha256:2ff4547dbe30aa7f6c7ef9fb49e35dfef43a36486cd8e463cd43cdda93914b24
     # In front of the metrics etcd, kube-proxy and node-exporter serve without authentication.
     # renovate: datasource=docker depName=ghcr.io/kube-rbac-proxy/kube-rbac-proxy
     kubeRBACProxy: ghcr.io/kube-rbac-proxy/kube-rbac-proxy:v0.23.1@sha256:f723251bdd90a806b5331b6e9f9287cc2832d3dd9f9479378cdbbddb9856724f
@@ -469,7 +469,7 @@ addons:
   loki:
     repository: https://grafana-community.github.io/helm-charts
     chart: loki
-    version: 21.2.3@sha256:6c2bdbcefedbc5b404faa52070e9de0fe9dd03a395af42483f84b2eef4df1a0b
+    version: 21.3.1@sha256:bda99d06d9243444a82b0a41ac76df512e304f0e238bb9d723d88fc2b12773f0
     values:
       loki:
         image:
@@ -676,13 +676,13 @@ addons:
     repository: oci://ghcr.io/sergelogvinov/charts
     chart: proxmox-csi-plugin
     # renovate: datasource=docker depName=ghcr.io/sergelogvinov/charts/proxmox-csi-plugin
-    version: 0.5.15@sha256:d5125be66d23c3380f3ccadc26018d21f0a44e203d93998a9e80ef82eaa2dc59
+    version: 0.5.16@sha256:affb62f57515bf4602ffa847cf0ede867d3f3f0cb4028f54c46d894469e36fe5
     values:
       controller:
         plugin:
           image:
             # renovate: datasource=docker depName=ghcr.io/sergelogvinov/proxmox-csi-controller
-            tag: v0.22.0@sha256:9af4fa00a6c075f4221068188d9e439e770db301a24f0df4e18e17fe9a4eb98f
+            tag: v0.22.1@sha256:1ecb4310985abe3ef92ab1c31c4c9b34bb6f199aaa459db866b23e8f110fb1fb
         attacher:
           image:
             # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-attacher
@@ -703,7 +703,7 @@ addons:
         plugin:
           image:
             # renovate: datasource=docker depName=ghcr.io/sergelogvinov/proxmox-csi-node
-            tag: v0.22.0@sha256:cecb7d6fa50f5a04867c50603aa9d1466fa06d13686f20fbaf602a01f941b8d8
+            tag: v0.22.1@sha256:216923842bf11d212a5e07d2d013884c5341fcda39af37c0f8ce55dffc76354e
         driverRegistrar:
           image:
             # yamllint disable-line rule:line-length
@@ -729,51 +729,51 @@ addons:
   cilium:
     repository: https://helm.cilium.io
     chart: cilium
-    version: 1.20.4@sha256:505abff8385811df1a949776fc42e9f10697989a332acc86d6e8933efcb855ed
+    version: 1.20.5@sha256:0c7592eb75179ecf46dd3ec22145916f0164c4401214ea15afb5b230b1d11a21
   calico:
     repository: https://docs.tigera.io/calico/charts
     chart: tigera-operator
-    version: v3.33.0@sha256:efcc8633742c136708cd8de9673862c6eee3a91ed176d7f2835690ab625ad846
+    version: v3.33.1@sha256:cf1f816efc484fbe0a21a54718e92f0375dd8593ae97567a51730ac759f90828
     values:
       tigeraOperator:
         # renovate: datasource=docker depName=quay.io/tigera/operator
-        version: v1.44.0@sha256:066c2e8d67452903a516fa54aabc22a604ec911b5882467b4de550d10fa8b21e
+        version: v1.44.1@sha256:6ab9a5d52aa88bda4279605c40c6fd4b722007f10d683cd8324fd9fbe1b68969
     # The images the operator runs Calico from, at its release, which it takes by digest from an
     # ImageSet named for that release. It refuses a set that lacks one it runs, so all are here.
     # They move only with the chart: Calico pushes a release's images days before it publishes it.
     # scripts/renovate-refresh.sh sets them and the operator to the chart's release.
     images:
       # renovate: datasource=docker depName=quay.io/calico/calico
-      - quay.io/calico/calico:v3.33.0@sha256:4ebc20730127bc9e8bf1db5f5a2d8b58cf37fe0e891b3c7b5471992221d213e5
+      - quay.io/calico/calico:v3.33.1@sha256:fc7c26a079896ada2bea3b0bd7732430e0b095a9af726ed2150fe0894d748d4b
       # renovate: datasource=docker depName=quay.io/calico/node
-      - quay.io/calico/node:v3.33.0@sha256:565d8db3200e443955557f8f28ff44ab8a4a456754bc74a19c4f2f3444af9b1c
+      - quay.io/calico/node:v3.33.1@sha256:1820b229f4aa6192bd2fc73930fcebd724387e6b8ff944c45061e81529bbd337
       # renovate: datasource=docker depName=quay.io/calico/third-party-cni-plugins
-      - quay.io/calico/third-party-cni-plugins:v3.33.0@sha256:0f32f48279484c0d6f0e0d0e767b2d0e1a6c6ca34cb3421a61b989d992f3df41
+      - quay.io/calico/third-party-cni-plugins:v3.33.1@sha256:3e1f07559df83c36cc3ff6db7d288e8893893ea9517434d5d9cf1e326737b6f3
       # renovate: datasource=docker depName=quay.io/calico/whisker
-      - quay.io/calico/whisker:v3.33.0@sha256:4802f246acbc4ac08d1ce6b5c229a518dc4d85e33b50b4d1366b05a49459497c
+      - quay.io/calico/whisker:v3.33.1@sha256:941ce3169c2d381ee4b9f65b7cdcd27fab9d5c8e9a123284fd09a450695ff721
       # renovate: datasource=docker depName=quay.io/calico/envoy-gateway
-      - quay.io/calico/envoy-gateway:v3.33.0@sha256:e1a3e0b964c72dbe9bc6a58fee8dd20cb94109e40649416f70d14d2710810b64
+      - quay.io/calico/envoy-gateway:v3.33.1@sha256:fb2b979f8a3e05f594494c3ac6d2b17193e5f05a700dfa626009d6efc79ed7b0
       # renovate: datasource=docker depName=quay.io/calico/envoy-proxy
-      - quay.io/calico/envoy-proxy:v3.33.0@sha256:431d1467703624b377f5d801f36367d948aa7da0ea6f6ac132d2f8758d70513a
+      - quay.io/calico/envoy-proxy:v3.33.1@sha256:6f205d9de32b8fd737316409def5d5af3786e57d5146183f74e558511c732dd7
       # renovate: datasource=docker depName=quay.io/calico/envoy-ratelimit
-      - quay.io/calico/envoy-ratelimit:v3.33.0@sha256:22470bbe92715b9ea5bed075ea491cf3e31dcd7814ef9049d6c1803b28a3fb64
+      - quay.io/calico/envoy-ratelimit:v3.33.1@sha256:6b801da56fb023ca83f46b7e3500a11bd5b3709b2f29d2e2737b055bbd9d7009
       # renovate: datasource=docker depName=quay.io/calico/istio-pilot
-      - quay.io/calico/istio-pilot:v3.33.0@sha256:de402261cba5fdf354308775a03a2451feb11ebb70c6e705dfca36681f6910ff
+      - quay.io/calico/istio-pilot:v3.33.1@sha256:7997399f5d0fec6d4a5ff980ea1fce36b932073594da5db551bf112e551d8162
       # renovate: datasource=docker depName=quay.io/calico/istio-install-cni
-      - quay.io/calico/istio-install-cni:v3.33.0@sha256:799ccfdecfb1c84ed12eec3ff033c4bc138fb0745a28c1b127f198cfda63e22e
+      - quay.io/calico/istio-install-cni:v3.33.1@sha256:2f128d5e129224d479a31226d959638b830655c92b7a31c0df8dfc9060e09e5d
       # renovate: datasource=docker depName=quay.io/calico/istio-ztunnel
-      - quay.io/calico/istio-ztunnel:v3.33.0@sha256:c176e7fde49109b25b5153ded76435782dc4869c05415bfc0fb9f7fcecf90359
+      - quay.io/calico/istio-ztunnel:v3.33.1@sha256:270dbd846450651fe69fada48e0c5f3bfadf04dab814279f6a3318d22382a201
       # renovate: datasource=docker depName=quay.io/calico/istio-proxyv2
-      - quay.io/calico/istio-proxyv2:v3.33.0@sha256:754ceacbb2ed3a41c0a6ece5a4a006ae6dbc6cdd441fc2865ad1f05e7894171e
+      - quay.io/calico/istio-proxyv2:v3.33.1@sha256:bf53cc31553d82e4e276d0b40bcbc544067094ab0ac2e4bc1283a47cb53b053d
       # renovate: datasource=docker depName=quay.io/calico/cni-windows
-      - quay.io/calico/cni-windows:v3.33.0@sha256:831453427dfb803acd73f32cbe53000e1e7942971dff9f25d2003832ed2f1997
+      - quay.io/calico/cni-windows:v3.33.1@sha256:3c5932204fd096033484d7de129e1631d08c4179260b48f7c2305957fb0dcf6e
       # renovate: datasource=docker depName=quay.io/calico/node-windows
-      - quay.io/calico/node-windows:v3.33.0@sha256:dc0d63f711964b074e5275d843c0442e72547f2ec5a5c03e793a7180af7516c3
+      - quay.io/calico/node-windows:v3.33.1@sha256:651bf8e29db431ce002d681fc54dabd0656f26949e24ccd5a3525b43093b08b5
   # The ingress controller of kubeadm clusters, which bring none; RKE2 and k3s bring Traefik.
   traefik:
     repository: https://traefik.github.io/charts
     chart: traefik
-    version: 42.4.0@sha256:eebfaff03c0f210b6424898ccf7583c9d40291cb9b14644ef3e369be6caeb0f0
+    version: 42.4.1@sha256:80ea7246b74d5bcd1f86ac598feca6ba516a110dc0ad9e95dfda28d933b4acdb
     values:
       image:
         # renovate: datasource=docker depName=docker.io/library/traefik
@@ -820,7 +820,7 @@ addons:
   argocd:
     repository: https://argoproj.github.io/argo-helm
     chart: argo-cd
-    version: 10.18.0@sha256:9785aff67197402aab26d7ab3928ac8e611c292dacdee47f0e8ded16c2cd5a47
+    version: 10.18.1@sha256:7074b586eea52a6c6ddf9e0331117b08d8f47ca92a65bf9d0b5f1044f5ed5fba
     values:
       global:
         image:

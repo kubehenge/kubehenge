@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -57,7 +58,9 @@ func newEtcdWatchFixture(t *testing.T, change func(*clusterv1.Cluster), extra ..
 		objs = append(objs, m, pm, etcdPod(fmt.Sprintf("web-cp-%d", i), corev1.ConditionTrue))
 	}
 	objs = append(objs, extra...)
-	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(&clusterv1.Cluster{}).Build()
+	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{talosControlPlaneGVK.GroupVersion()})
+	mapper.Add(talosControlPlaneGVK, meta.RESTScopeNamespace)
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithRESTMapper(mapper).WithObjects(objs...).WithStatusSubresource(&clusterv1.Cluster{}).Build()
 	f := &etcdWatchFixture{
 		t: t, kube: kube, pve: fakeProxmox{}, apis: &fakeAPIs{}, talos: &fakeTalos{down: map[string]bool{}},
 		events: events.NewFakeRecorder(10), now: etcdNow,

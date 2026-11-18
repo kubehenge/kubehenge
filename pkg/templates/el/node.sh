@@ -111,6 +111,15 @@ if [ "${fips}" = true ]; then
     # module, which checks the kernel's integrity at boot.
     printf 'kargs = ["fips=1"]\n' > /usr/lib/bootc/kargs.d/20-kubehenge-fips.toml
     update-crypto-policies --no-reload --set FIPS
+    # Without kubehenge-fips-boot (el/fips-module-setup.sh), the fips module finds no checksum of
+    # the kernel and powers the node off. The initramfs is made again to hold it.
+    module=/usr/lib/dracut/modules.d/99kubehenge-fips-boot
+    install -D -m 0755 "${files}/el/fips-module-setup.sh" "${module}/module-setup.sh"
+    install -m 0755 "${files}/el/fips-boot.sh" "${module}/kubehenge-fips-boot.sh"
+    install -m 0755 "${files}/el/fips-unboot.sh" "${module}/kubehenge-fips-unboot.sh"
+    kernel=$(cd /usr/lib/modules && echo *)
+    DRACUT_NO_XATTR=1 dracut --force --no-hostonly --add kubehenge-fips-boot \
+        "/usr/lib/modules/${kernel}/initramfs.img" "${kernel}"
 fi
 
 # A clone's first boot, with its new machine ID, applies the presets again, and the family's end in

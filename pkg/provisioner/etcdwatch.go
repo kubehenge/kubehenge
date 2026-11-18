@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -57,7 +58,7 @@ func QuorumLostHead(message string) string {
 
 // EtcdWatch looks at the control planes of every cluster: whether a majority of them runs while the
 // API is silent (QuorumLostCondition), and which etcd members are healthy, recorded in EtcdHealthName
-// for a host reboot to wait on.
+// for a host reboot to wait on. It starts etcd again where Talos left it Failed.
 type EtcdWatch struct {
 	Client client.Client
 	// Reader reads a cluster past the cache, after a write to it conflicted.
@@ -81,6 +82,24 @@ type EtcdWatch struct {
 	mu sync.Mutex
 	// silentSince is when each cluster's API first did not answer in the looks since it last did.
 	silentSince map[string]time.Time
+}
+
+// maxEtcdRepairs is how often a machine's Failed etcd is started again before it is left to a
+// person. A failure a reboot or a bootstrap cannot fix would otherwise cost a reboot every boot.
+const maxEtcdRepairs = 3
+
+// EtcdRepairsAnnotation on a control-plane Machine holds the starts of its Failed etcd since it last
+// ran, as JSON. It lives on the Machine so that a controller restart or a new leader keeps the
+// count, and goes with the Machine. Removing it by hand lets the controller start etcd again.
+const EtcdRepairsAnnotation = "kubehenge.dev/etcd-repairs"
+
+// etcdRepair is the value of EtcdRepairsAnnotation.
+type etcdRepair struct {
+	// Boot is the one the machine was last rebooted from, which still reads Failed while it shuts
+	// down.
+	Boot    string `json:"boot,omitempty"`
+	Repairs int    `json:"repairs"`
+	GaveUp  bool   `json:"gaveUp,omitempty"`
 }
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable.
@@ -314,11 +333,193 @@ func (w *EtcdWatch) talosMember(ctx context.Context, c *clusterv1.Cluster, m *cl
 	etcd, err := node.Etcd(ctx)
 	switch {
 	case err != nil:
+	case etcd.State == talosEtcdFailed:
+		w.startEtcd(ctx, c, m, node, etcd)
+	case etcd.State == talosEtcdRunning && m.Annotations[EtcdRepairsAnnotation] != "":
+		// etcd that fails again after running is started again, as often as the first time.
+		if ferr := w.recordRepair(ctx, m.DeepCopy(), nil); ferr != nil {
+			ctrl.LoggerFrom(ctx).WithName("etcd-watch").Error(ferr, "removing the etcd-repairs annotation of a machine whose etcd runs again")
+		}
+	}
+	switch {
+	case err != nil:
 		return "its etcd service cannot be read: " + err.Error()
 	case !etcd.Healthy:
 		return "its etcd service is " + etcd.State + " and not healthy"
 	}
 	return ""
+}
+
+// startEtcd starts etcd again on a node Talos left it Failed on, which Talos never does by itself,
+// as when the image pull of etcd's pre stage could not fetch the image's signature. The first etcd
+// of a cluster not yet initialised is bootstrapped again: CACPPT bootstraps once, and a rebooted
+// node would wait for it. Any other node is rebooted, at most once per boot, since a bootstrap
+// would make it a cluster of its own, empty. After maxEtcdRepairs the node is left Failed. A
+// restore or a Talos upgrade owns the nodes while it runs.
+//
+// Each start is counted on the Machine before it is made, so that a controller that stops between
+// the two undercounts rather than starts etcd twice.
+func (w *EtcdWatch) startEtcd(ctx context.Context, c *clusterv1.Cluster, m *clusterv1.Machine, node TalosNode, etcd TalosService) {
+	log := ctrl.LoggerFrom(ctx).WithName("etcd-watch").WithValues("cluster", c.Namespace+"/"+c.Name, "machine", m.Name)
+	boot, err := node.BootID(ctx)
+	if err != nil {
+		log.Error(err, "reading the boot of a node whose etcd Talos left Failed")
+		return
+	}
+	// The round listed the cluster a while ago. An upgrade the upgrader recorded since then, or a
+	// start another controller counted, shows only past the cache.
+	live := liveOr(w.Reader, w.Client)
+	fresh, machine := &clusterv1.Cluster{}, &clusterv1.Machine{}
+	if err = live.Get(ctx, client.ObjectKeyFromObject(c), fresh); err == nil {
+		err = live.Get(ctx, client.ObjectKeyFromObject(m), machine)
+	}
+	if err != nil {
+		log.Error(err, "reading the cluster and the machine again")
+		return
+	}
+	r := repairsOf(machine)
+	if leftToOthers(fresh) || r.GaveUp || r.Boot == boot {
+		return
+	}
+	note := "etcd on " + m.Name + " is Failed"
+	if etcd.Event != "" {
+		note += `, Talos says "` + etcd.Event + `"`
+	}
+	if r.Repairs >= maxEtcdRepairs {
+		r.GaveUp = true
+		if err = w.recordRepair(ctx, machine, &r); err != nil {
+			log.Error(err, "giving up on etcd")
+			return
+		}
+		note += fmt.Sprintf(". Kubehenge started it %d times without etcd running and has stopped trying.", r.Repairs)
+		log.Info(note)
+		w.event(c, "TalosEtcdLeftFailed", note)
+		return
+	}
+	only, err := w.onlyEtcd(ctx, fresh, machine)
+	if err != nil {
+		log.Error(err, "telling whether etcd on the node is the cluster's only one")
+		return
+	}
+	var done string
+	if only {
+		done, err = w.bootstrapEtcd(ctx, machine, node, boot, r)
+	} else {
+		done, err = w.rebootEtcd(ctx, machine, node, boot, r)
+	}
+	if err != nil {
+		log.Error(err, "starting etcd again")
+		return
+	}
+	note += done
+	log.Info(note)
+	w.event(c, "TalosEtcdFailed", note)
+}
+
+// bootstrapEtcd bootstraps the node's etcd, counting the start on the machine first, and says what
+// it did. After a bootstrap Talos took, a node whose etcd fails once more in the same boot is
+// bootstrapped again, as a restore does. Talos refuses one while etcd has data, which a reboot
+// starts from instead.
+func (w *EtcdWatch) bootstrapEtcd(ctx context.Context, machine *clusterv1.Machine, node TalosNode, boot string, r etcdRepair) (string, error) {
+	counted := r
+	counted.Repairs++
+	if err := w.recordRepair(ctx, machine, &counted); err != nil {
+		return "", err
+	}
+	err := node.Bootstrap(ctx)
+	switch {
+	case err == nil:
+		return ". Kubehenge bootstrapped it again.", nil
+	case errors.Is(err, errTalosNotReady):
+		// Not a start, so it does not count.
+		return "", errors.Join(err, w.recordRepair(ctx, machine, &r))
+	}
+	refused := fmt.Sprintf(". Talos did not bootstrap it again: %v", err)
+	done, err := w.rebootEtcd(ctx, machine, node, boot, r)
+	return refused + done, err
+}
+
+// rebootEtcd reboots the node, counting the start and the boot on the machine first, and says what
+// it did.
+func (w *EtcdWatch) rebootEtcd(ctx context.Context, machine *clusterv1.Machine, node TalosNode, boot string, r etcdRepair) (string, error) {
+	r.Repairs++
+	r.Boot = boot
+	if err := w.recordRepair(ctx, machine, &r); err != nil {
+		return "", err
+	}
+	if err := node.Reboot(ctx); err != nil {
+		return "", err //nolint:wrapcheck // the node's error names the node and the call
+	}
+	return ". Kubehenge rebooted the node to start etcd again.", nil
+}
+
+// leftToOthers says whether the cluster's nodes are someone else's to restart: it is paused, being
+// deleted, restored or upgraded.
+func leftToOthers(c *clusterv1.Cluster) bool {
+	_, upgrading := c.Annotations[TalosUpgradingAnnotation]
+	return ptr.Deref(c.Spec.Paused, false) || !c.DeletionTimestamp.IsZero() || RestoreInProgress(c) || upgrading
+}
+
+// repairsOf reads EtcdRepairsAnnotation. A value that does not read, as after a hand edit, counts as
+// none.
+func repairsOf(m *clusterv1.Machine) etcdRepair {
+	var r etcdRepair
+	_ = json.Unmarshal([]byte(m.Annotations[EtcdRepairsAnnotation]), &r)
+	return r
+}
+
+// recordRepair writes r on the machine as read, or removes the annotation for nil. A machine another
+// writer changed since is refused, so that two controllers never act on one count.
+func (w *EtcdWatch) recordRepair(ctx context.Context, m *clusterv1.Machine, r *etcdRepair) error {
+	before := m.DeepCopy()
+	if r == nil {
+		delete(m.Annotations, EtcdRepairsAnnotation)
+	} else {
+		raw, err := json.Marshal(r)
+		if err != nil {
+			return fmt.Errorf("encoding etcd's starts: %w", err)
+		}
+		if m.Annotations == nil {
+			m.Annotations = map[string]string{}
+		}
+		m.Annotations[EtcdRepairsAnnotation] = string(raw)
+	}
+	if err := w.Client.Patch(ctx, m, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
+		return fmt.Errorf("recording etcd's starts on machine %s: %w", m.Name, err)
+	}
+	return nil
+}
+
+func (w *EtcdWatch) event(c *clusterv1.Cluster, reason, note string) {
+	if w.Events != nil {
+		w.Events.Eventf(c, nil, corev1.EventTypeWarning, reason, "WatchEtcd", "%s", shorten(note, watchEventMax))
+	}
+}
+
+// onlyEtcd says whether etcd on the machine is the first of a cluster that has none yet: the
+// control plane is not initialised, CACPPT recorded it as bootstrapped, and no other control-plane
+// machine exists, not even one being deleted, which may still run a member. The machine's own etcd
+// reads Failed, so none runs. Once initialised, a cluster's etcd had data, which a new empty etcd
+// would replace, so its node is rebooted instead.
+func (w *EtcdWatch) onlyEtcd(ctx context.Context, c *clusterv1.Cluster, m *clusterv1.Machine) (bool, error) {
+	if meta.IsStatusConditionTrue(c.Status.Conditions, clusterv1.ClusterControlPlaneInitializedCondition) {
+		return false, nil
+	}
+	var machines clusterv1.MachineList
+	err := w.Client.List(ctx, &machines, client.InNamespace(c.Namespace),
+		client.MatchingLabels{clusterv1.ClusterNameLabel: c.Name}, client.HasLabels{clusterv1.MachineControlPlaneLabel})
+	if err != nil {
+		return false, fmt.Errorf("listing the control-plane machines: %w", err)
+	}
+	if len(machines.Items) != 1 || machines.Items[0].Name != m.Name {
+		return false, nil
+	}
+	cp, err := controlPlaneOf(ctx, w.Client, w.Client.RESTMapper(), c)
+	if err != nil || cp == nil {
+		return false, err
+	}
+	bootstrapped, _, _ := unstructured.NestedBool(cp.Object, "status", "bootstrapped")
+	return bootstrapped, nil
 }
 
 // podMember is "" when the etcd pod on the machine's node is ready, else why not.

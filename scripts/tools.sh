@@ -93,13 +93,13 @@ GO_SHA256=7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840
 tree go "https://go.dev/dl/go${GO}.linux-amd64.tar.gz" "${GO_SHA256}" bin go gofmt
 
 # renovate: datasource=node-version depName=node
-NODE=26.13.0
-NODE_SHA256=5848553868b402d3fabb5b09270649977780a390f832155721025a08b5104455
+NODE=26.13.1
+NODE_SHA256=518674de2b621728a5e4486f5fb3b7d2900bb3cc4aa97969edaa463db99f9778
 tree node "https://nodejs.org/dist/v${NODE}/node-v${NODE}-linux-x64.tar.gz" "${NODE_SHA256}" bin node npm npx
 
 # renovate: datasource=github-release-attachments depName=astral-sh/uv
-UV=0.13.8
-UV_SHA256=5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91
+UV=0.13.9
+UV_SHA256=a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5
 tree uv "https://github.com/astral-sh/uv/releases/download/${UV}/uv-x86_64-unknown-linux-gnu.tar.gz" "${UV_SHA256}" . uv
 
 # renovate: datasource=github-release-attachments depName=opentofu/opentofu
@@ -108,8 +108,8 @@ TOFU_SHA256=b34b327cc1ef07178207b6f2cd1f5276537d3e5b7be316500f6dac50d4c0a857
 release tofu opentofu/opentofu "${TOFU}" "tofu_${TOFU#v}_linux_amd64.tar.gz" "${TOFU_SHA256}" tofu
 
 # renovate: datasource=github-releases depName=helm/helm
-HELM=v4.3.1
-HELM_SHA256=0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b
+HELM=v4.3.2
+HELM_SHA256=d1c0278d46beab79582d7e50f5b3dc206944ba8e577cde618513fd07daa53983
 tool helm "https://get.helm.sh/helm-${HELM}-linux-amd64.tar.gz" "${HELM_SHA256}" linux-amd64/helm
 
 # renovate: datasource=github-release-attachments depName=terraform-linters/tflint
@@ -186,6 +186,6 @@ release cosign sigstore/cosign "${COSIGN}" cosign-linux-amd64 "${COSIGN_SHA256}"
 
 # The release writes the SBOMs of its archive and images with it (scripts/sbom.sh).
 # renovate: datasource=github-release-attachments depName=anchore/syft
-SYFT=v1.57.1
-SYFT_SHA256=bf52519eb57f675d47c07d43213cb6dff6449f3d6d1147ff6701ed91f44eef0c
+SYFT=v1.57.2
+SYFT_SHA256=ad92bd3ec1b94a3df01d4d0aec199afa9c42b72e86da436ff5f837914d32706b
 release syft anchore/syft "${SYFT}" "syft_${SYFT#v}_linux_amd64.tar.gz" "${SYFT_SHA256}" syft

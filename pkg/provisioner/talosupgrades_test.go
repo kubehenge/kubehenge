@@ -29,10 +29,12 @@ import (
 // nodes run etcd until wiped, boot again at once, and wait in Preparing until one of them is
 // bootstrapped, which the others then join.
 type fakeTalos struct {
-	mu         sync.Mutex
-	installed  map[string]string
-	rebooted   []string
-	installErr error
+	mu        sync.Mutex
+	installed map[string]string
+	rebooted  []string
+	// rebootFails, when set, gives the error of each reboot, which nil lets through.
+	rebootFails func() error
+	installErr  error
 	// installing, when set, runs in place of each install, as a node that is slow or goes away.
 	installing func(ctx context.Context) error
 
@@ -55,6 +57,8 @@ type fakeTalos struct {
 	// pullFailed are the nodes whose etcd reads Failed once wiped, as after its image pull failed,
 	// until bootstrapped or rebooted.
 	pullFailed map[string]bool
+	// service is the etcd a node reports in place of the states above.
+	service map[string]TalosService
 }
 
 // fakePullFailure is the last event of a fake etcd that reads Failed.
@@ -117,6 +121,11 @@ func (n *fakeTalosNode) Install(ctx context.Context, image string) error {
 func (n *fakeTalosNode) Reboot(context.Context) error {
 	n.f.mu.Lock()
 	defer n.f.mu.Unlock()
+	if n.f.rebootFails != nil {
+		if err := n.f.rebootFails(); err != nil {
+			return err
+		}
+	}
 	n.f.rebooted = append(n.f.rebooted, n.address)
 	return nil
 }
@@ -158,6 +167,9 @@ func (n *fakeTalosNode) Etcd(context.Context) (TalosService, error) {
 	}
 	n.f.mu.Lock()
 	defer n.f.mu.Unlock()
+	if s, ok := n.f.service[n.address]; ok {
+		return s, nil
+	}
 	etcd := TalosService{State: talosEtcdRunning, Healthy: true}
 	switch {
 	case n.f.wiped[n.address] && n.f.pullFailed[n.address] && !slices.Contains(n.f.rebooted, n.address):
@@ -206,6 +218,10 @@ func (n *fakeTalosNode) BootstrapRecovered(context.Context) error {
 	n.f.bootstraps[n.address]++
 	n.f.wiped[n.address] = false
 	return nil
+}
+
+func (n *fakeTalosNode) Bootstrap(context.Context) error {
+	return n.f.call(n.address, "plain bootstrap")
 }
 
 func (n *fakeTalosNode) EtcdMember(context.Context) (EtcdMember, error) {

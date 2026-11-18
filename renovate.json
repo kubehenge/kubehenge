@@ -65,6 +65,12 @@
       "allowedVersions": "<0.32.0"
     },
     {
+      "description": "controller-runtime's admission.Patched takes jsonpatch v2 operations, so v3 waits until controller-runtime moves to it.",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["gomodules.xyz/jsonpatch/v2"],
+      "allowedVersions": "<3.0.0"
+    },
+    {
       "description": "Kustomize comes in through k8s.io/cli-runtime, and its releases build on Kubernetes' next minor: 0.21.3 requires a kube-openapi on structured-merge-diff v7, which apimachinery 0.37 cannot use. It moves only with the Kubernetes modules that require it.",
       "matchManagers": ["gomod"],
       "matchDepTypes": ["indirect"],

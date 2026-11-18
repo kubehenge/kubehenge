@@ -747,6 +747,32 @@ func TestRestoreOnABootingNodeIsNotReady(t *testing.T) {
 	}
 }
 
+// A plain bootstrap starts a new etcd. Talos's answers before it can take one are not ready, its
+// refusal of a node whose etcd has data is for good.
+func TestBootstrapStartsANewEtcd(t *testing.T) {
+	t.Parallel()
+	api := &fakeTalosAPI{}
+	node, _ := dialFake(t, api)
+	if err := node.Bootstrap(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if req := sentTo[*machine.BootstrapRequest](t, api, "Bootstrap"); req.GetRecoverEtcd() {
+		t.Errorf("a plain bootstrap recovered etcd: %v", req)
+	}
+	for _, msg := range []string{"bootstrap is not available yet", "time is not in sync yet"} {
+		api = &fakeTalosAPI{fail: map[string]error{"Bootstrap": status.Error(codes.FailedPrecondition, msg)}}
+		node, _ = dialFake(t, api)
+		if err := node.Bootstrap(t.Context()); !errors.Is(err, errTalosNotReady) || !strings.Contains(err.Error(), "bootstrapping etcd") {
+			t.Errorf("%s: %v", msg, err)
+		}
+	}
+	api = &fakeTalosAPI{fail: map[string]error{"Bootstrap": status.Error(codes.AlreadyExists, "etcd data directory is not empty")}}
+	node, _ = dialFake(t, api)
+	if err := node.Bootstrap(t.Context()); err == nil || errors.Is(err, errTalosNotReady) {
+		t.Errorf("a refusal for good: %v", err)
+	}
+}
+
 func TestCloseEndsTheConnection(t *testing.T) {
 	t.Parallel()
 	api := &fakeTalosAPI{bootID: "boot"}

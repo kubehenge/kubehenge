@@ -52,8 +52,11 @@ type TalosNode interface {
 	Close() error
 }
 
-// TalosEtcdNode is what the controller reads and maintains of the etcd member on one node.
+// TalosEtcdNode is what the controller reads, maintains and starts of the etcd member on one node.
 type TalosEtcdNode interface {
+	// Bootstrap starts etcd on the node as a new, empty cluster of one. Talos refuses it while
+	// etcd's data directory holds anything.
+	Bootstrap(ctx context.Context) error
 	// EtcdMember is the state of the etcd member on the node, and its alarms. Name is left empty.
 	EtcdMember(ctx context.Context) (EtcdMember, error)
 	// EtcdMembers is the cluster's member list as the node's etcd has it.
@@ -265,6 +268,13 @@ func (n *talosNode) BootstrapRecovered(ctx context.Context) error {
 	// changed. The controller checked the snapshot against it and against the store's.
 	if err := n.c.Bootstrap(ctx, &machine.BootstrapRequest{RecoverEtcd: true, RecoverSkipHashCheck: true}); err != nil {
 		return fmt.Errorf("%s: restoring etcd from the snapshot: %w", n.address, notReady(err))
+	}
+	return nil
+}
+
+func (n *talosNode) Bootstrap(ctx context.Context) error {
+	if err := n.c.Bootstrap(ctx, &machine.BootstrapRequest{}); err != nil {
+		return fmt.Errorf("%s: bootstrapping etcd: %w", n.address, notReady(err))
 	}
 	return nil
 }

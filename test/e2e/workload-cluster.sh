@@ -2490,12 +2490,20 @@ if [ -n "${addons}" ]; then
             done
         }
         until_true 900 "every Kyverno Deployment ready" kyverno_ready
+        # kyverno_refuses: the policy refuses the pod. Until then, seen holds why not, which a timeout
+        # names: the policy's state while the pod is admitted, or the answer of another refusal.
         kyverno_refuses() {
             # shellcheck disable=SC2310 # admitted is a retry until the policies are in place.
-            out=$(privileged_pod e2e-privileged) && return 1
+            out=$(privileged_pod e2e-privileged) && {
+                seen="admitted, the policy: $(wl get clusterpolicy disallow-privileged-containers --no-headers -o wide 2>&1)"
+                return 1
+            }
             case ${out} in
                 *disallow-privileged-containers*) ;;
-                *) return 1 ;;
+                *)
+                    seen=${out}
+                    return 1
+                    ;;
             esac
         }
         until_true 900 "Kyverno refuses a privileged pod" kyverno_refuses

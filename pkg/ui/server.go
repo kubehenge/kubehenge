@@ -180,6 +180,9 @@ type Server struct {
 	TrustedProxies []netip.Prefix
 	// SessionMaxAge ends every session this long after sign-in.
 	SessionMaxAge time.Duration
+	// CLISessionMaxAge does so for a password sign-in by the kubehenge CLI, which an appliance with
+	// a key volume also keeps across restarts. Zero is SessionMaxAge.
+	CLISessionMaxAge time.Duration
 	// ConnectWorkload reaches a workload cluster's API server with the token of one of Kubehenge's
 	// identities in it. Unset, it connects over HTTPS trusting the cluster's CA alone.
 	ConnectWorkload func(server string, ca []byte, token string) (*Workload, error)
@@ -412,7 +415,6 @@ func (s *Server) clusterRoutes(mux *http.ServeMux) {
 
 func (s *Server) init() {
 	s.prepared.Do(func() {
-		s.sessions = newSessions(s.Accounts, s.SessionMaxAge)
 		s.limiter = newLimiter(failureWindow)
 		s.auditWake = make(chan struct{}, 1)
 		if s.Kube != nil {
@@ -427,6 +429,11 @@ func (s *Server) init() {
 		}
 		s.activityLog = newActivityLog(dir)
 		s.Log = withActivity(withRequestIDs(s.Log), s.activityLog)
+		var store sessionStore
+		if s.Appliance != nil && s.Appliance.KeyDir != "" {
+			store = s.Appliance
+		}
+		s.sessions = newSessions(s.Accounts, s.SessionMaxAge, s.CLISessionMaxAge, store, s.Log)
 	})
 }
 

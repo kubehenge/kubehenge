@@ -8,6 +8,13 @@
 #                                          cache, noting each in <file>.trims. Where the test names
 #                                          floors, it sets each guest's balloon minimum, noting each
 #                                          in <file>.balloons
+#   test/e2e/ci/guests.sh consoles <dir>   every second until stopped: reads the serial console of
+#                                          each VM either Proxmox VE container runs, which its boot
+#                                          loader and kernel write to, into <dir>/<container>-<VM ID>.log,
+#                                          redacted. It shows why a VM stopped before its guest agent
+#                                          or its logs could: a check in its initramfs, a panic. QEMU
+#                                          drops what a console prints while nothing reads it, so the
+#                                          first second of a boot may be missing
 #   test/e2e/ci/guests.sh now              the same sample once, to standard output
 #   test/e2e/ci/guests.sh trim <file>      the page cache step once
 #   test/e2e/ci/guests.sh summary <file>   from that record, each minute's CPUs, memory, download and
@@ -169,6 +176,34 @@ record() {
     done
 }
 
+# A console takes one reader at a time, so each stays connected until its VM stops. The file
+# beside each log holds its reader's process.
+consoles() {
+    mkdir -p "$1"
+    while :; do
+        for container in kubehenge-e2e-pve kubehenge-e2e-pve2; do
+            sockets=$(timeout -k 5 20 docker exec "${container}" sh -c 'cd /var/run/qemu-server && ls -- *.serial0' \
+                < /dev/null 2> /dev/null) || continue
+            for socket in ${sockets}; do
+                vmid=${socket%.serial0}
+                log=$1/${container#kubehenge-e2e-}-${vmid}.log
+                reader=$(cat "${log}.pid" 2> /dev/null) || reader=
+                if [ -n "${reader}" ] && kill -0 "${reader}" 2> /dev/null; then
+                    continue
+                fi
+                name=$(timeout -k 5 20 docker exec "${container}" qm config "${vmid}" < /dev/null 2> /dev/null |
+                    sed -n 's/^name: //p') || true
+                now=$(date -u +%T)
+                printf '== %s %s\n' "${now}" "${name}" >> "${log}"
+                docker exec "${container}" socat -u "UNIX-CONNECT:/var/run/qemu-server/${socket}" STDOUT \
+                    < /dev/null 2> /dev/null | redact >> "${log}" &
+                echo $! > "${log}.pid"
+            done
+        done
+        sleep 1
+    done
+}
+
 summary() {
     if [ -s "$1" ]; then
         load "$1"
@@ -261,9 +296,10 @@ load() {
 }
 
 # Tokens the distributions and their components might print: k3s's and RKE2's join tokens, and any
-# value given as a token, password, secret or bearer.
+# value given as a token, password, secret or bearer. Line by line, so a console's log is whole up to
+# the moment it is read.
 redact() {
-    sed -E -e 's/(K10[0-9a-f]+::[a-z]+:)[^[:space:]",]+/\1<redacted>/g' \
+    sed -u -E -e 's/(K10[0-9a-f]+::[a-z]+:)[^[:space:]",]+/\1<redacted>/g' \
         -e 's/((token|password|secret)"?[[:space:]]*[=:][[:space:]]*"?)[^[:space:]",}]{8,}/\1<redacted>/gI' \
         -e 's/(bearer[[:space:]]+)[^[:space:]",}]{8,}/\1<redacted>/gI'
 }
@@ -742,13 +778,14 @@ etcd_latency() {
 
 case ${1:-} in
     record) record "${2:?usage: $0 record <file>}.trims" > "$2" ;;
+    consoles) consoles "${2:?usage: $0 consoles <directory>}" ;;
     now) sample ;;
     trim) trim "${2:?usage: $0 trim <file>}.trims" ;;
     summary) summary "${2:?usage: $0 summary <file>}" ;;
     collect) collect "${2:?usage: $0 collect <directory> [<work directory>]}" "${3:-${RUNNER_TEMP:+${RUNNER_TEMP}/e2e}}" ;;
     etcd) etcd_latency "${2:?usage: $0 etcd <file> [<work directory>]}" "${3:-${RUNNER_TEMP:+${RUNNER_TEMP}/e2e}}" ;;
     *)
-        echo "usage: $0 record <file> | now | summary <file> | collect <directory> [<work directory>] | etcd <file> [<work directory>]" >&2
+        echo "usage: $0 record <file> | consoles <directory> | now | summary <file> | collect <directory> [<work directory>] | etcd <file> [<work directory>]" >&2
         exit 2
         ;;
 esac
