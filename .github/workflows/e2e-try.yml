@@ -274,6 +274,8 @@ jobs:
           nohup sudo sh -c "$sample" > "$RUNNER_TEMP/kvm.txt" 2> /dev/null &
           nohup test/e2e/ci/guests.sh record "$RUNNER_TEMP/guests.txt" \
             > "$RUNNER_TEMP/guests-record.log" 2>&1 &
+          nohup test/e2e/ci/guests.sh consoles "$RUNNER_TEMP/consoles" \
+            > "$RUNNER_TEMP/consoles.log" 2>&1 &
       # A runner lost to GitHub keeps neither its log nor its artifacts. So the record goes to a
       # check run as well, once a minute.
       - name: The runner's beacon
@@ -465,6 +467,9 @@ jobs:
             "$RUNNER_TEMP/guests-record.log" "$RUNNER_TEMP/guard.txt" \
             "$RUNNER_TEMP/guard.txt.fail" "$RUNNER_TEMP/guard.log" "$RUNNER_TEMP/etcd.txt" \
             "$out/" 2>/dev/null || true
+          # What each VM's boot loader and kernel printed, which a VM that stops early leaves alone.
+          mkdir -p "$out/consoles"
+          cp "$RUNNER_TEMP"/consoles/*.log "$RUNNER_TEMP/consoles.log" "$out/consoles/" 2>/dev/null || true
           # From inside the VMs, which answers even when a cluster's API does not.
           test/e2e/ci/guests.sh collect "$out/guests" || true
           # The management-cluster tests keep their kubeconfig only while they run, and leave the
