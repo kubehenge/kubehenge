@@ -10,10 +10,15 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 - **AlmaLinux and Rocky Linux 10.3.** Node templates move to 10.3, FIPS ones included.
 - **New Talos clusters start.** A first etcd start that fails no longer leaves a new cluster stuck.
+- **CLI logins last seven days.** A password login by `kubehenge login` also outlives appliance upgrades.
 
 ### Changed
 
 - AlmaLinux and Rocky Linux node templates are built from 10.3, FIPS ones included. Clusters move to the new build at their next node image refresh ([clusters.md](clusters.md#node-image-refresh)).
+- A password login by `kubehenge login` lasts seven days, set by `--cli-session-max-age`. Browser sign-ins keep their eight hours ([Sessions](architecture.md#sessions)).
+- On the appliance, a password login by `kubehenge login` outlives upgrades and certificate renewals of the interface ([clusters.md](clusters.md#signing-in-and-finding-clusters)).
+- A new `kubehenge login` ends the password login it replaces. A command still running carries on with the new login at the same address.
+- `kubehenge logout` says when it could not end the session at the interface. It forgets the login all the same.
 
 ### Fixed
 
