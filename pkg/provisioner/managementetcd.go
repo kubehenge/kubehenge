@@ -170,7 +170,7 @@ func (m *ManagementTalos) Restore(ctx context.Context, admin []byte, nodes []str
 
 // EtcdStart is what StartFirstEtcd keeps of one node's etcd while a new management cluster starts.
 type EtcdStart struct {
-	// Boot is the node's boot of the last start, which is made once per boot.
+	// Boot is the node's boot of the last reboot, which is made once per boot.
 	Boot    string `json:"boot,omitempty"`
 	Repairs int    `json:"repairs,omitempty"`
 	GaveUp  bool   `json:"gaveUp,omitempty"`
@@ -181,8 +181,8 @@ type EtcdStart struct {
 // StartFirstEtcd looks once at etcd on each node of a management cluster whose first apply runs,
 // nodes[0] the one the module bootstraps, and starts etcd again where Talos left it Failed, as the
 // workload clusters' etcd watch does. nodes[0] is bootstrapped again while etcd has run on no node.
-// Any other node, or one whose bootstrap Talos refuses, is rebooted. A node is started once per
-// boot and at most maxEtcdRepairs times, never once its etcd ran. starts holds the count by node,
+// Any other node, or one whose bootstrap Talos refuses, is rebooted. A node is rebooted once per
+// boot, started at most maxEtcdRepairs times, and never once its etcd ran. starts holds the count by node,
 // and record writes it down before each start, so that an appliance that stops between the two
 // counts a start it never made rather than makes one twice. A node that does not answer is looked
 // at next time.
@@ -213,8 +213,9 @@ func (m *ManagementTalos) StartFirstEtcd(ctx context.Context, admin []byte, node
 }
 
 // bootstrapEtcd bootstraps etcd on the node and says so, or reboots the node where Talos refuses.
-// A node not ready for a bootstrap is left as it is.
-func bootstrapEtcd(ctx context.Context, t TalosNode) (string, error) {
+// A node not ready for a bootstrap is left as it is. A bootstrap leaves the boot unrecorded, so that
+// an etcd failing once more in the same boot is bootstrapped again, as the workload watch does.
+func bootstrapEtcd(ctx context.Context, t TalosNode, rebooting func() error) (string, error) {
 	err := t.Bootstrap(ctx)
 	switch {
 	case err == nil:
@@ -222,12 +223,15 @@ func bootstrapEtcd(ctx context.Context, t TalosNode) (string, error) {
 	case errors.Is(err, errTalosNotReady):
 		return "", err //nolint:wrapcheck // the node's error names the node and the call
 	}
-	done, rebootErr := rebootEtcd(ctx, t)
+	done, rebootErr := rebootEtcd(ctx, t, rebooting)
 	return fmt.Sprintf(". Talos refused to bootstrap it again: %v%s", err, done), rebootErr
 }
 
-// rebootEtcd reboots the node and says so.
-func rebootEtcd(ctx context.Context, t TalosNode) (string, error) {
+// rebootEtcd records the boot with rebooting, then reboots the node and says so.
+func rebootEtcd(ctx context.Context, t TalosNode, rebooting func() error) (string, error) {
+	if err := rebooting(); err != nil {
+		return "", err
+	}
 	return ". Rebooted the node to start etcd again.", t.Reboot(ctx) //nolint:wrapcheck // the node's error names the node and the call
 }
 
@@ -242,7 +246,7 @@ func (m *ManagementTalos) onNode(ctx context.Context, admin []byte, address stri
 }
 
 // startFirstEtcd starts etcd on one node again with start if Talos left it Failed.
-func startFirstEtcd(ctx context.Context, t TalosNode, address string, start func(context.Context, TalosNode) (string, error), starts map[string]EtcdStart, record func() error, log func(string)) error {
+func startFirstEtcd(ctx context.Context, t TalosNode, address string, start func(context.Context, TalosNode, func() error) (string, error), starts map[string]EtcdStart, record func() error, log func(string)) error {
 	s := starts[address]
 	if s.Ran || s.GaveUp {
 		return nil
@@ -269,11 +273,16 @@ func startFirstEtcd(ctx context.Context, t TalosNode, address string, start func
 		log(fmt.Sprintf("%s. Left it Failed after %d starts.", note, s.Repairs))
 		return nil
 	}
-	starts[address] = EtcdStart{Boot: boot, Repairs: s.Repairs + 1}
+	counted := EtcdStart{Boot: s.Boot, Repairs: s.Repairs + 1}
+	starts[address] = counted
 	if err = record(); err != nil {
 		return err
 	}
-	done, err := start(ctx, t)
+	done, err := start(ctx, t, func() error {
+		counted.Boot = boot
+		starts[address] = counted
+		return record()
+	})
 	switch {
 	case errors.Is(err, errTalosNotReady):
 		// Not a start, so it does not count.

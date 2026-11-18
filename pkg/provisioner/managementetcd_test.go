@@ -237,7 +237,7 @@ func TestStartFirstEtcdBootstrapsTheFirstNode(t *testing.T) {
 	if got := f.restoreCalls(); !slices.Equal(got, []string{"10.0.0.21 plain bootstrap"}) || len(f.rebooted) != 0 {
 		t.Errorf("calls %v, rebooted %v", got, f.rebooted)
 	}
-	if want := []string{"{Boot:0 Repairs:1 GaveUp:false Ran:false} after []"}; !slices.Equal(counted, want) {
+	if want := []string{"{Boot: Repairs:1 GaveUp:false Ran:false} after []"}; !slices.Equal(counted, want) {
 		t.Errorf("recorded %q, want %q", counted, want)
 	}
 	if want := []string{"Talos left etcd on 10.0.0.21 Failed: " + fakePullFailure + ". Bootstrapped it again."}; !slices.Equal(log, want) {
@@ -290,7 +290,7 @@ func TestStartFirstEtcdRebootsAFailedJoiner(t *testing.T) {
 	if !slices.Equal(f.rebooted, []string{"10.0.0.22"}) || len(f.restoreCalls()) != 0 {
 		t.Errorf("rebooted %v, calls %v", f.rebooted, f.restoreCalls())
 	}
-	if !slices.Equal(rebootedThen, []int{0}) || starts["10.0.0.22"] != (EtcdStart{Boot: "0", Repairs: 1}) {
+	if !slices.Equal(rebootedThen, []int{0, 0}) || starts["10.0.0.22"] != (EtcdStart{Boot: "0", Repairs: 1}) {
 		t.Errorf("recorded with %v reboots made, %+v", rebootedThen, starts["10.0.0.22"])
 	}
 	if want := []string{"Talos left etcd on 10.0.0.22 Failed: " + fakePullFailure + ". Rebooted the node to start etcd again."}; !slices.Equal(log, want) {
@@ -330,6 +330,25 @@ func TestStartFirstEtcdOncePerBoot(t *testing.T) {
 	firstStart(f, starts, nil)
 	if !slices.Equal(f.rebooted, []string{"10.0.0.22", "10.0.0.22"}) || starts["10.0.0.22"] != (EtcdStart{Boot: "1", Repairs: 2}) {
 		t.Errorf("rebooted %v, counted %+v", f.rebooted, starts["10.0.0.22"])
+	}
+}
+
+// After a bootstrap Talos took, a first node whose etcd fails once more in the same boot is
+// bootstrapped again, three times in all, and then left Failed.
+func TestStartFirstEtcdBootstrapsAgainInTheSameBoot(t *testing.T) {
+	t.Parallel()
+	f := &fakeTalos{service: map[string]TalosService{"10.0.0.21": firstFailed, "10.0.0.22": {State: talosEtcdPreparing}}}
+	starts := map[string]EtcdStart{}
+	var log []string
+	for range 5 {
+		log = append(log, firstStart(f, starts, nil)...)
+	}
+	bootstrap := "10.0.0.21 plain bootstrap"
+	if got := f.restoreCalls(); !slices.Equal(got, []string{bootstrap, bootstrap, bootstrap}) || len(f.rebooted) != 0 {
+		t.Errorf("calls %v, rebooted %v", got, f.rebooted)
+	}
+	if len(log) != 4 || !strings.HasSuffix(log[3], ". Left it Failed after 3 starts.") {
+		t.Errorf("log %q", log)
 	}
 }
 
