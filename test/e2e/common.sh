@@ -11,7 +11,7 @@ agnhost=registry.k8s.io/e2e-test-images/agnhost:2.66.1@sha256:6e2eef87d0dc77e070
 pause_image=registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
 # The Git server the GitOps engines sync from, rootless as Pod Security's restricted level needs.
 # renovate: datasource=docker depName=docker.io/gitea/gitea
-gitea=docker.io/gitea/gitea:28.3.0-rootless@sha256:40c5a68a0463c0940e1ae32626c8300dd0572f3558e390073ad8379ca67c0e1d
+gitea=docker.io/gitea/gitea:28.4.0-rootless@sha256:15ab7fadb44981a2b781f40c712cad07066197f395100ea1c6326e14e5bb073a
 export agnhost pause_image gitea
 # What the test's own pods request, in MiB. The manifests and the worker's sizing both read these.
 # Every agnhost pod workload-cluster.sh creates is listed as <namespace>/<name> in one of two lists,
@@ -68,8 +68,8 @@ worker_memory_for() {
 }
 # The S3 store the backup tests write to.
 # renovate: datasource=github-release-attachments depName=seaweedfs/seaweedfs
-SEAWEEDFS_VERSION=4.53
-SEAWEEDFS_SHA256=d1a7dec9f48d8b33895a0ea8951971defc2dc5312906dcc76fa5a5f74a6ee90d
+SEAWEEDFS_VERSION=4.54
+SEAWEEDFS_SHA256=e7424a82eee327809bfa449fda4924c9a0f42f6669a01288eebb1b79674c8196
 
 # Each step shows the time since the test started, which is how a slow run shows where it lost it.
 e2e_started=$(date +%s)
