@@ -341,7 +341,8 @@ func (c *interfaceClient) send(ctx context.Context, method, path string, body an
 	}
 	// A 401 without the version refused the login itself. One with it refused something else, such
 	// as nodes whose clocks disagree, and its reason says what. So does a sign-in step's refusal.
-	if res.StatusCode == http.StatusUnauthorized && res.Header.Get(versionHeader) == "" && !strings.HasPrefix(path, "/api/session") {
+	signInStep := method != http.MethodDelete && strings.HasPrefix(path, "/api/session")
+	if res.StatusCode == http.StatusUnauthorized && res.Header.Get(versionHeader) == "" && !signInStep {
 		return nil, fmt.Errorf("%w: run kubehenge login %s again", errLoginEnded, c.login.URL)
 	}
 	if json.Unmarshal(answer, &e) == nil && e.Error != "" {
@@ -419,7 +420,7 @@ you alone. It holds the session or the token. Set ` + loginFileEnv + ` to keep i
 				unused = l
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), replacedLoginTimeout)
-			endSession(ctx, unused)
+			_ = endSession(ctx, unused)
 			cancel()
 			if saveErr != nil {
 				return saveErr
@@ -513,15 +514,28 @@ func (c *interfaceClient) signInStep(ctx context.Context, path string, body map[
 	return sess.SecondFactor != nil, nil
 }
 
-// endSession ends the session l holds, if it is a login with one. A session that cannot be reached
-// is left to end by itself.
-func endSession(ctx context.Context, l *login) {
+// endSession ends the session l holds, if it is a login with one. It reaches the interface as login
+// does, through the appliance's own certificate once that has expired. A session the interface has
+// ended already is no failure. The request is sent as it is, since taking over the login on file
+// would end that one.
+func endSession(ctx context.Context, l *login) error {
 	if l == nil || l.Cookie == "" {
-		return
+		return nil
 	}
-	if c, err := newInterfaceClient(l); err == nil {
-		_, _ = c.call(ctx, http.MethodDelete, "/api/session", nil, nil)
+	c, err := newInterfaceClient(l)
+	if err != nil {
+		return err
 	}
+	c.pinExpired()
+	res, err := c.send(ctx, http.MethodDelete, "/api/session", nil)
+	if errors.Is(err, errLoginEnded) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	_ = res.Body.Close()
+	return nil
 }
 
 func newLogoutCommand() *cobra.Command {
@@ -531,7 +545,7 @@ func newLogoutCommand() *cobra.Command {
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			l, _ := readLogin(cmd.Context())
-			endSession(cmd.Context(), l)
+			endErr := endSession(cmd.Context(), l)
 			path, err := loginPath(cmd.Context())
 			if err != nil {
 				return err
@@ -541,6 +555,8 @@ func newLogoutCommand() *cobra.Command {
 				return say(cmd, "Not signed in")
 			case err != nil:
 				return fmt.Errorf("removing the login: %w", err)
+			case endErr != nil:
+				return fmt.Errorf("the login is forgotten, but its session at %s was not ended: %w", l.URL, endErr)
 			}
 			return say(cmd, "Signed out")
 		},

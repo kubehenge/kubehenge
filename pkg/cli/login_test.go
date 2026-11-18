@@ -455,6 +455,116 @@ func TestAnExpiredApplianceCertificateKeepsTheApplianceCommands(t *testing.T) {
 	}
 }
 
+// expiredFakeInterface is a fake that presents a certificate expired an hour ago, as an appliance
+// does whose own certificate ran out.
+func expiredFakeInterface(t *testing.T) *fakeInterface {
+	t.Helper()
+	f := newFakeInterface(t)
+	f.srv.Close()
+	srv := httptest.NewUnstartedServer(f.srv.Config.Handler)
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{expiredCertificate(t)}, MinVersion: tls.VersionTLS12}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	f.srv = srv
+	return f
+}
+
+// Through the appliance's expired certificate, a new login still ends the one it replaces and
+// logout still ends the session.
+func TestSessionsEndThroughAnExpiredApplianceCertificate(t *testing.T) {
+	t.Parallel()
+	f := expiredFakeInterface(t)
+	for range 2 {
+		if err := f.login("admin@pve", fakePassword); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := f.state(); got != "signed in [session-2], ended [session-1]" {
+		t.Errorf("after a second login: %s", got)
+	}
+	if out, err := f.run("logout"); err != nil || strings.TrimSpace(out) != "Signed out" {
+		t.Errorf("logout: %q, %v", out, err)
+	}
+	if got := f.state(); got != "signed in [], ended [session-1 session-2]" {
+		t.Errorf("after logout: %s", got)
+	}
+}
+
+// Logout says when it could not end the session, and forgets the login all the same. A session the
+// interface has ended already is signed out.
+func TestLogoutSaysWhenTheSessionLivesOn(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	if err := f.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	delete(f.sessions, "session-1")
+	f.mu.Unlock()
+	if out, err := f.run("logout"); err != nil || strings.TrimSpace(out) != "Signed out" {
+		t.Errorf("logout from a session that has ended: %q, %v", out, err)
+	}
+
+	if err := f.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	f.srv.Close()
+	out, err := f.run("logout")
+	if err == nil || !strings.HasPrefix(err.Error(), "the login is forgotten, but its session at "+f.srv.URL+" was not ended: ") || strings.Contains(out, "Signed out") {
+		t.Errorf("logout from an interface that is gone: %q, %v", out, err)
+	}
+	if out, err := f.run("logout"); err != nil || strings.TrimSpace(out) != "Not signed in" {
+		t.Errorf("a second logout: %q, %v", out, err)
+	}
+}
+
+// A running command keeps trusting the interface as it did when it started, whatever the login it
+// takes over says: the appliance's expired certificate stays trusted, and another CA on file is not
+// taken.
+func TestARunningCommandKeepsItsTrust(t *testing.T) {
+	t.Parallel()
+	f := expiredFakeInterface(t)
+	if err := f.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(t.Context(), loginFileKey{}, f.loginFile)
+	running, err := openAppliance(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upgrades := func() error {
+		_, callErr := running.call(ctx, http.MethodGet, "/api/appliance/upgrades", nil, nil)
+		return callErr
+	}
+	if err = f.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	if err = upgrades(); err != nil {
+		t.Fatalf("after a new login, %s: %v", f.state(), err)
+	}
+
+	// A third login, kept in the command's file with a CA that does not vouch for the interface.
+	elsewhere := filepath.Join(t.TempDir(), "login.json")
+	if _, err = runIn(t, elsewhere, "login", f.srv.URL, "--ca", f.certFile(), "--user", "admin@pve", "--password-file", writeTemp(t, fakePassword)); err != nil {
+		t.Fatal(err)
+	}
+	l, err := readLogin(context.WithValue(t.Context(), loginFileKey{}, elsewhere))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := expiredCertificate(t)
+	l.CA, l.CAFile = "", writeTemp(t, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: other.Certificate[0]})))
+	if err = l.save(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	delete(f.sessions, "session-2")
+	f.mu.Unlock()
+	if err = upgrades(); err != nil {
+		t.Fatalf("after a login naming another CA, %s: %v", f.state(), err)
+	}
+}
+
 // signedBy is a certificate for 127.0.0.1 valid from notBefore to notAfter, signed by parent and
 // its key, or self-signed as a CA where parent is nil.
 func signedBy(t *testing.T, parent *tls.Certificate, notBefore, notAfter time.Time) tls.Certificate {

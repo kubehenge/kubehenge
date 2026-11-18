@@ -2049,7 +2049,7 @@ kubehenge cluster delete web --yes
 
 ### Signing in and finding clusters
 
-- `kubehenge login <url>` signs in once for every command, `appliance` and `cluster` alike. `kubehenge logout` ends it.
+- `kubehenge login <url>` signs in once for every command, `appliance` and `cluster` alike. `kubehenge logout` ends it, and says when it could not end the session at the interface.
 - Sign in as a user with `--user root@pam --password-file <file>` (or `KUBEHENGE_PASSWORD`). Add `--totp <code>` for a second factor.
 - A password login lasts seven days by default, and on the appliance it outlives a restart of the interface ([Sessions](architecture.md#sessions)).
 - A password login ends earlier once Proxmox VE no longer accepts the user. Run `kubehenge login` again when a command says the login has ended.
