@@ -786,9 +786,14 @@ job_was apply succeeded true
 # shellcheck disable=SC2016 # jq's variables, not the shell's.
 body_has "the management cluster is not recorded as applied by ${version}" \
     --arg new "${version}" '(.upgrade.behind | not) and .upgrade.applied == $new'
-# The apply made the snapshots' talosconfig again, which takes one still.
+# The apply made the snapshots' talosconfig again, which takes one still. It is the snapshot the
+# recreation below starts from, since the target keeps only the newest two and the steps since
+# second took more.
+expect 200 "the etcd backups before the snapshot" request "${work}/admin.jar" "${ui}/api/appliance/etcd-backups"
+before=$(jq -r '.last.name // ""' "${work}/body")
 expect 202 "a snapshot after the upgrade" post "${work}/admin.jar" "${admin_csrf}" "${backups}/snapshots" ''
-until_true 300 "the snapshot after the upgrade" snapshot_taken "${second}"
+until_true 300 "the snapshot after the upgrade" snapshot_taken "${before}"
+latest=$(jq -r .last.name "${work}/body")
 
 # lose_management_vms: deletes every management node VM, as a lost host or storage would. The
 # backup volume's VM stays.
@@ -820,7 +825,7 @@ case "${KUBEHENGE_E2E_RECREATE:-}" in
     bucket)
         step "the management cluster recreated from the bucket's snapshot, all its VMs lost"
         lose_management_vms
-        expect 202 "recreating from ${second}" post "${work}/admin.jar" "${admin_csrf}" "${backups}/snapshots/${second}/recreate" "${recreate_body}"
+        expect 202 "recreating from ${latest}" post "${work}/admin.jar" "${admin_csrf}" "${backups}/snapshots/${latest}/recreate" "${recreate_body}"
         until_true 3600 "the recreation to end" job_ended
         job_was recreate succeeded true
         management_back

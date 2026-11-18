@@ -462,7 +462,7 @@ jobs:
               pve pvesh get "/nodes/pve/tasks/$upid/log" --limit 500 --output-format json |
                 jq -r '.[].t'
             done > "$out/proxmox-failed-tasks.txt" 2>&1 || true
-          cp "$RUNNER_TEMP/e2e/apply.log" "$RUNNER_TEMP/vmstat.txt" "$RUNNER_TEMP/kvm.txt" \
+          cp "$RUNNER_TEMP"/e2e/apply*.log "$RUNNER_TEMP/vmstat.txt" "$RUNNER_TEMP/kvm.txt" \
             "$RUNNER_TEMP/guests.txt" "$RUNNER_TEMP/guests.txt.trims" \
             "$RUNNER_TEMP/guests-record.log" "$RUNNER_TEMP/guard.txt" \
             "$RUNNER_TEMP/guard.txt.fail" "$RUNNER_TEMP/guard.log" "$RUNNER_TEMP/etcd.txt" \
