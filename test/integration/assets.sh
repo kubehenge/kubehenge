@@ -23,8 +23,8 @@ CLUSTER_API_CONTROL_PLANE_SHA256=7fecb41843dcff7e05ab539dbe497c050a9aa7c888d4fb6
 CAPMOX=v0.9.2
 CAPMOX_SHA256=6817322435b42cfda07a8f94006bacb709afb83445ce24545af253c7904755d8
 # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api-addon-provider-helm
-HELM_ADDON=v0.6.6
-HELM_ADDON_SHA256=d3d6d5e15074407f586066a8b0226b717fcaf7de4bf72ebe357ccb37b8482de5
+HELM_ADDON=v0.6.4
+HELM_ADDON_SHA256=a70f4eb77eac626231daca1e2a046b4b069bb84320efa327cc8c56a9c4ca03e6
 # renovate: datasource=github-release-attachments depName=rancher/cluster-api-provider-rke2
 RKE2_BOOTSTRAP=v0.27.2
 RKE2_BOOTSTRAP_SHA256=0ba4c73bfe335bfa1b8a277b4df5f35e9a475f47f93038809010a1dc111063a2
