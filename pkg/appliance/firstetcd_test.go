@@ -93,6 +93,8 @@ func (n *firstNode) Bootstrap(context.Context) error {
 	n.nodes.mu.Lock()
 	defer n.nodes.mu.Unlock()
 	n.nodes.starts = append(n.nodes.starts, n.address+" bootstrap")
+	// As Talos, a bootstrap starts etcd again.
+	n.nodes.etcd[n.address] = "Preparing"
 	return nil
 }
 

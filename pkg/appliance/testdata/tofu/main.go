@@ -61,6 +61,17 @@ func waitForInterrupt(dir string) int {
 	}
 }
 
+const talosconfig = "context: management\ncontexts:\n  management:\n    endpoints: [10.0.0.11, 10.0.0.12]\n"
+
+// opens reports whether the state opens, which it does only with the passphrase the tests use.
+func opens() bool {
+	if !strings.Contains(os.Getenv("TF_ENCRYPTION"), "correct horse battery staple") {
+		fmt.Fprintln(os.Stderr, "Error: decryption failed")
+		return false
+	}
+	return true
+}
+
 func main() {
 	if len(os.Args) < 3 || !strings.HasPrefix(os.Args[1], "-chdir=") {
 		os.Exit(2)
@@ -81,6 +92,15 @@ func run(dir string, args []string) int {
 	case "init":
 		fmt.Println("OpenTofu has been initialised")
 	case "apply":
+		// As OpenTofu, an apply writes its resources to the state as it goes, and its outputs only
+		// once it ends.
+		if err := os.WriteFile(filepath.Join(dir, "..", "state-pushed"), nil, 0o600); err != nil {
+			return 3
+		}
+		if err := os.WriteFile(filepath.Join(dir, "..", "mid-apply"), nil, 0o600); err != nil {
+			return 3
+		}
+		defer func() { _ = os.Remove(filepath.Join(dir, "..", "mid-apply")) }()
 		// A "slow" apply runs until it is interrupted, then writes <dir>/../state-written as
 		// OpenTofu writes its state, and fails.
 		if strings.Contains(string(vars), `"slow"`) {
@@ -172,11 +192,24 @@ func run(dir string, args []string) int {
 			held, _ := os.ReadFile(filepath.Join(dir, "..", "state-list"))
 			fmt.Print(string(held))
 		}
+		// The state an apply has written holds the module's client configuration.
+		if _, err := os.Stat(filepath.Join(dir, "..", "state-pushed")); err == nil && len(args) > 1 && args[1] == "pull" {
+			if !opens() {
+				return 1
+			}
+			pulled, _ := json.Marshal(map[string]any{"version": 4, "resources": []any{map[string]any{
+				"module": "module.management", "mode": "data", "type": "talos_client_configuration", "name": "this",
+				"instances": []any{map[string]any{"attributes": map[string]any{"talos_config": talosconfig}}},
+			}}})
+			fmt.Print(string(pulled))
+		}
 	case "output":
-		// The state opens only with the passphrase the tests use.
-		if !strings.Contains(os.Getenv("TF_ENCRYPTION"), "correct horse battery staple") {
-			fmt.Fprintln(os.Stderr, "Error: decryption failed")
+		if !opens() {
 			return 1
+		}
+		if _, err := os.Stat(filepath.Join(dir, "..", "mid-apply")); err == nil {
+			fmt.Print("\nWarning: No outputs found\n\nThe state file either has no outputs defined, or all the defined outputs\nare empty.\n")
+			return 0
 		}
 		switch args[len(args)-1] {
 		case "kubeconfig":
@@ -190,7 +223,7 @@ func run(dir string, args []string) int {
 		case "api_endpoint":
 			fmt.Print("https://10.0.0.20:6443")
 		case "talosconfig":
-			fmt.Print("context: management\ncontexts:\n  management:\n    endpoints: [10.0.0.11, 10.0.0.12]\n")
+			fmt.Print(talosconfig)
 		}
 	}
 	return 0

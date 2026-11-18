@@ -48,6 +48,40 @@ func createsCluster(shown []byte) bool {
 	return creates
 }
 
+// pulledResource is a resource in a state as `tofu state pull` prints it, with what the module's
+// client configuration holds.
+type pulledResource struct {
+	Module    string           `json:"module"`
+	Mode      string           `json:"mode"`
+	Type      string           `json:"type"`
+	Name      string           `json:"name"`
+	Instances []pulledInstance `json:"instances"`
+}
+
+type pulledInstance struct {
+	Attributes clientConfiguration `json:"attributes"`
+}
+
+type clientConfiguration struct {
+	TalosConfig string `json:"talos_config"`
+}
+
+// stateTalosconfig is the module's talosconfig in a state as `tofu state pull` prints it, or nil.
+func stateTalosconfig(pulled []byte) []byte {
+	var state struct {
+		Resources []pulledResource `json:"resources"`
+	}
+	if json.Unmarshal(pulled, &state) != nil {
+		return nil
+	}
+	for _, r := range state.Resources {
+		if r.Module+"."+r.Mode+"."+r.Type+"."+r.Name == moduleAddress+"data.talos_client_configuration.this" && len(r.Instances) == 1 {
+			return []byte(r.Instances[0].Attributes.TalosConfig)
+		}
+	}
+	return nil
+}
+
 // watchFirstEtcd starts etcd again on the management nodes Talos left it Failed on, while the apply
 // that first starts it runs. Talos does not start a Failed etcd again by itself, and the apply would
 // wait for it until its time ran out. The func it returns ends the watch and waits until it has stopped.
@@ -76,17 +110,19 @@ func (a *Appliance) firstEtcd(ctx context.Context, j *Job, env []string) {
 			return
 		case <-time.After(cmp.Or(a.etcdPoll, firstEtcdPoll)):
 		}
-		// The apply puts the talosconfig in the state right after the cluster's secrets, minutes
-		// before any node runs etcd.
+		// The apply's outputs reach the state only once it ends. The client configuration they are
+		// made of is there as soon as OpenTofu first writes the state, minutes before any node
+		// runs etcd.
 		if admin == nil {
-			out, err := a.output(ctx, env, talosconfigName)
+			pulled, err := a.read(ctx, env, "state", "pull")
 			if err != nil {
 				continue
 			}
-			if nodes, err = provisioner.TalosEndpoints([]byte(out)); err != nil {
+			out := stateTalosconfig(pulled)
+			if nodes, err = provisioner.TalosEndpoints(out); err != nil {
 				continue
 			}
-			admin = []byte(out)
+			admin = out
 		}
 		starts := map[string]provisioner.EtcdStart{}
 		if saved, err := readJSONFile[map[string]provisioner.EtcdStart](a.etcdStartsPath()); err == nil {
