@@ -515,14 +515,28 @@ s.serve_forever()' "${work}/releases" 8944 "${mirror}/tls.crt" "${mirror}/tls.ke
 fi
 
 tofu -chdir="${work}/mgmt" init -input=false -lockfile=readonly > /dev/null
-if ! tofu -chdir="${work}/mgmt" apply -input=false -auto-approve -no-color > "${work}/apply.log"; then
+# Proxmox VE can fail to start a download's task when another of its tasks ends at that moment. The
+# download made nothing, so the apply runs again when that is its every error, up to three runs in
+# all, as the appliance's setup does (applyPlanned in pkg/appliance/protection.go).
+attempt=1
+while ! tofu -chdir="${work}/mgmt" apply -input=false -auto-approve -no-color > "${work}/apply.log" 2>&1; do
+    errors=$(grep -c '^Error: ' "${work}/apply.log" || true)
+    raced=$(grep -c '^Error: Error downloading file from url' "${work}/apply.log" || true)
+    unstarted=$(grep -c 'got no worker upid' "${work}/apply.log" || true)
+    if [ "${attempt}" -lt 3 ] && [ "${errors}" -gt 0 ] && [ "${raced}" = "${errors}" ] && [ "${unstarted}" = "${errors}" ]; then
+        mv "${work}/apply.log" "${work}/apply-${attempt}.log"
+        attempt=$((attempt + 1))
+        echo "Proxmox VE did not start a download's task. Running the apply again in 30 s, attempt ${attempt} of 3" >&2
+        sleep 30
+        continue
+    fi
     tail -n 50 "${work}/apply.log" >&2
     # A failed apply can still leave the management cluster up, and the job's artifacts then come
     # from it: its pods, events and controller logs.
     (umask 077 && tofu -chdir="${work}/mgmt" output -raw kubeconfig > "${work}/kubeconfig.yaml") ||
         rm -f "${work}/kubeconfig.yaml"
     exit 1
-fi
+done
 (umask 077 && tofu -chdir="${work}/mgmt" output -raw kubeconfig > "${work}/kubeconfig.yaml")
 export KUBECONFIG="${work}/kubeconfig.yaml"
 # For the guard, which samples the management node's memory from inside it once this is here.
