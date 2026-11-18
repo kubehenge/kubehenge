@@ -383,10 +383,8 @@ until it ends or kubehenge logout removes it.
 
 Give --user to sign in as a Proxmox VE user, with the password from --password-file or
 KUBEHENGE_PASSWORD, and --totp for an account with a second factor. That login lasts seven days
-by default, and ends earlier once Proxmox VE no longer accepts the user. On the appliance it
-outlives a restart of the interface. It outlasts a break of an hour and a half in which the
-interface is stopped or cannot reach Proxmox VE, and a longer one can end it. A new login ends the
-one it replaces.
+by default and ends sooner if Proxmox VE stops accepting the user. On the appliance it survives
+interface restarts and breaks of up to an hour and a half. A new login ends the one it replaces.
 
 Give --token-file or set KUBEHENGE_PROXMOX_TOKEN to sign in with a Proxmox VE API token
 (user@realm!name=secret) instead. That login lasts as long as the token.

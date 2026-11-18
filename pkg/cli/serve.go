@@ -117,7 +117,7 @@ The interface acts in the management cluster with its own kubeconfig.`,
 			"so one person's failures no longer lock out everyone behind the proxy. Without it forwarding headers are ignored (env KUBEHENGE_TRUSTED_PROXIES, comma-separated)")
 	f.StringVar(&a.Dir, "appliance-dir", "", "run as Kubehenge's appliance, keeping the management cluster's state in this directory and setting it up from the interface. "+
 		"Without it, the management cluster is the one in KUBECONFIG")
-	f.StringVar(&a.KeyDir, "key-dir", "", "with --appliance-dir, a directory on a volume the appliance's backups leave out. It holds the keys that seal what automatic upgrades of the management cluster keep and the sessions of kubehenge login. Empty, those upgrades cannot be switched on and those sessions end when the interface restarts")
+	f.StringVar(&a.KeyDir, "key-dir", "", "with --appliance-dir, a directory on a volume that backups leave out. It holds the keys for what automatic upgrades of the management cluster keep and for kubehenge login sessions. Without it, those upgrades cannot be switched on and those sessions end when the interface restarts")
 	f.StringVar(&o.headlampListen, "headlamp-listen", "", "address to serve the shared Headlamp on, behind the interface's sign-in, or empty for none")
 	f.StringVar(&o.headlampUpstream, "headlamp-upstream", "", "the Headlamp server, such as http://127.0.0.1:4466")
 	f.StringVar(&o.headlampKubeconfig, "headlamp-kubeconfig", "", "file the Headlamp server reads its clusters from, written by the interface")

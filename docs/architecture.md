@@ -965,11 +965,11 @@ Users sign in through the Proxmox VE API, with no second user directory. Every P
 - **Five failed sign-ins** for one user from one address within 15 minutes block that user from that address for the rest of the 15 minutes.
 - **Twenty failed sign-ins** from one address in that time refuse the address, whatever users they name.
 - Browser sessions end when the interface restarts on an upgrade or a certificate renewal.
-- The appliance keeps the sessions of `kubehenge login` across restarts. They are sealed (AES-256-GCM) in its state directory, with the key on the key volume that backups leave out.
+- The appliance keeps `kubehenge login` sessions across restarts, encrypted (AES-256-GCM) in its state directory. The key sits on a volume that backups leave out.
 - A ticket lasts two hours. The interface renews the ticket of a `kubehenge login` password session every 15 minutes, used or not. The session ends when Proxmox VE refuses the renewal.
 - A renewal that gets no answer is tried again in the next round, until the ticket has run out. A break of an hour and a half therefore ends no session.
 - A round starts every minute, or once the round before it has ended. A round waits ten seconds for an answer, for eight sessions at a time.
-- A kept session works after a restart only while its ticket is still valid. A file that does not open is discarded.
+- After a restart a kept session works while its ticket is valid. If the sessions file cannot be read, every kept session is dropped and its user runs `kubehenge login` again.
 
 #### Behind a reverse proxy
 

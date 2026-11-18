@@ -712,10 +712,10 @@ Component names are `out_<name>`, with hyphens as underscores. Alloy drops what 
 - **`TalosEtcdLeftFailed`**, "… Kubehenge started it 3 times without etcd running and has stopped trying", means the controller no longer starts etcd on that node. Read why on the node: `talosctl --talosconfig prod.talosconfig --nodes 192.0.2.21 service etcd`, then `logs etcd` the same way.
   - The count is kept in the Machine's `kubehenge.dev/etcd-repairs` annotation. The controller removes it once etcd runs, and a replaced machine has none.
   - To have the controller try again, remove it: `kubectl -n clusters annotate machine prod-cp-abcde kubehenge.dev/etcd-repairs-`.
-- **The management cluster's setup** starts etcd again the same way while the apply that creates the cluster runs. No other apply does this, nor one that also replaces or changes a node. Its log says "Talos left etcd on 192.0.2.21 Failed: …", then what was done.
-  - The first node is bootstrapped again only while etcd has run on no node, again in the same boot if etcd fails once more. Any other node is rebooted, once per boot.
-  - A node whose etcd ran is left alone. After 3 starts in one run the log says "Left it Failed after 3 starts", and the run times out. Fix the cause the line names, then run the setup again, which gives each node 3 more starts.
-  - Each node's boot and starts are in `/var/lib/kubehenge/management/etcd-starts.json`, so no run reboots a node twice in one boot. Removing the management cluster deletes the file.
+- **The management cluster's setup** starts etcd again when Talos leaves it Failed. It does so only in the apply that creates the cluster, and not when that apply also replaces or changes a node. Its log says "Talos left etcd on 192.0.2.21 Failed: …", then what was done.
+  - If etcd has run on no node, the first node is bootstrapped again, also when it fails again in the same boot. Any other node is rebooted, at most once per boot.
+  - A node whose etcd ran is left alone. After 3 starts the log says "Left it Failed after 3 starts" and the setup times out. Fix the cause the line names and run the setup again. Each node then gets 3 more starts.
+  - `/var/lib/kubehenge/management/etcd-starts.json` records each node's boot and starts, so a node is never rebooted twice in one boot. Removing the management cluster deletes the file.
 
 ### etcd snapshots and restores
 
