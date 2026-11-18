@@ -224,13 +224,20 @@ unmarked() {
 # lift_management_protection <node> <vmid>: checks that a management VM carries the protection the
 # setup gives it, then lifts it. A step that loses a VM by accident stands for an administrator who
 # lifted it first, since Proxmox VE refuses to delete a protected VM. The lift waits for a detach on
-# the VM to end, as volume_settled waits for one to come, and the digest has Proxmox VE refuse it
-# once the plugin changed the configuration since.
+# the VM to end, as volume_settled waits for one to come. The digest has Proxmox VE refuse the lift
+# once the plugin changed the configuration since it was read, and the next round reads it again.
 lift_management_protection() {
-    until_true 300 "no CSI detach in flight on management VM $2" unmarked "$1" "$2"
+    until_true 300 "the protection of management VM $2 lifted" protection_lifted "$1" "$2"
+}
+
+# protection_lifted <node> <vmid>: lifts a management VM's protection when no CSI detach is in
+# flight, against the configuration just read.
+protection_lifted() {
+    # shellcheck disable=SC2310 # unmarked is a predicate here; its status is the answer.
+    unmarked "$1" "$2" || return 1
     jq -e '.protection == 1' "${work}/vm-config" > /dev/null || fail "management VM $2 is not protected"
     digest=$(jq -r .digest "${work}/vm-config")
-    pvesh set "/nodes/$1/qemu/$2/config" --protection 0 --digest "${digest}" < /dev/null > /dev/null
+    seen=$(pvesh set "/nodes/$1/qemu/$2/config" --protection 0 --digest "${digest}" < /dev/null 2>&1 > /dev/null)
 }
 
 # delete_management_vm <node> <vmid>: deletes a stopped management VM whose protection was lifted,
