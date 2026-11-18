@@ -148,9 +148,6 @@ type interfaceClient struct {
 	// signingIn is set while `kubehenge login` makes the login, where a refused certificate is fixed
 	// by the --ca it is given and not by repeating the command.
 	signingIn bool
-	// pinsExpired is set for a client that trusts the login's expired certificate (pinExpired), so
-	// that a login it takes over is trusted the same way.
-	pinsExpired bool
 }
 
 // openInterface is a client for the login on file.
@@ -238,7 +235,6 @@ var errOtherCertificate = errors.New("the interface serves a certificate other t
 // clock. Only the very certificate is trusted then. An expired CA vouches for nothing it signed,
 // which a clock turned back would otherwise take.
 func (c *interfaceClient) pinExpired() {
-	c.pinsExpired = true
 	leaf := firstCertificate(c.login.CA)
 	transport, ok := c.http.Transport.(*http.Transport)
 	if leaf == nil || !ok || transport.TLSClientConfig == nil || time.Now().Before(leaf.NotAfter) {
@@ -284,16 +280,13 @@ func (c *interfaceClient) open(ctx context.Context, method, path string, body an
 
 // adoptLoginOnFile takes over the login on file where that is another one for the same interface,
 // and tells whether it did. A login for another interface is not taken: the command would go on
-// there.
+// there. The interface stays trusted as the command found it.
 func (c *interfaceClient) adoptLoginOnFile(ctx context.Context) bool {
-	fresh, err := openInterface(ctx)
-	if err != nil || fresh.login.URL != c.login.URL || fresh.login.Value == c.login.Value && fresh.login.Token == c.login.Token {
+	fresh, err := readLogin(ctx)
+	if err != nil || fresh.URL != c.login.URL || fresh.Value == c.login.Value && fresh.Token == c.login.Token {
 		return false
 	}
-	if c.pinsExpired {
-		fresh.pinExpired()
-	}
-	c.login, c.http = fresh.login, fresh.http
+	c.login = fresh
 	return true
 }
 
