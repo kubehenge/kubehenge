@@ -298,7 +298,7 @@ func TestStartFirstEtcdRebootsAFailedJoiner(t *testing.T) {
 	if !slices.Equal(f.rebooted, []string{"10.0.0.22"}) || len(f.restoreCalls()) != 0 {
 		t.Errorf("rebooted %v, calls %v", f.rebooted, f.restoreCalls())
 	}
-	if !slices.Equal(rebootedThen, []int{0, 1}) ||starts["10.0.0.22"] != (EtcdStart{Boot: "0", Repairs: 1}) {
+	if !slices.Equal(rebootedThen, []int{0, 1}) || starts["10.0.0.22"] != (EtcdStart{Boot: "0", Repairs: 1}) {
 		t.Errorf("recorded with %v reboots made, %+v", rebootedThen, starts["10.0.0.22"])
 	}
 	if want := []string{"Talos left etcd on 10.0.0.22 Failed: " + fakePullFailure + ". Rebooted the node to start etcd again."}; !slices.Equal(log, want) {
