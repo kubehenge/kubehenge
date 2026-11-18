@@ -104,6 +104,38 @@ func TestLogoutEndsTheSessionAndForgetsTheLogin(t *testing.T) {
 	}
 }
 
+// A new login ends the session of the one it replaces, which nothing could use any more. A login
+// that failed ends nothing, and an interface that is gone holds no new login up.
+func TestANewLoginEndsTheOneItReplaces(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	if err := f.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.login("admin@pve", "wrong"); err == nil || f.signOuts != 0 {
+		t.Fatalf("a refused login: %v, signed out %d times", err, f.signOuts)
+	}
+	if err := f.login("user@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	if f.signOuts != 1 {
+		t.Errorf("signed out %d times, want 1", f.signOuts)
+	}
+
+	gone := newFakeInterface(t)
+	gone.loginFile = f.loginFile
+	if err := gone.login("admin@pve", fakePassword); err != nil {
+		t.Fatal(err)
+	}
+	gone.srv.Close()
+	if err := f.login("admin@pve", fakePassword); err != nil {
+		t.Fatalf("a login replacing one at an interface that is gone: %v", err)
+	}
+	if _, err := f.run("appliance", "upgrades"); err != nil {
+		t.Errorf("after the new login: %v", err)
+	}
+}
+
 // A session the interface has ended says to log in again, not that the user is refused.
 func TestAnEndedLoginSaysToLogInAgain(t *testing.T) {
 	t.Parallel()

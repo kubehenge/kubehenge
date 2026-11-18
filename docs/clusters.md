@@ -2053,6 +2053,8 @@ kubehenge cluster delete web --yes
 - Sign in as a user with `--user root@pam --password-file <file>` (or `KUBEHENGE_PASSWORD`). Add `--totp <code>` for a second factor.
 - A password login lasts seven days by default, and on the appliance it outlives a restart of the interface ([Sessions](architecture.md#sessions)).
 - A password login ends earlier once Proxmox VE no longer accepts the user. Run `kubehenge login` again when a command says the login has ended.
+- A password login outlasts a break of an hour and a half in which the interface is stopped or cannot reach Proxmox VE. A longer break can end it.
+- A new `kubehenge login` ends the password login it replaces.
 - Sign in with a Proxmox VE API token through `--token-file <file>` (or `KUBEHENGE_PROXMOX_TOKEN`), written as `<user>@<realm>!<name>=<secret>`. That login lasts as long as the token.
 - Neither the password nor the token shows in a process list.
 - `--ca <file>` names the CA of the interface's certificate where the system does not trust it.

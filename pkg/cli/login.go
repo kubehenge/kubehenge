@@ -23,6 +23,8 @@ import (
 const (
 	// interfaceTimeout bounds each request to the interface.
 	interfaceTimeout = 2 * time.Minute
+	// replacedLoginTimeout bounds the ending of the login a new one replaces.
+	replacedLoginTimeout = 10 * time.Second
 	// maxInterfaceAnswer bounds what is read of one answer. An export the interface takes back is
 	// as large.
 	maxInterfaceAnswer = maxExportFile
@@ -357,7 +359,9 @@ until it ends or kubehenge logout removes it.
 Give --user to sign in as a Proxmox VE user, with the password from --password-file or
 KUBEHENGE_PASSWORD, and --totp for an account with a second factor. That login lasts seven days
 by default, and ends earlier once Proxmox VE no longer accepts the user. On the appliance it
-outlives a restart of the interface.
+outlives a restart of the interface. It outlasts a break of an hour and a half in which the
+interface is stopped or cannot reach Proxmox VE, and a longer one can end it. A new login ends the
+one it replaces.
 
 Give --token-file or set KUBEHENGE_PROXMOX_TOKEN to sign in with a Proxmox VE API token
 (user@realm!name=secret) instead. That login lasts as long as the token.
@@ -382,6 +386,11 @@ you alone. It holds the session or the token. Set ` + loginFileEnv + ` to keep i
 			if err := signInTo(cmd.Context(), l, user, passwordFile, tokenFile, totp); err != nil {
 				return err
 			}
+			// The login this one replaces would stay signed in for the rest of its seven days. An
+			// interface that is gone must not hold up the new login for long.
+			ctx, cancel := context.WithTimeout(cmd.Context(), replacedLoginTimeout)
+			endLogin(ctx)
+			cancel()
 			if err := l.save(cmd.Context()); err != nil {
 				return err
 			}
@@ -474,15 +483,21 @@ func (c *interfaceClient) signInStep(ctx context.Context, path string, body map[
 	return sess.SecondFactor != nil, nil
 }
 
+// endLogin ends the session of the login on file, if it holds one. A session that cannot be reached
+// is left to end by itself.
+func endLogin(ctx context.Context) {
+	if c, err := openInterface(ctx); err == nil && c.login.Cookie != "" {
+		_, _ = c.call(ctx, http.MethodDelete, "/api/session", nil, nil)
+	}
+}
+
 func newLogoutCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "logout",
 		Short: "End the login and forget it",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if c, err := openInterface(cmd.Context()); err == nil && c.login.Cookie != "" {
-				_, _ = c.call(cmd.Context(), http.MethodDelete, "/api/session", nil, nil)
-			}
+			endLogin(cmd.Context())
 			path, err := loginPath(cmd.Context())
 			if err != nil {
 				return err
