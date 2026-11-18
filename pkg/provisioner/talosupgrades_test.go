@@ -55,6 +55,8 @@ type fakeTalos struct {
 	// pullFailed are the nodes whose etcd reads Failed once wiped, as after its image pull failed,
 	// until bootstrapped or rebooted.
 	pullFailed map[string]bool
+	// service is the etcd a node reports in place of the states above.
+	service map[string]TalosService
 }
 
 // fakePullFailure is the last event of a fake etcd that reads Failed.
@@ -158,6 +160,9 @@ func (n *fakeTalosNode) Etcd(context.Context) (TalosService, error) {
 	}
 	n.f.mu.Lock()
 	defer n.f.mu.Unlock()
+	if s, ok := n.f.service[n.address]; ok {
+		return s, nil
+	}
 	etcd := TalosService{State: talosEtcdRunning, Healthy: true}
 	switch {
 	case n.f.wiped[n.address] && n.f.pullFailed[n.address] && !slices.Contains(n.f.rebooted, n.address):
@@ -206,6 +211,10 @@ func (n *fakeTalosNode) BootstrapRecovered(context.Context) error {
 	n.f.bootstraps[n.address]++
 	n.f.wiped[n.address] = false
 	return nil
+}
+
+func (n *fakeTalosNode) Bootstrap(context.Context) error {
+	return n.f.call(n.address, "plain bootstrap")
 }
 
 func (n *fakeTalosNode) EtcdMember(context.Context) (EtcdMember, error) {
