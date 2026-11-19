@@ -4,11 +4,11 @@
 
   Stopped
 
-  Step             Start container
-  Cause            container 100 did not start
-  Do               See /var/log/kubehenge-install.log for Proxmox VE's message
-  Log              /var/log/kubehenge-install.log
-  Container        100 is kept until you choose
+  Step              Start container
+  Cause             container 100 did not start
+  Do                Read the log for Proxmox VE's message
+  Log               /var/log/kubehenge-install.log
+  Container         100 is kept until you choose
 
   ┃ > Try again
   ┃   Quit and keep the container

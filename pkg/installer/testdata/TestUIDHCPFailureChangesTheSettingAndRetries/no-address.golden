@@ -4,12 +4,12 @@
 
   Stopped
 
-  Step             Wait for address
-  Cause            container 100 got no IPv4 address
-  Do               Check that the VLAN is the right one and that a DHCP server answers on it, or
-                   give a static IPv4 address and gateway
-  Log              /var/log/kubehenge-install.log
-  Container        100 is kept until you choose
+  Step              Wait for address
+  Cause             container 100 got no IPv4 address
+  Do                Check that the VLAN is the right one and that a DHCP server answers on it, or
+                    give a static IPv4 address and gateway
+  Log               /var/log/kubehenge-install.log
+  Container         100 is kept until you choose
 
   ┃ > Change IPv4 address
   ┃   Try again

@@ -29,12 +29,15 @@ type Network struct {
 	Zone  string
 	Tag   string
 	Alias string
+	// Subnet is the IPv4 subnet of the network where it is known: the node's own address on a
+	// bridge, the first subnet of a VNet.
+	Subnet netip.Prefix
 	// VLANAware is whether the network carries VLAN tags of its own.
 	VLANAware bool
 }
 
 // Label is the network's line in the list the user picks from.
-func (n Network) Label(own bool) string {
+func (n *Network) Label() string {
 	parts := []string{n.Name, n.Kind}
 	if n.Zone != "" {
 		parts = append(parts, "zone "+n.Zone)
@@ -42,19 +45,18 @@ func (n Network) Label(own bool) string {
 	if n.Tag != "" {
 		parts = append(parts, "tag "+n.Tag)
 	}
+	if n.Subnet.IsValid() {
+		parts = append(parts, "subnet "+n.Subnet.String())
+	}
 	if n.Alias != "" {
 		parts = append(parts, n.Alias)
 	}
-	label := strings.Join(parts, ", ")
-	if own {
-		label += " (this node's network)"
-	}
-	return label
+	return strings.Join(parts, ", ")
 }
 
 // VLANOffered reports whether the container's VLAN is asked for on this network. A VNet is bound
 // to its own tag unless it is VLAN aware.
-func (n Network) VLANOffered() bool { return n.Kind != kindVNet || n.VLANAware }
+func (n *Network) VLANOffered() bool { return n.Kind != kindVNet || n.VLANAware }
 
 // networkNames lists the names of the networks.
 func networkNames(list []Network) []string {
@@ -80,9 +82,9 @@ func (n *Node) networks(ctx context.Context) []Network {
 			switch str(m, "type") {
 			case "bridge":
 				aware, _ := flagOn(m["bridge_vlan_aware"])
-				add(Network{Name: str(m, "iface"), Kind: kindBridge, VLANAware: aware})
+				add(Network{Name: str(m, "iface"), Kind: kindBridge, Subnet: n.bridgeAddress4(ctx, str(m, "iface")).Masked(), VLANAware: aware})
 			case "OVSBridge":
-				add(Network{Name: str(m, "iface"), Kind: kindOVS, VLANAware: true})
+				add(Network{Name: str(m, "iface"), Kind: kindOVS, Subnet: n.bridgeAddress4(ctx, str(m, "iface")).Masked(), VLANAware: true})
 			}
 		}
 	}
@@ -90,7 +92,8 @@ func (n *Node) networks(ctx context.Context) []Network {
 	if out, err := n.run(ctx, "pvesh", "get", "/cluster/sdn/vnets", "--output-format", "json"); err == nil {
 		for _, m := range jsonList(out) {
 			aware, _ := flagOn(m["vlanaware"])
-			add(Network{Name: str(m, "vnet"), Kind: kindVNet, Zone: str(m, "zone"), Tag: str(m, "tag"), Alias: str(m, "alias"), VLANAware: aware})
+			subnet, _ := n.vnetSubnet(ctx, str(m, "vnet"))
+			add(Network{Name: str(m, "vnet"), Kind: kindVNet, Zone: str(m, "zone"), Tag: str(m, "tag"), Alias: str(m, "alias"), Subnet: subnet.Masked(), VLANAware: aware})
 		}
 	}
 	slices.SortFunc(list, func(a, b Network) int { return strings.Compare(a.Name, b.Name) })
@@ -160,7 +163,7 @@ func (n *Node) deviceGateway(ctx context.Context, dev string) string {
 		return ""
 	}
 	for line := range strings.SplitSeq(out, "\n") {
-		if m := viaDevRE.FindStringSubmatch(strings.TrimSpace(line)); m != nil && (m[2] == "" || m[2] == dev) {
+		if m := viaDevRE.FindStringSubmatch(strings.TrimSpace(line)); len(m) > 2 && (m[2] == "" || m[2] == dev) {
 			return m[1]
 		}
 	}
@@ -177,22 +180,9 @@ func (n *Node) refreshNetwork(ctx context.Context, f *Facts, bridge, vlan string
 	f.Prefix, f.Gateway, f.GatewayFrom, f.NodeDHCP, f.SuggestedIP, f.Device, f.NodeHolds = netip.Prefix{}, "", "", false, "", "", false
 	f.SuggestedCheck = AddrCheck{}
 	if net, ok := f.network(bridge); ok && net.Kind == kindVNet {
-		f.Prefix, f.Gateway = n.vnetSubnet(ctx, bridge)
-		if f.Gateway != "" {
-			f.GatewayFrom = gwFromVNet
-		}
-		f.Device = bridge
+		n.readVNet(ctx, f, bridge)
 	} else {
-		f.Device, f.Prefix = n.networkDevice(ctx, bridge, vlan)
-		f.NodeHolds = f.Prefix.IsValid()
-		if f.NodeHolds {
-			f.NodeDHCP = n.bridgeIsDHCP(f.Device)
-			if gw := n.deviceGateway(ctx, f.Device); gw != "" {
-				f.Gateway, f.GatewayFrom = gw, gwFromNode
-			} else if g, err := netip.ParseAddr(f.RouteGateway); err == nil && f.Prefix.Contains(g) {
-				f.Gateway, f.GatewayFrom = f.RouteGateway, gwFromNode
-			}
-		}
+		n.readHostNetwork(ctx, f, bridge, vlan)
 	}
 	if f.Prefix.IsValid() && f.Device != "" {
 		f.SuggestedIP, f.SuggestedCheck = n.SuggestAddress(ctx, f.Device, f)
@@ -202,6 +192,30 @@ func (n *Node) refreshNetwork(ctx context.Context, f *Facts, bridge, vlan string
 		dev = bridge
 	}
 	f.Candidates = n.APICandidates(ctx, f, dev)
+}
+
+// readVNet takes the subnet and gateway of a VNet from the SDN's own configuration.
+func (n *Node) readVNet(ctx context.Context, f *Facts, vnet string) {
+	f.Prefix, f.Gateway = n.vnetSubnet(ctx, vnet)
+	if f.Gateway != "" {
+		f.GatewayFrom = gwFromVNet
+	}
+	f.Device = vnet
+}
+
+// readHostNetwork takes the subnet, gateway and DHCP use of a network from the node's own address on it.
+func (n *Node) readHostNetwork(ctx context.Context, f *Facts, bridge, vlan string) {
+	f.Device, f.Prefix = n.networkDevice(ctx, bridge, vlan)
+	f.NodeHolds = f.Prefix.IsValid()
+	if !f.NodeHolds {
+		return
+	}
+	f.NodeDHCP = n.bridgeIsDHCP(f.Device)
+	if gw := n.deviceGateway(ctx, f.Device); gw != "" {
+		f.Gateway, f.GatewayFrom = gw, gwFromNode
+	} else if g, err := netip.ParseAddr(f.RouteGateway); err == nil && f.Prefix.Contains(g) {
+		f.Gateway, f.GatewayFrom = f.RouteGateway, gwFromNode
+	}
 }
 
 // GuessGateway is the gateway for an address that is not in the network the gateway was found for:
@@ -217,10 +231,10 @@ func GuessGateway(addr netip.Prefix, known string) string {
 	}
 	mask := ^uint32(0) << (ipv4Bits - addr.Bits())
 	gb, nb := g.As4(), addr.Masked().Addr().As4()
-	host := (uint32(gb[0])<<24 | uint32(gb[1])<<16 | uint32(gb[2])<<8 | uint32(gb[3])) &^ mask
-	net := uint32(nb[0])<<24 | uint32(nb[1])<<16 | uint32(nb[2])<<8 | uint32(nb[3])
-	v := net | host
-	guess := netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)})
+	v := binary.BigEndian.Uint32(nb[:]) | binary.BigEndian.Uint32(gb[:])&^mask
+	var out [4]byte
+	binary.BigEndian.PutUint32(out[:], v)
+	guess := netip.AddrFrom4(out)
 	if guess == addr.Addr() || !usableHost(addr, guess) {
 		return ""
 	}

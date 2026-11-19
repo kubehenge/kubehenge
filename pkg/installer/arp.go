@@ -2,9 +2,7 @@ package installer
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
-	"net"
 	"net/netip"
 	"strings"
 )
@@ -40,59 +38,6 @@ func (c AddrCheck) Text() string {
 	case AddrUnchecked:
 	}
 	return "not checked, " + c.Detail
-}
-
-const (
-	arpFrameLen   = 42
-	arpEtherType  = 0x0806
-	arpHardware   = 1
-	arpOpRequest  = 1
-	arpOpReply    = 2
-	ethHeaderLen  = 14
-	arpSenderIP   = 28
-	arpOpOffset   = 20
-	arpSenderMAC  = 22
-	arpTargetIP   = 38
-	arpTargetMAC  = 32
-	ipv4Len       = 4
-	macLen        = 6
-	arpPayloadLen = 28
-)
-
-// arpProbe builds the ARP probe of RFC 5227: a request for target from the unspecified address,
-// which a host holding the target answers and which makes no host learn this one.
-func arpProbe(mac net.HardwareAddr, target netip.Addr) []byte {
-	f := make([]byte, arpFrameLen)
-	copy(f[0:macLen], []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff})
-	copy(f[macLen:2*macLen], mac)
-	binary.BigEndian.PutUint16(f[12:14], arpEtherType)
-	binary.BigEndian.PutUint16(f[14:16], arpHardware)
-	binary.BigEndian.PutUint16(f[16:18], 0x0800)
-	f[18], f[19] = macLen, ipv4Len
-	binary.BigEndian.PutUint16(f[arpOpOffset:arpOpOffset+2], arpOpRequest)
-	copy(f[arpSenderMAC:arpSenderMAC+macLen], mac)
-	t := target.As4()
-	copy(f[arpTargetIP:arpTargetIP+ipv4Len], t[:])
-	return f
-}
-
-// answersProbe reports whether a frame is an ARP reply from target, or another host's probe for it.
-func answersProbe(frame []byte, mac net.HardwareAddr, target netip.Addr) bool {
-	if len(frame) < ethHeaderLen+arpPayloadLen || binary.BigEndian.Uint16(frame[12:14]) != arpEtherType {
-		return false
-	}
-	t := target.As4()
-	op := binary.BigEndian.Uint16(frame[arpOpOffset : arpOpOffset+2])
-	sender := frame[arpSenderIP : arpSenderIP+ipv4Len]
-	wants := frame[arpTargetIP : arpTargetIP+ipv4Len]
-	switch op {
-	case arpOpReply:
-		return string(sender) == string(t[:])
-	case arpOpRequest:
-		// Another host probing for the same address from the unspecified one, not this host's own frame.
-		return string(wants) == string(t[:]) && string(frame[arpSenderMAC:arpSenderMAC+macLen]) != string(mac) && string(sender) == string([]byte{0, 0, 0, 0})
-	}
-	return false
 }
 
 // errNoProbe is the check on a system that cannot send ARP.

@@ -1,0 +1,17 @@
+ ▄▄▄▄▄▄▄▄▄   Kubehenge
+ ▀██▀▀▀██▀   Appliance installer
+  ██   ██    Network · Storage · Summary · Install · Done
+
+  ┃ Network
+  ┃ > vmbr0, bridge, subnet 192.0.2.0/24 (this node)
+  ┃   vmbr1, bridge
+  ┃   vnet01, VNet, zone zone1, tag 20, subnet 198.51.100.0/24, servers
+  ┃   vnet02, VNet, zone zone1, tag 21
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ↑↓ choose  enter confirm  esc back  ctrl+c leave

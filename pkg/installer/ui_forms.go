@@ -79,11 +79,15 @@ func choose(title string, v *string, opts ...huh.Option[string]) *huh.Select[str
 
 func keysOf(fields []huh.Field) string {
 	if len(fields) == 1 {
-		switch fields[0].(type) {
+		switch f := fields[0].(type) {
 		case *huh.Input:
 			return "enter confirm  esc back  ctrl+c leave"
 		case *huh.Confirm:
 			return "←→ choose  enter confirm  esc back  ctrl+c leave"
+		case *huh.Select[string]:
+			if f.GetFiltering() {
+				return "type to filter  ↑↓ choose  enter confirm  esc back  ctrl+c leave"
+			}
 		}
 	}
 	return "↑↓ choose  enter confirm  esc back  ctrl+c leave"

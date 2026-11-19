@@ -11,7 +11,7 @@ import (
 
 // The columns of the screens: two spaces, a label of this width, then the value.
 const (
-	summaryLabelWidth = 17
+	summaryLabelWidth = 18
 	summaryMargin     = 2
 	minValueWidth     = 20
 )
@@ -73,6 +73,9 @@ func (m *Model) row(label, value string) string {
 }
 
 func (m *Model) render() string {
+	if m.stage == stSummary {
+		return m.summaryScreen()
+	}
 	var b strings.Builder
 	b.WriteString(m.header())
 	b.WriteString("\n")
@@ -81,9 +84,6 @@ func (m *Model) render() string {
 		b.WriteString("  " + m.spin.View() + " " + m.busy + "\n")
 	case stFound:
 		b.WriteString(m.foundView())
-	case stSummary:
-		b.WriteString(m.summaryView())
-		b.WriteString(m.formView())
 	case stRun:
 		b.WriteString(m.runView())
 	case stEnd:
@@ -132,6 +132,11 @@ func indent(s, pad string) string {
 var logo = []string{" ▄▄▄▄▄▄▄▄▄ ", " ▀██▀▀▀██▀ ", "  ██   ██  "}
 
 func (m *Model) header() string {
+	return m.headerAt(false)
+}
+
+// headerAt is the header, or with compact one line of the name and the crumbs.
+func (m *Model) headerAt(compact bool) string {
 	here := m.crumb()
 	crumbs := make([]string, 0, len(crumbNames))
 	for i, name := range crumbNames {
@@ -142,6 +147,9 @@ func (m *Model) header() string {
 		}
 	}
 	right := []string{bold.Render("Kubehenge"), dim.Render("Appliance installer"), strings.Join(crumbs, dim.Render(" · "))}
+	if compact {
+		return "  " + right[0] + "  " + right[2] + "\n"
+	}
 	var b strings.Builder
 	for i, l := range logo {
 		b.WriteString(tealS.Render(l) + "  " + right[i] + "\n")
@@ -155,7 +163,7 @@ func (m *Model) foundView() string {
 	var b strings.Builder
 	b.WriteString(m.row("Node", f.Node))
 	b.WriteString(m.row("Networks", fmt.Sprintf("%d, this node uses %s", len(f.Networks), orNone(f.DefaultBridge))))
-	b.WriteString(m.row("Disk storage", fmt.Sprintf("%d take container disks", len(f.RootStorages))))
+	b.WriteString(m.row("Storage", storageText(f.RootStorages)))
 	if c.ProxmoxURL != "" {
 		b.WriteString(m.row("Proxmox VE API", c.ProxmoxURL))
 	}
@@ -163,7 +171,10 @@ func (m *Model) foundView() string {
 		b.WriteString(m.row("API CA", caText(m.S.CA, c)))
 	}
 	for _, n := range m.S.Notices {
-		b.WriteString(m.row("Note", n))
+		// The Storage row says what the storage notices say.
+		if !strings.HasPrefix(n, "storage ") {
+			b.WriteString(m.row("Note", n))
+		}
 	}
 	if m.S.Restored {
 		b.WriteString("\n" + m.row("Restored", "your answers from the last run. Nothing secret is saved. Change any on the summary."))
@@ -172,16 +183,56 @@ func (m *Model) foundView() string {
 	return b.String()
 }
 
-func (m *Model) summaryView() string {
+// storageText says which storages take container disks.
+func storageText(list []Storage) string {
+	if len(list) == 1 {
+		return list[0].Name + ", the only one for container disks"
+	}
+	return fmt.Sprintf("%d take container disks", len(list))
+}
+
+// summaryScreen draws the summary with the form under it. A screen too short for it loses first
+// the logo and the blank lines, then the cautions' second sentences, which the plain output and
+// the dry run still give whole.
+func (m *Model) summaryScreen() string {
+	const lastLevel = 2
+	var out string
+	for level := 0; level <= lastLevel; level++ {
+		out = m.summaryAt(level)
+		if strings.Count(strings.TrimRight(out, "\n"), "\n")+1 <= m.height {
+			break
+		}
+	}
+	return out
+}
+
+func (m *Model) summaryAt(level int) string {
 	var b strings.Builder
+	sep := "\n"
+	if level > 0 {
+		sep = ""
+	}
+	b.WriteString(m.headerAt(level > 0) + sep)
 	for _, r := range m.S.Rows(!m.S.Cfg.KeepFailed) {
 		b.WriteString(m.row(r.Label, r.Value))
 	}
 	for _, n := range m.S.Cautions {
+		if level > 1 {
+			n = firstSentence(n)
+		}
 		b.WriteString(m.row("Note", n))
 	}
-	b.WriteString("\n")
+	b.WriteString(sep)
+	b.WriteString(m.formView())
 	return b.String()
+}
+
+// firstSentence is the text up to its first full stop followed by a space, with the stop kept.
+func firstSentence(text string) string {
+	if i := strings.Index(text, ". "); i >= 0 {
+		return text[:i+1]
+	}
+	return text
 }
 
 func caText(ca *CAChoice, c *Config) string {
@@ -284,7 +335,12 @@ func (m *Model) failView() string {
 	}
 	b.WriteString(m.row("Cause", neutral(u.Cause)))
 	if u.Fix != "" {
-		b.WriteString(m.row("Do", neutral(u.Fix)))
+		fix := u.Fix
+		if m.runner != nil && m.runner.LogPath != "" {
+			// The Log row below gives the path, so the action only names the log.
+			fix = strings.ReplaceAll(fix, "See "+m.runner.LogPath, "Read the log")
+		}
+		b.WriteString(m.row("Do", neutral(fix)))
 	}
 	if m.runner != nil {
 		b.WriteString(m.row("Log", m.runner.LogPath))

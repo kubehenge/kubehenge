@@ -47,7 +47,8 @@ func (s *Session) Rows(interactive bool) []Row {
 		dns = "this node's: " + strings.Join(f.DNS, ", ")
 	}
 	add("DNS", dns)
-	add("Container", c.CTID+", host name "+c.Hostname)
+	add("Container ID", c.CTID)
+	add("Host name", c.Hostname)
 	add("Resources", resourceText)
 	add("Storage", "disk "+c.Storage+", template "+c.TemplateStorage)
 	add("Proxmox VE API", c.ProxmoxURL)

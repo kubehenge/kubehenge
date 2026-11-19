@@ -173,6 +173,10 @@ func (u *ui) settle() {
 func (u *ui) press(msg tea.KeyPressMsg) {
 	u.t.Helper()
 	u.settle()
+	// A key sent before the form's field takes focus is lost.
+	if s := u.rec.screen(); strings.Contains(s, "enter confirm") && !strings.Contains(s, "┃") {
+		u.waitFor("┃")
+	}
 	want := u.rec.keysHandled() + 1
 	u.tm.Send(msg)
 	deadline := time.Now().Add(15 * time.Second)
