@@ -476,12 +476,15 @@ func (m *Model) formDone() tea.Cmd {
 }
 
 // back returns to the question before the open one, or to the summary or the failure the question
-// was opened from.
+// was opened from. The typed API address goes back to the list of addresses found.
 func (m *Model) back() tea.Cmd {
 	m.note = ""
 	switch {
 	case m.stage == stList:
 		return m.showSummary()
+	case m.stage == stAsk && m.asking == settingAPI && m.a.apiTyped && len(TiedCandidates(m.S.Facts.Candidates)) > 1:
+		m.a.apiTyped = false
+		return m.open(settingAPI)
 	case len(m.trail) > 1:
 		prev := m.trail[len(m.trail)-2]
 		m.trail = m.trail[:len(m.trail)-2]

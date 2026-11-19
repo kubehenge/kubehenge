@@ -330,6 +330,28 @@ func TestCertificateForNoClusterNameOffersTheAPI(t *testing.T) {
 	}
 }
 
+// Esc on the typed API address goes back to the list of addresses found.
+func TestUIAPITypedAddressGoesBackToTheList(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{
+		dhcp:  true,
+		names: []string{"a.example.com", "b.example.com"},
+		hosts: map[string][]string{"a.example.com": {"192.0.2.10"}, "b.example.com": {"192.0.2.10"}},
+	})
+	u := startUI(t, h, Config{PVEEntry: "no"})
+	u.waitFor("Node")
+	u.enter(1)
+	u.waitFor("Another address")
+	u.down(2)
+	u.enter(1)
+	u.waitFor("API CA file")
+	u.press(tea.KeyPressMsg{Code: tea.KeyEscape})
+	u.waitFor("Another address")
+	u.press(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	u.press(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	u.finish()
+}
+
 // Refusing the CA leads to the API's fields, not the same question again.
 func TestUIRefusedCAOffersTheAPIFields(t *testing.T) {
 	t.Parallel()
