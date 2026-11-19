@@ -34,7 +34,7 @@ Then [create clusters](clusters.md).
 Kubehenge gives every node of every cluster a static address, with no DHCP server needed. Each cluster, the management cluster too, is IPv4, IPv6 or dual-stack. IPv6 and dual-stack are unsupported until an end-to-end test passes on them ([clusters.md](clusters.md#ipv6-and-dual-stack)).
 
 - **The appliance** takes an IPv4 address, an IPv6 address or both on a bridge, each by DHCP or static (`--ip`, `--ip6`). IPv6 also takes one from the router's advertisements (`--ip6 auto`).
-  - Its certificate and the redirect URLs registered with identity providers contain it. Give it an address that does not change (a static `--ip` or a DHCP reservation), or a DNS name with `--name`.
+  - Its certificate and the redirect URLs registered with identity providers contain it. Give it a static `--ip`, a DHCP reservation or a `--name`.
   - After a change, [renew the certificate](upgrading.md#the-appliances-certificate).
 - **The Proxmox VE API** is reached on port 8006, at a name or address its certificate is valid for ([below](#the-proxmox-ve-api)). The appliance, the management cluster's nodes and every cluster's nodes must reach it.
 
@@ -119,8 +119,10 @@ An address is checked against the node's neighbour table, then with an ARP probe
 | `--gateway6 <address>` | none | The default IPv6 gateway, with a static `--ip6`. It may be link-local, such as `fe80::1`. |
 | `--dns <address>,...` | this node's name servers | The name servers the container asks, such as `192.0.2.53,192.0.2.54`. Required where the node's `/etc/resolv.conf` names only loopback addresses, which the container cannot reach. |
 | `--hostname <name>` | `kubehenge` | The container's host name, also written into its certificate. |
-| `--name <DNS name>` | none | A DNS name, such as `kubehenge.example.org`, that people reach the appliance by instead of its address. It goes into the certificate and into the redirect URLs for identity providers. Point it at the appliance's address in your DNS. |
-| `--cert <file> --key <file>` | a certificate signed by the Proxmox VE cluster's CA | Serves a certificate of your own instead, such as one from your organisation's CA. It must be valid for `--name` (or the address, without one) and its key must match. |
+| `--name <DNS name>` | asked | A DNS name, such as `kubehenge.example.org`, people open the interface at. It goes into the certificate and the redirect URLs for identity providers. |
+| `--cert <files>` | asked | Serves the certificate in these comma-separated files, in any format, instead of one signed by the cluster's CA ([details](upgrading.md#the-appliances-certificate)). |
+| `--key <file>` | | The key of `--cert`, where it is a file of its own. |
+| `--cert-passphrase-file <file>` | | The passphrase of encrypted `--cert` files, on its first line. |
 | `--proxmox-url <URL>` | chosen from the API's certificate ([below](#the-proxmox-ve-api)) | The Proxmox VE API as the appliance and the clusters' VMs reach it, such as `https://pve.example.org:8006`. The API's certificate must be valid for it. The installer stops unless the appliance gets an answer there. |
 | `--proxmox-ca <file>` | found by the installer ([below](#the-ca)) | The CA that signed the API's certificate, such as your organisation's where it replaced Proxmox VE's own. The file may be a whole trust store, and the appliance gets only the certificates the API's rests on. The installer stops before it creates anything unless this CA signed the API's certificate for the URL. |
 | `--proxmox-insecure` | off | Nothing checks the Proxmox VE API's certificate. That covers OpenTofu, Cluster API, Kubehenge's controller, the template builds and every cluster's cloud controller manager and CSI plugin. The Administration page shows that it is on. Not with `--proxmox-ca`. |

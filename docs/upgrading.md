@@ -370,11 +370,25 @@ The interface warns administrators 30 days before its certificate runs out. Rene
 sh install.sh --certificate --ctid 105
 ```
 
-The same command makes a new certificate after the appliance's address changed. `--name kubehenge.example.org` gives the appliance a DNS name. `--cert <file> --key <file>` installs a certificate of your own.
+The same command makes a new certificate after the appliance's address changed. `--name kubehenge.example.org` gives the appliance a DNS name. `--cert <files>` installs a certificate of your own, as the installer's own question does.
 
 It restarts the interface and the shared Headlamp, then prints the new fingerprint. It does not restart while the management cluster is being applied or removed or a VM template is being built. Run it again once that has finished.
 
 `--upgrade` renews a certificate the installer made once it has less than 60 days left. It only warns about a certificate of your own.
+
+### Certificate files
+
+`--cert` takes comma-separated files in any mix of PEM, DER, PKCS#7 and PKCS#12 (a `.pfx` or `.p12`). The certificate, its chain and its key may share a file or sit in several. `--key` adds a file to the list. Encrypted material needs `--cert-passphrase-file <file>`, whose first line is the passphrase. Without a terminal, the installer stops before it creates anything when that option is missing.
+
+- The certificate must be valid for the name, or for the fixed address where there is no name, and have more than a day left. With less than 30 days left it is taken with a caution giving the last day.
+- A chain that lacks its issuer is taken with a caution naming the issuer. Add the file that holds it. This node's trust store counts as known issuers.
+- Certificates in the files that the chain does not use are left out, and the installer says which.
+- Without `--cert`, the installer asks whether to make a certificate or read files. Where the Proxmox VE API's certificate comes from a CA outside the cluster, files of your own are preselected, since browsers that trust that CA warn about a certificate made here.
+- Saved answers keep the file paths and never the passphrase.
+
+### DNS check
+
+With a name, the installer looks it up on this node and says whether it points at the appliance, at another address, nowhere, or could not be checked. None of these stops the install. A name that did not point at the appliance gets the appliance's address beside it on the last screen.
 
 ### Names and addresses
 
