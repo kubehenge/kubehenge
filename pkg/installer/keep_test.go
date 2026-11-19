@@ -2,6 +2,7 @@ package installer
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -139,6 +140,101 @@ func TestUIAPIFailureTakesATypedURL(t *testing.T) {
 	}
 	if h.exec.count("pct create") != 1 || h.exec.count("pct destroy") != 0 {
 		t.Fatalf("the container was made again for a new API: %v", h.exec.calls)
+	}
+	if n := h.exec.count(apiConnect); n < 2 {
+		t.Fatalf("the network check did not run again for the new API: %d connects", n)
+	}
+}
+
+// A container removed after it was switched IPv4-only is made afresh, so its next start switches
+// nothing back on.
+func TestRemovedIPv4OnlyContainerStartsAfresh(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true})
+	r := h.runner(h.session(Config{CTID: "100", IP: optDHCP}), nil)
+	ctx := context.Background()
+	if err := r.stepCreate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.stepStart(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r.Cleanup(ctx)
+	r.S.Cfg.IP6 = optAuto
+	if err := r.stepStart(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.exec.count("pct exec 100 -- sh -c \nset -e\nrm -f /etc/sysctl.d/60-kubehenge-ipv4-only.conf"); n != 0 {
+		t.Errorf("a fresh container had IPv6 switched back on: %v", h.exec.calls)
+	}
+}
+
+// Fixing the network after a failure asks its VLAN and addresses again too.
+func TestFixingTheNetworkAsksItsVLANAndAddressesAgain(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true})
+	m := NewModel(prepared(t, h, Config{PVEEntry: "no"}), nil)
+	follow := []string{settingVLAN, settingV4Addr, settingV4Gateway, settingV6Addr, settingV6Gateway}
+	for _, id := range follow {
+		m.answered[id], m.given[id] = true, true
+	}
+	m.a.action = actFix + settingNetwork
+	m.failAction()
+	for _, id := range follow {
+		if m.answered[id] || m.given[id] {
+			t.Errorf("%s is not asked again after the network was changed", id)
+		}
+	}
+}
+
+// A sentence keeps the name Proxmox capitalised where a label starts it.
+func TestLowerFirstKeepsProxmox(t *testing.T) {
+	t.Parallel()
+	if got := lowerFirst("Proxmox VE API"); got != "Proxmox VE API" {
+		t.Errorf("got %q", got)
+	}
+	if got := lowerFirst("Network"); got != "network" {
+		t.Errorf("got %q", got)
+	}
+}
+
+// leaves runs cmd and every command its batches and sequences hold, and returns the messages.
+func leaves(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if msg == nil {
+		return nil
+	}
+	v := reflect.ValueOf(msg)
+	if v.Kind() != reflect.Slice || !v.Type().ConvertibleTo(cmdList) {
+		return []tea.Msg{msg}
+	}
+	inner, _ := reflect.TypeAssert[[]tea.Cmd](v.Convert(cmdList))
+	var out []tea.Msg
+	for _, c := range inner {
+		out = append(out, leaves(c)...)
+	}
+	return out
+}
+
+// The messages a key sets off in a form carry that form, so one still on its way when the form is
+// gone is known.
+func TestFormKeysSendTaggedMessages(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true})
+	m := NewModel(prepared(t, h, Config{PVEEntry: "no"}), nil)
+	var a, b string
+	m.startForm(huh.NewGroup(huh.NewInput().Value(&a), huh.NewInput().Value(&b)))
+	msgs := leaves(m.updateForm(tea.KeyPressMsg{Code: tea.KeyEnter}))
+	if len(msgs) == 0 {
+		t.Fatal("Enter set nothing off")
+	}
+	for _, msg := range msgs {
+		if f, ok := msg.(formMsg); !ok || f.form != m.form {
+			t.Errorf("a message without its form: %#v", msg)
+		}
 	}
 }
 
