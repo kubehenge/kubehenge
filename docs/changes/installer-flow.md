@@ -20,3 +20,4 @@
 
 - An address that cannot work is refused with the reason: a network or broadcast address, a gateway outside the subnet, or an IPv6 link-local address.
 - The route's VLAN no longer follows the user onto another network.
+- The connection check tries the Proxmox VE API's port for half a minute after the container starts. A gateway that drops ping or answers late no longer stops a working setup.

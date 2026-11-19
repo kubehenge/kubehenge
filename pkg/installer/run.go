@@ -774,9 +774,9 @@ func (r *Runner) reachAPI(ctx context.Context, hosts []string, port string) (str
 // neighbourRE reads the state of an entry of the container's neighbour table.
 var neighbourRE = regexp.MustCompile(`\b(REACHABLE|STALE|DELAY|PERMANENT|PROBE|FAILED|INCOMPLETE)\b`)
 
-// networkFailure explains why the API cannot be reached although a name of it resolves: first by
-// the neighbour table of the container, which shows whether its gateway answered ARP, then by a
-// retried ping.
+// networkFailure explains why the API cannot be reached although a name of it resolves. It pings
+// the gateway three times, and when that fails reads the container's neighbour table, which shows
+// whether the gateway answered ARP.
 func (r *Runner) networkFailure(ctx context.Context, hosts []string, port string) error {
 	c := &r.S.Cfg
 	gw := r.containerGateway(ctx)
@@ -784,12 +784,11 @@ func (r *Runner) networkFailure(ctx context.Context, hosts []string, port string
 		return settingErr(settingV4Gateway, fmt.Sprintf("container %s has no default route, so it cannot connect to the Proxmox VE API at %s on port %s", c.CTID, hosts[0], port),
 			"Give the container a gateway")
 	}
-	ping := "its gateway did not answer ping"
+	ping, state := "its gateway did not answer ping", ""
 	if _, err := r.inCT(ctx, "ping", "-c", "3", "-W", "2", gw); err == nil {
-		ping = "its gateway answers ping"
-	}
-	state := ""
-	if out, err := r.inCT(ctx, "ip", "neigh", "show", gw, "dev", "eth0"); err == nil {
+		// A gateway that answers ping has answered ARP, whatever the neighbour table shows.
+		ping, state = "its gateway answers ping", "REACHABLE"
+	} else if out, err := r.inCT(ctx, "ip", "neigh", "show", gw, "dev", "eth0"); err == nil {
 		state = neighbourRE.FindString(out)
 	}
 	switch state {
