@@ -1002,8 +1002,9 @@ func (m *Model) failAction() tea.Cmd {
 		m.fixed, m.fixing = id, m.runner != nil
 		ids := []string{id}
 		if id == settingNetwork {
-			// A network that does not carry the address may be right with another VLAN or address.
-			ids = append(ids, settingVLAN, settingV4Addr, settingV4Gateway, settingV6Addr, settingV6Gateway)
+			// A network that does not carry the address may be right with another VLAN, address or
+			// address mode, such as a static address where DHCP sends no router.
+			ids = append(ids, settingVLAN, settingV4Mode, settingV4Addr, settingV4Gateway, settingV6Mode, settingV6Addr, settingV6Gateway)
 		}
 		for _, id := range ids {
 			m.answered[id], m.given[id] = false, false

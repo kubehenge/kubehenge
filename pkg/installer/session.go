@@ -347,7 +347,7 @@ func (s *Session) pickAPIHost(ties Ties) (bool, error) {
 	cands := s.Facts.Candidates
 	if len(cands) == 0 {
 		_, file, _ := s.Node.servedCertificate()
-		return false, userErr(fmt.Sprintf("Proxmox VE's certificate (%s) is valid for no name or address of this cluster's nodes", file),
+		return false, settingErr(settingAPI, fmt.Sprintf("Proxmox VE's certificate (%s) is valid for no name or address of this cluster's nodes", file),
 			"Give the URL the appliance and the clusters reach the API at, by a name or address the certificate is valid for, with --proxmox-url")
 	}
 	if len(TiedCandidates(cands)) > 1 && ties != PickBest {

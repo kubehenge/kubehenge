@@ -187,6 +187,34 @@ func TestFixingTheNetworkAsksItsVLANAndAddressesAgain(t *testing.T) {
 	}
 }
 
+// A DHCP container without a route is told to give a static address, so its network fix asks
+// DHCP or static again.
+func TestDHCPWithoutARouteAsksTheAddressModeAgain(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true})
+	h.exec.fail(apiConnect, 1)
+	h.exec.on("pct exec 100 -- ip -4 route show default", "")
+	r, _ := networkRunner(t, h)
+	r.S.Cfg.IP = optDHCP
+	fault := networkError(t, r.stepNetwork(context.Background()))
+	m := NewModel(prepared(t, h, Config{IP: optDHCP, PVEEntry: "no"}), nil)
+	for _, id := range settingOrder {
+		m.answered[id], m.given[id] = true, true
+	}
+	m.fail = fault
+	id := m.failSetting()
+	if id != settingNetwork || !strings.Contains(fault.Fix, "--ip <address>") {
+		t.Fatalf("want the network offered with a static address as the fix, got %q: %q", id, fault.Fix)
+	}
+	m.a.action = actFix + id
+	m.failAction()
+	for _, mode := range []string{settingV4Mode, settingV6Mode} {
+		if m.answered[mode] || m.given[mode] {
+			t.Errorf("%s is not asked again after the network was changed", mode)
+		}
+	}
+}
+
 // A sentence keeps the name Proxmox capitalised where a label starts it.
 func TestLowerFirstKeepsProxmox(t *testing.T) {
 	t.Parallel()
@@ -256,6 +284,23 @@ func TestFailSettingOffersOnlyWhatApplies(t *testing.T) {
 	}
 	if fields := m.table[settingAPI].fields(m); len(fields) != 3 {
 		t.Errorf("want the URL, CA file and check, got %d fields", len(fields))
+	}
+}
+
+// A certificate valid for no name of the cluster offers the API's question, where a URL fixes it.
+func TestCertificateForNoClusterNameOffersTheAPI(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true})
+	s := prepared(t, h, Config{PVEEntry: "no"})
+	s.Facts.Candidates, s.Cfg.APIHost, s.Cfg.ProxmoxURL = nil, "", ""
+	err := s.ResolveAPI(context.Background(), PickBest)
+	if err == nil || !strings.Contains(err.Error(), "valid for no name") {
+		t.Fatalf("want the certificate named, got %v", err)
+	}
+	m := NewModel(s, nil)
+	m.fail = err
+	if id := m.failSetting(); id != settingAPI {
+		t.Fatalf("the API is not offered: %q", id)
 	}
 }
 
