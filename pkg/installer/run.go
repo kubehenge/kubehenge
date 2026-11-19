@@ -2,6 +2,7 @@ package installer
 
 import (
 	"archive/tar"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"crypto/tls"
@@ -55,10 +56,12 @@ func (e *NoAddressError) Error() string { return e.UserError.Error() }
 
 // Result is what the end screen shows.
 type Result struct {
-	CTID        string
-	URL         string
-	Address     string
-	Name        string
+	CTID    string
+	URL     string
+	Address string
+	Name    string
+	// AddressURL is the appliance's address as a URL, set where the DNS name does not lead to it yet.
+	AddressURL  string
 	Fingerprint string
 	ValidUntil  time.Time
 	Version     string
@@ -183,11 +186,24 @@ func (r *Runner) Run(ctx context.Context) (*Result, error) {
 		}
 	}
 	public := r.public()
-	return &Result{
+	res := &Result{
 		CTID: r.S.Cfg.CTID, URL: "https://" + urlHost(public) + "/", Address: r.address, Name: r.S.Cfg.Name,
 		Fingerprint: r.cert.Fingerprint, ValidUntil: r.cert.NotAfter, Version: r.version,
 		Warnings: r.warnings, LogPath: r.LogPath,
-	}, nil
+	}
+	if res.Name != "" && !nameResolves(ctx, r.S.Node.LookupHost, res.Name, r.address, r.address6) {
+		res.AddressURL = "https://" + urlHost(cmp.Or(r.address, r.address6)) + "/"
+	}
+	return res, nil
+}
+
+// nameResolves reports whether the DNS name leads to the appliance now.
+func nameResolves(ctx context.Context, lookup func(context.Context, string) ([]string, error), name string, own ...string) bool {
+	if lookup == nil {
+		return false
+	}
+	addrs, err := lookup(ctx, name)
+	return err == nil && anyOf(addrs, own)
 }
 
 func urlHost(h string) string {
@@ -885,15 +901,11 @@ func (r *Runner) stepCertificate(_ context.Context) error {
 	c := &r.S.Cfg
 	public := r.public()
 	if c.CertFile != "" {
-		certPEM, err := os.ReadFile(c.CertFile)
+		b, err := r.S.Node.readOwn(c, r.Now())
 		if err != nil {
-			return fmt.Errorf("read file: %w", err)
+			return plainCertErr(err)
 		}
-		keyPEM, err := os.ReadFile(c.KeyFile)
-		if err != nil {
-			return fmt.Errorf("read file: %w", err)
-		}
-		if r.cert, err = OwnCertificate(certPEM, keyPEM, c.CertFile, c.KeyFile, public, r.Now()); err != nil {
+		if r.cert, err = OwnCertificate(b, public, r.Now()); err != nil {
 			return err
 		}
 		r.finish("certificate", "yours, valid for "+public)
@@ -925,7 +937,7 @@ func (r *Runner) push(ctx context.Context, local, remote, perms string) error {
 
 func (r *Runner) pushData(ctx context.Context, name string, data []byte, remote, perms string) error {
 	local := filepath.Join(r.Work, name)
-	if err := os.WriteFile(local, data, permFile); err != nil { //nolint:gosec // the path is in the installer's own work directory.
+	if err := os.WriteFile(local, data, permFile); err != nil {
 		return fmt.Errorf("write file: %w", err)
 	}
 	return r.push(ctx, local, remote, perms)

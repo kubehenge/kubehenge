@@ -140,20 +140,3 @@ func (n *Node) MakeCertificate(hostname string, addresses []string, name string,
 		Fingerprint: fingerprint(cert), NotAfter: cert.NotAfter,
 	}, nil
 }
-
-// OwnCertificate checks the administrator's --cert and --key for the public host.
-func OwnCertificate(certPEM, keyPEM []byte, certFile, keyFile, host string, now time.Time) (*Certificate, error) {
-	cert, err := parseCertFile(certPEM)
-	if err != nil || cert.NotAfter.Before(now.Add(certMinValidity)) {
-		return nil, userErr(certFile+" is not a PEM certificate valid for at least another day", "")
-	}
-	pair, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		return nil, userErr(keyFile+" is not the key of "+certFile, "")
-	}
-	_ = pair
-	if err := cert.VerifyHostname(host); err != nil {
-		return nil, userErr(certFile+" is not valid for "+host, "")
-	}
-	return &Certificate{CertPEM: certPEM, KeyPEM: keyPEM, Fingerprint: fingerprint(cert), NotAfter: cert.NotAfter}, nil
-}

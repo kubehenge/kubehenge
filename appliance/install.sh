@@ -121,34 +121,35 @@ usage() {
 Usage: sh install.sh [options]
 
 Install:
-      --bridge string             the bridge, Open vSwitch bridge or SDN VNet the container attaches to
-      --cert string               serve this certificate instead of one signed by this cluster's CA
-      --ctid string               the container's ID (default the next free one)
-      --dns string                the name servers the container asks, comma-separated (default this node's)
-      --dry-run                   print what would be installed and change nothing
-      --gateway string            the default gateway, an IPv4 address, with a static --ip
-      --gateway6 string           the default IPv6 gateway, with a static --ip6
-      --hostname string           the container's host name, also in its certificate (default kubehenge)
-      --ip string                 the IPv4 address: dhcp, none or an address with or without /prefix, such as 192.0.2.40/24
-      --ip6 string                the IPv6 address: auto, dhcp or an address with its prefix, such as 2001:db8::40/64
-      --keep-failed               keep the container of a failed install for inspection instead of removing it
-      --key string                the key of --cert
-      --mtu string                the MTU of the container's network, 576 to 65535
-      --name string               a DNS name people reach the appliance by, put into its certificate
-      --no-pve-entry              do not add the Kubernetes entry
-      --plain                     run without the full-screen installer: ask nothing, print a line per step
-      --proxmox-ca string         the CA that signed the API's certificate, alone or in a bundle
-      --proxmox-insecure          reach the Proxmox VE API without verifying its certificate
-      --proxmox-url string        the Proxmox VE API, such as https://pve.example.org:8006
-      --pve-entry                 add the Kubernetes entry to this node's Proxmox VE interface
-      --release string            install this release archive instead of downloading it
-      --sha256 string             the archive's SHA-256, with --release
-      --storage string            where the container's disks go, 9 GiB
-      --template-storage string   where the container template goes
-      --tofu string               install OpenTofu from this release archive instead of downloading it
-      --trusted-proxy strings     a reverse proxy in front of the interface, an address or CIDR, repeatable
-      --vlan string               the VLAN tag of the container's network, 1 to 4094
-      --yes                       skip the summary confirmation and accept an address outside the network's subnet
+      --bridge string                 the bridge, Open vSwitch bridge or SDN VNet the container attaches to
+      --cert string                   serve the certificate in these files, comma-separated, in any format, instead of one signed by this cluster's CA
+      --cert-passphrase-file string   a file whose first line is the passphrase of encrypted --cert and --key files
+      --ctid string                   the container's ID (default the next free one)
+      --dns string                    the name servers the container asks, comma-separated (default this node's)
+      --dry-run                       print what would be installed and change nothing
+      --gateway string                the default gateway, an IPv4 address, with a static --ip
+      --gateway6 string               the default IPv6 gateway, with a static --ip6
+      --hostname string               the container's host name, also in its certificate (default kubehenge)
+      --ip string                     the IPv4 address: dhcp, none or an address with or without /prefix, such as 192.0.2.40/24
+      --ip6 string                    the IPv6 address: auto, dhcp or an address with its prefix, such as 2001:db8::40/64
+      --keep-failed                   keep the container of a failed install for inspection instead of removing it
+      --key string                    the key of --cert, where it is a file of its own
+      --mtu string                    the MTU of the container's network, 576 to 65535
+      --name string                   a DNS name people open the interface at, put into its certificate
+      --no-pve-entry                  do not add the Kubernetes entry
+      --plain                         run without the full-screen installer: ask nothing, print a line per step
+      --proxmox-ca string             the CA that signed the API's certificate, alone or in a bundle
+      --proxmox-insecure              reach the Proxmox VE API without verifying its certificate
+      --proxmox-url string            the Proxmox VE API, such as https://pve.example.org:8006
+      --pve-entry                     add the Kubernetes entry to this node's Proxmox VE interface
+      --release string                install this release archive instead of downloading it
+      --sha256 string                 the archive's SHA-256, with --release
+      --storage string                where the container's disks go, 9 GiB
+      --template-storage string       where the container template goes
+      --tofu string                   install OpenTofu from this release archive instead of downloading it
+      --trusted-proxy strings         a reverse proxy in front of the interface, an address or CIDR, repeatable
+      --vlan string                   the VLAN tag of the container's network, 1 to 4094
+      --yes                           skip the summary confirmation and accept an address outside the network's subnet
 
 Upgrade:
       --no-trusted-proxy   with --upgrade, remove the list of trusted proxies

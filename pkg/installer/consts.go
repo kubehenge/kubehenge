@@ -85,6 +85,7 @@ const (
 	maxFormWidth    = 76
 	listChrome      = 12 // the rows a list's header, title and footer take
 	minListRows     = 4
+	certNoteRows    = 5 // a title, a note of two lines and the two choices
 	vlanMax         = 4094
 	ctidMin         = 100
 	ctidMax         = 999999999

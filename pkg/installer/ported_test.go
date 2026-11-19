@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kubehenge/kubehenge/pkg/certfiles"
 )
 
 func TestIPValidators(t *testing.T) {
@@ -254,16 +256,23 @@ func TestOwnCertificate(t *testing.T) {
 	now := time.Now()
 	cert, _ := h.node.MakeCertificate("kubehenge", []string{"192.0.2.40"}, "", now)
 	other, _ := h.node.MakeCertificate("kubehenge", []string{"192.0.2.41"}, "", now)
-	if _, err := OwnCertificate(cert.CertPEM, cert.KeyPEM, "c.pem", "k.pem", "192.0.2.40", now); err != nil {
+	read := func(c, k *Certificate) (*certfiles.Bundle, error) {
+		return certfiles.Read([]certfiles.File{{Name: "c.pem", Data: c.CertPEM}, {Name: "k.pem", Data: k.KeyPEM}}, "", nil, now)
+	}
+	bundle, err := read(cert, cert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = OwnCertificate(bundle, "192.0.2.40", now); err != nil {
 		t.Errorf("a matching pair: %v", err)
 	}
-	if _, err := OwnCertificate(cert.CertPEM, other.KeyPEM, "c.pem", "k.pem", "192.0.2.40", now); err == nil || !strings.Contains(err.Error(), "is not the key of c.pem") {
-		t.Errorf("a key of another certificate: %v", err)
+	if _, err = read(cert, other); err == nil {
+		t.Error("a key of another certificate was read")
 	}
-	if _, err := OwnCertificate(cert.CertPEM, cert.KeyPEM, "c.pem", "k.pem", "192.0.2.99", now); err == nil || !strings.Contains(err.Error(), "is not valid for 192.0.2.99") {
+	if _, err = OwnCertificate(bundle, "192.0.2.99", now); err == nil || !strings.Contains(err.Error(), "is not valid for 192.0.2.99") {
 		t.Errorf("another host: %v", err)
 	}
-	if _, err := OwnCertificate(cert.CertPEM, cert.KeyPEM, "c.pem", "k.pem", "192.0.2.40", now.Add(900*24*time.Hour)); err == nil {
+	if _, err = OwnCertificate(bundle, "192.0.2.40", now.Add(900*24*time.Hour)); err == nil {
 		t.Error("an expired certificate")
 	}
 }

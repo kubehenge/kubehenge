@@ -41,7 +41,7 @@ func (m *Model) needed(id string) bool {
 var settingOrder = []string{
 	settingAPI, settingTrust, settingFamily, settingNetwork, settingVLAN,
 	settingV4Mode, settingV4Addr, settingV4Gateway, settingV6Mode, settingV6Addr, settingV6Gateway,
-	settingDNS, settingStorage, settingTemplate, settingEntry,
+	settingDNS, settingName, settingCert, settingStorage, settingTemplate, settingEntry,
 }
 
 // The settings the summary lets the user change.
@@ -52,6 +52,9 @@ var settingList = []string{
 }
 
 var storageSettings = []string{settingStorage, settingTemplate}
+
+// interfaceSettings are the questions of the Interface step.
+var interfaceSettings = []string{settingName, settingCert}
 
 // networkSettings are the settings a kept container takes by a change of its network alone.
 var networkSettings = []string{
@@ -577,60 +580,6 @@ func hostnameSetting() *setting {
 		},
 		apply: func(m *Model) tea.Cmd {
 			m.S.Cfg.Hostname = m.a.hostname
-			return nil
-		},
-	}
-}
-
-func nameSetting() *setting {
-	return &setting{
-		label:   "DNS name",
-		applies: always,
-		open:    func(*Model) bool { return false },
-		value:   func(m *Model) string { return orNone(m.S.Cfg.Name) },
-		fields: func(m *Model) []huh.Field {
-			m.a.name = m.S.Cfg.Name
-			return []huh.Field{input("DNS name for the certificate", &m.a.name, "none", nil)}
-		},
-		apply: func(m *Model) tea.Cmd {
-			m.S.Cfg.Name, m.S.Cfg.NoName = m.a.name, m.a.name == ""
-			return nil
-		},
-	}
-}
-
-func certSetting() *setting {
-	return &setting{
-		label:   "Certificate",
-		applies: always,
-		open:    func(*Model) bool { return false },
-		value: func(m *Model) string {
-			if m.S.Cfg.CertFile == "" {
-				return "made by the appliance"
-			}
-			return "yours, " + m.S.Cfg.CertFile
-		},
-		fields: func(m *Model) []huh.Field {
-			m.a.certFile, m.a.keyFile = m.S.Cfg.CertFile, m.S.Cfg.KeyFile
-			return []huh.Field{
-				input("Certificate file", &m.a.certFile, "none", nil),
-				input("Key file", &m.a.keyFile, "none", func(s string) error {
-					if (s == "") != (m.a.certFile == "") {
-						return errors.New("give both the certificate and its key, or neither")
-					}
-					return nil
-				}),
-			}
-		},
-		apply: func(m *Model) tea.Cmd {
-			c := &m.S.Cfg
-			c.CertFile, c.KeyFile = m.a.certFile, m.a.keyFile
-			if err := c.CheckOptionFiles(); err != nil {
-				m.note = neutral(err.Error())
-				c.CertFile, c.KeyFile = "", ""
-				m.answered[settingCert] = false
-				return m.open(settingCert)
-			}
 			return nil
 		},
 	}

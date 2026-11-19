@@ -48,3 +48,26 @@ func TestInstallHelpGroupsTheOptions(t *testing.T) {
 		t.Fatalf("the options are not grouped:\n%s", help)
 	}
 }
+
+// The options of the interface's name and certificate are listed under Install.
+func TestInstallHelpListsTheInterfaceOptionsUnderInstall(t *testing.T) {
+	t.Parallel()
+	root := NewRoot()
+	var out strings.Builder
+	root.SetOut(&out)
+	root.SetErr(io.Discard)
+	root.SetArgs([]string{"install", "--help"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	help := out.String()
+	install, upgrade := strings.Index(help, "\nInstall:\n"), strings.Index(help, "\nUpgrade:\n")
+	if install < 0 || upgrade < install {
+		t.Fatalf("the options are not grouped:\n%s", help)
+	}
+	for _, flag := range []string{"--name ", "--cert ", "--key ", "--cert-passphrase-file "} {
+		if !strings.Contains(help[install:upgrade], flag) {
+			t.Errorf("%s is not under Install:\n%s", flag, help)
+		}
+	}
+}

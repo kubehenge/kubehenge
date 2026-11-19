@@ -165,3 +165,20 @@ func TestInstallScriptUsesTheCachedRelease(t *testing.T) {
 		t.Fatalf("a damaged copy was used: %v\n%s", err, out)
 	}
 }
+
+// install.sh's help lists the name and certificate options in the Install group.
+func TestInstallScriptHelpListsTheInterfaceOptionsUnderInstall(t *testing.T) {
+	t.Parallel()
+	src, err := os.ReadFile(filepath.Join("..", "..", "appliance", "install.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.ReplaceAll(string(src), "\r\n", "\n")
+	_, listed, _ := strings.Cut(text, "\nUsage: sh install.sh [options]\n\n")
+	install, _, _ := strings.Cut(listed, "\nUpgrade:\n")
+	for _, flag := range []string{"--name ", "--cert ", "--key ", "--cert-passphrase-file "} {
+		if !strings.Contains(install, flag) {
+			t.Errorf("%s is not under Install in install.sh:\n%s", flag, install)
+		}
+	}
+}

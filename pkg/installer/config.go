@@ -30,24 +30,28 @@ type Config struct {
 	VLAN            string
 	MTU             string
 	// IP is dhcp, none or an address with its prefix. Empty means not decided yet.
-	IP             string
-	Gateway        string
-	IP6            string
-	Gateway6       string
-	DNS            string
-	Hostname       string
-	Name           string
-	NoName         bool
-	CertFile       string
-	KeyFile        string
-	ProxmoxURL     string
-	ProxmoxCA      string
-	Insecure       bool
-	TrustedProxies []string
-	NoTrustedProxy bool
-	Release        string
-	ReleaseSHA     string
-	Tofu           string
+	IP       string
+	Gateway  string
+	IP6      string
+	Gateway6 string
+	DNS      string
+	Hostname string
+	Name     string
+	NoName   bool
+	// CertFile is the comma-separated files of the administrator's certificate, in any format, and
+	// KeyFile the key's file where it is a file of its own.
+	CertFile string
+	KeyFile  string
+	// CertPassphraseFile is the file whose first line is the passphrase of encrypted files.
+	CertPassphraseFile string
+	ProxmoxURL         string
+	ProxmoxCA          string
+	Insecure           bool
+	TrustedProxies     []string
+	NoTrustedProxy     bool
+	Release            string
+	ReleaseSHA         string
+	Tofu               string
 	// PVEEntry is yes, no or empty for not decided.
 	PVEEntry    string
 	Upgrade     bool
@@ -66,6 +70,9 @@ type Config struct {
 	// TrustServedCA is the user's yes to the CA the API serves.
 	TrustServedCA bool
 
+	// passphrase is what the user typed for encrypted files. It lives in memory only: no answers
+	// file, repeat command, log or error holds it.
+	passphrase    string
 	pveEntryFlags [2]*bool
 }
 
@@ -98,10 +105,11 @@ func BindFlags(f *pflag.FlagSet, c *Config) {
 	f.StringVar(&c.Gateway6, "gateway6", "", "the default IPv6 gateway, with a static --ip6")
 	f.StringVar(&c.DNS, "dns", "", "the name servers the container asks, comma-separated (default this node's)")
 	f.StringVar(&c.Hostname, "hostname", "", "the container's host name, also in its certificate (default "+DefaultHostname+")")
-	f.StringVar(&c.Name, "name", "", "a DNS name people reach the appliance by, put into its certificate")
+	f.StringVar(&c.Name, "name", "", "a DNS name people open the interface at, put into its certificate")
 	f.BoolVar(&c.NoName, "no-name", false, "with --certificate, drop the name the certificate was given")
-	f.StringVar(&c.CertFile, "cert", "", "serve this certificate instead of one signed by this cluster's CA")
-	f.StringVar(&c.KeyFile, "key", "", "the key of --cert")
+	f.StringVar(&c.CertFile, "cert", "", "serve the certificate in these files, comma-separated, in any format, instead of one signed by this cluster's CA")
+	f.StringVar(&c.KeyFile, "key", "", "the key of --cert, where it is a file of its own")
+	f.StringVar(&c.CertPassphraseFile, "cert-passphrase-file", "", "a file whose first line is the passphrase of encrypted --cert and --key files")
 	f.StringVar(&c.ProxmoxURL, "proxmox-url", "", "the Proxmox VE API, such as https://pve.example.org:8006")
 	f.StringVar(&c.ProxmoxCA, "proxmox-ca", "", "the CA that signed the API's certificate, alone or in a bundle")
 	f.BoolVar(&c.Insecure, "proxmox-insecure", false, "reach the Proxmox VE API without verifying its certificate")
@@ -188,7 +196,7 @@ func (c *Config) Normalise() error {
 	case no != nil && *no:
 		c.PVEEntry = "no"
 	}
-	c.Name = strings.TrimSpace(c.Name)
+	c.Name = strings.ToLower(strings.TrimSpace(c.Name))
 	return nil
 }
 
@@ -196,7 +204,7 @@ func (c *Config) Normalise() error {
 const repeatBase = "sh install.sh"
 
 // RepeatCommand is the install.sh command that runs an install again with this one's answers.
-// The options hold no secret: a certificate's key is named by its file.
+// The options hold no secret: a certificate's key and its passphrase are named by their files.
 func (c *Config) RepeatCommand() string {
 	args := []string{repeatBase}
 	add := func(name, value string) {
@@ -221,6 +229,7 @@ func (c *Config) RepeatCommand() string {
 	add("--name", c.Name)
 	add("--cert", c.CertFile)
 	add("--key", c.KeyFile)
+	add("--cert-passphrase-file", c.CertPassphraseFile)
 	add("--proxmox-url", c.ProxmoxURL)
 	add("--proxmox-ca", c.ProxmoxCA)
 	for _, p := range c.TrustedProxies {

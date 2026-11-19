@@ -14,6 +14,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/kubehenge/kubehenge/pkg/certfiles"
 )
 
 //go:embed upgrade.sh
@@ -193,12 +195,11 @@ func (r *Runner) ReplaceCertificate(ctx context.Context, out io.Writer) (*Result
 	var cert *Certificate
 	var err error
 	if c.CertFile != "" {
-		certPEM, rerr := os.ReadFile(c.CertFile)
-		keyPEM, kerr := os.ReadFile(c.KeyFile)
-		if rerr != nil || kerr != nil {
-			return nil, userErr("--cert and --key name a readable PEM certificate and its key", "")
+		var b *certfiles.Bundle
+		if b, err = r.S.Node.readOwn(c, r.Now()); err != nil {
+			return nil, plainCertErr(err)
 		}
-		cert, err = OwnCertificate(certPEM, keyPEM, c.CertFile, c.KeyFile, public, r.Now())
+		cert, err = OwnCertificate(b, public, r.Now())
 	} else {
 		cert, err = r.S.Node.MakeCertificate(r.hostnameOf(ctx), addrs, name, r.Now())
 	}

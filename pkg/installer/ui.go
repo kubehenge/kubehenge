@@ -45,10 +45,11 @@ const (
 )
 
 // The crumbs of the header and the stages each one covers.
-var crumbNames = []string{"Network", "Storage", "Summary", "Install", "Done"}
+var crumbNames = []string{"Network", "Interface", "Storage", "Summary", "Install", "Done"}
 
 const (
 	crumbNetwork = iota
+	crumbInterface
 	crumbStorage
 	crumbSummary
 	crumbInstall
@@ -92,13 +93,16 @@ type answers struct {
 	address, gateway, address6, gateway6 string
 	dns, bridge, vlan, mtu               string
 	ctid, hostname, name                 string
-	certFile, keyFile, proxies           string
-	storage, templateStorage, apiHost    string
-	apiURL, apiCA                        string
-	trust, pve, outside, apiCheck        bool
-	action                               string
-	setting                              string
-	gwNote                               string
+	certChoice, certPaths, certFile      string
+	passphrase, proxies                  string
+	// certStep is the step of the certificate question: the choice, its files or a passphrase.
+	certStep                          int
+	storage, templateStorage, apiHost string
+	apiURL, apiCA                     string
+	trust, pve, outside, apiCheck     bool
+	action                            string
+	setting                           string
+	gwNote                            string
 	// apiPick says the API question lists the addresses found, and apiTyped that the user asked
 	// for another.
 	apiPick, apiTyped bool
@@ -485,6 +489,9 @@ func (m *Model) back() tea.Cmd {
 	case m.stage == stAsk && m.asking == settingAPI && m.a.apiTyped && len(TiedCandidates(m.S.Facts.Candidates)) > 1:
 		m.a.apiTyped = false
 		return m.open(settingAPI)
+	case m.stage == stAsk && m.asking == settingCert && m.a.certStep > certStepChoice:
+		m.a.certStep--
+		return m.open(settingCert)
 	case len(m.trail) > 1:
 		prev := m.trail[len(m.trail)-2]
 		m.trail = m.trail[:len(m.trail)-2]
@@ -506,9 +513,22 @@ func (m *Model) advance() tea.Cmd {
 			return m.open(id)
 		}
 	}
-	m.busy = "Checking the network settings"
+	m.busy = "Checking the settings"
 	m.stage = stDetect
-	return tea.Batch(m.spin.Tick, func() tea.Msg { return verifiedMsg{m.S.CheckAddressing(m.ctx)} })
+	return tea.Batch(m.spin.Tick, func() tea.Msg { return verifiedMsg{m.checkAll()} })
+}
+
+// checkAll checks the addresses, then looks the DNS name up for the addresses as they stand, and
+// reads an accepted certificate again for the name and address as they stand now.
+func (m *Model) checkAll() error {
+	if err := m.S.CheckAddressing(m.ctx); err != nil {
+		return err
+	}
+	m.S.CheckName(m.ctx)
+	if m.S.Cfg.CertFile == "" {
+		return nil
+	}
+	return m.S.CheckCertificate()
 }
 
 // afterVerify opens the setting a check refused, or moves on once all pass.
@@ -518,9 +538,17 @@ func (m *Model) afterVerify(err error) (*Model, tea.Cmd) {
 		cmd := m.allAnswered()
 		return m, cmd
 	}
+	if pe, ok := errors.AsType[*PassphraseError](err); ok {
+		m.a.certStep, m.a.certFile = certStepPassphrase, pe.File
+		cmd := m.askCertAgain()
+		return m, cmd
+	}
 	var u *UserError
 	if !errors.As(err, &u) || u.Setting == "" {
 		return m.failWith(err)
+	}
+	if u.Setting == settingCert {
+		m.a.certStep = certStepChoice
 	}
 	if u.Setting == settingOutside {
 		m.stage = stConfirm
@@ -689,6 +717,8 @@ func (m *Model) initFromOptions() {
 	m.given[settingNetwork] = s.BridgeGiven
 	m.given[settingVLAN] = s.VLANGiven
 	m.given[settingDNS] = c.DNS != ""
+	m.given[settingName] = c.Name != "" || c.NoName
+	m.given[settingCert] = c.CertFile != ""
 }
 
 func modeOf(ip string) string {
@@ -717,6 +747,9 @@ func (m *Model) crumb() int {
 	case stAsk:
 		if slices.Contains(storageSettings, m.asking) {
 			return crumbStorage
+		}
+		if slices.Contains(interfaceSettings, m.asking) {
+			return crumbInterface
 		}
 		return crumbNetwork
 	case stList, stSummary, stConfirm:

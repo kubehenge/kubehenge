@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 )
 
 // savedAnswers are the answers of a run that did not finish, kept on the node for the next run to
@@ -27,6 +28,7 @@ type savedAnswers struct {
 	DNS             string   `json:"dns,omitempty"`
 	Hostname        string   `json:"hostname,omitempty"`
 	Name            string   `json:"name,omitempty"`
+	Cert            string   `json:"cert,omitempty"`
 	TrustedProxies  []string `json:"trustedProxies,omitempty"`
 	PVEEntry        string   `json:"pveEntry,omitempty"`
 }
@@ -36,7 +38,7 @@ func saveAnswers(path string, c *Config) error {
 	data, err := json.MarshalIndent(savedAnswers{
 		CTID: c.CTID, Storage: c.Storage, TemplateStorage: c.TemplateStorage, Bridge: c.Bridge, VLAN: c.VLAN, MTU: c.MTU,
 		IP: c.IP, Gateway: c.Gateway, IP6: c.IP6, Gateway6: c.Gateway6, DNS: c.DNS, Hostname: c.Hostname, Name: c.Name,
-		TrustedProxies: c.TrustedProxies, PVEEntry: c.PVEEntry,
+		Cert: strings.Join(c.ownFiles(), ","), TrustedProxies: c.TrustedProxies, PVEEntry: c.PVEEntry,
 	}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal answers: %w", err)
@@ -87,6 +89,9 @@ func (s *Session) Restore(ctx context.Context, a *savedAnswers) bool {
 	}
 	r.fill("DNS", &c.DNS, a.DNS)
 	r.fill("DNS name", &c.Name, a.Name)
+	if c.CertFile == "" && a.Cert != "" {
+		r.certificate(a.Cert)
+	}
 	if !s.HostnameGiven && a.Hostname != "" && a.Hostname != DefaultHostname {
 		r.take("host name", func() { c.Hostname = a.Hostname })
 	}
@@ -146,6 +151,19 @@ func (r *restoring) fill(what string, dst *string, value string) {
 	if *dst == "" && value != "" {
 		r.take(what, func() { *dst = value })
 	}
+}
+
+// certificate takes the saved certificate files when they still read and fit the name and address.
+// The passphrase was never saved, so encrypted files fit only with --cert-passphrase-file.
+func (r *restoring) certificate(files string) {
+	c := &r.s.Cfg
+	c.CertFile = files
+	if err := r.s.CheckCertificate(); err != nil {
+		c.CertFile = ""
+		r.s.Dropped = append(r.s.Dropped, "certificate")
+		return
+	}
+	r.restored = true
 }
 
 // network takes the MTU and the addresses of the saved network, each on its own.

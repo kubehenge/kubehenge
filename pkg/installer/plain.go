@@ -144,8 +144,11 @@ func RunPlain(ctx context.Context, s *Session, newRunner func(emit func(Event)) 
 	if s.Cfg.PVEEntry == "" {
 		s.Cfg.PVEEntry = "no"
 	}
-	for _, n := range append(append([]string(nil), s.Notices...), s.Cautions...) {
+	for _, n := range append(append([]string(nil), s.Notices...), s.AllCautions()...) {
 		_, _ = fmt.Fprintln(out, "kubehenge: "+n)
+	}
+	if s.Own != nil && len(s.Own.Dropped) > 0 {
+		_, _ = fmt.Fprintln(out, "kubehenge: "+droppedNote(s.Own.Dropped))
 	}
 	if s.Cfg.DryRun {
 		_, _ = fmt.Fprint(out, dryRunHeading+s.PlanText(false))
@@ -193,7 +196,11 @@ func plainChecks(ctx context.Context, s *Session) error {
 	if err := s.ResolveAPI(ctx, PickBest); err != nil {
 		return err
 	}
-	return s.UnattendedCheck()
+	if err := s.UnattendedCheck(); err != nil {
+		return err
+	}
+	s.CheckName(ctx)
+	return plainCertErr(s.CheckCertificate())
 }
 
 // dryRunHeading starts the plan a dry run prints.
@@ -250,6 +257,9 @@ func WriteEnd(out io.Writer, res *Result) {
 	_, _ = fmt.Fprintf(out, "Certificate SHA-256 fingerprint: %s\nValid until: %s\n", res.Fingerprint, res.ValidUntil.UTC().Format(time.RFC1123))
 	if res.Name != "" {
 		_, _ = fmt.Fprintf(out, "Point %s at %s in your DNS.\n", res.Name, res.Address)
+	}
+	if res.AddressURL != "" {
+		_, _ = fmt.Fprintf(out, "Also at %s\n", res.AddressURL)
 	}
 	_, _ = fmt.Fprintf(out, "Sign in with a Proxmox VE administrator to create the management cluster.\nLog: %s\n", res.LogPath)
 }

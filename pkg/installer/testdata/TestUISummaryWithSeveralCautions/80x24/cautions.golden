@@ -1,4 +1,4 @@
-  Kubehenge  Network · Storage · Summary · Install · Done
+  Kubehenge  Network · Interface · Storage · Summary · Install · Done
   Install           Kubehenge on node pve1
   Network           vmbr0 (bridge)
   IPv4              DHCP
@@ -10,6 +10,8 @@
   Storage           disk local-lvm, template local-lvm
   Proxmox VE API    https://pve1.example.com:8006
   API CA            this cluster's CA
+  Interface         the address comes from DHCP
+  Certificate       made here, signed by this cluster's CA
   Proxmox VE entry  no
   If it fails       you choose to keep or remove the container
   Note  Clusters without IPv6 need 192.0.2.10 in the API certificate.

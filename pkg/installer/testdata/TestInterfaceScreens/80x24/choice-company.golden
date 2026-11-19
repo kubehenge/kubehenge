@@ -1,0 +1,10 @@
+ ▄▄▄▄▄▄▄▄▄   Kubehenge
+ ▀██▀▀▀██▀   Appliance installer
+  ██   ██    Network · Interface · Storage · Summary · Install · Done
+
+  ┃ Certificate
+  ┃ This node's API certificate comes from CN=Corporate Root, so browsers that
+  ┃ trust it warn about one made here
+  ┃   Made here, signed by this cluster's CA
+  ┃ > Files of your own
+  ↑↓ choose  enter confirm  esc back  ctrl+c quit

@@ -149,7 +149,8 @@ func (c *Config) generalChecks() []optionCheck {
 		{c.NoTrustedProxy && !c.Upgrade, "--no-trusted-proxy goes with --upgrade", ""},
 		{c.NoName && (!c.Certificate || c.Name != ""), "--no-name goes with --certificate and without --name", ""},
 		{c.Hostname != "" && !hostnameRE.MatchString(c.Hostname), "--hostname is a host name such as kubehenge", ""},
-		{(c.CertFile != "") != (c.KeyFile != ""), "--cert and --key name a readable PEM certificate and its key", ""},
+		{c.CertFile == "" && c.KeyFile != "", "--key goes with --cert, which names the certificate files", ""},
+		{c.CertFile == "" && c.CertPassphraseFile != "", "--cert-passphrase-file goes with --cert", ""},
 	}
 }
 

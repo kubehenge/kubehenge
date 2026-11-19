@@ -14,7 +14,6 @@ import (
 	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -148,6 +147,8 @@ type opts struct {
 	untrusted bool
 	// hosts maps names to addresses.
 	hosts map[string][]string
+	// lookupErr is what a lookup of a name not in hosts fails with, a name that has no record where nil.
+	lookupErr error
 }
 
 type harness struct {
@@ -360,7 +361,10 @@ func newHarness(t *testing.T, o opts) *harness { //nolint:gocritic // tests pass
 			if a, ok := o.hosts[name]; ok {
 				return a, nil
 			}
-			return nil, errors.New("no such host")
+			if o.lookupErr != nil {
+				return nil, o.lookupErr
+			}
+			return nil, &net.DNSError{Err: "no such host", Name: name, IsNotFound: true}
 		},
 		Dial: func(context.Context, string, string) ([]*x509.Certificate, error) { return h.chain, nil },
 		Probe: func(_ context.Context, dev string, target netip.Addr) (bool, error) {

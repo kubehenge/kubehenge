@@ -8,6 +8,9 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
+
+	"github.com/kubehenge/kubehenge/pkg/certfiles"
 )
 
 // Session is one install from detection to the summary: the options, what was detected, and the
@@ -46,6 +49,13 @@ type Session struct {
 	Saved *savedAnswers
 	// AnswersPath is where the answers are saved when the install starts, empty for nowhere.
 	AnswersPath string
+
+	// NameCheck is the last lookup of the DNS name, shown in the summary while it fits the options.
+	NameCheck NameCheck
+	// Own is the certificate the files of the options hold, read at the last check.
+	Own *certfiles.Bundle
+	// Now is the clock the certificate checks use, time.Now where nil.
+	Now func() time.Time
 
 	// vlanAware holds what routeVLANError read of each bridge, as a form checks on every key.
 	vlanAware map[string]bool
@@ -445,11 +455,12 @@ func (c *Config) CheckOptionFiles() error {
 			return userErr("--tofu names a readable OpenTofu release archive", "")
 		}
 	}
-	for _, f := range []string{c.CertFile, c.KeyFile} {
-		if f != "" {
-			if _, err := os.Stat(f); err != nil {
-				return userErr("--cert and --key name a readable PEM certificate and its key", "")
-			}
+	for _, f := range append(c.ownFiles(), c.CertPassphraseFile) {
+		if f == "" {
+			continue
+		}
+		if _, err := readCertFile(f); err != nil {
+			return err
 		}
 	}
 	return nil

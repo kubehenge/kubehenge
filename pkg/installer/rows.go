@@ -55,12 +55,8 @@ func (s *Session) Rows(interactive bool) []Row {
 	if s.CA != nil {
 		add("API CA", caText(s.CA, c))
 	}
-	if c.Name != "" {
-		add("DNS name", c.Name)
-	}
-	if c.CertFile != "" {
-		add("Certificate", "yours, "+c.CertFile)
-	}
+	add("Interface", s.interfaceText())
+	add("Certificate", s.certText())
 	if len(c.TrustedProxies) > 0 {
 		add("Trusted proxies", strings.Join(c.TrustedProxies, ", "))
 	}
