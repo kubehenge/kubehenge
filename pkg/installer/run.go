@@ -344,14 +344,18 @@ func (r *Runner) Keep() {
 func (r *Runner) Renet(ctx context.Context) error {
 	c := &r.S.Cfg
 	_, _ = r.pct(ctx, "stop", c.CTID)
+	// A refused change leaves the container stopped, so the next try starts it again either way.
+	r.Redo(stepStartName)
 	args := []string{"set", c.CTID, "--net0", c.containerNet()}
 	if c.DNS != "" {
 		args = append(args, "--nameserver", strings.ReplaceAll(c.DNS, ",", " "))
+	} else {
+		// No name servers given means the node's, which the container uses once its own are gone.
+		args = append(args, "--delete", "nameserver")
 	}
 	if _, err := r.pct(ctx, args...); err != nil {
 		return settingErr(settingNetwork, "Proxmox VE would not change container "+c.CTID+"'s network", "See "+r.LogPath+" for its message")
 	}
-	r.Redo(stepStartName)
 	return nil
 }
 

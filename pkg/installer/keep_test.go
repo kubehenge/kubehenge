@@ -314,3 +314,44 @@ func TestIPv4OnlyContainerGetsIPv6Back(t *testing.T) {
 		t.Errorf("want IPv6 switched on once, got %d: %v", n, h.exec.calls)
 	}
 }
+
+// Clearing the name servers of a kept container gives it the node's again, rather than leaving the
+// ones it was made with.
+func TestRenetWithoutDNSRemovesTheOldNameServers(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true})
+	r := h.runner(h.session(Config{CTID: "100", IP: optDHCP, DNS: "192.0.2.99"}), nil)
+	ctx := context.Background()
+	if err := r.stepCreate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r.S.Cfg.DNS = ""
+	if err := r.Renet(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if set := h.exec.last("pct set 100 --net0"); !strings.HasSuffix(set, " --delete nameserver") {
+		t.Fatalf("the old name servers stay: %q", set)
+	}
+}
+
+// A network change Proxmox VE refuses leaves the container stopped, so the next try starts it.
+func TestRefusedNetworkChangeStartsTheContainerOnTheNextTry(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true})
+	h.exec.on("pct exec 100 -- ip -4 route show default", "")
+	h.exec.fail(apiConnect, 1)
+	s := prepared(t, h, Config{IP: optDHCP, PVEEntry: "no"})
+	r := h.runner(s, nil)
+	ctx := context.Background()
+	if _, err := r.Run(ctx); err == nil {
+		t.Fatal("the run without a route passed")
+	}
+	h.exec.fail("pct set 100 --net0", 255)
+	if err := r.Renet(ctx); err == nil {
+		t.Fatal("the refused change passed")
+	}
+	_, _ = r.Run(ctx)
+	if n := h.exec.count("pct start 100"); n != 2 {
+		t.Fatalf("want the container started again on the next try, got %d starts: %v", n, h.exec.calls)
+	}
+}
