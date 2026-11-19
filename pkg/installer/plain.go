@@ -186,8 +186,9 @@ func RunPlain(ctx context.Context, s *Session, newRunner func(emit func(Event)) 
 		// The cleanup must run even when the run was cancelled.
 		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 		defer cancel()
+		kept := s.Cfg.KeepFailed && runner.Made()
 		switch {
-		case s.Cfg.KeepFailed && runner.Made():
+		case kept:
 			runner.Keep()
 			_, _ = fmt.Fprintf(out, "kubehenge: keeping container %s. Inspect it with: pct enter %s\n", s.Cfg.CTID, s.Cfg.CTID)
 		case runner.Made():
@@ -195,6 +196,7 @@ func RunPlain(ctx context.Context, s *Session, newRunner func(emit func(Event)) 
 		}
 		runner.Cleanup(cleanCtx)
 		_, _ = fmt.Fprintf(out, "kubehenge: log %s\n", runner.LogPath)
+		_, _ = fmt.Fprintf(out, "kubehenge: to run it again with the same answers: %s\n", s.Cfg.RepeatCommand(kept))
 		return err
 	}
 	WriteEnd(out, res)

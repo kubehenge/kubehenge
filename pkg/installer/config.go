@@ -171,6 +171,67 @@ func (c *Config) Normalise() error {
 	return nil
 }
 
+// RepeatCommand is the install.sh command that runs an install again with this one's answers.
+// The options hold no secret: a certificate's key is named by its file. A kept container still
+// holds the ID, so the next run then takes a free one.
+func (c *Config) RepeatCommand(kept bool) string {
+	args := []string{"sh", "install.sh"}
+	add := func(name, value string) {
+		if value != "" {
+			args = append(args, name, shellWord(value))
+		}
+	}
+	if !kept {
+		add("--ctid", c.CTID)
+	}
+	add("--storage", c.Storage)
+	add("--template-storage", c.TemplateStorage)
+	add("--bridge", c.Bridge)
+	add("--vlan", c.VLAN)
+	add("--mtu", c.MTU)
+	add("--ip", c.IP)
+	add("--gateway", c.Gateway)
+	add("--ip6", c.IP6)
+	add("--gateway6", c.Gateway6)
+	add("--dns", c.DNS)
+	if c.Hostname != DefaultHostname {
+		add("--hostname", c.Hostname)
+	}
+	add("--name", c.Name)
+	add("--cert", c.CertFile)
+	add("--key", c.KeyFile)
+	add("--proxmox-url", c.ProxmoxURL)
+	add("--proxmox-ca", c.ProxmoxCA)
+	for _, p := range c.TrustedProxies {
+		add("--trusted-proxy", p)
+	}
+	add("--release", c.Release)
+	add("--sha256", c.ReleaseSHA)
+	add("--tofu", c.Tofu)
+	switches := []struct {
+		flag string
+		on   bool
+	}{
+		{"--proxmox-insecure", c.Insecure}, {"--pve-entry", c.PVEEntry == optYes}, {"--no-pve-entry", c.PVEEntry == "no"},
+		{"--plain", c.Plain}, {"--yes", c.Yes}, {"--keep-failed", c.KeepFailed},
+	}
+	for _, s := range switches {
+		if s.on {
+			args = append(args, s.flag)
+		}
+	}
+	return strings.Join(args, " ")
+}
+
+// shellWord quotes a value for a POSIX shell where it holds more than letters, digits and the
+// marks addresses and paths use.
+func shellWord(s string) string {
+	if strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%_+=:,./-") == "" {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // containerNet returns the container's net0 setting. A gateway goes with a static address only.
 // Without an IPv6 setting there is none, and IP none leaves the IPv4 one out.
 func (c *Config) containerNet() string {

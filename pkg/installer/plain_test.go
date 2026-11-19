@@ -82,6 +82,28 @@ func TestPlainFailureNamesTheCauseBesideTheStep(t *testing.T) {
 	}
 }
 
+// A failed plain run prints the command that runs it again with the same answers. A kept
+// container holds its ID, so that command names none.
+func TestPlainFailurePrintsTheCommandToRepeat(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true})
+	h.exec.fail("pct start 100", 1)
+	out, _ := plainOn(t, h, Config{IP: "dhcp", DNS: "192.0.2.53", Hostname: "ct1", PVEEntry: "no", Plain: true})
+	want := "kubehenge: to run it again with the same answers: sh install.sh --ctid 100 --storage local-lvm --template-storage local-lvm --bridge vmbr0 --ip dhcp --dns 192.0.2.53 --hostname ct1 --proxmox-url https://pve1.example.com:8006 --tofu " + shellWord(h.tofu) + " --no-pve-entry --plain\n"
+	if !strings.Contains(out, want) {
+		t.Fatalf("want %q in:\n%s", want, out)
+	}
+	if got := shellWord("/root/it's here.pem"); got != `'/root/it'\''s here.pem'` {
+		t.Errorf("a path with a quote and a space came out as %s", got)
+	}
+	h = newHarness(t, opts{dhcp: true})
+	h.exec.fail("pct start 100", 1)
+	out, _ = plainOn(t, h, Config{IP: "dhcp", PVEEntry: "no", KeepFailed: true})
+	if !strings.Contains(out, "same answers: sh install.sh --storage") || !strings.Contains(out, " --keep-failed\n") {
+		t.Fatalf("the command after a kept container:\n%s", out)
+	}
+}
+
 // --keep-failed leaves the container and says how to look into it.
 func TestPlainKeepFailedKeepsTheContainer(t *testing.T) {
 	t.Parallel()
