@@ -4,6 +4,14 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
+### Added
+
+- Administrators show the interface's certificate, replace it with files in any format, make a self-signed one or go back to the installer's, from the API and `kubehenge appliance certificate`. A change reaches the next connection with no restart ([upgrading.md](upgrading.md#from-the-interface)).
+
+### Changed
+
+- `install.sh --certificate` removes a certificate given through the interface.
+
 ## [0.5.4] - 2026-11-19
 
 ### Highlights

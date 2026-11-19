@@ -290,21 +290,33 @@ func (c *interfaceClient) adoptLoginOnFile(ctx context.Context) bool {
 	return true
 }
 
+// formBody is a request body that is already encoded, as an upload of files is, in place of the
+// JSON a body is otherwise sent as.
+type formBody struct {
+	contentType string
+	data        []byte
+}
+
 func (c *interfaceClient) send(ctx context.Context, method, path string, body any) (*http.Response, error) {
 	var payload io.Reader = http.NoBody
-	if body != nil {
+	contentType := ""
+	switch b := body.(type) {
+	case nil:
+	case formBody:
+		payload, contentType = bytes.NewReader(b.data), b.contentType
+	default:
 		raw, err := json.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("encoding the request: %w", err)
 		}
-		payload = bytes.NewReader(raw)
+		payload, contentType = bytes.NewReader(raw), "application/json"
 	}
 	req, err := http.NewRequestWithContext(ctx, method, strings.TrimSuffix(c.login.URL, "/")+path, payload)
 	if err != nil {
 		return nil, fmt.Errorf("the interface's address: %w", err)
 	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	// A password sign-in that says it is the CLI's lasts longer than a browser's and outlives a
 	// restart of the interface.

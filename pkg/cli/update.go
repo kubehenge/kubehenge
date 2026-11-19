@@ -46,7 +46,7 @@ func releaseIndexDefault() string {
 
 func newUpdateCommand() *cobra.Command {
 	check := appliance.ServiceCheck{
-		CertFile: "/etc/kubehenge/tls.crt", Address: "127.0.0.1:443", Wait: healthWait, Settle: healthSettle,
+		CertFile: "/etc/kubehenge/tls.crt", StoredFile: storedCertificateFile, Address: "127.0.0.1:443", Wait: healthWait, Settle: healthSettle,
 	}
 	u := appliance.Updater{
 		Root: "/", Restart: appliance.RestartService, Reload: appliance.ReloadUnits, Healthy: check.Healthy,

@@ -341,7 +341,7 @@ func TestSetupTellsAdministratorsWhenTheAddressMoved(t *testing.T) {
 	} {
 		h := newHarness(t)
 		h.server.Appliance = &appliance.Appliance{Dir: t.TempDir()}
-		h.server.CertificateIPs, h.server.CertificateNames = []netip.Addr{old}, []string{"kubehenge", "kubehenge.example.org"}
+		h.serveCertificate(h.clock.AddDate(2, 0, 0), []string{"kubehenge", "kubehenge.example.org"}, old.String())
 		h.server.OwnAddresses = func() []netip.Addr { return tc.own }
 		a := h.browser()
 		a.signIn("admin@pve")
@@ -393,7 +393,7 @@ func TestSetupTellsAdministratorsWhenTheCertificateRunsOut(t *testing.T) {
 	h := newHarness(t)
 	h.server.Appliance = &appliance.Appliance{Dir: t.TempDir()}
 	h.server.ApplianceVMID = 150
-	h.server.CertificateExpires = time.Date(2028, 1, 16, 20, 17, 48, 0, time.UTC)
+	h.serveCertificate(time.Date(2028, 1, 16, 20, 17, 48, 0, time.UTC), []string{"kubehenge"})
 	a := h.browser()
 	a.signIn("admin@pve")
 	if got := a.do("GET", "/api/setup", "").Body.String(); !strings.Contains(got, `"certificateExpires":"2028-01-16T20:17:48Z","applianceVMID":150`) {

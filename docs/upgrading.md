@@ -372,9 +372,27 @@ sh install.sh --certificate --ctid 105
 
 The same command makes a new certificate after the appliance's address changed. `--name kubehenge.example.org` gives the appliance a DNS name. `--cert <files>` installs a certificate of your own, as the installer's own question does.
 
-It restarts the interface and the shared Headlamp, then prints the new fingerprint. It does not restart while the management cluster is being applied or removed or a VM template is being built. Run it again once that has finished.
+It restarts the interface and the shared Headlamp, then prints the new fingerprint. It does not restart while the management cluster is being applied or removed or a VM template is being built. Run it again once that has finished. It also removes a certificate given through the interface (below), so the installer's is served again.
 
 `--upgrade` renews a certificate the installer made once it has less than 60 days left. It only warns about a certificate of your own.
+
+### From the interface
+
+Administrators show and change the certificate with no shell and no restart, on the Administration page or in the appliance with `kubehenge appliance certificate`:
+
+```sh
+pct exec <ctid> -- kubehenge appliance certificate
+pct exec <ctid> -- kubehenge appliance certificate replace fullchain.pem host.key
+pct exec <ctid> -- kubehenge appliance certificate replace host.pfx --passphrase-file /root/passphrase
+pct exec <ctid> -- kubehenge appliance certificate self-sign
+pct exec <ctid> -- kubehenge appliance certificate reset
+```
+
+`replace` takes the files [`--cert` takes](#certificate-files), with the same checks, and the certificate must be valid for the host of the public URL. `self-sign` makes a certificate for the names and addresses of the one served, valid for 824 days. `reset` serves the installer's again. Open sessions and Headlamp keep working through a change.
+
+A certificate given this way is kept in the key volume, which backups of the container leave out. After a restore, the installer's certificate is served until it is given again. `--upgrade` leaves it, and the upgrade's health check expects it.
+
+`kubehenge login` pins the certificate it was given with `--ca`. After a change to one that CA does not vouch for, `kubehenge` commands fail until `kubehenge login` is run again with the new CA.
 
 ### Certificate files
 

@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/kubehenge/kubehenge/pkg/pve"
 	"github.com/kubehenge/kubehenge/pkg/templates"
+	"github.com/kubehenge/kubehenge/pkg/ui"
 )
 
 // writeCertificate writes a certificate for 127.0.0.1 and localhost that is its own CA, and its
@@ -174,8 +176,8 @@ func TestServeStopsCleanlyWhenItsContextEnds(t *testing.T) {
 	if err := o.run(ctx, conn); err != nil {
 		t.Errorf("run gave %v once its context ended; want a clean stop", err)
 	}
-	if o.s.Appliance == nil || o.s.Upgrades == nil || o.s.MakeTemplate == nil || o.s.CertificateExpires.IsZero() {
-		t.Errorf("the interface is not the appliance's: appliance %v, upgrades %v, certificate expiring %s", o.s.Appliance, o.s.Upgrades, o.s.CertificateExpires)
+	if o.s.Appliance == nil || o.s.Upgrades == nil || o.s.MakeTemplate == nil || o.s.Certificate == nil {
+		t.Errorf("the interface is not the appliance's: appliance %v, upgrades %v, certificate %v", o.s.Appliance, o.s.Upgrades, o.s.Certificate)
 	}
 }
 
@@ -191,6 +193,10 @@ func TestServeStopsWithTheFirstServerThatFails(t *testing.T) {
 	t.Cleanup(func() { _ = taken.Close() })
 	o, _ := serveOptionsIn(t, t.TempDir())
 	o.listen = taken.Addr().String()
+	o.s.Certificate = ui.NewInterfaceCertificate("", o.certFile, o.keyFile)
+	if err = o.s.Certificate.Load(time.Now(), nil); err != nil {
+		t.Fatal(err)
+	}
 	o.headlampListen, o.headlampUpstream, o.headlampKubeconfig = "127.0.0.1:0", "http://127.0.0.1:4466", filepath.Join(t.TempDir(), "headlamp.kubeconfig")
 	if err = o.setUpHeadlamp(); err != nil {
 		t.Fatal(err)
@@ -200,6 +206,63 @@ func TestServeStopsWithTheFirstServerThatFails(t *testing.T) {
 	}
 	if _, err = os.Stat(o.headlampKubeconfig); err != nil {
 		t.Errorf("serve returned before Headlamp's sync finished: %v", err)
+	}
+}
+
+// The interface and Headlamp take the certificate they present from the one holder, which serve
+// does not hand them as files.
+func TestServeGivesBothListenersTheCertificateOfOneHolder(t *testing.T) {
+	t.Parallel()
+	free := func() string {
+		l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = l.Close() }()
+		return l.Addr().String()
+	}
+	o, _ := serveOptionsIn(t, t.TempDir())
+	o.a.Dir = ""
+	o.listen = free()
+	o.headlampListen, o.headlampUpstream, o.headlampKubeconfig = free(), "http://127.0.0.1:4466", filepath.Join(t.TempDir(), "headlamp.kubeconfig")
+	o.s.Certificate = ui.NewInterfaceCertificate("", o.certFile, o.keyFile)
+	if err := o.s.Certificate.Load(time.Now(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.setUpHeadlamp(); err != nil {
+		t.Fatal(err)
+	}
+	// The files stay where they are, since what is presented comes from the holder alone.
+	for _, f := range []string{o.certFile, o.keyFile} {
+		if err := os.Remove(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- o.serve(ctx) }()
+	want := ""
+	for _, addr := range []string{o.listen, o.headlampListen} {
+		var got string
+		for range 100 {
+			conn, err := (&tls.Dialer{Config: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}}).DialContext(ctx, "tcp", addr) //nolint:gosec // only the presented certificate is read
+			if err == nil {
+				if secured, ok := conn.(*tls.Conn); ok {
+					got = string(secured.ConnectionState().PeerCertificates[0].Raw)
+				}
+				_ = conn.Close()
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		if got == "" || want != "" && got != want {
+			t.Errorf("%s presents a certificate other than the interface's, or none", addr)
+		}
+		want = got
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Errorf("serve gave %v once its context ended", err)
 	}
 }
 

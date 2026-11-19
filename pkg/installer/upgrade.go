@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kubehenge/kubehenge/pkg/appliance"
 	"github.com/kubehenge/kubehenge/pkg/certfiles"
 )
 
@@ -209,6 +210,11 @@ func (r *Runner) ReplaceCertificate(ctx context.Context, out io.Writer) (*Result
 	r.sayf(out, "ok   Certificate for %s", public)
 	if err = r.installCertificate(ctx, cert, public); err != nil {
 		return nil, userErr("copying the certificate into container "+c.CTID+" failed", "See "+r.LogPath)
+	}
+	// A certificate an administrator gave the interface is served before the installer's, so asking
+	// for the installer's again takes it away.
+	if _, err = r.inCT(ctx, "rm", "-f", keyDir+"/"+appliance.InterfaceCertificateFile); err != nil {
+		return nil, userErr("removing the stored certificate from container "+c.CTID+" failed", "See "+r.LogPath)
 	}
 	// Not while the management cluster is applied or removed: the restart would cut the run off.
 	_, err = r.inCT(ctx, "flock", "-n", "-E", "75", "/var/lib/kubehenge", "sh", "-c", "systemctl restart kubehenge.service && systemctl stop kubehenge-headlamp.service")

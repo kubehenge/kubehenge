@@ -103,8 +103,8 @@ func (s *Server) applianceStatus(w http.ResponseWriter, r *http.Request, u user,
 		}
 	}
 	v.ApplianceVMID, v.ProxmoxInsecure = s.applianceID(r.Context(), u), s.ProxmoxInsecure
-	if !s.CertificateExpires.IsZero() {
-		v.CertificateExpires = &s.CertificateExpires
+	if expires := s.certificateExpires(); !expires.IsZero() {
+		v.CertificateExpires = &expires
 	}
 	v.AddressMoved, v.DiskFull = s.addressMoved(r.Host), s.diskFull(r.Context())
 	if !v.Ready || v.ApplianceVMID == 0 || !privs.Has("Sys.Audit") {
@@ -145,21 +145,22 @@ type addressMove struct {
 // more, as after its DHCP lease changed or a move to another network. Nil while one still is, or
 // while the user reaches the appliance by a DNS name the certificate is for.
 func (s *Server) addressMoved(host string) *addressMove {
-	if len(s.CertificateIPs) == 0 || s.OwnAddresses == nil {
+	names, ips := s.certificateCovers()
+	if len(ips) == 0 || s.OwnAddresses == nil {
 		return nil
 	}
 	own := s.OwnAddresses()
-	if slices.ContainsFunc(s.CertificateIPs, func(ip netip.Addr) bool { return slices.Contains(own, ip) }) {
+	if slices.ContainsFunc(ips, func(ip netip.Addr) bool { return slices.Contains(own, ip) }) {
 		return nil
 	}
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
 	}
-	if slices.ContainsFunc(s.CertificateNames, func(n string) bool { return strings.EqualFold(n, host) }) {
+	if slices.ContainsFunc(names, func(n string) bool { return strings.EqualFold(n, host) }) {
 		return nil
 	}
 	m := &addressMove{From: []string{}, To: []string{}}
-	for _, ip := range s.CertificateIPs {
+	for _, ip := range ips {
 		m.From = append(m.From, ip.String())
 	}
 	for _, ip := range own {

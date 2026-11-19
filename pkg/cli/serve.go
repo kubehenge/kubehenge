@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
@@ -102,7 +101,7 @@ The interface acts in the management cluster with its own kubeconfig.`,
 	f := cmd.Flags()
 	proxmoxFlags(f, conn)
 	f.StringVar(&o.listen, "listen", ":8443", "address to serve on")
-	f.StringVar(&o.certFile, "tls-cert", "", "PEM file with the interface's certificate and any intermediates")
+	f.StringVar(&o.certFile, "tls-cert", "", "PEM file with the interface's certificate and any intermediates, served until an administrator gives another")
 	f.StringVar(&o.keyFile, "tls-key", "", "PEM file with the certificate's private key")
 	f.StringVar(&s.WorkloadPool, "workload-pool", "kubehenge", "Proxmox VE pool the clusters' own pools nest under, as the controller's --workload-pool")
 	f.StringVar(&s.ClassNamespace, "class-namespace", "kubehenge-system", "namespace of Kubehenge's ClusterClasses")
@@ -117,7 +116,7 @@ The interface acts in the management cluster with its own kubeconfig.`,
 			"so one person's failures no longer lock out everyone behind the proxy. Without it forwarding headers are ignored (env KUBEHENGE_TRUSTED_PROXIES, comma-separated)")
 	f.StringVar(&a.Dir, "appliance-dir", "", "run as Kubehenge's appliance, keeping the management cluster's state in this directory and setting it up from the interface. "+
 		"Without it, the management cluster is the one in KUBECONFIG")
-	f.StringVar(&a.KeyDir, "key-dir", "", "with --appliance-dir, a directory on a volume that backups leave out. It holds the keys for what automatic upgrades of the management cluster keep and for kubehenge login sessions. Without it, those upgrades cannot be switched on and those sessions end when the interface restarts")
+	f.StringVar(&a.KeyDir, "key-dir", "", "with --appliance-dir, a directory on a volume that backups leave out. It holds the keys for what automatic upgrades of the management cluster keep and for kubehenge login sessions, and the certificate an administrator gave the interface. Without it, those upgrades cannot be switched on, those sessions end when the interface restarts and the certificate cannot be changed")
 	f.StringVar(&o.headlampListen, "headlamp-listen", "", "address to serve the shared Headlamp on, behind the interface's sign-in, or empty for none")
 	f.StringVar(&o.headlampUpstream, "headlamp-upstream", "", "the Headlamp server, such as http://127.0.0.1:4466")
 	f.StringVar(&o.headlampKubeconfig, "headlamp-kubeconfig", "", "file the Headlamp server reads its clusters from, written by the interface")
@@ -127,7 +126,7 @@ The interface acts in the management cluster with its own kubeconfig.`,
 	f.StringVar(&o.updateSpool, "update-spool", "/var/lib/kubehenge-update", "the appliance updater's spool, where upgrades are requested")
 	f.StringVar(&o.releaseIndex, "release-index", releaseIndexDefault(), "URL of the signed index of Kubehenge's releases (env KUBEHENGE_RELEASE_INDEX)")
 	f.BoolVar(&o.demo, "demo", false, "serve the interface with sample clusters and no Proxmox VE or management cluster behind it. "+
-		"Changes are refused. Without --tls-cert it serves plain HTTP, on a loopback address only")
+		"Changes are refused, except those of the interface's certificate, which stay in memory. Without --tls-cert it serves plain HTTP, on a loopback address only")
 	f.StringVar(&o.demoTime, "demo-time", "", "with --demo, stop the demo's clock at this RFC 3339 time, for screenshots that come out the same every run")
 	o.logs.addFlags(f, "log in development mode, naming where in the code each line was logged. Lines stay in JSON")
 	return cmd
@@ -165,13 +164,8 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 	if err := provisioner.ValidWorkloadPool(s.WorkloadPool); err != nil {
 		return fmt.Errorf("--workload-pool: %w", err)
 	}
-	pair, err := tls.LoadX509KeyPair(o.certFile, o.keyFile)
-	if err != nil {
-		return fmt.Errorf("--tls-cert and --tls-key: %w", err)
-	}
-	s.CertificateExpires = pair.Leaf.NotAfter
 	if o.a.Dir != "" {
-		knowTheAppliance(s, pair.Leaf, o.a.Dir)
+		knowTheAppliance(s, o.a.Dir)
 	}
 	accounts, err := pve.NewAccounts(*conn)
 	if err != nil {
@@ -201,6 +195,9 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 	sources.HTTP = savedProxyClient(o.a.Dir, conn.URL, sources.HTTP.Timeout)
 	s.TalosReleases = sources.TalosReleases
 	if s.Log, err = o.logs.slogLogger(os.Stderr); err != nil {
+		return err
+	}
+	if err = o.loadCertificate(time.Now()); err != nil {
 		return err
 	}
 	// Without a logger, controller-runtime drops its own messages and says so once.
@@ -258,6 +255,11 @@ func (o *serveOptions) runDemo(ctx context.Context) error {
 		clock = func() time.Time { return at }
 	}
 	o.s.Assets = ui.Frontend()
+	if o.certFile != "" {
+		if err = o.loadCertificate(clock()); err != nil {
+			return err
+		}
+	}
 	cleanup, err := ui.SetUpDemo(&o.s, clock)
 	if err != nil {
 		return fmt.Errorf("--demo: %w", err)
@@ -399,6 +401,17 @@ func (o *serveOptions) setUpHeadlamp() error {
 	return nil
 }
 
+// loadCertificate has the interface serve the certificate of --tls-cert and --tls-key, or the one an
+// administrator gave it, which the appliance's key directory keeps.
+func (o *serveOptions) loadCertificate(now time.Time) error {
+	keyDir := ""
+	if o.a.Dir != "" {
+		keyDir = o.a.KeyDir
+	}
+	o.s.Certificate = ui.NewInterfaceCertificate(keyDir, o.certFile, o.keyFile)
+	return o.s.Certificate.Load(now, o.s.Log) //nolint:wrapcheck // the error names the flags already
+}
+
 // serve runs the interface and, with it, Headlamp's port until ctx ends or one of them stops.
 func (o *serveOptions) serve(ctx context.Context) error {
 	s := &o.s
@@ -422,6 +435,13 @@ func (o *serveOptions) serve(ctx context.Context) error {
 	if s.Headlamp != nil {
 		servers = append(servers, newServer(o.headlampListen, s.HeadlampHandler(), 0))
 	}
+	for _, srv := range servers {
+		if o.certFile != "" {
+			// Both listeners read the certificate on each handshake, so a change reaches the next
+			// connection and no restart.
+			srv.TLSConfig.GetCertificate = s.Certificate.GetCertificate
+		}
+	}
 	wg.Go(func() {
 		<-ctx.Done()
 		shutdown, done := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
@@ -436,7 +456,7 @@ func (o *serveOptions) serve(ctx context.Context) error {
 		if o.certFile == "" {
 			go func() { errs <- srv.ListenAndServe() }()
 		} else {
-			go func() { errs <- srv.ListenAndServeTLS(o.certFile, o.keyFile) }()
+			go func() { errs <- srv.ListenAndServeTLS("", "") }()
 		}
 	}
 	// The first to stop takes the others down with it. The process ends when serve returns, so it
@@ -491,18 +511,12 @@ func applianceVMIDDefault() int {
 	return id
 }
 
-// knowTheAppliance tells the interface the appliance's MAC and IP addresses and those its
-// certificate is for, by which it finds its guest in Proxmox VE and notices an address it lost. It
-// also reads the use of the disk holding the appliance's state in dir.
-func knowTheAppliance(s *ui.Server, cert *x509.Certificate, dir string) {
+// knowTheAppliance tells the interface the appliance's MAC and IP addresses, by which it finds its
+// guest in Proxmox VE and notices an address its certificate is not for. It also reads the use of
+// the disk holding the appliance's state in dir.
+func knowTheAppliance(s *ui.Server, dir string) {
 	s.DiskUse = func() (uint64, uint64, error) { return backupstore.DiskUse(dir) }
 	s.ApplianceMACs, s.OwnAddresses = ownMACs(), ownAddresses
-	s.CertificateNames = cert.DNSNames
-	for _, ip := range cert.IPAddresses {
-		if addr, ok := netip.AddrFromSlice(ip); ok {
-			s.CertificateIPs = append(s.CertificateIPs, addr.Unmap())
-		}
-	}
 }
 
 // ownAddresses are the addresses of this machine others may reach it at: neither loopback nor

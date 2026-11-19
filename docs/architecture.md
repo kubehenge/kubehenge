@@ -971,6 +971,18 @@ Users sign in through the Proxmox VE API, with no second user directory. Every P
 - A round starts every minute, or once the round before it has ended. A round waits ten seconds for an answer, for eight sessions at a time.
 - After a restart a kept session works while its ticket is valid. If the sessions file cannot be read, every kept session is dropped and its user runs `kubehenge login` again.
 
+#### The interface's certificate
+
+The interface and Headlamp take their certificate from one function on each handshake, so a change reaches the next connection of either with no restart and signs no one out.
+
+- The installer's certificate (`--tls-cert`, `--tls-key`) is served until an administrator gives another. That one is kept in `interface-certificate.pem` in the key directory, mode 0600, written whole to a temporary file, synced and renamed over the old one.
+- At a start, the stored file is served when it reads cleanly (a key and certificate that pair, with time left). Otherwise the installer's is served, the reason is logged, and administrators see it with the certificate.
+- Administrators only (`Sys.Modify` on `/`) read and change it. `GET /api/appliance/certificate` shows it. `PUT` replaces it with uploaded files (`multipart/form-data`, up to 8 files of 1 MiB, in any format, with an optional `passphrase` field). `POST /api/appliance/certificate/self-signed` makes a self-signed one for the names and addresses of the one served. `DELETE` serves the installer's again. `kubehenge appliance certificate` does the same four things.
+- An upload is refused with a `code` and a sentence when it is unreadable, needs a passphrase, ends within a day, or is not valid for the host of `--public-url`. A refusal changes nothing. One change runs at a time, and a second gets `busy`.
+- Each change is in the activity log with its user and the new fingerprint. No answer or log line holds a key or a passphrase.
+- The key directory is left out of container backups, so a restore serves the installer's certificate until an administrator gives the other again. `install.sh --certificate` removes the stored file. `--upgrade` leaves it, and the updater's health check expects it.
+- The demo does all of it in memory.
+
 #### Behind a reverse proxy
 
 The interface needs a host name of its own, never a path such as `https://tools.example.org/kubehenge/`, because its pages and API use absolute paths.

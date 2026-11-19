@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -662,5 +663,28 @@ func TestReplaceCertificate(t *testing.T) {
 	h.exec.fail("pct exec 100 -- flock", exitBusy)
 	if _, err = r.ReplaceCertificate(ctx, out); err == nil || !strings.Contains(err.Error(), "the interface is busy") {
 		t.Errorf("a busy interface: %v", err)
+	}
+}
+
+// The installer's certificate is the one served unless an administrator gave the interface another,
+// which is kept in the key directory. Replacing the installer's certificate takes that one away,
+// before the interface restarts and reads what it serves.
+func TestReplaceCertificateForgetsTheOneAnAdministratorGave(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const remove = "pct exec 100 -- rm -f /var/lib/kubehenge-keys/interface-certificate.pem"
+	h, r, out := upgradeHarness(t)
+	h.exec.on("pct config 100", "hostname: kubehenge\ntags: kubehenge\nnet0: name=eth0,bridge=vmbr0,ip=192.0.2.40/24\n")
+	r.S.Cfg.Upgrade, r.S.Cfg.Certificate, r.S.Cfg.Name = false, true, "kubehenge.example.org"
+	if _, err := r.ReplaceCertificate(ctx, out); err != nil {
+		t.Fatal(err)
+	}
+	removed, restarted := slices.Index(h.exec.calls, remove), slices.IndexFunc(h.exec.calls, func(c string) bool { return strings.HasPrefix(c, "pct exec 100 -- flock") })
+	if h.exec.count(remove) != 1 || removed > restarted {
+		t.Errorf("the stored certificate is removed once, before the restart: %v", h.exec.calls)
+	}
+	h.exec.failWith(remove, "no such file system")
+	if _, err := r.ReplaceCertificate(ctx, out); err == nil || !strings.Contains(err.Error(), "removing the stored certificate") {
+		t.Errorf("a stored certificate that cannot be removed: %v", err)
 	}
 }
