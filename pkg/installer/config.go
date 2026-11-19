@@ -119,6 +119,41 @@ func BindFlags(f *pflag.FlagSet, c *Config) {
 	f.BoolVar(&c.KeepFailed, "keep-failed", false, "keep the container of a failed install for inspection instead of removing it")
 	// The entry answers are applied by Normalise once the flags are parsed.
 	c.pveEntryFlags = [2]*bool{pveEntry, noPVEEntry}
+	for group, names := range map[string][]string{groupUpgrade: {"upgrade", "no-trusted-proxy"}, groupCertificate: {"certificate", "no-name"}} {
+		for _, name := range names {
+			_ = f.SetAnnotation(name, flagGroup, []string{group})
+		}
+	}
+}
+
+// The groups the options are listed in. An option without a group is an install's.
+const (
+	flagGroup        = "group"
+	groupInstall     = "Install"
+	groupUpgrade     = "Upgrade"
+	groupCertificate = "Certificate"
+)
+
+// FlagUsages lists the options under Install, Upgrade and Certificate.
+func FlagUsages(f *pflag.FlagSet) string {
+	sets := map[string]*pflag.FlagSet{}
+	f.VisitAll(func(fl *pflag.Flag) {
+		group := groupInstall
+		if g := fl.Annotations[flagGroup]; len(g) > 0 {
+			group = g[0]
+		}
+		if sets[group] == nil {
+			sets[group] = pflag.NewFlagSet(group, pflag.ContinueOnError)
+		}
+		sets[group].AddFlag(fl)
+	})
+	var parts []string
+	for _, group := range []string{groupInstall, groupUpgrade, groupCertificate} {
+		if s := sets[group]; s != nil {
+			parts = append(parts, group+":\n"+s.FlagUsages())
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 // Normalise folds flags that cannot be read directly into the Config.

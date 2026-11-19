@@ -120,10 +120,9 @@ usage() {
     cat << 'OPTIONS'
 Usage: sh install.sh [options]
 
-Options:
+Install:
       --bridge string                   the bridge, Open vSwitch bridge or SDN VNet the container attaches to
       --cert string                     serve this certificate instead of one signed by this cluster's CA
-      --certificate[=true|false]        replace the certificate of the appliance in container --ctid
       --ctid string                     the container's ID (default the next free one)
       --dns string                      the name servers the container asks, comma-separated (default this node's)
       --dry-run[=true|false]            print what would be installed and change nothing
@@ -136,9 +135,7 @@ Options:
       --key string                      the key of --cert
       --mtu string                      the MTU of the container's network, 576 to 65535
       --name string                     a DNS name people reach the appliance by, put into its certificate
-      --no-name[=true|false]            with --certificate, drop the name the certificate was given
       --no-pve-entry[=true|false]       do not add the Kubernetes entry
-      --no-trusted-proxy[=true|false]   with --upgrade, remove the list of trusted proxies
       --plain[=true|false]              print one line per step instead of the full-screen installer
       --proxmox-ca string               the CA that signed the API's certificate, alone or in a bundle
       --proxmox-insecure[=true|false]   reach the Proxmox VE API without verifying its certificate
@@ -150,10 +147,18 @@ Options:
       --template-storage string         where the container template goes
       --tofu string                     install OpenTofu from this release archive instead of downloading it
       --trusted-proxy strings           a reverse proxy in front of the interface, an address or CIDR, repeatable
-      --upgrade[=true|false]            upgrade the appliance in container --ctid
       --vlan string                     the VLAN tag of the container's network, 1 to 4094
       --yes[=true|false]                install without asking to confirm the summary, and accept an address outside the network's known subnet
-  -h, --help                            list these options
+
+Upgrade:
+      --no-trusted-proxy[=true|false]   with --upgrade, remove the list of trusted proxies
+      --upgrade[=true|false]            upgrade the appliance in container --ctid
+
+Certificate:
+      --certificate[=true|false]   replace the certificate of the appliance in container --ctid
+      --no-name[=true|false]       with --certificate, drop the name the certificate was given
+
+  -h, --help   list these options
 OPTIONS
 }
 

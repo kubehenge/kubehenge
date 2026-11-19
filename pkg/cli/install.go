@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"io"
 	"os"
 
@@ -33,6 +34,13 @@ func newInstallCommand() *cobra.Command {
 		},
 	}
 	installer.BindFlags(cmd.Flags(), &cfg)
+	cmd.SetUsageFunc(func(c *cobra.Command) error {
+		_, err := fmt.Fprintf(c.OutOrStderr(), "Usage:\n  %s [flags]\n\n%s", c.CommandPath(), installer.FlagUsages(c.LocalFlags()))
+		if err != nil {
+			return fmt.Errorf("print the usage: %w", err)
+		}
+		return nil
+	})
 	return cmd
 }
 

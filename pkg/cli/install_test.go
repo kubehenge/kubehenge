@@ -29,3 +29,22 @@ func TestInstallRefusesBadOptions(t *testing.T) {
 		}
 	}
 }
+
+// The install command's help lists the options under Install, Upgrade and Certificate.
+func TestInstallHelpGroupsTheOptions(t *testing.T) {
+	t.Parallel()
+	root := NewRoot()
+	var out strings.Builder
+	root.SetOut(&out)
+	root.SetErr(io.Discard)
+	root.SetArgs([]string{"install", "--help"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	help := out.String()
+	install, upgrade, certificate := strings.Index(help, "\nInstall:\n"), strings.Index(help, "\nUpgrade:\n"), strings.Index(help, "\nCertificate:\n")
+	if install < 0 || upgrade < install || certificate < upgrade || !strings.Contains(help[upgrade:certificate], "--upgrade") ||
+		!strings.Contains(help[certificate:], "--no-name") || strings.Contains(help[:upgrade], "--certificate") {
+		t.Fatalf("the options are not grouped:\n%s", help)
+	}
+}

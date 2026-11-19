@@ -117,17 +117,24 @@ func TestInstallScriptHelpListsTheFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, listed, ok := strings.Cut(strings.ReplaceAll(string(src), "\r\n", "\n"), "\nOptions:\n")
+	_, listed, ok := strings.Cut(strings.ReplaceAll(string(src), "\r\n", "\n"), "\nUsage: sh install.sh [options]\n\n")
 	listed, _, found := strings.Cut(listed, "\nOPTIONS\n")
 	if !ok || !found {
 		t.Fatal("install.sh has no list of options")
 	}
-	listed, _, _ = strings.Cut(listed, "\n  -h, --help")
+	listed, _, _ = strings.Cut(listed, "\n\n  -h, --help")
 	f := pflag.NewFlagSet("install", pflag.ContinueOnError)
 	var c Config
 	BindFlags(f, &c)
-	if want := strings.TrimSuffix(f.FlagUsages(), "\n"); listed != want {
+	want := strings.TrimSuffix(FlagUsages(f), "\n")
+	if listed != want {
 		t.Fatalf("install.sh lists other options than the installer takes. Want:\n%s\ngot:\n%s", want, listed)
+	}
+	for group, flag := range map[string]string{"Install:\n": "--ip string", "\nUpgrade:\n": "--no-trusted-proxy", "\nCertificate:\n": "--no-name"} {
+		_, rest, ok := strings.Cut(want, group)
+		if section, _, _ := strings.Cut(rest, ":\n"); !ok || !strings.Contains(section, flag) {
+			t.Errorf("the %q group does not list %s:\n%s", strings.TrimSpace(group), flag, want)
+		}
 	}
 }
 
