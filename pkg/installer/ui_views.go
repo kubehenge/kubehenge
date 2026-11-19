@@ -329,9 +329,13 @@ func (m *Model) runView() string {
 			b.WriteString(s)
 		}
 	}
-	stop := "  ctrl+c stops and removes the container"
-	if m.keeps() {
-		stop = "  ctrl+c stops and keeps the container"
+	stop := "  ctrl+c quit and remove"
+	switch {
+	case m.state["remove"] == StepRunning:
+		// The removal runs to its end whatever the key, and the installer closes after it.
+		stop = "  removing container " + m.S.Cfg.CTID + ", ctrl+c waits for it"
+	case m.keeps():
+		stop = "  ctrl+c quit and keep"
 	}
 	b.WriteString("\n")
 	b.WriteString(dim.Render(stop))

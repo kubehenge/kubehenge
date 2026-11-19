@@ -104,6 +104,36 @@ func TestPlainFailurePrintsTheCommandToRepeat(t *testing.T) {
 	}
 }
 
+// A removal Proxmox VE refuses is said with the command that removes the container by hand, and
+// the repeat command leaves out the ID the container still holds.
+func TestPlainRefusedRemovalNamesTheContainer(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true})
+	h.exec.fail("pct start 100", 1)
+	h.exec.failWith("pct destroy 100", "unable to destroy")
+	out, _ := plainOn(t, h, Config{IP: "dhcp", PVEEntry: "no"})
+	if !strings.Contains(out, "kubehenge: container 100 could not be removed. Remove it with: pct destroy 100 --purge\n") {
+		t.Fatalf("the refused removal is not said:\n%s", out)
+	}
+	if !strings.Contains(out, "same answers: sh install.sh --storage") {
+		t.Fatalf("the repeat command names the taken ID:\n%s", out)
+	}
+}
+
+// A plain run refused before it changes anything prints the command that runs it again, once
+// answers were given.
+func TestPlainRefusalPrintsTheCommandToRepeat(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{})
+	out, err := plainOn(t, h, Config{DNS: "192.0.2.53", PVEEntry: "no"})
+	if err == nil || h.exec.count("pct create") != 0 {
+		t.Fatalf("a node with no DHCP sign was not refused: %v", err)
+	}
+	if !strings.Contains(out, "kubehenge: to run it again with the same answers: sh install.sh ") || !strings.Contains(out, "--dns 192.0.2.53") {
+		t.Fatalf("no repeat command after the refusal:\n%s", out)
+	}
+}
+
 // --keep-failed leaves the container and says how to look into it.
 func TestPlainKeepFailedKeepsTheContainer(t *testing.T) {
 	t.Parallel()
@@ -123,7 +153,7 @@ func TestPlainDryRunChangesNothing(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, opts{dhcp: true})
 	out, err := plainOn(t, h, Config{IP: "dhcp", PVEEntry: "no", DryRun: true})
-	if err != nil || !strings.Contains(out, "Dry run, nothing was changed") || !strings.Contains(out, "DHCP") {
+	if err != nil || !strings.Contains(out, "Dry run, nothing changed") || !strings.Contains(out, "DHCP") {
 		t.Fatalf("dry run: %v\n%s", err, out)
 	}
 	if h.exec.changed() != 0 || h.hits != 0 {

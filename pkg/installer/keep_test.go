@@ -10,18 +10,19 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/exp/teatest/v2"
 )
 
 // failureOnScreen runs the installer through executeOn until a failure screen says the container
-// is kept, and returns the context's cancel, the screen and the run's end.
+// is kept, and returns the context's cancel, what the run prints to stderr and the run's end.
 func failureOnScreen(t *testing.T, h *harness, cfg Config) (context.CancelFunc, *syncBuffer, chan error) { //nolint:gocritic // tests pass a Config literal.
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	t.Cleanup(cancel)
 	keys, _ := pressEnter(ctx, func() bool { return h.exec.count("pct create") > 0 })
-	screen := &syncBuffer{}
+	screen, errs := &syncBuffer{}, &syncBuffer{}
 	c := h.session(cfg).Cfg
-	streams := ioStreams{in: keys, out: screen, errs: &strings.Builder{}, size: []tea.ProgramOption{tea.WithWindowSize(100, 40)}}
+	streams := ioStreams{in: keys, out: screen, errs: errs, size: []tea.ProgramOption{tea.WithWindowSize(100, 40)}}
 	ended := make(chan error, 1)
 	go func() { ended <- executeOn(ctx, h.env(), &c, streams, true, "xterm") }()
 	for !strings.Contains(strings.ReplaceAll(ansi.Strip(screen.String()), " ", ""), "Container100iskeptuntilyouchoose") {
@@ -30,7 +31,7 @@ func failureOnScreen(t *testing.T, h *harness, cfg Config) (context.CancelFunc, 
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	return cancel, screen, ended
+	return cancel, errs, ended
 }
 
 // A signal, as a dropped SSH session sends, on a failure screen that said the container is kept
@@ -78,7 +79,7 @@ func TestUIKeepFailedHoldsForCtrlCDuringTheRun(t *testing.T) {
 	u := startUI(t, h, Config{PVEEntry: "no", KeepFailed: true})
 	u.toSummary()
 	u.enter(1)
-	u.waitFor("ctrl+c stops and keeps the container")
+	u.waitFor("ctrl+c quit and keep")
 	for h.exec.count("pct exec 100 -- ip -4 -o addr show") == 0 {
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -104,7 +105,7 @@ func TestUICtrlCDuringARetriedRunKeepsTheContainer(t *testing.T) {
 	h.exec.stall("pct exec 100 -- ip -4 -o addr show dev eth0")
 	u.down(1)
 	u.enter(1)
-	u.waitFor("ctrl+c stops and keeps the container")
+	u.waitFor("ctrl+c quit and keep")
 	for h.exec.count("pct exec 100 -- ip -4 -o addr show") == tries {
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -113,6 +114,63 @@ func TestUICtrlCDuringARetriedRunKeepsTheContainer(t *testing.T) {
 	m.Shutdown(context.Background())
 	if h.exec.count("pct destroy") != 0 || !strings.Contains(m.Outcome(), "is kept") {
 		t.Fatalf("Ctrl+C in the retried run removed the container: %q %v", m.Outcome(), h.exec.calls)
+	}
+}
+
+// heldExec holds pct destroy until release is closed, as a removal that takes its time.
+type heldExec struct {
+	inner   *fakeExec
+	release chan struct{}
+}
+
+func (e heldExec) Run(ctx context.Context, name string, args ...string) (string, error) {
+	if name == "pct" && len(args) > 0 && args[0] == "destroy" {
+		<-e.release
+	}
+	return e.inner.Run(ctx, name, args...)
+}
+
+// During the removal the user chose, the run screen says Ctrl+C waits for it, and Ctrl+C lets it
+// finish.
+func TestUIRemovalSaysCtrlCWaitsForIt(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true})
+	h.exec.fail("pct start 100", 1)
+	release := make(chan struct{})
+	s := h.session(Config{PVEEntry: "no"})
+	model := NewModel(s, func(emit func(Event)) *Runner {
+		r := h.runner(s, emit)
+		r.Exec = heldExec{h.exec, release}
+		return r
+	})
+	rec := &recorder{inner: model}
+	u := &ui{t: t, h: h, s: s, rec: rec, tm: teatest.NewTestModel(t, rec, teatest.WithInitialTermSize(100, 40)), w: 100, l: 40}
+	u.toSummary()
+	u.enter(1)
+	u.waitFor("Quit and remove it")
+	u.down(2)
+	u.enter(1)
+	u.waitFor("removing container 100, ctrl+c waits for it")
+	u.press(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	close(release)
+	m := u.finish()
+	m.Shutdown(context.Background())
+	if h.exec.count("pct destroy 100") != 1 || !strings.Contains(m.Outcome(), "was removed") {
+		t.Fatalf("Ctrl+C did not let the removal finish: %q %v", m.Outcome(), h.exec.calls)
+	}
+}
+
+// Quitting the full-screen installer after a failure prints the command that runs it again once
+// the screen has closed. The kept container holds its ID, so the command names none.
+func TestQuitAfterAFailurePrintsTheCommandToRepeat(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true})
+	h.exec.fail("pct start 100", 1)
+	cancel, errs, ended := failureOnScreen(t, h, Config{IP: "dhcp", PVEEntry: "no"})
+	cancel()
+	<-ended
+	if got := errs.String(); !strings.Contains(got, "kubehenge: to run it again with the same answers: sh install.sh --storage") || strings.Contains(got, "--ctid") {
+		t.Fatalf("no repeat command without --ctid after the screen closed: %q", got)
 	}
 }
 

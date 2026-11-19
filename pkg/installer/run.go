@@ -295,6 +295,21 @@ func (r *Runner) Made() bool {
 	return r.created
 }
 
+// Stuck reports whether Cleanup's last removal of the container failed.
+func (r *Runner) Stuck() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stuck
+}
+
+// HoldsID reports whether a container of this run still holds its ID: kept, not yet removed, its
+// removal refused, or finished but not protected.
+func (r *Runner) HoldsID() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.kept || r.created || r.stuck || r.unprotected
+}
+
 // Left says what a stopped run left behind that the user must look after, empty for nothing.
 func (r *Runner) Left() string {
 	r.mu.Lock()

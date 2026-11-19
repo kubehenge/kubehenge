@@ -137,19 +137,8 @@ func (e *Env) NewRunner(s *Session, emit func(Event)) *Runner {
 // RunPlain installs with one line per step and no questions. What only a question could settle
 // is an error naming the flag that settles it.
 func RunPlain(ctx context.Context, s *Session, newRunner func(emit func(Event)) *Runner, out io.Writer) error {
-	if err := s.detect(ctx); err != nil {
-		return err
-	}
-	if err := s.CheckAddressing(ctx); err != nil {
-		return err
-	}
-	if err := s.FillStorages(PickBest); err != nil {
-		return err
-	}
-	if err := s.ResolveAPI(ctx, PickBest); err != nil {
-		return err
-	}
-	if err := s.UnattendedCheck(); err != nil {
+	if err := plainChecks(ctx, s); err != nil {
+		printRepeat(out, &s.Cfg, false)
 		return err
 	}
 	if s.Cfg.PVEEntry == "" {
@@ -159,7 +148,7 @@ func RunPlain(ctx context.Context, s *Session, newRunner func(emit func(Event)) 
 		_, _ = fmt.Fprintln(out, "kubehenge: "+n)
 	}
 	if s.Cfg.DryRun {
-		_, _ = fmt.Fprint(out, "Dry run, nothing was changed. The install would be:\n"+s.PlanText(false))
+		_, _ = fmt.Fprint(out, dryRunHeading+s.PlanText(false))
 		return nil
 	}
 	_, _ = fmt.Fprint(out, "Installing:\n"+s.PlanText(false))
@@ -190,28 +179,59 @@ func RunPlain(ctx context.Context, s *Session, newRunner func(emit func(Event)) 
 	return nil
 }
 
+// plainChecks settles what the run needs before it changes anything, or refuses.
+func plainChecks(ctx context.Context, s *Session) error {
+	if err := s.detect(ctx); err != nil {
+		return err
+	}
+	if err := s.CheckAddressing(ctx); err != nil {
+		return err
+	}
+	if err := s.FillStorages(PickBest); err != nil {
+		return err
+	}
+	if err := s.ResolveAPI(ctx, PickBest); err != nil {
+		return err
+	}
+	return s.UnattendedCheck()
+}
+
+// dryRunHeading starts the plan a dry run prints.
+const dryRunHeading = "Dry run, nothing changed. The install would be:\n"
+
 // plainFailed keeps or removes the container of a failed plain run, then names the log and the
 // command that runs the install again.
 func plainFailed(ctx context.Context, s *Session, runner *Runner, out io.Writer) {
 	// The cleanup must run even when the run was cancelled.
 	cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 	defer cancel()
-	kept := s.Cfg.KeepFailed && runner.Made()
+	id := s.Cfg.CTID
 	switch {
-	case kept:
+	case s.Cfg.KeepFailed && runner.Made():
 		runner.Keep()
-		_, _ = fmt.Fprintf(out, "kubehenge: keeping container %s. Inspect it with: pct enter %s\n", s.Cfg.CTID, s.Cfg.CTID)
+		_, _ = fmt.Fprintf(out, "kubehenge: keeping container %s. Inspect it with: pct enter %s\n", id, id)
 	case runner.Made():
-		_, _ = fmt.Fprintf(out, "kubehenge: removing container %s after the failure\n", s.Cfg.CTID)
+		_, _ = fmt.Fprintf(out, "kubehenge: removing container %s after the failure\n", id)
 	}
 	runner.Cleanup(cleanCtx)
+	if runner.Stuck() {
+		_, _ = fmt.Fprintf(out, "kubehenge: container %s could not be removed. Remove it with: pct destroy %s --purge\n", id, id)
+	}
 	_, _ = fmt.Fprintf(out, "kubehenge: log %s\n", runner.LogPath)
-	again := s.Cfg
-	if kept {
-		// The kept container holds the ID, so the next run takes a free one.
+	printRepeat(out, &s.Cfg, runner.HoldsID())
+}
+
+// printRepeat prints the install.sh command that runs the install again with the answers given,
+// when there are any. A container still holding the ID leaves --ctid out, so the next run takes a
+// free one.
+func printRepeat(out io.Writer, c *Config, holdsID bool) {
+	again := *c
+	if holdsID {
 		again.CTID = ""
 	}
-	_, _ = fmt.Fprintf(out, "kubehenge: to run it again with the same answers: %s\n", again.RepeatCommand())
+	if cmd := again.RepeatCommand(); cmd != repeatBase {
+		_, _ = fmt.Fprintf(out, "kubehenge: to run it again with the same answers: %s\n", cmd)
+	}
 }
 
 func suffix(detail string) string {

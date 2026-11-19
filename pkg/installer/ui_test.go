@@ -466,7 +466,7 @@ func TestUIDHCPFailureChangesTheSettingAndRetries(t *testing.T) {
 	}
 }
 
-// Quitting from the failure screen with ctrl+c removes the container, and says so.
+// "Quit and remove it" on the failure screen removes the container, and says so.
 func TestUIFailureQuitAndRemove(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, opts{dhcp: true})

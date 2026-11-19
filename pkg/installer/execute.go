@@ -82,23 +82,27 @@ func executeOn(ctx context.Context, env *Env, cfg *Config, streams ioStreams, in
 }
 
 // ended is what an interactive install returns once the program ended with err: the run's error
-// with what is left of it, or nil with the dry run's plan or the cancel printed.
+// with what is left of it, or nil with the dry run's plan or the cancel printed. An install that
+// stopped with answers given also prints the command that runs it again.
 func (m *Model) ended(err error, streams ioStreams) error {
+	if m.Finished() && err != nil {
+		// A signal on the end screen, such as a dropped SSH session, ends a finished install.
+		return nil
+	}
+	if m.DryRun() && err == nil {
+		_, _ = fmt.Fprint(streams.out, dryRunHeading+m.S.PlanText(true))
+		return nil
+	}
+	if !m.Finished() && (m.runner != nil || len(m.answered) > 0) {
+		printRepeat(streams.errs, &m.S.Cfg, m.runner != nil && m.runner.HoldsID())
+	}
+	outcome := m.Outcome()
 	if err != nil {
-		if m.Finished() {
-			// A signal on the end screen, such as a dropped SSH session, ends a finished install.
-			return nil
-		}
-		if outcome := m.Outcome(); outcome != "" {
+		if outcome != "" {
 			return fmt.Errorf("run: %w. %s", err, outcome)
 		}
 		return fmt.Errorf("run: %w", err)
 	}
-	if m.DryRun() {
-		_, _ = fmt.Fprint(streams.out, "Dry run, nothing was changed. The install would be:\n"+m.S.PlanText(true))
-		return nil
-	}
-	outcome := m.Outcome()
 	if m.Cancelled() {
 		if outcome == "" {
 			outcome = "Nothing was changed."

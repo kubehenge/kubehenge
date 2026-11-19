@@ -172,10 +172,13 @@ func (c *Config) Normalise() error {
 	return nil
 }
 
+// repeatBase is RepeatCommand with no answers.
+const repeatBase = "sh install.sh"
+
 // RepeatCommand is the install.sh command that runs an install again with this one's answers.
 // The options hold no secret: a certificate's key is named by its file.
 func (c *Config) RepeatCommand() string {
-	args := []string{"sh", "install.sh"}
+	args := []string{repeatBase}
 	add := func(name, value string) {
 		if value != "" {
 			args = append(args, name, shellWord(value))
