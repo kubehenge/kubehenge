@@ -85,7 +85,27 @@ type recorder struct {
 
 func (r *recorder) Init() tea.Cmd { return r.inner.Init() }
 
+// keyUnless is a key the installer gets only while its screen lacks the text. The check runs as
+// the key arrives, so a screen that changed after the test last read it cannot take the key.
+type keyUnless struct {
+	key    tea.KeyPressMsg
+	unless string
+}
+
 func (r *recorder) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn // tea.Model's method returns the interface.
+	if k, ok := msg.(keyUnless); ok {
+		r.mu.Lock()
+		skip := strings.Contains(r.last, k.unless)
+		if skip {
+			r.keys++
+			r.lastUpdate = time.Now()
+		}
+		r.mu.Unlock()
+		if skip {
+			return r, nil
+		}
+		msg = k.key
+	}
 	_, cmd := r.inner.Update(msg)
 	screen := sanitise(r.inner.render())
 	r.mu.Lock()
@@ -172,6 +192,12 @@ func (u *ui) settle() {
 // what it set off.
 func (u *ui) press(msg tea.KeyPressMsg) {
 	u.t.Helper()
+	u.send(msg, msg.String())
+}
+
+// send is press for a key or a keyUnless.
+func (u *ui) send(msg tea.Msg, name string) {
+	u.t.Helper()
 	u.settle()
 	// A key sent before the form's field takes focus is lost.
 	if s := u.rec.screen(); strings.Contains(s, "enter confirm") && !strings.Contains(s, "┃") {
@@ -182,7 +208,7 @@ func (u *ui) press(msg tea.KeyPressMsg) {
 	deadline := time.Now().Add(15 * time.Second)
 	for u.rec.keysHandled() < want {
 		if time.Now().After(deadline) {
-			u.t.Fatalf("the installer did not handle the key %q, the screen is:\n%s", msg.String(), u.rec.screen())
+			u.t.Fatalf("the installer did not handle the key %q, the screen is:\n%s", name, u.rec.screen())
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -262,7 +288,8 @@ func (u *ui) toSummary() {
 			u.settle()
 			return
 		case strings.Contains(screen, "enter "):
-			u.enter(1)
+			// A summary drawn after the screen was read would take a plain enter as Install.
+			u.send(keyUnless{tea.KeyPressMsg{Code: tea.KeyEnter}, "If it fails"}, "enter")
 			presses++
 		default:
 			time.Sleep(10 * time.Millisecond)
