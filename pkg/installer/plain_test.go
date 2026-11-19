@@ -134,6 +134,16 @@ func TestPlainRefusalPrintsTheCommandToRepeat(t *testing.T) {
 	}
 }
 
+// A stop before any answer prints no repeat command, since it would repeat nothing.
+func TestPlainRepeatNeedsAnAnswer(t *testing.T) {
+	t.Parallel()
+	var out strings.Builder
+	printRepeat(&out, &Config{}, nil)
+	if out.Len() != 0 {
+		t.Fatalf("a stop without answers printed %q", out.String())
+	}
+}
+
 // --keep-failed leaves the container and says how to look into it.
 func TestPlainKeepFailedKeepsTheContainer(t *testing.T) {
 	t.Parallel()
