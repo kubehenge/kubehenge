@@ -93,15 +93,15 @@ On a terminal, the installer is a full-screen guide. It detects the node and say
 3. For each version, DHCP, router advertisements (IPv6) or a static address.
 4. A static address, typed with or without `/prefix`. The prefix of the network fills in when it is left out. A free address comes filled in, with how it was checked. The gateway is found from the network and kept in the address's subnet. It is asked only when none is found.
 
-After the network it asks only what is ambiguous, and shows a summary of everything that will be created to install, change or cancel. The commands' output goes to `/var/log/kubehenge-install.log`.
+After the network it asks only what is ambiguous, and shows a summary of everything that will be created to install, change or cancel. Each run writes the commands' output to a log of its own, `/var/log/kubehenge-install-<UTC time>-<random>.log`.
 
-A step that fails does not end the installer. The screen names the step, the cause and what to do, and offers to change the setting at fault, try again, quit and keep the container to inspect it (`pct enter <id>`), or quit and remove it. A change of the container's network reaches the container that is already there. A change of any other setting creates it afresh, and the downloads are not repeated.
+A step that fails does not end the installer. The screen names the step, the cause and what to do, and offers to change the setting at fault, try again, quit and keep the container to inspect it (`pct enter <id>`), or quit and remove it. Only that last choice removes it: leaving any other way, or losing the session, keeps it. A change of the container's network or of the Proxmox VE API reaches the container that is already there. A change of any other setting creates it afresh, and the downloads are not repeated.
 
 Without a terminal, with `TERM` empty or `dumb` (a serial console, an editor's shell), or with `--plain`, it prints the plan, then one line as each step starts and one as it ends, and asks nothing. A failed step shows its cause beside it. On a node whose own network is static, it then needs `--ip`, or `--ip dhcp` where a DHCP server answers. A dropped SSH session or Ctrl+C removes the container it was making, unless `--keep-failed` is given.
 
 An address is checked on the container's own network by its neighbour table and then by an ARP probe the installer sends itself, which needs no extra package. The result is free, in use or not checked. A probe that gets no answer counts as free only where this node holds an address on that network, or where the gateway answers a probe too. An address that is in use is refused.
 
-`install.sh --help` lists the options from any shell, with no node and no root. `install.sh` carries the version of its release and the checksums of the release archive and the OpenTofu release. It needs 1 GiB free in `/tmp` (or `TMPDIR`) for the unpacked release. The downloaded archive is kept in `~/.cache/kubehenge` (or `KUBEHENGE_CACHE_DIR`) and used again while it matches its checksum. The installer inside the archive carries the container template's checksum. Every download is checked against its checksum before it is used. Once Proxmox's mirror drops that template, the installer takes the one Proxmox's signed template index lists, with the checksum the index gives. To check the script itself before running it, see [Verifying a release](releasing.md#verifying-a-release).
+`install.sh --help` lists the options from any shell, with no node, no root and no download. `install.sh` carries the version of its release and the checksums of the release archive and the OpenTofu release. It needs 1 GiB free in `/tmp` (or `TMPDIR`) for the unpacked release. The downloaded archive is kept in `~/.cache/kubehenge` (or `KUBEHENGE_CACHE_DIR`) and used again while it matches its checksum. The installer inside the archive carries the container template's checksum. Every download is checked against its checksum before it is used. Once Proxmox's mirror drops that template, the installer takes the one Proxmox's signed template index lists, with the checksum the index gives. To check the script itself before running it, see [Verifying a release](releasing.md#verifying-a-release).
 
 ### Options
 
@@ -145,7 +145,7 @@ Kubehenge is running in container 105: https://192.0.2.40/
 Certificate SHA-256 fingerprint: …
 Valid until: …
 Sign in with a Proxmox VE administrator to create the management cluster.
-Log: /var/log/kubehenge-install.log
+Log: /var/log/kubehenge-install-20261119-134128-2706524411.log
 ```
 
 ### The Proxmox VE API

@@ -371,9 +371,6 @@ func newHarness(t *testing.T, o opts) *harness { //nolint:gocritic // tests pass
 }
 
 func (h *harness) session(cfg Config) *Session { //nolint:gocritic // tests pass a Config literal.
-	if cfg.Hostname == "" {
-		cfg.Hostname = DefaultHostname
-	}
 	cfg.Tofu = h.tofu
 	return &Session{Node: h.node, Cfg: cfg}
 }

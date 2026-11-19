@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/exp/golden"
 	"github.com/charmbracelet/x/exp/teatest/v2"
@@ -77,10 +78,15 @@ type recorder struct {
 	inner *Model
 	mu    sync.Mutex
 	last  string
-	// keys counts the key presses the installer has handled, and lastUpdate is when it handled any
-	// message last.
-	keys       int
-	lastUpdate time.Time
+	// keys counts the key presses the installer has handled.
+	keys int
+	// navForm and navField are the form and field an Enter left, until huh's message that moves on
+	// from them has arrived.
+	navForm  *huh.Form
+	navField huh.Field
+	// ready says the installer takes a key now: nothing is being checked, no Enter is still moving
+	// a form on, and a question's field has its focus.
+	ready bool
 }
 
 func (r *recorder) Init() tea.Cmd { return r.inner.Init() }
@@ -98,7 +104,6 @@ func (r *recorder) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn /
 		skip := strings.Contains(r.last, k.unless)
 		if skip {
 			r.keys++
-			r.lastUpdate = time.Now()
 		}
 		r.mu.Unlock()
 		if skip {
@@ -106,19 +111,48 @@ func (r *recorder) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn /
 		}
 		msg = k.key
 	}
+	before := r.inner.form
+	var field huh.Field
+	if before != nil {
+		field = before.GetFocusedField()
+	}
 	_, cmd := r.inner.Update(msg)
 	screen := sanitise(r.inner.render())
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.last = screen
-	r.lastUpdate = time.Now()
-	if _, ok := msg.(tea.KeyPressMsg); ok {
+	if key, ok := msg.(tea.KeyPressMsg); ok {
 		r.keys++
+		// An Enter a field took without an error moves on only when huh's next message arrives.
+		if key.String() == "enter" && before != nil && r.inner.form == before && field != nil && field.Error() == nil {
+			r.navForm, r.navField = before, field
+		}
 	}
-	r.mu.Unlock()
+	if f := r.navForm; f != nil && (r.inner.form != f || f.State != huh.StateNormal || f.GetFocusedField() != r.navField) {
+		r.navForm, r.navField = nil, nil
+	}
+	r.ready = r.takesKeys()
 	return r, cmd
 }
 
 func (r *recorder) View() tea.View { return r.inner.View() }
+
+// takesKeys is ready, worked out from the installer's state with mu held.
+func (r *recorder) takesKeys() bool {
+	m := r.inner
+	if r.navForm != nil || m.busy != "" {
+		return false
+	}
+	switch m.stage {
+	case stDetect:
+		return false
+	case stFound, stRun, stEnd:
+		return true
+	case stAsk, stList, stConfirm, stSummary, stFail:
+	}
+	// A question's stage with no form open is the installer leaving.
+	return m.form == nil || strings.Contains(r.last, "┃")
+}
 
 func (r *recorder) keysHandled() int {
 	r.mu.Lock()
@@ -126,11 +160,10 @@ func (r *recorder) keysHandled() int {
 	return r.keys
 }
 
-// quietFor is how long ago the installer handled a message last.
-func (r *recorder) quietFor() time.Duration {
+func (r *recorder) takingKeys() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return time.Since(r.lastUpdate)
+	return r.ready
 }
 
 func (r *recorder) screen() string {
@@ -175,21 +208,21 @@ func (u *ui) waitFor(want string) {
 	u.t.Fatalf("waited for %q, the screen is:\n%s", want, u.rec.screen())
 }
 
-// quietPeriod is how long the installer must have handled no message for the screen to count as
-// settled: the messages one key sets off (a form's next field or group, a probe's answer) all
-// arrive within it.
-const quietPeriod = 50 * time.Millisecond
-
-// settle waits until the installer has handled no message for quietPeriod.
+// settle waits until the installer takes keys: nothing is being checked, a form an Enter moved on
+// has moved, and the question's field has its focus.
 func (u *ui) settle() {
+	u.t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) && u.rec.quietFor() < quietPeriod {
+	for !u.rec.takingKeys() {
+		if time.Now().After(deadline) {
+			u.t.Fatalf("the installer never took keys, the screen is:\n%s", u.rec.screen())
+		}
 		time.Sleep(5 * time.Millisecond)
 	}
 }
 
-// press sends a key once the screen has settled, and returns once the installer handled it and
-// what it set off.
+// press sends a key once the installer takes keys, and returns once it handled the key and what
+// the key set off.
 func (u *ui) press(msg tea.KeyPressMsg) {
 	u.t.Helper()
 	u.send(msg, msg.String())
@@ -199,10 +232,6 @@ func (u *ui) press(msg tea.KeyPressMsg) {
 func (u *ui) send(msg tea.Msg, name string) {
 	u.t.Helper()
 	u.settle()
-	// A key sent before the form's field takes focus is lost.
-	if s := u.rec.screen(); strings.Contains(s, "enter confirm") && !strings.Contains(s, "┃") {
-		u.waitFor("┃")
-	}
 	want := u.rec.keysHandled() + 1
 	u.tm.Send(msg)
 	deadline := time.Now().Add(15 * time.Second)
@@ -247,9 +276,6 @@ func (u *ui) typed(s string) {
 func (u *ui) golden(name string) {
 	u.t.Helper()
 	u.settle()
-	if strings.Contains(u.rec.screen(), "enter confirm") || strings.Contains(u.rec.screen(), "enter change") {
-		u.waitFor("┃")
-	}
 	screen := u.rec.screen()
 	show(u.t, fmt.Sprintf("%s-%s-%dx%d", u.t.Name(), name, u.w, u.l), screen)
 	fits(u.t, screen, u.w, u.l)
@@ -525,7 +551,7 @@ func TestUIChangeASettingFromTheSummary(t *testing.T) {
 			u.toSummary()
 			u.press(tea.KeyPressMsg{Code: tea.KeyRight})
 			u.enter(1)
-			u.waitFor("Change")
+			u.waitFor("enter change")
 			u.golden("list")
 			u.press(tea.KeyPressMsg{Code: tea.KeyEscape})
 			u.waitFor("If it fails")

@@ -13,9 +13,9 @@
   ┃   Host name          kubehenge
   ┃   DNS name           none
   ┃   Certificate        made by the appliance
+  ┃   Proxmox VE API     https://pve1.example.com:8006
   ┃   Trusted proxies    none
   ┃   Proxmox VE entry   no
-  ┃
   ┃
   ┃
   ┃

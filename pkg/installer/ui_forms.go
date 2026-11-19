@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -79,6 +80,9 @@ func choose(title string, v *string, opts ...huh.Option[string]) *huh.Select[str
 }
 
 func keysOf(fields []huh.Field) string {
+	if len(fields) > 1 {
+		return "enter next  esc back  ctrl+c leave"
+	}
 	if len(fields) == 1 {
 		switch f := fields[0].(type) {
 		case *huh.Input:
@@ -664,28 +668,96 @@ func templateSetting() *setting {
 	}
 }
 
+// apiOther is the choice of an API address that is not among those found.
+const apiOther = "\x00other"
+
 func apiSetting() *setting {
 	return &setting{
 		label:   "Proxmox VE API",
-		applies: func(m *Model) bool { return len(TiedCandidates(m.S.Facts.Candidates)) > 1 },
-		open:    func(m *Model) bool { return m.S.Cfg.ProxmoxURL == "" && m.S.Cfg.APIHost == "" },
-		value:   func(m *Model) string { return m.S.Cfg.ProxmoxURL },
+		applies: always,
+		open: func(m *Model) bool {
+			return m.S.Cfg.ProxmoxURL == "" && m.S.Cfg.APIHost == "" && len(TiedCandidates(m.S.Facts.Candidates)) > 1
+		},
+		value: func(m *Model) string { return m.S.Cfg.ProxmoxURL },
 		fields: func(m *Model) []huh.Field {
 			tied := TiedCandidates(m.S.Facts.Candidates)
-			opts := make([]huh.Option[string], len(tied))
-			for i, c := range tied {
-				opts[i] = huh.NewOption(c.Host+"  "+c.What, c.Host)
+			m.a.apiPick = len(tied) > 1 && !m.a.apiTyped
+			if !m.a.apiPick {
+				return apiFields(m)
 			}
+			opts := make([]huh.Option[string], 0, len(tied)+1)
+			for _, c := range tied {
+				opts = append(opts, huh.NewOption(c.Host+"  "+c.What, c.Host))
+			}
+			opts = append(opts, huh.NewOption("Another address", apiOther))
 			m.a.apiHost = tied[0].Host
 			return []huh.Field{choose("Proxmox VE API address", &m.a.apiHost, opts...)}
 		},
 		apply: func(m *Model) tea.Cmd {
 			c := &m.S.Cfg
-			c.APIHost, c.ProxmoxURL, m.S.CA = m.a.apiHost, "", nil
+			switch {
+			case m.a.apiPick && m.a.apiHost == apiOther:
+				m.a.apiTyped = true
+				m.answered[settingAPI] = false
+				return m.open(settingAPI)
+			case m.a.apiPick:
+				c.APIHost, c.ProxmoxURL = m.a.apiHost, ""
+			default:
+				m.a.apiTyped = false
+				c.APIHost, c.ProxmoxURL, c.ProxmoxCA, c.Insecure = "", typedAPIURL(m.a.apiURL), m.a.apiCA, !m.a.apiCheck
+				if err := c.CheckOptionFiles(); err != nil {
+					m.note = neutral(err.Error())
+					c.ProxmoxCA = ""
+					m.a.apiTyped, m.answered[settingAPI] = true, false
+					return m.open(settingAPI)
+				}
+			}
+			m.S.CA = nil
 			m.answered[settingTrust], m.given[settingTrust], c.TrustServedCA = false, false, false
 			return m.resolve()
 		},
 	}
+}
+
+// apiFields ask for any API address, a CA file to check it against and whether to check it at all.
+func apiFields(m *Model) []huh.Field {
+	c := &m.S.Cfg
+	m.a.apiURL, m.a.apiCA, m.a.apiCheck = c.ProxmoxURL, c.ProxmoxCA, !c.Insecure
+	found := make([]string, 0, len(m.S.Facts.Candidates))
+	for _, cand := range m.S.Facts.Candidates {
+		found = append(found, APIURL(cand.Host))
+	}
+	return []huh.Field{
+		input("Proxmox VE API address", &m.a.apiURL, "https://pve.example.org:8006", func(s string) error {
+			if !apiURLRE.MatchString(typedAPIURL(s)) {
+				return errors.New("an https:// URL or a host name, such as pve.example.org")
+			}
+			return nil
+		}).Suggestions(found),
+		input("API CA file", &m.a.apiCA, "none, the CA is found", nil),
+		huh.NewConfirm().Title("API certificate").Affirmative("Check").Negative("Do not check").Value(&m.a.apiCheck).
+			Validate(func(check bool) error {
+				if !check && m.a.apiCA != "" {
+					return errors.New("a CA file goes with the check")
+				}
+				return nil
+			}),
+	}
+}
+
+// typedAPIURL is the API URL a typed address means: https:// and port 8006 where it names none.
+func typedAPIURL(s string) string {
+	s = strings.TrimSuffix(strings.TrimSpace(s), "/")
+	if s == "" {
+		return ""
+	}
+	if !strings.Contains(s, "://") {
+		s = "https://" + s
+	}
+	if u, err := url.Parse(s); err == nil && u.Scheme == "https" && u.Hostname() != "" && u.Port() == "" && u.Path == "" {
+		return APIURL(u.Hostname())
+	}
+	return s
 }
 
 func trustSetting() *setting {
@@ -709,11 +781,8 @@ func trustSetting() *setting {
 		apply: func(m *Model) tea.Cmd {
 			c := &m.S.Cfg
 			if !m.a.trust {
-				err := apiFailure(true, c.ProxmoxURL, "8006", "")
-				if u, ok := errors.AsType[*UserError](err); ok {
-					u.Setting = settingTrust
-				}
-				_, cmd := m.failWith(err)
+				_, cmd := m.failWith(settingErr(settingAPI, "you did not trust the CA the Proxmox VE API at "+c.ProxmoxURL+" serves",
+					"Give the CA that signed its certificate with --proxmox-ca <file>, or another URL with --proxmox-url"))
 				return cmd
 			}
 			c.TrustServedCA = true
@@ -856,6 +925,9 @@ func (m *Model) onDone(d doneMsg) (*Model, tea.Cmd) {
 	}
 	if m.ctx.Err() != nil {
 		m.cancelled = true
+		if m.S.Cfg.KeepFailed {
+			m.runner.Keep()
+		}
 		cmd := m.cleanCmd(tea.Quit)
 		return m, cmd
 	}
@@ -871,10 +943,11 @@ func (m *Model) quitAndRemove() tea.Cmd {
 	return tea.Batch(m.spin.Tick, m.cleanCmd(tea.Quit))
 }
 
-// lowerFirst lowers the first letter of a label in a sentence, keeping an acronym such as IPv4.
+// lowerFirst lowers the first letter of a label in a sentence, keeping an acronym such as IPv4 and
+// the name Proxmox.
 func lowerFirst(label string) string {
 	r := []rune(label)
-	if len(r) > 1 && unicode.IsUpper(r[0]) && unicode.IsLower(r[1]) {
+	if len(r) > 1 && unicode.IsUpper(r[0]) && unicode.IsLower(r[1]) && !strings.HasPrefix(label, "Proxmox") {
 		r[0] = unicode.ToLower(r[0])
 	}
 	return string(r)
@@ -890,7 +963,7 @@ func (m *Model) failSetting() string {
 	case !errors.As(m.fail, &u):
 		return ""
 	}
-	if m.table[u.Setting] == nil {
+	if st := m.table[u.Setting]; st == nil || m.S.Facts == nil || !st.applies(m) {
 		return ""
 	}
 	return u.Setting
@@ -903,6 +976,8 @@ func (m *Model) failForm() tea.Cmd {
 		opts = append(opts, huh.NewOption("Change "+lowerFirst(m.table[id].label), actFix+id))
 	}
 	made := m.runner != nil && m.runner.Made()
+	// The screen says the container is kept until the user chooses, so only that choice removes it.
+	m.keep = m.keep || made
 	if m.runner != nil {
 		opts = append(opts, huh.NewOption("Try again", actRetry))
 	}
@@ -925,7 +1000,14 @@ func (m *Model) failAction() tea.Cmd {
 	case strings.HasPrefix(action, actFix):
 		id := strings.TrimPrefix(action, actFix)
 		m.fixed, m.fixing = id, m.runner != nil
-		m.answered[id], m.given[id] = false, false
+		ids := []string{id}
+		if id == settingNetwork {
+			// A network that does not carry the address may be right with another VLAN or address.
+			ids = append(ids, settingVLAN, settingV4Addr, settingV4Gateway, settingV6Addr, settingV6Gateway)
+		}
+		for _, id := range ids {
+			m.answered[id], m.given[id] = false, false
+		}
 		m.trail = nil
 		return m.open(id)
 	case action == actRetry:
@@ -937,8 +1019,9 @@ func (m *Model) failAction() tea.Cmd {
 	return m.quitAndRemove()
 }
 
-// resume starts the run again after the setting fixed was changed. A change of network alone is
-// given to the container that is there. Another setting starts the container afresh.
+// resume starts the run again after the setting fixed was changed. A change of network is given to
+// the container that is there, and a change of the API has the steps from the network check on run
+// again in it. Another setting starts the container afresh.
 func (m *Model) resume(fixed string) tea.Cmd {
 	m.fixing = false
 	m.stage, m.busy, m.form = stDetect, "Preparing the next try", nil
@@ -948,6 +1031,8 @@ func (m *Model) resume(fixed string) tea.Cmd {
 		case fixed == "":
 		case slices.Contains(networkSettings, fixed) && m.runner.Made():
 			return resumedMsg{m.runner.Renet(ctx)}
+		case (fixed == settingAPI || fixed == settingTrust) && m.runner.Made():
+			m.runner.Redo(stepNetworkName)
 		default:
 			cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 			defer cancel()

@@ -78,7 +78,7 @@ func TestAddressPairsThatCannotWork(t *testing.T) {
 	if err := checkPair6(netip.MustParsePrefix("2001:db8::5/64"), "fe80::1"); err != nil {
 		t.Errorf("a link-local gateway was refused: %v", err)
 	}
-	if err := checkPair6(netip.MustParsePrefix("2001:db8::5/64"), "2001:db9::1"); err == nil {
+	if err := checkPair6(netip.MustParsePrefix("2001:db8::5/64"), "2001:db8:1::1"); err == nil {
 		t.Error("an IPv6 gateway outside the prefix was accepted")
 	}
 }
@@ -179,15 +179,46 @@ func TestPlanTextListsWhatIsCreated(t *testing.T) {
 	}
 }
 
-// Every option of the command line that sets an answer comes back in the repeat command.
-func TestRepeatArgsCarryTheAnswers(t *testing.T) {
+// A saved value the option checks refuse is dropped, as one the flags gave would be refused, and
+// the values beside it that pass still come back.
+func TestRestoreDropsWhatTheChecksRefuse(t *testing.T) {
 	t.Parallel()
-	cfg := Config{CTID: "105", Bridge: "vnet1", VLAN: "20", IP: "192.0.2.40/24", Gateway: "192.0.2.1", IP6: "2001:db8::5/64", Gateway6: "2001:db8::1", PVEEntry: "no"}
-	got := strings.Join(cfg.RepeatArgs(), " ")
-	for _, want := range []string{"--ctid 105", "--bridge vnet1", "--vlan 20", "--ip 192.0.2.40/24", "--gateway 192.0.2.1", "--ip6 2001:db8::5/64", "--gateway6 2001:db8::1", "--no-pve-entry"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("the repeat command lacks %q: %s", want, got)
-		}
+	h := newHarness(t, opts{})
+	s := prepared(t, h, Config{})
+	saved := &savedAnswers{
+		Bridge: "vmbr0", MTU: "abc", IP: "192.0.2.40/24", Hostname: "bad_host!", DNS: "192.0.2.53", Name: "not a name",
+		TrustedProxies: []string{"nowhere"}, PVEEntry: "maybe",
+	}
+	s.Restore(context.Background(), saved)
+	c := s.Cfg
+	switch {
+	case c.MTU != "" || c.IP == "192.0.2.40/24":
+		t.Errorf("a network with a bad MTU was restored: %q %q", c.MTU, c.IP)
+	case c.Hostname != DefaultHostname || c.Name != "" || len(c.TrustedProxies) != 0 || c.PVEEntry != "":
+		t.Errorf("a refused value was restored: %q %q %v %q", c.Hostname, c.Name, c.TrustedProxies, c.PVEEntry)
+	case c.DNS != "192.0.2.53":
+		t.Errorf("a value that passes was dropped: %q", c.DNS)
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("the restored options fail their checks: %v", err)
+	}
+}
+
+// A container ID and a host name the flags gave win over saved ones, even when they equal the
+// defaults.
+func TestRestoreKeepsTheGivenIDAndHostname(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{})
+	saved := &savedAnswers{CTID: "105", Hostname: "saved"}
+	s := prepared(t, h, Config{CTID: "100", Hostname: DefaultHostname})
+	s.Restore(context.Background(), saved)
+	if s.Cfg.CTID != "100" || s.Cfg.Hostname != DefaultHostname {
+		t.Errorf("--ctid 100 --hostname kubehenge given, restored %q %q", s.Cfg.CTID, s.Cfg.Hostname)
+	}
+	s = prepared(t, h, Config{})
+	s.Restore(context.Background(), saved)
+	if s.Cfg.CTID != "105" || s.Cfg.Hostname != "saved" {
+		t.Errorf("nothing given, restored %q %q", s.Cfg.CTID, s.Cfg.Hostname)
 	}
 }
 

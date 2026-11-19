@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/progress"
@@ -92,10 +94,14 @@ type answers struct {
 	ctid, hostname, name                 string
 	certFile, keyFile, proxies           string
 	storage, templateStorage, apiHost    string
-	trust, pve, outside                  bool
+	apiURL, apiCA                        string
+	trust, pve, outside, apiCheck        bool
 	action                               string
 	setting                              string
 	gwNote                               string
+	// apiPick says the API question lists the addresses found, and apiTyped that the user asked
+	// for another.
+	apiPick, apiTyped bool
 }
 
 // Model is the full-screen installer.
@@ -148,6 +154,9 @@ type Model struct {
 	fail      error
 	cancelled bool
 	cleaned   bool
+	// keep says the container stays when the installer ends without the user's choice to remove it:
+	// a failure screen said it is kept until they choose, or the installer crashed.
+	keep bool
 }
 
 // NewModel returns the installer for a session. The runner is built when the run starts.
@@ -193,8 +202,9 @@ func (m *Model) Left() string {
 	return m.runner.Left()
 }
 
-// Shutdown ends a run still going and removes what it made, unless the user chose to keep it. A
-// signal or a lost terminal ends the program without its own cleanup, which would leave a half-made
+// Shutdown ends a run still going and removes what it made, unless it is to be kept: with
+// --keep-failed, or once a failure screen said the container stays until the user chooses. A signal
+// or a lost terminal ends the program without its own cleanup, which would leave a half-made
 // container behind.
 func (m *Model) Shutdown(ctx context.Context) {
 	m.cancel()
@@ -202,7 +212,7 @@ func (m *Model) Shutdown(ctx context.Context) {
 		<-m.running
 	}
 	if m.runner != nil {
-		if m.S.Cfg.KeepFailed && m.fail != nil {
+		if m.S.Cfg.KeepFailed || m.keep {
 			m.runner.Keep()
 		}
 		m.runner.Cleanup(ctx)
@@ -251,6 +261,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn // t
 		m.cleaned = true
 		m.state["remove"] = StepDone
 		return m, msg.then
+	case formMsg:
+		cmd := m.onFormMsg(msg)
+		return m, cmd
 	}
 	if m.form != nil {
 		cmds = append(cmds, m.updateForm(msg))
@@ -324,10 +337,13 @@ func (m *Model) leave() tea.Cmd {
 // afterDetect shows what the detection found, or its failure.
 func (m *Model) afterDetect(err error) (*Model, tea.Cmd) {
 	m.busy = ""
+	if m.S.Facts != nil {
+		// A failed check of the API still offers to change it, then goes on from the options.
+		m.initFromOptions()
+	}
 	if err != nil {
 		return m.failWith(err)
 	}
-	m.initFromOptions()
 	m.stage = stFound
 	return m, nil
 }
@@ -345,7 +361,7 @@ func (m *Model) updateForm(msg tea.Msg) tea.Cmd {
 	if form, ok := f.(*huh.Form); ok {
 		m.form = form
 	}
-	cmds := []tea.Cmd{cmd}
+	cmds := []tea.Cmd{tagged(m.form, cmd)}
 	switch m.form.State {
 	case huh.StateCompleted:
 		m.form = nil
@@ -362,7 +378,64 @@ func (m *Model) formWidth() int { return min(m.width-formMargin, maxFormWidth) }
 
 func (m *Model) startForm(groups ...*huh.Group) tea.Cmd {
 	m.form = huh.NewForm(groups...).WithTheme(huh.ThemeFunc(theme)).WithKeyMap(formKeys()).WithWidth(m.formWidth()).WithShowHelp(false)
-	return m.form.Init()
+	return tagged(m.form, m.form.Init())
+}
+
+// formMsg is a message a form's command sent, with the form that sent it.
+type formMsg struct {
+	form *huh.Form
+	msg  tea.Msg
+}
+
+var cmdList = reflect.TypeFor[[]tea.Cmd]()
+
+// tagged has every message of a form's command carry the form. huh's own messages, such as the
+// one an Enter sends to move to the next field, name no form. One still on its way when its form
+// was answered would otherwise reach the next form and answer it too.
+func tagged(f *huh.Form, cmd tea.Cmd) tea.Cmd {
+	if cmd == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		msg := cmd()
+		if msg == nil {
+			return nil
+		}
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			return tea.BatchMsg(taggedAll(f, batch))
+		}
+		// tea.Sequence's message type is unexported, so it is known by its shape.
+		if v := reflect.ValueOf(msg); v.Kind() == reflect.Slice && v.Type().ConvertibleTo(cmdList) {
+			if list, ok := reflect.TypeAssert[[]tea.Cmd](v.Convert(cmdList)); ok {
+				if seq := tea.Sequence(taggedAll(f, list)...); seq != nil {
+					return seq()
+				}
+				return nil
+			}
+		}
+		return formMsg{f, msg}
+	}
+}
+
+func taggedAll(f *huh.Form, cmds []tea.Cmd) []tea.Cmd {
+	out := make([]tea.Cmd, len(cmds))
+	for i, c := range cmds {
+		out[i] = tagged(f, c)
+	}
+	return out
+}
+
+// onFormMsg passes a form's message on while the form is open, and drops it once the form is gone.
+// A message of Bubble Tea's own, such as a request for the window's size, goes back to the program.
+func (m *Model) onFormMsg(msg formMsg) tea.Cmd {
+	if m.form == nil || msg.form != m.form {
+		return nil
+	}
+	if t := reflect.TypeOf(msg.msg); !strings.HasPrefix(t.PkgPath(), "charm.land/huh/") && !strings.HasPrefix(t.PkgPath(), "charm.land/bubbles/") {
+		inner := msg.msg
+		return func() tea.Msg { return inner }
+	}
+	return m.updateForm(msg.msg)
 }
 
 func formKeys() *huh.KeyMap {

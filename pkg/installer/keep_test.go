@@ -1,0 +1,220 @@
+package installer
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
+	"github.com/charmbracelet/x/ansi"
+)
+
+// failureOnScreen runs the installer through executeOn until a failure screen says the container
+// is kept, and returns the context's cancel, the screen and the run's end.
+func failureOnScreen(t *testing.T, h *harness, cfg Config) (context.CancelFunc, *syncBuffer, chan error) { //nolint:gocritic // tests pass a Config literal.
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	t.Cleanup(cancel)
+	keys, _ := pressEnter(ctx, func() bool { return h.exec.count("pct create") > 0 })
+	screen := &syncBuffer{}
+	c := h.session(cfg).Cfg
+	streams := ioStreams{in: keys, out: screen, errs: &strings.Builder{}, size: []tea.ProgramOption{tea.WithWindowSize(100, 40)}}
+	ended := make(chan error, 1)
+	go func() { ended <- executeOn(ctx, h.env(), &c, streams, true, "xterm") }()
+	for !strings.Contains(strings.ReplaceAll(ansi.Strip(screen.String()), " ", ""), "Container100iskeptuntilyouchoose") {
+		if ctx.Err() != nil {
+			t.Fatalf("the failure screen never said the container is kept: %q", ansi.Strip(screen.String()))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return cancel, screen, ended
+}
+
+// A signal, as a dropped SSH session sends, on a failure screen that said the container is kept
+// keeps it, and the way to inspect or remove it is said.
+func TestSignalOnTheFailureScreenKeepsTheContainer(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true})
+	h.exec.fail("pct start 100", 1)
+	cancel, _, ended := failureOnScreen(t, h, Config{IP: "dhcp", PVEEntry: "no"})
+	cancel()
+	err := <-ended
+	if h.exec.count("pct destroy") != 0 {
+		t.Fatalf("the signal removed the container: %v", h.exec.calls)
+	}
+	if err == nil || !strings.Contains(err.Error(), "pct enter 100") || !strings.Contains(err.Error(), "pct destroy 100 --purge") {
+		t.Fatalf("the kept container is not said: %v", err)
+	}
+}
+
+// Leaving from the question a failure sent the user to keeps the container.
+func TestUILeavingAFixKeepsTheContainer(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true})
+	h.exec.on("pct exec 100 -- ip -4 -o addr show dev eth0", "")
+	u := startUI(t, h, Config{PVEEntry: "no"})
+	u.toSummary()
+	u.enter(1)
+	u.waitFor("Change IPv4 address")
+	u.enter(1)
+	u.waitFor("DHCP")
+	u.press(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	u.press(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	m := u.finish()
+	m.Shutdown(context.Background())
+	if h.exec.count("pct destroy") != 0 || !strings.Contains(m.Outcome(), "is kept") {
+		t.Fatalf("leaving the fix removed the container: %q %v", m.Outcome(), h.exec.calls)
+	}
+}
+
+// With --keep-failed, Ctrl+C during the run keeps the container, and the run screen says so.
+func TestUIKeepFailedHoldsForCtrlCDuringTheRun(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true})
+	h.exec.stall("pct exec 100 -- ip -4 -o addr show dev eth0")
+	u := startUI(t, h, Config{PVEEntry: "no", KeepFailed: true})
+	u.toSummary()
+	u.enter(1)
+	u.waitFor("ctrl+c stops and keeps the container")
+	for h.exec.count("pct exec 100 -- ip -4 -o addr show") == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	u.press(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	m := u.finish()
+	m.Shutdown(context.Background())
+	if h.exec.count("pct destroy") != 0 || !strings.Contains(m.Outcome(), "is kept") {
+		t.Fatalf("Ctrl+C with --keep-failed removed the container: %q %v", m.Outcome(), h.exec.calls)
+	}
+}
+
+// On a terminal, a full set of flags without --yes still shows the summary before anything is made.
+func TestTerminalAsksForTheSummaryWithoutYes(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	keys, _ := pressEnter(ctx, func() bool { return true })
+	screen := &syncBuffer{}
+	cfg := h.session(Config{IP: "dhcp", PVEEntry: "no"}).Cfg
+	streams := ioStreams{in: keys, out: screen, errs: &strings.Builder{}, size: []tea.ProgramOption{tea.WithWindowSize(100, 40)}}
+	ended := make(chan error, 1)
+	go func() { ended <- executeOn(ctx, h.env(), &cfg, streams, true, "xterm") }()
+	for !strings.Contains(ansi.Strip(screen.String()), "enter continue") && ctx.Err() == nil {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	err := <-ended
+	if n := h.exec.count("pct create"); n != 0 || !strings.Contains(ansi.Strip(screen.String()), "enter continue") {
+		t.Fatalf("installed with no yes: %d creates (%v), screen %q", n, err, ansi.Strip(screen.String()))
+	}
+}
+
+// A failure of the API's connection takes any URL typed, and the next try runs in the container
+// that is there.
+func TestUIAPIFailureTakesATypedURL(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true})
+	h.exec.fail(apiConnect, 1)
+	u := startUI(t, h, Config{PVEEntry: "no"})
+	u.toSummary()
+	u.enter(1)
+	u.waitFor("Change Proxmox VE API")
+	u.golden("api-failure")
+	h.exec.on(apiConnect, "")
+	u.enter(1)
+	u.waitFor("API CA file")
+	u.golden("api-form")
+	u.press(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
+	u.typed("198.51.100.7")
+	u.enter(2)
+	u.key('n')
+	u.waitFor("Kubehenge is running")
+	u.enter(1)
+	u.finish()
+	c := u.s.Cfg
+	if c.ProxmoxURL != "https://198.51.100.7:8006" || !c.Insecure {
+		t.Errorf("the typed URL was not taken: %q insecure %v", c.ProxmoxURL, c.Insecure)
+	}
+	if h.exec.count("pct create") != 1 || h.exec.count("pct destroy") != 0 {
+		t.Fatalf("the container was made again for a new API: %v", h.exec.calls)
+	}
+}
+
+// The failure screen offers a setting only where it exists, and the API question opens with no
+// address found.
+func TestFailSettingOffersOnlyWhatApplies(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true})
+	s := prepared(t, h, Config{PVEEntry: "no"})
+	s.Facts.Candidates = nil
+	m := NewModel(s, nil)
+	m.fail = settingErr(settingV4Gateway, "no route", "")
+	if id := m.failSetting(); id != "" {
+		t.Errorf("a DHCP install was offered %q", id)
+	}
+	m.fail = settingErr(settingAPI, "cannot connect", "")
+	if id := m.failSetting(); id != settingAPI {
+		t.Fatalf("the API is not offered: %q", id)
+	}
+	if fields := m.table[settingAPI].fields(m); len(fields) != 3 {
+		t.Errorf("want the URL, CA file and check, got %d fields", len(fields))
+	}
+}
+
+// Refusing the CA leads to the API's fields, not the same question again.
+func TestUIRefusedCAOffersTheAPIFields(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true, untrusted: true})
+	u := startUI(t, h, Config{PVEEntry: "no"})
+	u.waitFor("Node")
+	u.enter(1)
+	u.waitFor("Trust this CA")
+	u.key('n')
+	u.waitFor("Change Proxmox VE API")
+	u.enter(1)
+	u.waitFor("API CA file")
+	if strings.Contains(u.rec.screen(), "Trust this CA") {
+		t.Fatalf("the same question came again:\n%s", u.rec.screen())
+	}
+}
+
+// A form's message that arrives after the form is gone moves the form open now on to nothing, and
+// a form's commands carry which form sent them.
+func TestUIStaleFormMessageIsDropped(t *testing.T) {
+	t.Parallel()
+	gone := huh.NewForm(huh.NewGroup(huh.NewNote()))
+	if msg, ok := tagged(gone, huh.NextField)().(formMsg); !ok || msg.form != gone {
+		t.Fatalf("the form's command is not tagged with its form: %#v", msg)
+	}
+	h := newHarness(t, opts{dhcp: true})
+	u := startUI(t, h, Config{PVEEntry: "no"})
+	u.toSummary()
+	u.tm.Send(formMsg{form: gone, msg: huh.NextField()})
+	u.press(tea.KeyPressMsg{Code: tea.KeyDown})
+	if !strings.Contains(u.rec.screen(), "If it fails") || h.exec.count("pct create") != 0 {
+		t.Fatalf("a message of a form that is gone submitted the summary:\n%s", u.rec.screen())
+	}
+	u.press(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	u.press(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	u.finish()
+}
+
+// A kept IPv4-only container whose network gains IPv6 gets IPv6 back at its next start.
+func TestIPv4OnlyContainerGetsIPv6Back(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true})
+	r := h.runner(h.session(Config{CTID: "100", IP: optDHCP}), nil)
+	ctx := context.Background()
+	if err := r.stepStart(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r.S.Cfg.IP6 = optAuto
+	if err := r.stepStart(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.exec.count("pct exec 100 -- sh -c \nset -e\nrm -f /etc/sysctl.d/60-kubehenge-ipv4-only.conf"); n != 1 {
+		t.Errorf("want IPv6 switched on once, got %d: %v", n, h.exec.calls)
+	}
+}

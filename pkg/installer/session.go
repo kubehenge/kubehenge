@@ -2,6 +2,7 @@ package installer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -36,6 +37,9 @@ type Session struct {
 	NetworkGiven bool
 	// BridgeGiven and VLANGiven say the options name the network and its VLAN.
 	BridgeGiven, VLANGiven bool
+	// HostnameGiven and CTIDGiven say the options name the host name and the container ID, which
+	// saved answers then do not replace.
+	HostnameGiven, CTIDGiven bool
 	// Saved holds the answers of an earlier run, which detect restores.
 	Saved *savedAnswers
 	// AnswersPath is where the answers are saved when the install starts, empty for nowhere.
@@ -55,6 +59,7 @@ func (n Needs) Any() bool { return n != Needs{} }
 
 // Prepare detects the node and refuses what can never work, before any question.
 func (s *Session) Prepare(ctx context.Context) error {
+	s.HostnameGiven, s.CTIDGiven = s.Cfg.Hostname != "", s.Cfg.CTID != ""
 	if s.Cfg.Hostname == "" {
 		s.Cfg.Hostname = DefaultHostname
 	}
@@ -254,6 +259,9 @@ func (s *Session) ResolveAPI(ctx context.Context, ties Ties) error {
 	}
 	ca, err := s.Node.DecideCA(ctx, c, c.ProxmoxURL)
 	if err != nil {
+		if u, ok := errors.AsType[*UserError](err); ok && u.Setting == "" {
+			u.Setting = settingAPI
+		}
 		return err
 	}
 	s.CA = ca

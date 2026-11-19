@@ -71,29 +71,41 @@ func removeAnswers(path string) {
 }
 
 // Restore fills the options the command line left open from saved answers, keeping only what still
-// fits this node: a network, a storage and a container ID that exist and are free. It reports whether
-// it restored anything. Called after the detection, it changes no option the flags gave.
+// fits this node: a network, a storage and a container ID that exist and are free. A saved value the
+// option checks refuse, as from an older version or a file edited by hand, is dropped. It reports
+// whether it restored anything. Called after the detection, it changes no option the flags gave.
 func (s *Session) Restore(ctx context.Context, a *savedAnswers) bool {
 	if a == nil {
 		return false
 	}
 	c, f := &s.Cfg, s.Facts
 	restored := false
+	// take applies one group of saved values, and undoes it when the options no longer pass.
+	take := func(apply func()) bool {
+		before := *c
+		apply()
+		if c.Validate() != nil {
+			*c = before
+			return false
+		}
+		restored = true
+		return true
+	}
 	fill := func(dst *string, value string) {
 		if *dst == "" && value != "" {
-			*dst, restored = value, true
+			take(func() { *dst = value })
 		}
 	}
-	if !s.NetworkGiven && a.Bridge != "" && slices.Contains(f.Bridges, a.Bridge) {
+	if !s.NetworkGiven && a.Bridge != "" && slices.Contains(f.Bridges, a.Bridge) && take(func() {
 		c.Bridge, c.VLAN, c.MTU = a.Bridge, a.VLAN, a.MTU
 		c.IP, c.Gateway, c.IP6, c.Gateway6 = a.IP, a.Gateway, a.IP6, a.Gateway6
+	}) {
 		s.RefreshNetwork(ctx, c.Bridge, c.VLAN)
-		restored = true
 	}
 	fill(&c.DNS, a.DNS)
 	fill(&c.Name, a.Name)
-	if c.Hostname == DefaultHostname && a.Hostname != "" && a.Hostname != DefaultHostname {
-		c.Hostname, restored = a.Hostname, true
+	if !s.HostnameGiven && a.Hostname != "" && a.Hostname != DefaultHostname {
+		take(func() { c.Hostname = a.Hostname })
 	}
 	if c.Storage == "" && hasStorage(f.RootStorages, a.Storage) {
 		c.Storage, restored = a.Storage, true
@@ -101,11 +113,13 @@ func (s *Session) Restore(ctx context.Context, a *savedAnswers) bool {
 	if c.TemplateStorage == "" && hasStorage(f.TemplateStorages, a.TemplateStorage) {
 		c.TemplateStorage, restored = a.TemplateStorage, true
 	}
-	fill(&c.PVEEntry, a.PVEEntry)
-	if len(c.TrustedProxies) == 0 && len(a.TrustedProxies) > 0 {
-		c.TrustedProxies, restored = slices.Clone(a.TrustedProxies), true
+	if a.PVEEntry == optYes || a.PVEEntry == "no" {
+		fill(&c.PVEEntry, a.PVEEntry)
 	}
-	if c.CTID == f.NextID && a.CTID != "" && a.CTID != f.NextID && s.Node.IDFree(ctx, a.CTID) {
+	if len(c.TrustedProxies) == 0 && len(a.TrustedProxies) > 0 {
+		take(func() { c.TrustedProxies = slices.Clone(a.TrustedProxies) })
+	}
+	if !s.CTIDGiven && a.CTID != "" && a.CTID != c.CTID && inRange(a.CTID, ctidMin, ctidMax) && s.Node.IDFree(ctx, a.CTID) {
 		c.CTID, restored = a.CTID, true
 	}
 	s.Restored = restored

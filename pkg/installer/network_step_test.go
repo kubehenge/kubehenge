@@ -100,8 +100,94 @@ func TestNetworkStepNothingAnswers(t *testing.T) {
 	h.exec.on(gwNeighbour, "192.0.2.1 dev eth0 FAILED\n")
 	r, _ := networkRunner(t, h)
 	fault := networkError(t, r.stepNetwork(context.Background()))
-	if fault.Setting != settingV4Gateway || !strings.Contains(fault.Cause, "no answer to ARP") || !strings.Contains(fault.Fix, "network and VLAN") {
+	if fault.Setting != settingNetwork || !strings.Contains(fault.Cause, "at 192.0.2.77 cannot reach its gateway 192.0.2.1: no answer to ARP") ||
+		!strings.Contains(fault.Fix, "--bridge and --vlan") {
 		t.Errorf("want the network and VLAN named, got %q (%s)", fault.Error(), fault.Setting)
+	}
+}
+
+// A DHCP container whose gateway does not answer gets the network to change, since its gateway
+// comes from the DHCP server.
+func TestNetworkStepDHCPGatewayDoesNotAnswer(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{})
+	h.exec.fail(apiConnect, 1)
+	h.exec.fail(gwPing, 1)
+	h.exec.on(gwNeighbour, "192.0.2.1 dev eth0 INCOMPLETE\n")
+	r, _ := networkRunner(t, h)
+	r.S.Cfg.IP = optDHCP
+	if fault := networkError(t, r.stepNetwork(context.Background())); fault.Setting != settingNetwork {
+		t.Errorf("want the network named, got %q (%s)", fault.Error(), fault.Setting)
+	}
+}
+
+// An IPv6-only container names its IPv6 address and neighbour discovery, never ARP or an empty
+// address.
+func TestNetworkStepIPv6OnlyGatewayDoesNotAnswer(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{})
+	h.exec.fail(apiConnect, 1)
+	h.exec.fail(gwPing, 1)
+	h.exec.on("pct exec 100 -- ip -4 route show default", "")
+	h.exec.on("pct exec 100 -- ip -6 route show default", "default via 2001:db8::1 dev eth0 metric 1024\n")
+	h.exec.on("pct exec 100 -- ip neigh show 2001:db8::1 dev eth0", "2001:db8::1 dev eth0 FAILED\n")
+	r, _ := networkRunner(t, h)
+	r.S.Cfg.IP, r.S.Cfg.IP6, r.address, r.address6 = optNone, "2001:db8::77/64", "", "2001:db8::77"
+	fault := networkError(t, r.stepNetwork(context.Background()))
+	if fault.Setting != settingNetwork || !strings.Contains(fault.Cause, "at 2001:db8::77 cannot reach its gateway 2001:db8::1: no answer to neighbour discovery") ||
+		strings.Contains(fault.Cause, "ARP") {
+		t.Errorf("want the IPv6 address and neighbour discovery, got %q (%s)", fault.Error(), fault.Setting)
+	}
+}
+
+// Without a default route the setting named follows how the container gets its address, and the
+// fix names the flag to pass.
+func TestNetworkStepNoRouteNamesTheSetting(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		ip, ip6, setting, flag string
+	}{
+		{"192.0.2.77/24", "", settingV4Gateway, "--gateway"},
+		{optDHCP, "", settingNetwork, "--bridge and --vlan"},
+		{optNone, "2001:db8::77/64", settingV6Gateway, "--gateway6"},
+		{optNone, optAuto, settingV6Mode, "--ip6 and --gateway6"},
+	}
+	for _, c := range cases {
+		h := newHarness(t, opts{})
+		h.exec.fail(apiConnect, 1)
+		h.exec.on("pct exec 100 -- ip -4 route show default", "")
+		r, _ := networkRunner(t, h)
+		r.S.Cfg.IP, r.S.Cfg.IP6 = c.ip, c.ip6
+		fault := networkError(t, r.stepNetwork(context.Background()))
+		if fault.Setting != c.setting || !strings.Contains(fault.Fix, c.flag) || !strings.Contains(fault.Cause, "has no default route") {
+			t.Errorf("--ip %s --ip6 %s: want %s and %s, got %q (%s)", c.ip, c.ip6, c.setting, c.flag, fault.Error(), fault.Setting)
+		}
+	}
+}
+
+// Plain mode prints a failure as it is, so each fix names the flags that change it.
+func TestNetworkStepFixesNameTheFlags(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{})
+	h.exec.fail(nameLookup, 2)
+	r, _ := networkRunner(t, h)
+	if fault := networkError(t, r.stepNetwork(context.Background())); !strings.Contains(fault.Fix, "with --dns") || !strings.Contains(fault.Fix, "with --proxmox-url") {
+		t.Errorf("the DNS fix names no flag: %q", fault.Fix)
+	}
+	h = newHarness(t, opts{})
+	h.exec.fail(linkCheck, 1)
+	r, _ = networkRunner(t, h)
+	if fault := networkError(t, r.stepNetwork(context.Background())); !strings.Contains(fault.Fix, "--bridge, --vlan") {
+		t.Errorf("the link fix names no flag: %q", fault.Fix)
+	}
+	h = newHarness(t, opts{})
+	h.exec.fail(apiConnect, 1)
+	r, _ = networkRunner(t, h)
+	if fault := networkError(t, r.stepNetwork(context.Background())); !strings.Contains(fault.Fix, "--proxmox-url") {
+		t.Errorf("the API fix names no flag: %q", fault.Fix)
+	}
+	if got := neutral("Check that --bridge and --vlan carry it, or give another URL with --proxmox-url, a CA with --proxmox-ca <file>"); strings.Contains(got, "--") {
+		t.Errorf("the screen's wording keeps a flag: %q", got)
 	}
 }
 

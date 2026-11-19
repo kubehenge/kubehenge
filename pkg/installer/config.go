@@ -96,7 +96,7 @@ func BindFlags(f *pflag.FlagSet, c *Config) {
 	f.StringVar(&c.IP6, "ip6", "", "the IPv6 address: auto, dhcp or an address with its prefix, such as 2001:db8::40/64")
 	f.StringVar(&c.Gateway6, "gateway6", "", "the default IPv6 gateway, with a static --ip6")
 	f.StringVar(&c.DNS, "dns", "", "the name servers the container asks, comma-separated (default this node's)")
-	f.StringVar(&c.Hostname, "hostname", DefaultHostname, "the container's host name, also in its certificate")
+	f.StringVar(&c.Hostname, "hostname", "", "the container's host name, also in its certificate (default "+DefaultHostname+")")
 	f.StringVar(&c.Name, "name", "", "a DNS name people reach the appliance by, put into its certificate")
 	f.BoolVar(&c.NoName, "no-name", false, "with --certificate, drop the name the certificate was given")
 	f.StringVar(&c.CertFile, "cert", "", "serve this certificate instead of one signed by this cluster's CA")
@@ -134,49 +134,6 @@ func (c *Config) Normalise() error {
 	}
 	c.Name = strings.TrimSpace(c.Name)
 	return nil
-}
-
-// RepeatArgs are the options that repeat this install's answers, for a command line after a run
-// that did not finish.
-func (c *Config) RepeatArgs() []string {
-	var args []string
-	add := func(name, value string) {
-		if value != "" {
-			args = append(args, name, value)
-		}
-	}
-	add("--ctid", c.CTID)
-	add("--storage", c.Storage)
-	add("--template-storage", c.TemplateStorage)
-	add("--bridge", c.Bridge)
-	add("--vlan", c.VLAN)
-	add("--mtu", c.MTU)
-	add("--ip", c.IP)
-	add("--gateway", c.Gateway)
-	add("--ip6", c.IP6)
-	add("--gateway6", c.Gateway6)
-	add("--dns", c.DNS)
-	if c.Hostname != DefaultHostname {
-		add("--hostname", c.Hostname)
-	}
-	add("--name", c.Name)
-	add("--cert", c.CertFile)
-	add("--key", c.KeyFile)
-	add("--proxmox-url", c.ProxmoxURL)
-	add("--proxmox-ca", c.ProxmoxCA)
-	if c.Insecure {
-		args = append(args, "--proxmox-insecure")
-	}
-	for _, p := range c.TrustedProxies {
-		add("--trusted-proxy", p)
-	}
-	switch c.PVEEntry {
-	case optYes:
-		args = append(args, "--pve-entry")
-	case "no":
-		args = append(args, "--no-pve-entry")
-	}
-	return args
 }
 
 // containerNet returns the container's net0 setting. A gateway goes with a static address only.

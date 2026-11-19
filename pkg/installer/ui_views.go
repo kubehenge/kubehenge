@@ -26,7 +26,8 @@ var neutralWords = strings.NewReplacer(
 	"--ip6 and --gateway6", "a static IPv6 address and gateway",
 	"--proxmox-insecure", "the unchecked API certificate",
 	"--proxmox-url", "the Proxmox VE API address",
-	"--proxmox-ca", "the Proxmox VE API CA",
+	"--proxmox-ca <file>", "the API CA file",
+	"--proxmox-ca", "the API CA file",
 	"--template-storage", "the template storage",
 	"--trusted-proxy", "the trusted proxies",
 	"--gateway6", "the IPv6 gateway",
@@ -76,7 +77,10 @@ func (m *Model) rowIn(labelWidth int, label, value string) string {
 		if i == 0 {
 			name = label
 		}
-		b.WriteString(strings.Repeat(" ", summaryMargin) + dim.Render(fmt.Sprintf("%-*s", labelWidth, name)) + l + "\n")
+		b.WriteString(strings.Repeat(" ", summaryMargin))
+		b.WriteString(dim.Render(fmt.Sprintf("%-*s", labelWidth, name)))
+		b.WriteString(l)
+		b.WriteString("\n")
 	}
 	return b.String()
 }
@@ -90,7 +94,11 @@ func (m *Model) render() string {
 	b.WriteString("\n")
 	switch m.stage {
 	case stDetect:
-		b.WriteString("  " + m.spin.View() + " " + m.busy + "\n")
+		b.WriteString("  ")
+		b.WriteString(m.spin.View())
+		b.WriteString(" ")
+		b.WriteString(m.busy)
+		b.WriteString("\n")
 	case stFound:
 		b.WriteString(m.foundView())
 	case stRun:
@@ -113,7 +121,9 @@ func (m *Model) render() string {
 func (m *Model) noteView() string {
 	var b strings.Builder
 	for _, l := range wrap(neutral(m.note), m.width-summaryMargin-1) {
-		b.WriteString("  " + badS.Render(l) + "\n")
+		b.WriteString("  ")
+		b.WriteString(badS.Render(l))
+		b.WriteString("\n")
 	}
 	b.WriteString("\n")
 	return b.String()
@@ -159,7 +169,10 @@ func (m *Model) header() string {
 	right := []string{bold.Render("Kubehenge"), dim.Render("Appliance installer"), m.crumbLine()}
 	var b strings.Builder
 	for i, l := range logo {
-		b.WriteString(tealS.Render(l) + "  " + right[i] + "\n")
+		b.WriteString(tealS.Render(l))
+		b.WriteString("  ")
+		b.WriteString(right[i])
+		b.WriteString("\n")
 	}
 	return b.String()
 }
@@ -189,9 +202,12 @@ func (m *Model) foundView() string {
 		}
 	}
 	if m.S.Restored {
-		b.WriteString("\n" + m.row("Restored", "your answers from the last run. Nothing secret is saved. Change any on the summary."))
+		b.WriteString("\n")
+		b.WriteString(m.row("Restored", "your answers from the last run. Nothing secret is saved. Change any on the summary."))
 	}
-	b.WriteString("\n" + dim.Render("  enter continue  ctrl+c leave") + "\n")
+	b.WriteString("\n")
+	b.WriteString(dim.Render("  enter continue  ctrl+c leave"))
+	b.WriteString("\n")
 	return b.String()
 }
 
@@ -227,7 +243,8 @@ func (m *Model) summaryAt(level int) string {
 	if level > 1 {
 		noteWidth = noteLabelWidth
 	}
-	b.WriteString(head + sep)
+	b.WriteString(head)
+	b.WriteString(sep)
 	for _, r := range m.S.Rows(!m.S.Cfg.KeepFailed) {
 		b.WriteString(m.row(r.Label, r.Value))
 	}
@@ -299,16 +316,26 @@ func (m *Model) runView() string {
 		if m.state[st.ID] == StepRunning {
 			tail += m.elapsed(st.ID)
 		}
-		b.WriteString("  " + icon + " " + label + pad + tail + "\n")
+		for _, s := range []string{"  ", icon, " ", label, pad, tail, "\n"} {
+			b.WriteString(s)
+		}
 	}
-	b.WriteString("\n" + dim.Render("  ctrl+c stops and removes the container") + "\n")
+	stop := "  ctrl+c stops and removes the container"
+	if m.S.Cfg.KeepFailed {
+		stop = "  ctrl+c stops and keeps the container"
+	}
+	b.WriteString("\n")
+	b.WriteString(dim.Render(stop))
+	b.WriteString("\n")
 	return b.String()
 }
 
 func (m *Model) endView() string {
 	r := m.res
 	var b strings.Builder
-	b.WriteString("  " + goodS.Bold(true).Render("Kubehenge is running") + "\n\n")
+	b.WriteString("  ")
+	b.WriteString(goodS.Bold(true).Render("Kubehenge is running"))
+	b.WriteString("\n\n")
 	b.WriteString(m.row("Open", accentS.Underline(true).Render(r.URL)))
 	b.WriteString(m.row("Sign in", "a Proxmox VE administrator"))
 	b.WriteString(m.row("Container", r.CTID+", version "+r.Version))
@@ -321,16 +348,22 @@ func (m *Model) endView() string {
 	for _, w := range r.Warnings {
 		b.WriteString("\n")
 		for _, l := range wrap(w, m.width-summaryMargin-1) {
-			b.WriteString("  " + badS.Render(l) + "\n")
+			b.WriteString("  ")
+			b.WriteString(badS.Render(l))
+			b.WriteString("\n")
 		}
 	}
-	b.WriteString("\n" + dim.Render("  any key closes") + "\n")
+	b.WriteString("\n")
+	b.WriteString(dim.Render("  any key closes"))
+	b.WriteString("\n")
 	return b.String()
 }
 
 func (m *Model) failView() string {
 	var b strings.Builder
-	b.WriteString("  " + badS.Bold(true).Render("Stopped") + "\n\n")
+	b.WriteString("  ")
+	b.WriteString(badS.Bold(true).Render("Stopped"))
+	b.WriteString("\n\n")
 	var u *UserError
 	var na *NoAddressError
 	switch {
