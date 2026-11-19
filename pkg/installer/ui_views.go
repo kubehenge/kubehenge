@@ -18,6 +18,8 @@ const (
 
 // neutralWords says a flag in the words of a screen, where the user is not typing flags.
 var neutralWords = strings.NewReplacer(
+	"--ip <address>/<prefix> --gateway <address>", "a static IPv4 address and gateway",
+	"--ip6 and --gateway6", "a static IPv6 address and gateway",
 	"--proxmox-insecure", "the unchecked API certificate",
 	"--proxmox-url", "the Proxmox VE API address",
 	"--proxmox-ca", "the Proxmox VE API CA",
@@ -41,6 +43,15 @@ var neutralWords = strings.NewReplacer(
 )
 
 func neutral(text string) string { return neutralWords.Replace(text) }
+
+// fingerprintLines splits a SHA-256 fingerprint in two halves, so that it is never cut mid-byte.
+func fingerprintLines(fp string) string {
+	const half = 47
+	if len(fp) <= half+1 {
+		return fp
+	}
+	return fp[:half] + "\n" + fp[half+1:]
+}
 
 // wrap breaks text to the width.
 func wrap(text string, width int) []string {
@@ -238,7 +249,8 @@ func (m *Model) endView() string {
 	b.WriteString(m.row("Open", accentS.Underline(true).Render(r.URL)))
 	b.WriteString(m.row("Sign in", "a Proxmox VE administrator"))
 	b.WriteString(m.row("Container", r.CTID+", version "+r.Version))
-	b.WriteString(m.row("Certificate", "SHA-256 "+r.Fingerprint+", valid until "+r.ValidUntil.UTC().Format(time.DateOnly)))
+	b.WriteString(m.row("Certificate", "valid until "+r.ValidUntil.UTC().Format(time.DateOnly)))
+	b.WriteString(m.row("SHA-256", fingerprintLines(r.Fingerprint)))
 	if r.Name != "" {
 		b.WriteString(m.row("Next", "point "+r.Name+" at "+r.Address))
 	}

@@ -62,6 +62,10 @@ func executeOn(ctx context.Context, env *Env, cfg *Config, streams ioStreams, in
 	if plain {
 		return RunPlain(ctx, s, newRunner, stdout)
 	}
+	s.AnswersPath = env.AnswersPath
+	if s.Facts == nil && s.AnswersPath != "" {
+		s.Saved = loadAnswers(s.AnswersPath)
+	}
 	model := NewModel(s, newRunner)
 	prog := tea.NewProgram(model, append([]tea.ProgramOption{tea.WithInput(stdin), tea.WithOutput(stdout), tea.WithContext(ctx)}, streams.size...)...)
 	_, err = prog.Run()
@@ -77,6 +81,10 @@ func executeOn(ctx context.Context, env *Env, cfg *Config, streams ioStreams, in
 			return fmt.Errorf("run: %w. %s", err, left)
 		}
 		return fmt.Errorf("run: %w", err)
+	}
+	if model.DryRun() {
+		_, _ = fmt.Fprint(stdout, "Dry run, nothing was changed. The install would be:\n"+s.PlanText(true))
+		return nil
 	}
 	outcome := model.Outcome()
 	if model.Cancelled() {

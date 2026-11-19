@@ -1,0 +1,16 @@
+ ▄▄▄▄▄▄▄▄▄   Kubehenge
+ ▀██▀▀▀██▀   Appliance installer
+  ██   ██    Network · Storage · Summary · Install · Done
+
+  Stopped
+
+  Step             Start container
+  Cause            container 100 did not start
+  Do               See /var/log/kubehenge-install.log for Proxmox VE's message
+  Log              /var/log/kubehenge-install.log
+  Container        100 is kept until you choose
+
+  ┃ > Try again
+  ┃   Quit and keep the container
+  ┃   Quit and remove it
+  ↑↓ choose  enter confirm  ctrl+c quit and remove

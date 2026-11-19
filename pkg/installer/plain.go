@@ -141,6 +141,11 @@ func RunPlain(ctx context.Context, s *Session, newRunner func(emit func(Event)) 
 	for _, n := range append(append([]string(nil), s.Notices...), s.Cautions...) {
 		_, _ = fmt.Fprintln(out, "kubehenge: "+n)
 	}
+	if s.Cfg.DryRun {
+		_, _ = fmt.Fprint(out, "Dry run, nothing was changed. The install would be:\n"+s.PlanText(false))
+		return nil
+	}
+	_, _ = fmt.Fprint(out, "Installing:\n"+s.PlanText(false))
 	runner := newRunner(nil)
 	labels := map[string]string{}
 	for _, st := range runner.Steps() {
@@ -148,13 +153,15 @@ func RunPlain(ctx context.Context, s *Session, newRunner func(emit func(Event)) 
 	}
 	runner.Emit = func(e Event) {
 		switch e.State {
+		case StepRunning:
+			_, _ = fmt.Fprintf(out, "...  %s\n", labels[e.Step])
 		case StepDone:
 			_, _ = fmt.Fprintf(out, "ok   %s%s\n", labels[e.Step], suffix(e.Detail))
 		case StepSkipped:
 			_, _ = fmt.Fprintf(out, "skip %s%s\n", labels[e.Step], suffix(e.Detail))
 		case StepFailed:
-			_, _ = fmt.Fprintf(out, "fail %s\n", labels[e.Step])
-		case StepPending, StepRunning:
+			_, _ = fmt.Fprintf(out, "fail %s%s\n", labels[e.Step], suffix(e.Detail))
+		case StepPending:
 		}
 	}
 	res, err := runner.Run(ctx)
@@ -162,10 +169,15 @@ func RunPlain(ctx context.Context, s *Session, newRunner func(emit func(Event)) 
 		// The cleanup must run even when the run was cancelled.
 		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 		defer cancel()
-		if runner.Made() {
+		switch {
+		case s.Cfg.KeepFailed && runner.Made():
+			runner.Keep()
+			_, _ = fmt.Fprintf(out, "kubehenge: keeping container %s. Inspect it with: pct enter %s\n", s.Cfg.CTID, s.Cfg.CTID)
+		case runner.Made():
 			_, _ = fmt.Fprintf(out, "kubehenge: removing container %s after the failure\n", s.Cfg.CTID)
 		}
 		runner.Cleanup(cleanCtx)
+		_, _ = fmt.Fprintf(out, "kubehenge: log %s\n", runner.LogPath)
 		return err
 	}
 	WriteEnd(out, res)

@@ -683,11 +683,11 @@ func TestCtrlCOnFailureKeepsTheFailure(t *testing.T) {
 	streams := ioStreams{in: keys, out: screen, errs: &errs, size: []tea.ProgramOption{tea.WithWindowSize(100, 40)}}
 	ended := make(chan error, 1)
 	go func() { ended <- executeOn(ctx, h.env(), &cfg, streams, true, "xterm") }()
-	for !strings.Contains(strings.ReplaceAll(ansi.Strip(screen.String()), " ", ""), "Container100wasremoved") && ctx.Err() == nil {
+	for !strings.Contains(strings.ReplaceAll(ansi.Strip(screen.String()), " ", ""), "Container100iskeptuntilyouchoose") && ctx.Err() == nil {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if ctx.Err() != nil {
-		t.Fatalf("the failure screen never said what was undone: %q", ansi.Strip(screen.String()))
+		t.Fatalf("the failure screen never said the container is kept: %q", ansi.Strip(screen.String()))
 	}
 	_, _ = typed.Write([]byte{0x03})
 	err := <-ended

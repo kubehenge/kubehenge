@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
@@ -323,6 +324,13 @@ func v4AddrSetting() *setting {
 			if modeOf(m.S.Cfg.IP) == optStatic {
 				m.a.address = m.S.Cfg.IP
 			}
+			suggestion := ""
+			if f.SuggestedIP != "" && f.Prefix.IsValid() {
+				suggestion = fmt.Sprintf("%s/%d", f.SuggestedIP, f.Prefix.Bits())
+				if m.a.address == "" {
+					m.a.address = suggestion
+				}
+			}
 			in := input("IPv4 address and prefix", &m.a.address, "192.0.2.40/24", func(s string) error {
 				if _, ok := ParseAddress4(s, f.Prefix); !ok {
 					if f.Prefix.IsValid() {
@@ -332,9 +340,8 @@ func v4AddrSetting() *setting {
 				}
 				return nil
 			})
-			if f.SuggestedIP != "" && f.Prefix.IsValid() {
-				suggestion := fmt.Sprintf("%s/%d", f.SuggestedIP, f.Prefix.Bits())
-				in = in.Suggestions([]string{suggestion}).Description("Tab fills " + suggestion + ", " + f.SuggestedCheck.Text())
+			if suggestion != "" {
+				in = in.Description("Suggested " + suggestion + ", " + f.SuggestedCheck.Text())
 			} else if f.Prefix.IsValid() {
 				in = in.Description("The subnet is " + f.Prefix.Masked().String() + ", so /" + fmt.Sprint(f.Prefix.Bits()) + " may be left out")
 			}
@@ -822,6 +829,9 @@ func (m *Model) cleanCmd(then tea.Cmd) tea.Cmd {
 func (m *Model) onDone(d doneMsg) (*Model, tea.Cmd) {
 	if d.err == nil {
 		m.res, m.stage = d.res, stEnd
+		if m.S.AnswersPath != "" {
+			removeAnswers(m.S.AnswersPath)
+		}
 		return m, nil
 	}
 	if m.ctx.Err() != nil {
@@ -838,6 +848,15 @@ func (m *Model) quitAndRemove() tea.Cmd {
 	}
 	m.stage, m.form = stRun, nil
 	return tea.Batch(m.spin.Tick, m.cleanCmd(tea.Quit))
+}
+
+// lowerFirst lowers the first letter of a label in a sentence, keeping an acronym such as IPv4.
+func lowerFirst(label string) string {
+	r := []rune(label)
+	if len(r) > 1 && unicode.IsUpper(r[0]) && unicode.IsLower(r[1]) {
+		r[0] = unicode.ToLower(r[0])
+	}
+	return string(r)
 }
 
 // failSetting is the setting a failure names, if the installer can ask it again.
@@ -860,7 +879,7 @@ func (m *Model) failSetting() string {
 func (m *Model) failForm() tea.Cmd {
 	var opts []huh.Option[string]
 	if id := m.failSetting(); id != "" {
-		opts = append(opts, huh.NewOption("Change "+strings.ToLower(m.table[id].label), actFix+id))
+		opts = append(opts, huh.NewOption("Change "+lowerFirst(m.table[id].label), actFix+id))
 	}
 	made := m.runner != nil && m.runner.Made()
 	if m.runner != nil {

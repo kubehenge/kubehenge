@@ -1,0 +1,20 @@
+ ▄▄▄▄▄▄▄▄▄   Kubehenge
+ ▀██▀▀▀██▀   Appliance installer
+  ██   ██    Network · Storage · Summary · Install · Done
+
+  Node             pve1
+  Networks         1, this node uses vmbr0
+  Disk storage     1 take container disks
+  Proxmox VE API   https://pve1.example.com:8006
+  API CA           this cluster's CA
+  Note             storage local-lvm (lvmthin) for the appliance's disks, the
+                   only one here that takes it
+  Note             storage local-lvm (lvmthin) for the container template, the
+                   only one here that takes it
+  Note             the Proxmox VE API at pve1.example.com has a certificate
+                   that is also valid for 192.0.2.10
+
+  Restored         your answers from the last run. Nothing secret is saved.
+                   Change any on the summary.
+
+  enter continue  ctrl+c leave

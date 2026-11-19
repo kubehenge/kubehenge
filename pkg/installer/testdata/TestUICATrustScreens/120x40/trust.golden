@@ -1,6 +1,6 @@
- ▟▀▜ ▟▀▜   Kubehenge
- █ █ █ █   Appliance installer
- ▀▀▘ ▀▀▘   Network  ·  Choices  ·  Summary  ·  Install  ·  Done
+ ▄▄▄▄▄▄▄▄▄   Kubehenge
+ ▀██▀▀▀██▀   Appliance installer
+  ██   ██    Network · Storage · Summary · Install · Done
 
   ┃ Trust this CA for the Proxmox VE API?
   ┃ Subject  CN=Corporate Root
@@ -9,4 +9,4 @@
   ┃          <fingerprint>
   ┃
   ┃                    Trust     Refuse
-  enter confirm  ctrl+c leave
+  ←→ choose  enter confirm  esc back  ctrl+c leave

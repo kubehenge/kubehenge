@@ -665,13 +665,13 @@ func (r *Runner) stepAddress(ctx context.Context) error {
 		if c.IP == optNone {
 			return &NoAddressError{UserError: UserError{
 				Cause:   "container " + c.CTID + " got no IPv6 address",
-				Fix:     "Check the VLAN, and that the router advertises a prefix or a DHCPv6 server answers on it, or give a static IPv6 address",
+				Fix:     "Check that --vlan is the right one and that the router advertises a prefix or a DHCPv6 server answers on it, or give --ip6 and --gateway6",
 				Setting: settingV6Mode,
 			}}
 		}
 		return &NoAddressError{DHCP: c.IP == optDHCP, UserError: UserError{
 			Cause:   "container " + c.CTID + " got no IPv4 address",
-			Fix:     "Check the VLAN, and that a DHCP server answers on it, or give a static address and gateway",
+			Fix:     "Check that --vlan is the right one and that a DHCP server answers on it, or give --ip <address>/<prefix> --gateway <address>",
 			Setting: settingV4Mode,
 		}}
 	}

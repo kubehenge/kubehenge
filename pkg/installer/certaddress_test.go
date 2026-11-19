@@ -75,14 +75,20 @@ func TestTheSummaryShowsTheIPv6CautionOnA80By24Screen(t *testing.T) {
 	s := h.session(Config{PVEEntry: "no", ProxmoxURL: "https://pve1.example.com:8006"})
 	s.Cautions = []string{apiFamilyCaution("192.0.2.10", "2001:db8::10")}
 	model := NewModel(s, func(emit func(Event)) *Runner { return h.runner(s, emit) })
-	rec := &recorder{inner: model, views: make(map[stage]string)}
+	rec := &recorder{inner: model}
 	tm := teatest.NewTestModel(t, rec, teatest.WithInitialTermSize(80, 24))
-	u := &ui{t: t, h: h, s: s, rec: rec, tm: tm}
-	u.waitFor("DHCP")
-	u.enter(2)
-	u.waitFor("Change network")
+	u := &ui{t: t, h: h, s: s, rec: rec, tm: tm, w: 80, l: 24}
+	u.waitFor("Node")
 	u.settle()
-	screen := strings.Join(drawn(rec.viewOf(stSummary), 80, 24), "\n")
+	for range 12 {
+		if strings.Contains(u.rec.screen(), "If it fails") {
+			break
+		}
+		u.enter(1)
+	}
+	u.waitFor("If it fails")
+	u.settle()
+	screen := strings.Join(drawn(rec.screen(), 80, 24), "\n")
 	flat := strings.Join(strings.Fields(screen), " ")
 	for _, want := range []string{"Kubehenge", "Note", "cannot reach the API at 2001:db8::10", "--proxmox-url https://192.0.2.10:8006", "Install"} {
 		if !strings.Contains(flat, want) {

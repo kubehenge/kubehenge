@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -255,7 +256,7 @@ func storageTable(n int, kind string) string {
 func newHarness(t *testing.T, o opts) *harness { //nolint:gocritic // tests pass an opts literal.
 	t.Helper()
 	root, work, dir := t.TempDir(), t.TempDir(), t.TempDir()
-	h := &harness{t: t, exec: &fakeExec{}, root: root, work: work, dir: dir}
+	h := &harness{t: t, exec: &fakeExec{}, root: root, work: work, dir: dir, taken: map[string]bool{}, silent: map[string]bool{}}
 	if o.rootStorages == 0 {
 		o.rootStorages = 1
 	}

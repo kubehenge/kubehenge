@@ -160,7 +160,7 @@ func (n *Node) deviceGateway(ctx context.Context, dev string) string {
 		return ""
 	}
 	for line := range strings.SplitSeq(out, "\n") {
-		if m := viaDevRE.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+		if m := viaDevRE.FindStringSubmatch(strings.TrimSpace(line)); m != nil && (m[2] == "" || m[2] == dev) {
 			return m[1]
 		}
 	}
