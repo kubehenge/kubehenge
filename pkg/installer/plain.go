@@ -138,7 +138,7 @@ func (e *Env) NewRunner(s *Session, emit func(Event)) *Runner {
 // is an error naming the flag that settles it.
 func RunPlain(ctx context.Context, s *Session, newRunner func(emit func(Event)) *Runner, out io.Writer) error {
 	if err := plainChecks(ctx, s); err != nil {
-		printRepeat(out, &s.Cfg, false)
+		printRepeat(out, &s.Cfg, nil)
 		return err
 	}
 	if s.Cfg.PVEEntry == "" {
@@ -218,15 +218,15 @@ func plainFailed(ctx context.Context, s *Session, runner *Runner, out io.Writer)
 		_, _ = fmt.Fprintf(out, "kubehenge: container %s could not be removed. Remove it with: pct destroy %s --purge\n", id, id)
 	}
 	_, _ = fmt.Fprintf(out, "kubehenge: log %s\n", runner.LogPath)
-	printRepeat(out, &s.Cfg, runner.HoldsID())
+	printRepeat(out, &s.Cfg, runner)
 }
 
 // printRepeat prints the install.sh command that runs the install again with the answers given,
-// when there are any. A container still holding the ID leaves --ctid out, so the next run takes a
-// free one.
-func printRepeat(out io.Writer, c *Config, holdsID bool) {
+// when there are any. Where the run's container still holds the ID, the command leaves --ctid out,
+// so the next run takes a free one. The runner is nil before a run.
+func printRepeat(out io.Writer, c *Config, r *Runner) {
 	again := *c
-	if holdsID {
+	if r != nil && r.HoldsID() {
 		again.CTID = ""
 	}
 	if cmd := again.RepeatCommand(); cmd != repeatBase {

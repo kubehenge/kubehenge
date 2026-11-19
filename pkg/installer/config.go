@@ -155,10 +155,13 @@ func FlagUsages(f *pflag.FlagSet) string {
 	return strings.Join(parts, "\n")
 }
 
+// flagGap is the spaces between a flag and its meaning, as pflag puts them.
+const flagGap = 3
+
 // flagLines lists flags in pflag's layout, without the [=true|false] pflag puts after a switch.
 func flagLines(list []*pflag.Flag) string {
 	var b strings.Builder
-	w := tabwriter.NewWriter(&b, 0, 0, 3, ' ', 0)
+	w := tabwriter.NewWriter(&b, 0, 0, flagGap, ' ', 0)
 	for _, fl := range list {
 		name := "      --" + fl.Name
 		if fl.Shorthand != "" {

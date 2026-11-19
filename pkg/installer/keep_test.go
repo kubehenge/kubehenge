@@ -168,7 +168,9 @@ func TestQuitAfterAFailurePrintsTheCommandToRepeat(t *testing.T) {
 	h.exec.fail("pct start 100", 1)
 	cancel, errs, ended := failureOnScreen(t, h, Config{IP: "dhcp", PVEEntry: "no"})
 	cancel()
-	<-ended
+	if err := <-ended; err == nil {
+		t.Fatal("the failed install ended without its error")
+	}
 	if got := errs.String(); !strings.Contains(got, "kubehenge: to run it again with the same answers: sh install.sh --storage") || strings.Contains(got, "--ctid") {
 		t.Fatalf("no repeat command without --ctid after the screen closed: %q", got)
 	}
