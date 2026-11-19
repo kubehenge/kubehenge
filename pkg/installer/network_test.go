@@ -102,7 +102,7 @@ func TestNeighbourTableMakesAnAddressInUse(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, opts{})
 	h.exec.on("ip neigh show 192.0.2.60 dev vmbr0", "192.0.2.60 lladdr 02:00:00:00:00:01 STALE\n")
-	got := h.node.CheckAddress(context.Background(), "vmbr0", "192.0.2.60", "192.0.2.1", true)
+	got := h.node.CheckAddress(context.Background(), "192.0.2.60", Link{"vmbr0", "192.0.2.1", true})
 	if !got.Taken() || !strings.Contains(got.Detail, "neighbour table") {
 		t.Errorf("a neighbour-table entry was not in use: %+v", got)
 	}
@@ -142,7 +142,7 @@ func TestSavedAnswersRoundTripWithoutSecrets(t *testing.T) {
 	if err := saveAnswers(path, &cfg); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // the test's own temporary file
 	if err != nil {
 		t.Fatal(err)
 	}

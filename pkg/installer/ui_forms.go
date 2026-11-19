@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -88,6 +89,7 @@ func keysOf(fields []huh.Field) string {
 			if f.GetFiltering() {
 				return "type to filter  ↑↓ choose  enter confirm  esc back  ctrl+c leave"
 			}
+		case *huh.FilePicker, *huh.MultiSelect[string], *huh.Note, *huh.Text:
 		}
 	}
 	return "↑↓ choose  enter confirm  esc back  ctrl+c leave"
@@ -121,7 +123,7 @@ func validateRange(message string, low, high int) func(string) error {
 	}
 }
 
-func (m *Model) storageOptions(list []Storage) []huh.Option[string] {
+func storageOptions(list []Storage) []huh.Option[string] {
 	opts := make([]huh.Option[string], len(list))
 	for i, s := range list {
 		opts[i] = huh.NewOption(fmt.Sprintf("%s  %s, %s", s.Name, s.Type, s.FreeText()), s.Name)
@@ -246,11 +248,7 @@ func networkSetting() *setting {
 				n := &f.Networks[i]
 				opts[i] = huh.NewOption(m.networkLabel(n), n.Name)
 			}
-			sel := choose("Network", &m.a.bridge, opts...).Height(max(m.height-12, 4))
-			if len(opts) > m.height-12 {
-				sel = sel.Filtering(true)
-			}
-			return []huh.Field{sel}
+			return []huh.Field{m.fitList(choose("Network", &m.a.bridge, opts...), len(opts))}
 		},
 		apply: func(m *Model) tea.Cmd {
 			c := &m.S.Cfg
@@ -327,40 +325,49 @@ func v4ModeSetting() *setting {
 	}
 }
 
+// v4AddrFields asks for the static IPv4 address, filled with the free address found where there is
+// one.
+func v4AddrFields(m *Model) []huh.Field {
+	f := m.S.Facts
+	m.a.address = ""
+	if modeOf(m.S.Cfg.IP) == optStatic {
+		m.a.address = m.S.Cfg.IP
+	}
+	suggestion := ""
+	if f.SuggestedIP != "" && f.Prefix.IsValid() {
+		suggestion = fmt.Sprintf("%s/%d", f.SuggestedIP, f.Prefix.Bits())
+		if m.a.address == "" {
+			m.a.address = suggestion
+		}
+	}
+	in := input("IPv4 address and prefix", &m.a.address, "192.0.2.40/24", validateAddress4(f.Prefix))
+	if suggestion != "" {
+		in = in.Description("Suggested " + suggestion + ", " + f.SuggestedCheck.Text())
+	} else if f.Prefix.IsValid() {
+		in = in.Description("The subnet is " + f.Prefix.Masked().String() + ", so /" + strconv.Itoa(f.Prefix.Bits()) + " may be left out")
+	}
+	return []huh.Field{in}
+}
+
+// validateAddress4 takes an IPv4 address with its prefix, or without one where the subnet is known.
+func validateAddress4(subnet netip.Prefix) func(string) error {
+	return func(s string) error {
+		if _, ok := ParseAddress4(s, subnet); ok {
+			return nil
+		}
+		if subnet.IsValid() {
+			return errors.New("an IPv4 address, with or without /prefix")
+		}
+		return errors.New("an address with its prefix, such as 192.0.2.40/24")
+	}
+}
+
 func v4AddrSetting() *setting {
 	return &setting{
 		label:   "IPv4 static",
 		applies: func(m *Model) bool { return m.static4() },
 		value:   func(m *Model) string { return orNone(m.S.Cfg.IP) },
-		fields: func(m *Model) []huh.Field {
-			f := m.S.Facts
-			m.a.address = ""
-			if modeOf(m.S.Cfg.IP) == optStatic {
-				m.a.address = m.S.Cfg.IP
-			}
-			suggestion := ""
-			if f.SuggestedIP != "" && f.Prefix.IsValid() {
-				suggestion = fmt.Sprintf("%s/%d", f.SuggestedIP, f.Prefix.Bits())
-				if m.a.address == "" {
-					m.a.address = suggestion
-				}
-			}
-			in := input("IPv4 address and prefix", &m.a.address, "192.0.2.40/24", func(s string) error {
-				if _, ok := ParseAddress4(s, f.Prefix); !ok {
-					if f.Prefix.IsValid() {
-						return errors.New("an IPv4 address, with or without /prefix")
-					}
-					return errors.New("an address with its prefix, such as 192.0.2.40/24")
-				}
-				return nil
-			})
-			if suggestion != "" {
-				in = in.Description("Suggested " + suggestion + ", " + f.SuggestedCheck.Text())
-			} else if f.Prefix.IsValid() {
-				in = in.Description("The subnet is " + f.Prefix.Masked().String() + ", so /" + fmt.Sprint(f.Prefix.Bits()) + " may be left out")
-			}
-			return []huh.Field{in}
-		},
+		fields:  v4AddrFields,
 		apply: func(m *Model) tea.Cmd {
 			c, f := &m.S.Cfg, m.S.Facts
 			p, _ := ParseAddress4(m.a.address, f.Prefix)
@@ -628,7 +635,7 @@ func storageSetting() *setting {
 			if m.a.storage == "" {
 				m.a.storage = m.S.Facts.RootStorages[0].Name
 			}
-			return []huh.Field{choose("Disk storage", &m.a.storage, m.storageOptions(m.S.Facts.RootStorages)...)}
+			return []huh.Field{choose("Disk storage", &m.a.storage, storageOptions(m.S.Facts.RootStorages)...)}
 		},
 		apply: func(m *Model) tea.Cmd {
 			m.S.Cfg.Storage = m.a.storage
@@ -648,7 +655,7 @@ func templateSetting() *setting {
 			if m.a.templateStorage == "" {
 				m.a.templateStorage = m.S.Facts.TemplateStorages[0].Name
 			}
-			return []huh.Field{choose("Template storage", &m.a.templateStorage, m.storageOptions(m.S.Facts.TemplateStorages)...)}
+			return []huh.Field{choose("Template storage", &m.a.templateStorage, storageOptions(m.S.Facts.TemplateStorages)...)}
 		},
 		apply: func(m *Model) tea.Cmd {
 			m.S.Cfg.TemplateStorage = m.a.templateStorage
@@ -703,8 +710,7 @@ func trustSetting() *setting {
 			c := &m.S.Cfg
 			if !m.a.trust {
 				err := apiFailure(true, c.ProxmoxURL, "8006", "")
-				var u *UserError
-				if errors.As(err, &u) {
+				if u, ok := errors.AsType[*UserError](err); ok {
 					u.Setting = settingTrust
 				}
 				_, cmd := m.failWith(err)
@@ -850,7 +856,8 @@ func (m *Model) onDone(d doneMsg) (*Model, tea.Cmd) {
 	}
 	if m.ctx.Err() != nil {
 		m.cancelled = true
-		return m, m.cleanCmd(tea.Quit)
+		cmd := m.cleanCmd(tea.Quit)
+		return m, cmd
 	}
 	return m.failWith(d.err)
 }
@@ -955,5 +962,6 @@ func (m *Model) afterResume(err error) (*Model, tea.Cmd) {
 	if err != nil {
 		return m.failWith(err)
 	}
-	return m, m.startRun()
+	cmd := m.startRun()
+	return m, cmd
 }

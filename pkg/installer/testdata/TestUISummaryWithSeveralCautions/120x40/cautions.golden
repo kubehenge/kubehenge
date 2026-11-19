@@ -15,12 +15,12 @@
   API CA            this cluster's CA
   Proxmox VE entry  no
   If it fails       you choose to keep or remove the container
-  Note              The certificate lacks 192.0.2.10, so clusters without IPv6 cannot reach the API at 2001:db8::10.
-                    Add it to the certificate, then pass --proxmox-url https://192.0.2.10:8006
-  Note              The certificate lacks 192.0.2.11, so clusters without IPv6 cannot reach the API at 2001:db8::11.
-                    Add it to the certificate, then pass --proxmox-url https://192.0.2.11:8006
-  Note              The certificate lacks 192.0.2.12, so clusters without IPv6 cannot reach the API at 2001:db8::12.
-                    Add it to the certificate, then pass --proxmox-url https://192.0.2.12:8006
+  Note              Clusters without IPv6 need 192.0.2.10 in the API certificate.
+                    Add it, then pass --proxmox-url https://192.0.2.10:8006
+  Note              Clusters without IPv6 need 198.51.100.200 in the API certificate.
+                    Add it, then pass --proxmox-url https://198.51.100.200:8006
+  Note              Clusters without IPv6 need 192.0.2.12 in the API certificate.
+                    Add it, then pass --proxmox-url https://192.0.2.12:8006
 
   ┃ ← Install →
   ←→ choose  enter confirm  ctrl+c leave

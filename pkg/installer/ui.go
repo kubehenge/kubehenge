@@ -25,6 +25,9 @@ const (
 	actFix     = "fix:"
 )
 
+// keyLeave stops a run, or leaves the installer.
+const keyLeave = "ctrl+c"
+
 type stage int
 
 const (
@@ -89,8 +92,7 @@ type answers struct {
 	ctid, hostname, name                 string
 	certFile, keyFile, proxies           string
 	storage, templateStorage, apiHost    string
-	apiURL, apiCA                        string
-	insecure, trust, pve, outside        bool
+	trust, pve, outside                  bool
 	action                               string
 	setting                              string
 	gwNote                               string
@@ -213,10 +215,6 @@ func (m *Model) Init() tea.Cmd {
 	return tea.Batch(m.spin.Tick, m.detectCmd())
 }
 
-func (m *Model) detectCmd() tea.Cmd {
-	return func() tea.Msg { return detectedMsg{m.S.detect(m.ctx)} }
-}
-
 // Update implements tea.Model.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn // tea.Model's method returns the interface.
 	var cmds []tea.Cmd
@@ -260,12 +258,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn // t
 	return m, tea.Batch(cmds...)
 }
 
-func (m *Model) advanceModel() (*Model, tea.Cmd) {
-	m.busy = ""
-	cmd := m.advance()
-	return m, cmd
-}
-
 // View implements tea.Model.
 func (m *Model) View() tea.View {
 	v := tea.NewView(m.render())
@@ -273,18 +265,38 @@ func (m *Model) View() tea.View {
 	return v
 }
 
+func (m *Model) detectCmd() tea.Cmd {
+	return func() tea.Msg { return detectedMsg{m.S.detect(m.ctx)} }
+}
+
+func (m *Model) advanceModel() (*Model, tea.Cmd) {
+	m.busy = ""
+	cmd := m.advance()
+	return m, cmd
+}
+
+// fitList sizes a list of count options to the terminal, and lets the user filter one that is
+// longer than the rows it gets.
+func (m *Model) fitList(sel *huh.Select[string], count int) *huh.Select[string] {
+	sel = sel.Height(max(m.height-listChrome, minListRows))
+	if count > m.height-listChrome {
+		sel = sel.Filtering(true)
+	}
+	return sel
+}
+
 // onKey handles the keys that act on the whole installer, and reports whether it did.
 func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	key := msg.String()
 	switch {
-	case key == "ctrl+c" && m.stage == stRun:
+	case key == keyLeave && m.stage == stRun:
 		m.cancel()
 		return nil, true
 	case m.stage == stEnd:
 		return tea.Quit, true
-	case key == "ctrl+c" && m.stage == stFail:
+	case key == keyLeave && m.stage == stFail:
 		return m.quitAndRemove(), true
-	case key == "ctrl+c":
+	case key == keyLeave:
 		return m.leaveKey(), true
 	case key == "esc" && (m.stage == stAsk || m.stage == stList || m.stage == stConfirm):
 		return m.back(), true
@@ -393,7 +405,7 @@ func (m *Model) back() tea.Cmd {
 	switch {
 	case m.stage == stList:
 		return m.showSummary()
-	case len(m.trail) >= 2:
+	case len(m.trail) > 1:
 		prev := m.trail[len(m.trail)-2]
 		m.trail = m.trail[:len(m.trail)-2]
 		return m.open(prev)
@@ -518,10 +530,7 @@ func (m *Model) settingList() tea.Cmd {
 	}
 	m.a.setting = opts[0].Value
 	m.keys = "↑↓ choose  / filter  enter change  esc back  ctrl+c leave"
-	sel := huh.NewSelect[string]().Title("Change").Options(opts...).Value(&m.a.setting).Height(max(m.height-12, 4))
-	if len(opts) > m.height-12 {
-		sel = sel.Filtering(true)
-	}
+	sel := m.fitList(huh.NewSelect[string]().Title("Change").Options(opts...).Value(&m.a.setting), len(opts))
 	return m.startForm(huh.NewGroup(sel))
 }
 

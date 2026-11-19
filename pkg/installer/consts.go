@@ -83,6 +83,8 @@ const (
 	barWidth        = 24
 	formMargin      = 4
 	maxFormWidth    = 76
+	listChrome      = 12 // the rows a list's header, title and footer take
+	minListRows     = 4
 	vlanMax         = 4094
 	ctidMin         = 100
 	ctidMax         = 999999999

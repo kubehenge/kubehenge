@@ -340,7 +340,7 @@ func (n *Node) SuggestAddress(ctx context.Context, dev string, f *Facts) (string
 			continue
 		}
 		tries++
-		if check := n.CheckAddress(ctx, dev, a.String(), f.Gateway, f.NodeHolds); !check.Taken() {
+		if check := n.CheckAddress(ctx, a.String(), Link{dev, f.Gateway, f.NodeHolds}); !check.Taken() {
 			return a.String(), check
 		}
 	}

@@ -19,8 +19,8 @@ const fakeBinary = "#!/bin/sh\necho \"kubehenge-ran $*\"\n"
 // scriptRun is install.sh run in a scratch folder with a release whose binary only echoes its
 // arguments, a curl that always fails, and no pct.
 type scriptRun struct {
-	script, archive, sum, cache string
-	env                         []string
+	sh, script, archive, sum, cache string
+	env                             []string
 }
 
 func newScriptRun(t *testing.T) *scriptRun {
@@ -49,7 +49,7 @@ func newScriptRun(t *testing.T) *scriptRun {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(raw.Bytes())
-	r := &scriptRun{sum: hex.EncodeToString(sum[:]), cache: filepath.Join(dir, "cache")}
+	r := &scriptRun{sh: sh, sum: hex.EncodeToString(sum[:]), cache: filepath.Join(dir, "cache")}
 	r.archive = filepath.Join(dir, "release.tar.gz")
 	if err = os.WriteFile(r.archive, raw.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
@@ -60,7 +60,7 @@ func newScriptRun(t *testing.T) *scriptRun {
 	}
 	r.script = filepath.Join(dir, "install.sh")
 	body := strings.Replace(string(src), "KUBEHENGE_SHA256=\n", "KUBEHENGE_SHA256="+r.sum+"\n", 1)
-	if err = os.WriteFile(r.script, []byte(body), 0o600); err != nil {
+	if err = os.WriteFile(r.script, []byte(body), 0o600); err != nil { //nolint:gosec // into the test's own temporary folder
 		t.Fatal(err)
 	}
 	bin := filepath.Join(dir, "bin")
@@ -71,13 +71,12 @@ func newScriptRun(t *testing.T) *scriptRun {
 		t.Fatal(err)
 	}
 	r.env = []string{"PATH=" + bin + ":/usr/bin:/bin", "TMPDIR=" + dir, "HOME=" + dir, "KUBEHENGE_CACHE_DIR=" + r.cache}
-	_ = sh
 	return r
 }
 
 func (r *scriptRun) run(t *testing.T, args ...string) (string, error) {
 	t.Helper()
-	cmd := exec.Command("sh", append([]string{r.script}, args...)...) //nolint:gosec // the script under test.
+	cmd := exec.CommandContext(t.Context(), r.sh, append([]string{r.script}, args...)...) //nolint:gosec // the script under test.
 	cmd.Env = r.env
 	out, err := cmd.CombinedOutput()
 	return string(out), err
@@ -108,7 +107,7 @@ func TestInstallScriptUsesTheCachedRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(cached, data, 0o600); err != nil {
+	if err = os.WriteFile(cached, data, 0o600); err != nil { //nolint:gosec // into the test's own temporary folder
 		t.Fatal(err)
 	}
 	out, err := r.run(t, "--help")

@@ -1,17 +1,21 @@
 package installer
 
 import (
+	"crypto"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
 )
 
-// The columns of the screens: two spaces, a label of this width, then the value.
+// The columns of the screens: two spaces, a label of this width, then the value. A summary too
+// tall for the screen gives its notes the narrower label column.
 const (
 	summaryLabelWidth = 18
+	noteLabelWidth    = 6
 	summaryMargin     = 2
 	minValueWidth     = 20
 )
@@ -60,14 +64,19 @@ func wrap(text string, width int) []string {
 
 // row renders a label and a value in two columns, wrapping the value under itself.
 func (m *Model) row(label, value string) string {
-	lines := wrap(value, m.width-summaryLabelWidth-summaryMargin-1)
+	return m.rowIn(summaryLabelWidth, label, value)
+}
+
+// rowIn is row with a label column of the width given.
+func (m *Model) rowIn(labelWidth int, label, value string) string {
+	lines := wrap(value, m.width-labelWidth-summaryMargin-1)
 	var b strings.Builder
 	for i, l := range lines {
 		name := ""
 		if i == 0 {
 			name = label
 		}
-		b.WriteString(strings.Repeat(" ", summaryMargin) + dim.Render(fmt.Sprintf("%-*s", summaryLabelWidth, name)) + l + "\n")
+		b.WriteString(strings.Repeat(" ", summaryMargin) + dim.Render(fmt.Sprintf("%-*s", labelWidth, name)) + l + "\n")
 	}
 	return b.String()
 }
@@ -96,6 +105,7 @@ func (m *Model) render() string {
 			b.WriteString(m.noteView())
 		}
 		b.WriteString(m.formView())
+	case stSummary:
 	}
 	return b.String()
 }
@@ -131,12 +141,8 @@ func indent(s, pad string) string {
 // The trilithon, three lines, beside the name and the crumbs.
 var logo = []string{" ▄▄▄▄▄▄▄▄▄ ", " ▀██▀▀▀██▀ ", "  ██   ██  "}
 
-func (m *Model) header() string {
-	return m.headerAt(false)
-}
-
-// headerAt is the header, or with compact one line of the name and the crumbs.
-func (m *Model) headerAt(compact bool) string {
+// crumbLine is the crumbs with the stage the installer is at lit.
+func (m *Model) crumbLine() string {
 	here := m.crumb()
 	crumbs := make([]string, 0, len(crumbNames))
 	for i, name := range crumbNames {
@@ -146,15 +152,21 @@ func (m *Model) headerAt(compact bool) string {
 			crumbs = append(crumbs, dim.Render(name))
 		}
 	}
-	right := []string{bold.Render("Kubehenge"), dim.Render("Appliance installer"), strings.Join(crumbs, dim.Render(" · "))}
-	if compact {
-		return "  " + right[0] + "  " + right[2] + "\n"
-	}
+	return strings.Join(crumbs, dim.Render(" · "))
+}
+
+func (m *Model) header() string {
+	right := []string{bold.Render("Kubehenge"), dim.Render("Appliance installer"), m.crumbLine()}
 	var b strings.Builder
 	for i, l := range logo {
 		b.WriteString(tealS.Render(l) + "  " + right[i] + "\n")
 	}
 	return b.String()
+}
+
+// compactHeader is the header in one line: the name and the crumbs.
+func (m *Model) compactHeader() string {
+	return "  " + bold.Render("Kubehenge") + "  " + m.crumbLine() + "\n"
 }
 
 // foundView shows what the detection found, and that earlier answers came back.
@@ -192,8 +204,8 @@ func storageText(list []Storage) string {
 }
 
 // summaryScreen draws the summary with the form under it. A screen too short for it loses first
-// the logo and the blank lines, then the cautions' second sentences, which the plain output and
-// the dry run still give whole.
+// the logo and the blank lines, then the width of the cautions' label column. Each caution stays
+// whole.
 func (m *Model) summaryScreen() string {
 	const lastLevel = 2
 	var out string
@@ -208,29 +220,29 @@ func (m *Model) summaryScreen() string {
 
 func (m *Model) summaryAt(level int) string {
 	var b strings.Builder
-	sep := "\n"
+	sep, head, noteWidth := "\n", m.header(), summaryLabelWidth
 	if level > 0 {
-		sep = ""
+		sep, head = "", m.compactHeader()
 	}
-	b.WriteString(m.headerAt(level > 0) + sep)
+	if level > 1 {
+		noteWidth = noteLabelWidth
+	}
+	b.WriteString(head + sep)
 	for _, r := range m.S.Rows(!m.S.Cfg.KeepFailed) {
 		b.WriteString(m.row(r.Label, r.Value))
 	}
 	for _, n := range m.S.Cautions {
-		if level > 1 {
-			n = firstSentence(n)
-		}
-		b.WriteString(m.row("Note", n))
+		b.WriteString(m.rowIn(noteWidth, "Note", causeThenFix(n)))
 	}
 	b.WriteString(sep)
 	b.WriteString(m.formView())
 	return b.String()
 }
 
-// firstSentence is the text up to its first full stop followed by a space, with the stop kept.
-func firstSentence(text string) string {
-	if i := strings.Index(text, ". "); i >= 0 {
-		return text[:i+1]
+// causeThenFix starts a caution's fix, its text after the first sentence, on a line of its own.
+func causeThenFix(text string) string {
+	if cause, fix, ok := strings.Cut(text, ". "); ok {
+		return cause + ".\n" + fix
 	}
 	return text
 }
@@ -263,7 +275,7 @@ func (m *Model) runView() string {
 	var b strings.Builder
 	steps := m.steps
 	if _, ok := m.state["remove"]; ok {
-		steps = append(steps[:len(steps):len(steps)], StepInfo{"remove", "Remove container"})
+		steps = append(slices.Clip(steps), StepInfo{"remove", "Remove container"})
 	}
 	const labelWidth = 20
 	for _, st := range steps {
@@ -301,7 +313,7 @@ func (m *Model) endView() string {
 	b.WriteString(m.row("Sign in", "a Proxmox VE administrator"))
 	b.WriteString(m.row("Container", r.CTID+", version "+r.Version))
 	b.WriteString(m.row("Certificate", "valid until "+r.ValidUntil.UTC().Format(time.DateOnly)))
-	b.WriteString(m.row("SHA-256", fingerprintLines(r.Fingerprint)))
+	b.WriteString(m.row(crypto.SHA256.String(), fingerprintLines(r.Fingerprint)))
 	if r.Name != "" {
 		b.WriteString(m.row("Next", "point "+r.Name+" at "+r.Address))
 	}

@@ -250,24 +250,24 @@ func TestCheckAddressStates(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t, opts{})
 	h.take(gateway)
-	if got := h.node.CheckAddress(ctx, dev, address, gateway, true); got.State != AddrFree {
+	if got := h.node.CheckAddress(ctx, address, Link{dev, gateway, true}); got.State != AddrFree {
 		t.Errorf("silent address on a network the node holds: %+v", got)
 	}
-	if got := h.node.CheckAddress(ctx, dev, address, gateway, false); got.State != AddrFree {
+	if got := h.node.CheckAddress(ctx, address, Link{dev, gateway, false}); got.State != AddrFree {
 		t.Errorf("silent address while the gateway answers: %+v", got)
 	}
 	h.take(address)
-	if got := h.node.CheckAddress(ctx, dev, address, gateway, false); !got.Taken() {
+	if got := h.node.CheckAddress(ctx, address, Link{dev, gateway, false}); !got.Taken() {
 		t.Errorf("an answering address was not in use: %+v", got)
 	}
 	h.silent[dev] = true
-	if got := h.node.CheckAddress(ctx, dev, address, gateway, false); got.State != AddrUnchecked {
+	if got := h.node.CheckAddress(ctx, address, Link{dev, gateway, false}); got.State != AddrUnchecked {
 		t.Errorf("a deaf device was trusted: %+v", got)
 	}
-	if got := h.node.CheckAddress(ctx, "", address, gateway, true); got.State != AddrUnchecked {
+	if got := h.node.CheckAddress(ctx, address, Link{"", gateway, true}); got.State != AddrUnchecked {
 		t.Errorf("no device was checked: %+v", got)
 	}
-	if got := h.node.CheckAddress(ctx, dev, "192.0.2.77", "", false); got.State != AddrUnchecked {
+	if got := h.node.CheckAddress(ctx, "192.0.2.77", Link{dev, "", false}); got.State != AddrUnchecked {
 		t.Errorf("no witness was trusted: %+v", got)
 	}
 }

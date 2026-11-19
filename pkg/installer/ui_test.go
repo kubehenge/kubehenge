@@ -39,7 +39,7 @@ var screens = []struct {
 	w, l int
 }{{"80x24", 80, 24}, {"120x40", 120, 40}}
 
-// rendersDir is where a run writes every screen it draws as text, when the variable names one.
+// rendersEnv names the folder a run writes every screen it draws into as text, when it is set.
 const rendersEnv = "KUBEHENGE_INSTALLER_RENDERS"
 
 // show writes a screen to the renders folder, when asked for.
@@ -49,11 +49,11 @@ func show(t *testing.T, name, screen string) {
 	if dir == "" {
 		return
 	}
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil { //nolint:gosec // the developer running the test names the folder
 		t.Fatal(err)
 	}
 	file := filepath.Join(dir, strings.NewReplacer("/", "-", " ", "-").Replace(name)+".txt")
-	if err := os.WriteFile(file, []byte(screen), 0o600); err != nil {
+	if err := os.WriteFile(file, []byte(screen), 0o600); err != nil { //nolint:gosec // the developer running the test names the folder
 		t.Fatal(err)
 	}
 }

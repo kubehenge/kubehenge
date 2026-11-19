@@ -130,7 +130,7 @@ func (s *Session) CheckAddressing(ctx context.Context) error {
 	if msg := OutsideSubnet(f.Prefix, p); msg != "" && !c.Yes && !s.AllowOutside {
 		return settingErr(settingOutside, msg, "Name the VLAN or network it is on with --vlan or --bridge, or pass --yes to install there anyway")
 	}
-	check := s.Node.CheckAddress(ctx, f.Device, p.Addr().String(), cmpGateway(c.Gateway, f.Gateway), f.NodeHolds)
+	check := s.Node.CheckAddress(ctx, p.Addr().String(), Link{f.Device, cmpGateway(c.Gateway, f.Gateway), f.NodeHolds})
 	s.AddressCheck = check
 	switch check.State {
 	case AddrInUse:
@@ -148,33 +148,6 @@ func cmpGateway(given, found string) string {
 		return given
 	}
 	return found
-}
-
-// checkStatic6 checks a static IPv6 address against its gateway.
-func (s *Session) checkStatic6() error {
-	c := &s.Cfg
-	if !IsIPv6CIDR(c.IP6) {
-		return nil
-	}
-	p, err := netip.ParsePrefix(c.IP6)
-	if err != nil {
-		return nil //nolint:nilerr // Validate names a malformed address.
-	}
-	if err := checkPair6(p, c.Gateway6); err != nil {
-		return settingErr(settingV6Addr, err.Error(), "Check --ip6 and --gateway6")
-	}
-	return nil
-}
-
-// apiOnLink reports whether the Proxmox VE API the container will use is in its own subnet, which
-// needs no gateway.
-func (s *Session) apiOnLink(p netip.Prefix) bool {
-	host, _, _ := splitAPI(s.Cfg.ProxmoxURL)
-	if host == "" && len(s.Facts.Candidates) > 0 {
-		host = s.Facts.Candidates[0].Host
-	}
-	a, err := netip.ParseAddr(host)
-	return err == nil && p.Contains(a)
 }
 
 func contains(list []string, want string) bool {
@@ -329,6 +302,33 @@ func (s *Session) UnattendedCheck() error {
 	return nil
 }
 
+// checkStatic6 checks a static IPv6 address against its gateway.
+func (s *Session) checkStatic6() error {
+	c := &s.Cfg
+	if !IsIPv6CIDR(c.IP6) {
+		return nil
+	}
+	p, err := netip.ParsePrefix(c.IP6)
+	if err != nil {
+		return nil //nolint:nilerr // Validate names a malformed address.
+	}
+	if err := checkPair6(p, c.Gateway6); err != nil {
+		return settingErr(settingV6Addr, err.Error(), "Check --ip6 and --gateway6")
+	}
+	return nil
+}
+
+// apiOnLink reports whether the Proxmox VE API the container will use is in its own subnet, which
+// needs no gateway.
+func (s *Session) apiOnLink(p netip.Prefix) bool {
+	host, _, _ := splitAPI(s.Cfg.ProxmoxURL)
+	if host == "" && len(s.Facts.Candidates) > 0 {
+		host = s.Facts.Candidates[0].Host
+	}
+	a, err := netip.ParseAddr(host)
+	return err == nil && p.Contains(a)
+}
+
 // pickAPIHost sets the API host from the candidates. It reports true when a tie is left for the
 // user to settle.
 func (s *Session) pickAPIHost(ties Ties) (bool, error) {
@@ -369,13 +369,13 @@ func (s *Session) noteAPIFamily() {
 	if _, ips := certNames(cert); slices.Contains(ips, bridge.String()) {
 		return
 	}
-	s.Cautions = append(s.Cautions, apiFamilyCaution(bridge.String(), s.Cfg.APIHost))
+	s.Cautions = append(s.Cautions, apiFamilyCaution(bridge.String()))
 }
 
-// apiFamilyCaution is the text of that note, short enough for three lines of the summary at 80
-// columns.
-func apiFamilyCaution(ipv4, ipv6 string) string {
-	return fmt.Sprintf("The certificate lacks %[1]s, so clusters without IPv6 cannot reach the API at %[2]s. Add it to the certificate, then pass --proxmox-url https://%[1]s:8006", ipv4, ipv6)
+// apiFamilyCaution is the text of that note: the cause, then the fix, each short enough for one
+// line of the summary at 80 columns.
+func apiFamilyCaution(ipv4 string) string {
+	return fmt.Sprintf("Clusters without IPv6 need %[1]s in the API certificate. Add it, then pass --proxmox-url https://%[1]s:8006", ipv4)
 }
 
 // checkRouteVLAN refuses the VLAN of the node's default route on its bridge, taken from the route

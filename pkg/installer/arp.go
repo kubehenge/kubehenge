@@ -43,11 +43,22 @@ func (c AddrCheck) Text() string {
 // errNoProbe is the check on a system that cannot send ARP.
 var errNoProbe = errors.New("this system cannot send ARP probes")
 
-// CheckAddress asks the network behind dev whether the address is taken: the node's neighbour table,
-// then an ARP probe the installer sends itself. An unanswered probe counts as free only where the
-// node is known to hear that network, which is where it holds an address of its own, or where the
+// Link is the network an address is checked on.
+type Link struct {
+	// Dev is the node's interface on the network.
+	Dev string
+	// Witness is the gateway, probed to learn whether the node hears the network.
+	Witness string
+	// NodeHolds is whether the node has an address of its own there, so it hears the network.
+	NodeHolds bool
+}
+
+// CheckAddress asks the network behind l.Dev whether the address is taken: the node's neighbour
+// table, then an ARP probe the installer sends itself. An unanswered probe counts as free only where
+// the node is known to hear that network, which is where it holds an address of its own, or where the
 // gateway answers a probe the same way. Any other no-answer is "not checked".
-func (n *Node) CheckAddress(ctx context.Context, dev, address, witness string, holds bool) AddrCheck {
+func (n *Node) CheckAddress(ctx context.Context, address string, l Link) AddrCheck {
+	dev, witness := l.Dev, l.Witness
 	if dev == "" {
 		return AddrCheck{AddrUnchecked, "this node has no interface on the network to ask"}
 	}
@@ -69,7 +80,7 @@ func (n *Node) CheckAddress(ctx context.Context, dev, address, witness string, h
 	if answered {
 		return AddrCheck{AddrInUse, "it answered an ARP probe on " + dev}
 	}
-	if holds {
+	if l.NodeHolds {
 		return AddrCheck{AddrFree, "no answer to an ARP probe on " + dev}
 	}
 	if witness == "" {

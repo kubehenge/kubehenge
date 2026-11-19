@@ -663,17 +663,18 @@ func (r *Runner) stepAddress(ctx context.Context) error {
 	}
 	if r.address == "" && r.address6 == "" {
 		if c.IP == optNone {
-			return &NoAddressError{UserError: UserError{
+			return &NoAddressError{
 				Cause:   "container " + c.CTID + " got no IPv6 address",
 				Fix:     "Check that --vlan is the right one and that the router advertises a prefix or a DHCPv6 server answers on it, or give --ip6 and --gateway6",
 				Setting: settingV6Mode,
-			}}
+			}
 		}
-		return &NoAddressError{DHCP: c.IP == optDHCP, UserError: UserError{
+		return &NoAddressError{
+			DHCP:    c.IP == optDHCP,
 			Cause:   "container " + c.CTID + " got no IPv4 address",
 			Fix:     "Check that --vlan is the right one and that a DHCP server answers on it, or give --ip <address>/<prefix> --gateway <address>",
 			Setting: settingV4Mode,
-		}}
+		}
 	}
 	if c.IP6 != "" && r.address6 == "" {
 		r.warnings = append(r.warnings, "container "+c.CTID+" has no IPv6 address yet, so its certificate names its IPv4 address only. Fix the IPv6 setting, then run: sh install.sh --certificate --ctid "+c.CTID)
@@ -722,8 +723,12 @@ func (r *Runner) stepNetwork(ctx context.Context) error {
 			}
 		}
 	}
+	if reachable == "" && !resolved {
+		return settingErr(settingDNS, "the container cannot resolve any name of the Proxmox VE API (tried "+strings.Join(hosts, ", ")+")",
+			"Name servers the container reaches, or an address the certificate is valid for, in the API address")
+	}
 	if reachable == "" {
-		return r.networkFailure(ctx, hosts, port, resolved)
+		return r.networkFailure(ctx, hosts, port)
 	}
 	if reachable != hosts[0] {
 		r.S.noticef("the container cannot use %s, so the appliance and the clusters reach the Proxmox VE API at %s", hosts[0], reachable)
@@ -769,14 +774,11 @@ func (r *Runner) reachAPI(ctx context.Context, hosts []string, port string) (str
 // neighbourRE reads the state of an entry of the container's neighbour table.
 var neighbourRE = regexp.MustCompile(`\b(REACHABLE|STALE|DELAY|PERMANENT|PROBE|FAILED|INCOMPLETE)\b`)
 
-// networkFailure explains why the API cannot be reached: first by the neighbour table of the
-// container, which shows whether its gateway answered ARP, then by a retried ping.
-func (r *Runner) networkFailure(ctx context.Context, hosts []string, port string, resolved bool) error {
+// networkFailure explains why the API cannot be reached although a name of it resolves: first by
+// the neighbour table of the container, which shows whether its gateway answered ARP, then by a
+// retried ping.
+func (r *Runner) networkFailure(ctx context.Context, hosts []string, port string) error {
 	c := &r.S.Cfg
-	if !resolved {
-		return settingErr(settingDNS, "the container cannot resolve any name of the Proxmox VE API (tried "+strings.Join(hosts, ", ")+")",
-			"Name servers the container reaches, or an address the certificate is valid for, in the API address")
-	}
 	gw := r.containerGateway(ctx)
 	if gw == "" {
 		return settingErr(settingV4Gateway, fmt.Sprintf("container %s has no default route, so it cannot connect to the Proxmox VE API at %s on port %s", c.CTID, hosts[0], port),

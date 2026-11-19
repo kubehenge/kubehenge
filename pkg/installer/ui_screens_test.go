@@ -261,25 +261,34 @@ func TestUINetworkListFiltersAtEightyByTwentyFour(t *testing.T) {
 	}
 }
 
-// Several cautions stay readable on the smallest screen, with the choice still shown.
+// Several cautions stay whole on the smallest screen, each with its fix, and the choice is still
+// shown. One address is as long as an IPv4 address gets.
 func TestUISummaryWithSeveralCautions(t *testing.T) {
 	t.Parallel()
+	cautions := []string{
+		apiFamilyCaution("192.0.2.10"),
+		apiFamilyCaution("198.51.100.200"),
+		apiFamilyCaution("192.0.2.12"),
+	}
 	for _, sz := range screens {
 		t.Run(sz.name, func(t *testing.T) {
 			t.Parallel()
 			h := newHarness(t, opts{dhcp: true})
 			u := startUIWith(t, h, Config{PVEEntry: "no", ProxmoxURL: "https://pve1.example.com:8006"}, sz.w, sz.l, func(s *Session) {
-				s.Cautions = []string{
-					apiFamilyCaution("192.0.2.10", "2001:db8::10"),
-					apiFamilyCaution("192.0.2.11", "2001:db8::11"),
-					apiFamilyCaution("192.0.2.12", "2001:db8::12"),
-				}
+				s.Cautions = cautions
 			})
 			u.waitFor("Node")
 			u.toSummary()
 			u.golden("cautions")
-			if !strings.Contains(u.rec.screen(), "Install") {
-				t.Fatalf("the choice is cut:\n%s", u.rec.screen())
+			screen := u.rec.screen()
+			if !strings.Contains(screen, "Install") {
+				t.Fatalf("the choice is cut:\n%s", screen)
+			}
+			flat := strings.Join(strings.Fields(screen), " ")
+			for _, c := range cautions {
+				if !strings.Contains(flat, c) {
+					t.Errorf("the caution %q is cut:\n%s", c, screen)
+				}
 			}
 			u.press(tea.KeyPressMsg{Code: tea.KeyRight})
 			u.press(tea.KeyPressMsg{Code: tea.KeyRight})
