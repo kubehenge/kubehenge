@@ -29,15 +29,18 @@ type AddrCheck struct {
 func (c AddrCheck) Taken() bool { return c.State == AddrInUse }
 
 // Text is the check as one short phrase for the summary.
-func (c AddrCheck) Text() string {
+func (c AddrCheck) Text() string { return c.Outcome() + ", " + c.Detail }
+
+// Outcome is the check's state in words alone: free, in use or not checked.
+func (c AddrCheck) Outcome() string {
 	switch c.State {
 	case AddrFree:
-		return "free, " + c.Detail
+		return "free"
 	case AddrInUse:
-		return "in use, " + c.Detail
+		return "in use"
 	case AddrUnchecked:
 	}
-	return "not checked, " + c.Detail
+	return "not checked"
 }
 
 // errNoProbe is the check on a system that cannot send ARP.
@@ -84,14 +87,14 @@ func (n *Node) CheckAddress(ctx context.Context, address string, l Link) AddrChe
 		return AddrCheck{AddrFree, "no answer to an ARP probe on " + dev}
 	}
 	if witness == "" {
-		return AddrCheck{AddrUnchecked, "no gateway known to test that this node hears " + dev}
+		return AddrCheck{AddrUnchecked, "no gateway to test the probe against"}
 	}
 	w, err := netip.ParseAddr(witness)
 	if err != nil {
 		return AddrCheck{AddrUnchecked, "no gateway to test the probe against"}
 	}
 	if heard, werr := n.Probe(ctx, dev, w); werr != nil || !heard {
-		return AddrCheck{AddrUnchecked, "the gateway " + witness + " does not answer a probe on " + dev + " either, so this node may not hear that network"}
+		return AddrCheck{AddrUnchecked, "the gateway " + witness + " does not answer a probe either"}
 	}
-	return AddrCheck{AddrFree, "no answer to an ARP probe on " + dev + ", the gateway answers one"}
+	return AddrCheck{AddrFree, "no answer to an ARP probe on " + dev + ", while the gateway answers one"}
 }

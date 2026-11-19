@@ -5,7 +5,7 @@
   Install           Kubehenge on node pve1
   Network           vmbr0 (bridge)
   IPv4              192.0.2.254/24 via 192.0.2.1, free
-  IPv6              off, the container takes none
+  IPv6              off
   DNS               this node's: 192.0.2.53
   Container ID      100
   Host name         kubehenge
@@ -17,4 +17,4 @@
   If it fails       you choose to keep or remove the container
 
   ┃ ← Install →
-  ←→ choose  enter confirm  ctrl+c leave
+  ←→ choose  enter confirm  ctrl+c quit

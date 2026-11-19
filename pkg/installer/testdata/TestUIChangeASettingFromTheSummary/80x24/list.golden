@@ -8,10 +8,10 @@
   ┃   VLAN               none
   ┃   IPv4 address       DHCP
   ┃   DNS                this node's: 192.0.2.53
-  ┃   MTU                none
+  ┃   MTU                bridge default
   ┃   Container ID       100
   ┃   Host name          kubehenge
   ┃   DNS name           none
   ┃   Certificate        made by the appliance
   ┃   Proxmox VE API     https://pve1.example.com:8006
-  ↑↓ choose  / filter  enter change  esc back  ctrl+c leave
+  ↑↓ choose  / filter  enter change  esc back  ctrl+c quit

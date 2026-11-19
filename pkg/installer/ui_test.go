@@ -387,7 +387,7 @@ func TestUIAddressInUseReturnsToTheAddress(t *testing.T) {
 	u.waitFor("IPv4 address and prefix")
 	h.take("192.0.2.254")
 	u.enter(2)
-	u.waitFor("answers on the network")
+	u.waitFor("is in use on")
 	u.golden("in-use")
 	if !strings.Contains(u.rec.screen(), "IPv4 address and prefix") || strings.Contains(u.rec.screen(), "IP version") {
 		t.Fatalf("the refusal is not on the address question:\n%s", u.rec.screen())
@@ -524,7 +524,7 @@ func TestUIRestoreNamesWhatItDropped(t *testing.T) {
 	u := startUIWith(t, h, Config{PVEEntry: "no"}, 80, 24, func(s *Session) {
 		s.AnswersPath, s.Saved = path, loadAnswers(path)
 	})
-	u.waitFor("which this version refuses")
+	u.waitFor("which fail the checks")
 	u.golden("dropped")
 	if screen := u.rec.screen(); !strings.Contains(screen, "the saved MTU and host name") {
 		t.Errorf("the dropped answers are not named:\n%s", screen)

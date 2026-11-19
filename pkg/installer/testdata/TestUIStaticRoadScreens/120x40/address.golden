@@ -3,6 +3,6 @@
   ██   ██    Network · Storage · Summary · Install · Done
 
   ┃ IPv4 address and prefix
-  ┃ Suggested 192.0.2.254/24, free, no answer to an ARP probe on vmbr0
+  ┃ Suggested 192.0.2.254/24, free
   ┃ > 192.0.2.254/24
-  enter confirm  esc back  ctrl+c leave
+  enter confirm  esc back  ctrl+c quit

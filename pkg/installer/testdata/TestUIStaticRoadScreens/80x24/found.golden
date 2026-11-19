@@ -7,7 +7,6 @@
   Storage           local-lvm, the only one for container disks
   Proxmox VE API    https://pve1.example.com:8006
   API CA            this cluster's CA
-  Note              the Proxmox VE API at pve1.example.com has a certificate
-                    that is also valid for 192.0.2.10
+  Note              the API's certificate also covers 192.0.2.10
 
-  enter continue  ctrl+c leave
+  enter continue  ctrl+c quit

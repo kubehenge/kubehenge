@@ -79,7 +79,7 @@ func TestValidateOptions(t *testing.T) {
 		{Config{Insecure: true, Certificate: true}, "--proxmox-insecure goes with an install or --upgrade"},
 		{Config{TrustedProxies: []string{"pve"}}, "--trusted-proxy pve: use an IPv4 or IPv6 address"},
 		{Config{NoTrustedProxy: true}, "--no-trusted-proxy goes with --upgrade"},
-		{Config{IP: "192.0.2.5/99"}, "--ip is dhcp, an IPv4 address with its prefix length"},
+		{Config{IP: "192.0.2.5/99"}, "--ip is dhcp, an IPv4 address with or without /prefix"},
 		{Config{Gateway: "x"}, "--gateway is an IPv4 address"},
 		{Config{IP6: "x"}, "--ip6 is auto, dhcp or an IPv6 address"},
 		{Config{Gateway6: "x", IP6: "2001:db8::5/64"}, "--gateway6 is an IPv6 address"},

@@ -6,8 +6,8 @@
 
   Cause             you did not trust the CA the Proxmox VE API at
                     https://pve1.example.com:8006 serves
-  Do                Give the CA that signed its certificate with the API CA
-                    file, or another URL with the Proxmox VE API address
+  Fix               Give the CA that signed its certificate with the API CA
+                    file, or another API address
   Changed           nothing
 
   ┃ > Change Proxmox VE API

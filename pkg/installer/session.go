@@ -100,7 +100,7 @@ func (s *Session) Prepare(ctx context.Context) error {
 	if s.Cfg.CTID == "" {
 		s.Cfg.CTID = facts.NextID
 	} else if !s.Node.IDFree(ctx, s.Cfg.CTID) {
-		return userErr(fmt.Sprintf("--ctid %s is taken by another guest", s.Cfg.CTID), "Name a free id, or leave --ctid out")
+		return userErr(fmt.Sprintf("--ctid %s is taken by another guest", s.Cfg.CTID), "Name a free ID, or leave --ctid out")
 	}
 	return nil
 }
@@ -141,7 +141,7 @@ func (s *Session) CheckAddressing(ctx context.Context) error {
 	s.AddressCheck = check
 	switch check.State {
 	case AddrInUse:
-		return settingErr(settingV4Addr, p.Addr().String()+" answers on the network of "+c.Bridge, "Give a free address with --ip")
+		return settingErr(settingV4Addr, p.Addr().String()+" is in use on "+c.Bridge, "Give a free address with --ip")
 	case AddrUnchecked:
 		s.noticef("could not check that %s is free: %s", p.Addr(), check.Detail)
 	case AddrFree:
@@ -304,7 +304,7 @@ func (s *Session) UnattendedCheck() error {
 	if s.CA != nil && s.CA.NeedsTrust && !c.TrustServedCA && c.ProxmoxCA == "" {
 		fix := "Check that it is your CA, then give it with --proxmox-ca <file>"
 		if s.CA.Pinned {
-			fix = "The API serves no CA certificate, so only its own certificate could be trusted. The appliance would then fail when that is renewed. Give the CA that signed it with --proxmox-ca <file>"
+			fix = "Give the CA that signed it with --proxmox-ca <file>. Without it the appliance fails when the certificate is renewed"
 		}
 		return userErr(fmt.Sprintf("the Proxmox VE API at %s serves a certificate from %s (SHA-256 fingerprint %s) that this node does not trust",
 			c.ProxmoxURL, s.CA.Subject, s.CA.Fingerprint), fix)
@@ -349,15 +349,15 @@ func (s *Session) pickAPIHost(ties Ties) (bool, error) {
 	cands := s.Facts.Candidates
 	if len(cands) == 0 {
 		_, file, _ := s.Node.servedCertificate()
-		return false, settingErr(settingAPI, fmt.Sprintf("Proxmox VE's certificate (%s) is valid for no name or address of this cluster's nodes", file),
-			"Give the URL the appliance and the clusters reach the API at, by a name or address the certificate is valid for, with --proxmox-url")
+		return false, settingErr(settingAPI, fmt.Sprintf("the certificate in %s covers no name or address of this cluster's nodes", file),
+			"Give a name or address the certificate covers with --proxmox-url")
 	}
 	if len(TiedCandidates(cands)) > 1 && ties != PickBest {
 		return true, nil
 	}
 	c.APIHost = cands[0].Host
 	if len(cands) > 1 {
-		s.noticef("the Proxmox VE API at %s has a certificate that is also valid for %s", c.APIHost, joinHosts(cands[1:]))
+		s.noticef("the API's certificate also covers %s", joinHosts(cands[1:]))
 	}
 	return false, nil
 }

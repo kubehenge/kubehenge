@@ -2,9 +2,9 @@
  ▀██▀▀▀██▀   Appliance installer
   ██   ██    Network · Storage · Summary · Install · Done
 
-  192.0.2.254 answers on the network of vmbr0
+  192.0.2.254 is in use on vmbr0
 
   ┃ IPv4 address and prefix
-  ┃ Suggested 192.0.2.254/24, free, no answer to an ARP probe on vmbr0
+  ┃ Suggested 192.0.2.254/24, free
   ┃ > 192.0.2.254/24
-  enter confirm  esc back  ctrl+c leave
+  enter confirm  esc back  ctrl+c quit

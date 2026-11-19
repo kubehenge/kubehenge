@@ -6,6 +6,7 @@ package installer
 import (
 	"fmt"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/spf13/pflag"
 )
@@ -91,7 +92,7 @@ func BindFlags(f *pflag.FlagSet, c *Config) {
 	f.StringVar(&c.Bridge, "bridge", "", "the bridge, Open vSwitch bridge or SDN VNet the container attaches to")
 	f.StringVar(&c.VLAN, "vlan", "", "the VLAN tag of the container's network, 1 to 4094")
 	f.StringVar(&c.MTU, "mtu", "", "the MTU of the container's network, 576 to 65535")
-	f.StringVar(&c.IP, "ip", "", "the IPv4 address: dhcp, none or an address with its prefix, such as 192.0.2.40/24")
+	f.StringVar(&c.IP, "ip", "", "the IPv4 address: dhcp, none or an address with or without /prefix, such as 192.0.2.40/24")
 	f.StringVar(&c.Gateway, "gateway", "", "the default gateway, an IPv4 address, with a static --ip")
 	f.StringVar(&c.IP6, "ip6", "", "the IPv6 address: auto, dhcp or an address with its prefix, such as 2001:db8::40/64")
 	f.StringVar(&c.Gateway6, "gateway6", "", "the default IPv6 gateway, with a static --ip6")
@@ -113,8 +114,8 @@ func BindFlags(f *pflag.FlagSet, c *Config) {
 	noPVEEntry := f.Bool("no-pve-entry", false, "do not add the Kubernetes entry")
 	f.BoolVar(&c.Upgrade, "upgrade", false, "upgrade the appliance in container --ctid")
 	f.BoolVar(&c.Certificate, "certificate", false, "replace the certificate of the appliance in container --ctid")
-	f.BoolVar(&c.Plain, "plain", false, "print one line per step instead of the full-screen installer")
-	f.BoolVar(&c.Yes, "yes", false, "install without asking to confirm the summary, and accept an address outside the network's known subnet")
+	f.BoolVar(&c.Plain, "plain", false, "run without the full-screen installer: ask nothing, print a line per step")
+	f.BoolVar(&c.Yes, "yes", false, "skip the summary confirmation and accept an address outside the network's subnet")
 	f.BoolVar(&c.DryRun, "dry-run", false, "print what would be installed and change nothing")
 	f.BoolVar(&c.KeepFailed, "keep-failed", false, "keep the container of a failed install for inspection instead of removing it")
 	// The entry answers are applied by Normalise once the flags are parsed.
@@ -137,24 +138,40 @@ const (
 
 // FlagUsages lists the options under Install, Upgrade and Certificate.
 func FlagUsages(f *pflag.FlagSet) string {
-	sets := map[string]*pflag.FlagSet{}
+	groups := map[string][]*pflag.Flag{}
 	f.VisitAll(func(fl *pflag.Flag) {
 		group := groupInstall
 		if g := fl.Annotations[flagGroup]; len(g) > 0 {
 			group = g[0]
 		}
-		if sets[group] == nil {
-			sets[group] = pflag.NewFlagSet(group, pflag.ContinueOnError)
-		}
-		sets[group].AddFlag(fl)
+		groups[group] = append(groups[group], fl)
 	})
 	var parts []string
 	for _, group := range []string{groupInstall, groupUpgrade, groupCertificate} {
-		if s := sets[group]; s != nil {
-			parts = append(parts, group+":\n"+s.FlagUsages())
+		if list := groups[group]; list != nil {
+			parts = append(parts, group+":\n"+flagLines(list))
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// flagLines lists flags in pflag's layout, without the [=true|false] pflag puts after a switch.
+func flagLines(list []*pflag.Flag) string {
+	var b strings.Builder
+	w := tabwriter.NewWriter(&b, 0, 0, 3, ' ', 0)
+	for _, fl := range list {
+		name := "      --" + fl.Name
+		if fl.Shorthand != "" {
+			name = "  -" + fl.Shorthand + ", --" + fl.Name
+		}
+		varname, usage := pflag.UnquoteUsage(fl)
+		if varname != "" {
+			name += " " + varname
+		}
+		_, _ = fmt.Fprintf(w, "%s\t%s\n", name, usage)
+	}
+	_ = w.Flush()
+	return b.String()
 }
 
 // Normalise folds flags that cannot be read directly into the Config.

@@ -6,4 +6,4 @@
   ┃ A Kubernetes button in this node's interface
   ┃
   ┃                Add     Skip
-  ←→ choose  enter confirm  esc back  ctrl+c leave
+  ←→ choose  enter confirm  esc back  ctrl+c quit

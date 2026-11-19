@@ -149,7 +149,7 @@ func TestPlainRefusesStaticAddressInUse(t *testing.T) {
 	h := newHarness(t, opts{})
 	h.take("192.0.2.40")
 	_, err := plainOn(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", PVEEntry: "no"})
-	if err == nil || !strings.Contains(err.Error(), "192.0.2.40 answers on the network of vmbr0") || !strings.Contains(err.Error(), "--ip") {
+	if err == nil || !strings.Contains(err.Error(), "192.0.2.40 is in use on vmbr0") || !strings.Contains(err.Error(), "--ip") {
 		t.Fatalf("want the in-use refusal, got %v", err)
 	}
 	if h.exec.changed() != 0 {

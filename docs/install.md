@@ -86,22 +86,22 @@ The same with a static address:
 sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
 ```
 
-On a terminal, the installer is a full-screen guide. It detects the node and says what it found, including answers restored from a run that did not finish (nothing secret is saved). Then it asks the network first:
+On a terminal, the installer is a full-screen guide. It says what it found on the node, and any answers restored from an unfinished run (never a secret). Then it asks the network first:
 
-1. The IP version: IPv4, IPv6 or both. IPv4 only gives the container no IPv6 at all.
+1. The IP version: IPv4, IPv6 or both. IPv4 only gives the container no IPv6.
 2. The network the container attaches to, and its VLAN.
 3. For each version, DHCP, router advertisements (IPv6) or a static address.
-4. A static address, with or without `/prefix`, which the network's prefix fills in. A free address comes filled in, with how it was checked. The gateway is found from the network and kept in the address's subnet. It is asked only when none is found.
+4. A static address, with or without `/prefix`, which the network's prefix fills in. A free address comes filled in, with how it was checked. The gateway is found from the network, within the address's subnet, and asked only when none is found.
 
-After the network it asks only what is ambiguous, and shows a summary of what it will create, to install, change or cancel. Each run writes the commands' output to a log of its own, `/var/log/kubehenge-install-<UTC time>-<random>.log`. The newest ten are kept.
+It then asks only what is ambiguous and shows a summary to install, change or cancel. Each run writes the commands' output to a log of its own, `/var/log/kubehenge-install-<UTC time>-<random>.log`. The newest ten are kept.
 
-A failed step does not end the installer. Its screen names the cause and what to do, and offers to change the setting at fault, try again, quit and keep the container to inspect it (`pct enter <id>`), or quit and remove it. Once it says the container is kept, only that last choice removes it. Before that, Ctrl+C or a lost session removes it unless `--keep-failed` is given. A change of the container's network or of the Proxmox VE API reaches the container that is already there. A change of any other setting creates it afresh, and the downloads are not repeated.
+A failed step keeps the installer open. The screen gives the cause and the fix, and offers to change the setting at fault, try again, quit and keep the container (`pct enter <id>`), or quit and remove it. Once it says the container is kept, only the last choice removes it. Before that, Ctrl+C or a lost session removes it unless `--keep-failed` is given. A new network or Proxmox VE API setting reaches the existing container. Any other change creates it afresh without repeating the downloads.
 
-Without a terminal, with `TERM` empty or `dumb`, or with `--plain`, it prints the plan, then one line as each step starts and one as it ends, and asks nothing. A failed step shows its cause beside it. On a node whose own network is static, it then needs `--ip`, or `--ip dhcp` where a DHCP server answers. A dropped SSH session or Ctrl+C removes the container it was making, unless `--keep-failed` is given. A failed run ends on the `install.sh` command that repeats it with the same answers.
+Without a terminal, with `TERM` empty or `dumb`, or with `--plain`, it prints the plan and a line as each step starts and ends, and asks nothing. A failed step shows its cause beside it. On a node whose own network is static, it then needs `--ip`, or `--ip dhcp` where a DHCP server answers. A dropped SSH session or Ctrl+C removes the container it was making, unless `--keep-failed` is given. A run that stops with answers given ends on the `install.sh` command that repeats them, on a terminal too.
 
-An address is checked on the container's own network by the neighbour table, then by the installer's own ARP probe. The result is free, in use or not checked. A probe that gets no answer counts as free only where this node holds an address on that network, or where the gateway answers a probe too. An address that is in use is refused.
+An address is checked against the node's neighbour table, then with an ARP probe on the container's network. The result is free, in use or not checked. No answer counts as free only where this node holds an address on that network or the gateway answers a probe. An address in use is refused.
 
-`install.sh --help` lists the options from any shell, with no node, no root and no download. `install.sh` carries the version of its release and the checksums of the release archive and the OpenTofu release. It needs 1 GiB free in `/tmp` (or `TMPDIR`) for the unpacked release. The downloaded archive is kept in `~/.cache/kubehenge` (or `KUBEHENGE_CACHE_DIR`) and used again while it matches its checksum. The installer inside the archive carries the container template's checksum, and checks every download before it is used. Once Proxmox's mirror drops that template, the installer takes the one Proxmox's signed template index lists, with the checksum the index gives. To check the script itself before running it, see [Verifying a release](releasing.md#verifying-a-release).
+`install.sh --help` lists the options without a node, root or download. `install.sh` carries the version of its release and the checksums of the release archive and the OpenTofu release. It needs 1 GiB free in `/tmp` (or `TMPDIR`) for the unpacked release. The downloaded archive is kept in `~/.cache/kubehenge` (or `KUBEHENGE_CACHE_DIR`) and used again while it matches its checksum. The installer inside the archive carries the container template's checksum, and checks every download before it is used. Once Proxmox's mirror drops that template, the installer takes the one Proxmox's signed template index lists, with the checksum the index gives. To check the script itself before running it, see [Verifying a release](releasing.md#verifying-a-release).
 
 ### Options
 
@@ -113,7 +113,7 @@ An address is checked on the container's own network by the neighbour table, the
 | `--bridge <bridge>` | the bridge of the node's default route, else `vmbr0` | A bridge, Open vSwitch bridge or SDN VNet of the node, which the container attaches to. A name the node lacks stops the installer before any download. |
 | `--vlan <tag>` | none, or the tag of the VLAN device (such as `vmbr1.20`) the node's default route leaves by | The VLAN tag of the container's network, 1 to 4094. With `--bridge` given, no tag is taken from the route. The installer refuses the default when that bridge is not VLAN aware, since a tag there would cut the node's own VLAN network. |
 | `--mtu <bytes>` | the bridge's | The MTU of the container's network, 576 to 65535. |
-| `--ip dhcp`, `--ip none` or `--ip <address>/<prefix>` | asked | The container's IPv4 address, such as `192.0.2.40` or `192.0.2.40/24`, whose prefix is the network's where left out. `none` leaves IPv4 out, on an IPv6-only network, and needs `--ip6`. Without a terminal, `dhcp` where the node's own network uses DHCP, else the install stops. |
+| `--ip dhcp`, `--ip none` or `--ip <address>/<prefix>` | asked | The container's IPv4 address, such as `192.0.2.40/24`. Without `/prefix` it takes the network's. `none` leaves IPv4 out, on an IPv6-only network, and needs `--ip6`. Without a terminal, `dhcp` where the node's own network uses DHCP, else the install stops. |
 | `--gateway <address>` | none | The default gateway, an IPv4 address, with a static `--ip`. |
 | `--ip6 auto`, `--ip6 dhcp` or `--ip6 <address>/<prefix>` | none | The container's IPv6 address, such as `2001:db8::40/64`. `auto` takes one from the router's advertisements. |
 | `--gateway6 <address>` | none | The default IPv6 gateway, with a static `--ip6`. It may be link-local, such as `fe80::1`. |
@@ -129,7 +129,7 @@ An address is checked on the container's own network by the neighbour table, the
 | `--release <file> --sha256 <hex>` | the published release the script names | Installs a release archive from a file instead, checked against the given checksum. OpenTofu is still downloaded unless `--tofu` names it. |
 | `--tofu <file>` | the published OpenTofu release | Installs OpenTofu from a release archive (`tofu_<version>_linux_amd64.tar.gz`) instead of downloading it. It is checked against the checksum in `install.sh`, so the version must be the one the script names. Together with `--release` and a template on a storage, the node needs no internet access. |
 | `--plain` | off | Runs as without a terminal. |
-| `--yes` | off | Installs without the confirmation of the summary, and accepts an address outside the network's known subnet. |
+| `--yes` | off | Skips the summary confirmation and accepts an address outside the network's subnet. |
 | `--dry-run` | off | Prints what would be installed and changes nothing. |
 | `--keep-failed` | off | Keeps a failed install's container for inspection. |
 | `--pve-entry` or `--no-pve-entry` | asked | Whether to add a Kubernetes entry to this node's Proxmox VE interface ([below](#the-proxmox-ve-interface-entry)). Run without a terminal, it leaves the entry out. |
@@ -152,7 +152,7 @@ Log: /var/log/kubehenge-install-20261119-134128-2706524411.log
 
 The appliance, the management cluster and every cluster reach the Proxmox VE API at one URL and check the certificate it serves. Without `--proxmox-url`, the installer reads the names and addresses in this node's API certificate (`/etc/pve/local/pveproxy-ssl.pem`, else `pve-ssl.pem`). It keeps an address only if it belongs to one of this cluster's nodes. It keeps a name only if every address it resolves to belongs to one. A wildcard name counts for this node's own name (`hostname -f`) where it covers it.
 
-Where the certificate is valid for none of the cluster's names and addresses, the installer asks for the URL (`--proxmox-url`), by a name or address the certificate is valid for.
+Where the certificate is valid for none of the cluster's names and addresses, the installer asks for a URL with a name or address the certificate is valid for. Without a terminal it stops, and `--proxmox-url` gives that URL.
 
 The management cluster's nodes resolve a name in that URL with the setup's DNS servers, not with the appliance's resolver or hosts file. The setup refuses a name when a server says it does not know it and none resolves it. Put an address in the URL, or add a DNS record. It warns when every server stays silent, and when the servers and the appliance resolve the name differently.
 

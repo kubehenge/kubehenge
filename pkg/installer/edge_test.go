@@ -31,7 +31,7 @@ func TestNoAddressNamesTheVLAN(t *testing.T) {
 		h.exec.on("pct exec 100 -- ip -4 -o addr show dev eth0", "")
 		h.exec.on(c.call, "")
 		_, err := plainOn(t, h, c.cfg)
-		if err == nil || !strings.Contains(err.Error(), "--vlan is the right one") {
+		if err == nil || !strings.Contains(err.Error(), "Check --vlan and that") {
 			t.Errorf("%s: the error names no VLAN check: %v", c.name, err)
 		}
 	}
@@ -212,7 +212,7 @@ func (h *harness) env() *Env {
 	fetch := NewFetcher("")
 	fetch.Sleep = func(time.Duration) {}
 	return &Env{
-		Node: h.node, Exec: h.exec, Fetch: fetch, Dir: h.dir, Work: h.work, LogPath: "/var/log/kubehenge-install.log",
+		Node: h.node, Exec: h.exec, Fetch: fetch, Dir: h.dir, Work: h.work, LogPath: testLogPath,
 		TofuV: "1.0.0", TofuSH: h.tofuSum, Cleanup: func() {},
 		Tune: func(r *Runner) {
 			r.Sleep = func(time.Duration) { time.Sleep(time.Millisecond) }
@@ -693,7 +693,7 @@ func TestCtrlCOnFailureKeepsTheFailure(t *testing.T) {
 	_, _ = typed.Write([]byte{0x03})
 	err := <-ended
 	if err == nil || !strings.Contains(err.Error(), "did not start") || !strings.Contains(err.Error(), "Container 100 is kept.") ||
-		!strings.Contains(err.Error(), "template stays on storage local-lvm") || errs.Len() != 0 {
+		!strings.Contains(err.Error(), "template stays on storage local-lvm") || !strings.HasPrefix(errs.String(), "kubehenge: to run it again") || strings.Count(errs.String(), "\n") != 1 {
 		t.Fatalf("Ctrl+C on the failure screen: err %v, said %q", err, errs.String())
 	}
 	if n := h.exec.count("pct destroy"); n != 0 {

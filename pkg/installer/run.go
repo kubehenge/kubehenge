@@ -580,7 +580,7 @@ func (r *Runner) needSpace(ctx context.Context, dir string, kib int64, what, fix
 func (r *Runner) stepCreate(ctx context.Context) error {
 	c := &r.S.Cfg
 	if !r.S.Node.IDFree(ctx, c.CTID) {
-		return settingErr(settingCTID, fmt.Sprintf("id %s was taken by another guest while the installer ran", c.CTID), "Run it again, or name a free id with --ctid")
+		return settingErr(settingCTID, fmt.Sprintf("ID %s was taken by another guest during the install", c.CTID), "Run it again, or name a free ID with --ctid")
 	}
 	args := []string{
 		"create", c.CTID, c.TemplateStorage + ":vztmpl/" + r.template,
@@ -598,7 +598,7 @@ func (r *Runner) stepCreate(ctx context.Context) error {
 	}
 	out, err := r.pct(ctx, args...)
 	if err != nil && idTaken(c.CTID, out, err) {
-		return settingErr(settingCTID, fmt.Sprintf("id %s was taken by another guest while the installer ran", c.CTID), "Run it again, or name a free id with --ctid")
+		return settingErr(settingCTID, fmt.Sprintf("ID %s was taken by another guest during the install", c.CTID), "Run it again, or name a free ID with --ctid")
 	}
 	// Past Proxmox VE's existence check the id is locked for this create alone. Whatever stopped
 	// the create after that, a cancel included, what it left is this run's to remove.
@@ -712,19 +712,19 @@ func (r *Runner) stepAddress(ctx context.Context) error {
 		if c.IP == optNone {
 			return &NoAddressError{
 				Cause:   "container " + c.CTID + " got no IPv6 address",
-				Fix:     "Check that --vlan is the right one and that the router advertises a prefix or a DHCPv6 server answers on it, or give --ip6 and --gateway6",
+				Fix:     "Check --vlan and that a router or DHCPv6 server answers on it, or give --ip6 and --gateway6",
 				Setting: settingV6Mode,
 			}
 		}
 		return &NoAddressError{
 			DHCP:    c.IP == optDHCP,
 			Cause:   "container " + c.CTID + " got no IPv4 address",
-			Fix:     "Check that --vlan is the right one and that a DHCP server answers on it, or give --ip <address>/<prefix> --gateway <address>",
+			Fix:     "Check --vlan and that a DHCP server answers on it, or give --ip <address>/<prefix> --gateway <address>",
 			Setting: settingV4Mode,
 		}
 	}
 	if c.IP6 != "" && r.address6 == "" {
-		r.warnings = append(r.warnings, "container "+c.CTID+" has no IPv6 address yet, so its certificate names its IPv4 address only. Fix the IPv6 setting, then run: sh install.sh --certificate --ctid "+c.CTID)
+		r.warnings = append(r.warnings, "container "+c.CTID+" has no IPv6 address, so its certificate names IPv4 only. Fix IPv6, then run: sh install.sh --certificate --ctid "+c.CTID)
 	}
 	shown := r.address
 	if shown == "" {
@@ -772,7 +772,7 @@ func (r *Runner) stepNetwork(ctx context.Context) error {
 	}
 	if reachable == "" && !resolved {
 		return settingErr(settingDNS, "the container cannot resolve any name of the Proxmox VE API (tried "+strings.Join(hosts, ", ")+")",
-			"Give name servers the container reaches with --dns, or an address the certificate is valid for with --proxmox-url")
+			"Give --dns name servers the container reaches, or a --proxmox-url address the certificate covers")
 	}
 	if reachable == "" {
 		return r.networkFailure(ctx, hosts, port)
@@ -844,11 +844,11 @@ func (r *Runner) networkFailure(ctx context.Context, hosts []string, port string
 		if strings.Contains(gw, ":") {
 			address, probe = r.address6, "neighbour discovery"
 		}
-		return settingErr(settingNetwork, fmt.Sprintf("container %s at %s cannot reach its gateway %s: no answer to %s, and %s", c.CTID, address, gw, probe, ping),
+		return settingErr(settingNetwork, fmt.Sprintf("container %s at %s cannot reach gateway %s (no answer to %s, %s)", c.CTID, address, gw, probe, ping),
 			"Check that --bridge and --vlan carry the address and that the gateway is on that network")
 	}
-	return settingErr(settingAPI, fmt.Sprintf("container %s reaches its gateway %s but cannot connect to the Proxmox VE API at %s on port %s (%s)", c.CTID, gw, hosts[0], port, ping),
-		"Check the routing to the API, the node's firewall for that port and pveproxy's LISTEN_IP in /etc/default/pveproxy, or give another URL with --proxmox-url")
+	return settingErr(settingAPI, fmt.Sprintf("container %s reaches its gateway but not the Proxmox VE API at %s", c.CTID, net.JoinHostPort(hosts[0], port)),
+		"Check the route and firewall to port "+port+", LISTEN_IP in /etc/default/pveproxy, or give another URL with --proxmox-url")
 }
 
 // noRouteFix is the setting and the fix for a container without a default route, by how it gets
@@ -860,7 +860,7 @@ func (r *Runner) noRouteFix() (string, string) {
 	case c.IP != optNone && modeOf(c.IP) == optStatic:
 		return settingV4Gateway, "Give the container a gateway with --gateway"
 	case c.IP != optNone:
-		return settingNetwork, "Check that the DHCP server on --bridge and --vlan sends a router, or give --ip <address>/<prefix> --gateway <address>"
+		return settingNetwork, "Check that the DHCP server on --bridge and --vlan sends a gateway, or give --ip <address>/<prefix> --gateway <address>"
 	case modeOf(c.IP6) == optStatic:
 		return settingV6Gateway, "Give the container an IPv6 gateway with --gateway6"
 	}

@@ -383,6 +383,9 @@ func (h *harness) runner(s *Session, emit func(Event)) *Runner {
 		Sleep: func(time.Duration) {}, Now: func() time.Time { return time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC) },
 		TofuV: "1.0.0", TofuSH: h.tofuSum,
 		Realms:  func(context.Context, string, string, []byte) int { return http.StatusOK },
-		LogPath: "/var/log/kubehenge-install.log", Pin: h.pin,
+		LogPath: testLogPath, Pin: h.pin,
 	}
 }
+
+// testLogPath is a run's log, named as openLog names it.
+const testLogPath = LogDir + "/" + LogPrefix + "20261112-120000-1234567890.log"

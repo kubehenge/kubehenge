@@ -25,6 +25,7 @@ var neutralWords = strings.NewReplacer(
 	"--ip <address>/<prefix> --gateway <address>", "a static IPv4 address and gateway",
 	"--ip6 and --gateway6", "a static IPv6 address and gateway",
 	"--proxmox-insecure", "the unchecked API certificate",
+	"another URL with --proxmox-url", "another API address",
 	"--proxmox-url", "the Proxmox VE API address",
 	"--proxmox-ca <file>", "the API CA file",
 	"--proxmox-ca", "the API CA file",
@@ -135,7 +136,7 @@ func (m *Model) formView() string {
 	}
 	keys := m.keys
 	if m.leaveAsked {
-		keys = "ctrl+c again leaves, your answers are kept for the next run"
+		keys = "ctrl+c again quits and keeps your answers"
 	}
 	return indent(m.form.View(), "  ") + "\n" + dim.Render("  "+keys) + "\n"
 }
@@ -205,17 +206,17 @@ func (m *Model) foundView() string {
 		b.WriteString("\n")
 	}
 	if m.S.Restored {
-		b.WriteString(m.row("Restored", "your answers from the last run. Nothing secret is saved. Change any on the summary."))
+		b.WriteString(m.row("Restored", "answers from the last run. Change any on the summary"))
 	}
 	if d := m.S.Dropped; len(d) > 0 {
 		list := d[len(d)-1]
 		if len(d) > 1 {
 			list = strings.Join(d[:len(d)-1], ", ") + " and " + list
 		}
-		b.WriteString(m.row("Dropped", "the saved "+list+", which this version refuses"))
+		b.WriteString(m.row("Dropped", "the saved "+list+", which fail the checks"))
 	}
 	b.WriteString("\n")
-	b.WriteString(dim.Render("  enter continue  ctrl+c leave"))
+	b.WriteString(dim.Render("  enter continue  ctrl+c quit"))
 	b.WriteString("\n")
 	return b.String()
 }
@@ -398,7 +399,7 @@ func (m *Model) failView() string {
 			// The Log row below gives the path, so the action only names the log.
 			fix = strings.ReplaceAll(fix, "See "+m.runner.LogPath, "Read the log")
 		}
-		b.WriteString(m.row("Do", neutral(fix)))
+		b.WriteString(m.row("Fix", neutral(fix)))
 	}
 	if m.runner != nil {
 		b.WriteString(m.row("Log", m.runner.LogPath))

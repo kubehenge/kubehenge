@@ -5,7 +5,7 @@
   Install           Kubehenge on node pve1
   Network           vmbr0 (bridge)
   IPv4              DHCP
-  IPv6              off, the container takes none
+  IPv6              off
   DNS               this node's: 192.0.2.53
   Container ID      100
   Host name         kubehenge
@@ -23,4 +23,4 @@
                     Add it, then pass --proxmox-url https://192.0.2.12:8006
 
   ┃ ← Install →
-  ←→ choose  enter confirm  ctrl+c leave
+  ←→ choose  enter confirm  ctrl+c quit

@@ -556,7 +556,7 @@ func (m *Model) begin() tea.Cmd {
 
 func (m *Model) confirmForm(title, yes, no string) tea.Cmd {
 	m.a.outside = false
-	m.keys = "←→ choose  enter confirm  esc back  ctrl+c leave"
+	m.keys = "←→ choose  enter confirm  esc back  ctrl+c quit"
 	return m.startForm(huh.NewGroup(huh.NewConfirm().Title(title).Affirmative(yes).Negative(no).Value(&m.a.outside)))
 }
 
@@ -581,7 +581,7 @@ func (m *Model) showSummary() tea.Cmd {
 		install = "Print plan"
 	}
 	m.a.action = actInstall
-	m.keys = "←→ choose  enter confirm  ctrl+c leave"
+	m.keys = "←→ choose  enter confirm  ctrl+c quit"
 	return m.startForm(huh.NewGroup(huh.NewSelect[string]().Inline(true).Options(
 		huh.NewOption(install, actInstall), huh.NewOption("Change a setting", actChange), huh.NewOption("Cancel", actCancel),
 	).Value(&m.a.action)))
@@ -609,7 +609,7 @@ func (m *Model) settingList() tea.Cmd {
 		}
 	}
 	m.a.setting = opts[0].Value
-	m.keys = "↑↓ choose  / filter  enter change  esc back  ctrl+c leave"
+	m.keys = "↑↓ choose  / filter  enter change  esc back  ctrl+c quit"
 	sel := m.fitList(huh.NewSelect[string]().Title("Change").Options(opts...).Value(&m.a.setting), len(opts))
 	return m.startForm(huh.NewGroup(sel))
 }

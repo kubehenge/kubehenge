@@ -177,7 +177,7 @@ func (c *Config) pairErrors() (string, string) {
 func (c *Config) networkChecks() []optionCheck {
 	pair4, pair6 := c.pairErrors()
 	return []optionCheck{
-		{c.IP != "" && c.IP != optDHCP && c.IP != optNone && !IsIPv4CIDR(c.IP) && !IsIPv4(c.IP), "--ip is dhcp, an IPv4 address with its prefix length, such as 192.0.2.5/24, or none on an IPv6-only network", ""},
+		{c.IP != "" && c.IP != optDHCP && c.IP != optNone && !IsIPv4CIDR(c.IP) && !IsIPv4(c.IP), "--ip is dhcp, an IPv4 address with or without /prefix, such as 192.0.2.5/24, or none on an IPv6-only network", ""},
 		{pair4 != "", "--ip and --gateway do not fit: " + pair4, ""},
 		{pair6 != "", "--ip6 and --gateway6 do not fit: " + pair6, ""},
 		{c.IP == optDHCP && c.Gateway != "", "--gateway goes with a static --ip", ""},

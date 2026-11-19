@@ -378,7 +378,7 @@ func TestCertificateForNoClusterNameOffersTheAPI(t *testing.T) {
 	s := prepared(t, h, Config{PVEEntry: "no"})
 	s.Facts.Candidates, s.Cfg.APIHost, s.Cfg.ProxmoxURL = nil, "", ""
 	err := s.ResolveAPI(context.Background(), PickBest)
-	if err == nil || !strings.Contains(err.Error(), "valid for no name") {
+	if err == nil || !strings.Contains(err.Error(), "covers no name") {
 		t.Fatalf("want the certificate named, got %v", err)
 	}
 	m := NewModel(s, nil)

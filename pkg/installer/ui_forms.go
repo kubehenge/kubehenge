@@ -81,22 +81,22 @@ func choose(title string, v *string, opts ...huh.Option[string]) *huh.Select[str
 
 func keysOf(fields []huh.Field) string {
 	if len(fields) > 1 {
-		return "enter next  esc back  ctrl+c leave"
+		return "enter next  esc back  ctrl+c quit"
 	}
 	if len(fields) == 1 {
 		switch f := fields[0].(type) {
 		case *huh.Input:
-			return "enter confirm  esc back  ctrl+c leave"
+			return "enter confirm  esc back  ctrl+c quit"
 		case *huh.Confirm:
-			return "←→ choose  enter confirm  esc back  ctrl+c leave"
+			return "←→ choose  enter confirm  esc back  ctrl+c quit"
 		case *huh.Select[string]:
 			if f.GetFiltering() {
-				return "type to filter  ↑↓ choose  enter confirm  esc back  ctrl+c leave"
+				return "type to filter  ↑↓ choose  enter confirm  esc back  ctrl+c quit"
 			}
 		case *huh.FilePicker, *huh.MultiSelect[string], *huh.Note, *huh.Text:
 		}
 	}
-	return "↑↓ choose  enter confirm  esc back  ctrl+c leave"
+	return "↑↓ choose  enter confirm  esc back  ctrl+c quit"
 }
 
 func orNone(s string) string {
@@ -109,10 +109,10 @@ func orNone(s string) string {
 func validateDNS(f *Facts) func(string) error {
 	return func(s string) error {
 		if s != "" && !dnsListRE.MatchString(s) {
-			return errors.New("comma-separated name server addresses")
+			return errors.New("enter name server addresses, comma-separated")
 		}
 		if s == "" && f.LoopbackDNSOnly {
-			return errors.New("required, this node's resolver is on loopback")
+			return errors.New("this node's resolver is on loopback, so give name servers")
 		}
 		return nil
 	}
@@ -346,9 +346,9 @@ func v4AddrFields(m *Model) []huh.Field {
 	}
 	in := input("IPv4 address and prefix", &m.a.address, "192.0.2.40/24", validateAddress4(f.Prefix))
 	if suggestion != "" {
-		in = in.Description("Suggested " + suggestion + ", " + f.SuggestedCheck.Text())
+		in = in.Description("Suggested " + suggestion + ", " + f.SuggestedCheck.Outcome())
 	} else if f.Prefix.IsValid() {
-		in = in.Description("The subnet is " + f.Prefix.Masked().String() + ", so /" + strconv.Itoa(f.Prefix.Bits()) + " may be left out")
+		in = in.Description("/" + strconv.Itoa(f.Prefix.Bits()) + " may be left out")
 	}
 	return []huh.Field{in}
 }
@@ -360,9 +360,9 @@ func validateAddress4(subnet netip.Prefix) func(string) error {
 			return nil
 		}
 		if subnet.IsValid() {
-			return errors.New("an IPv4 address, with or without /prefix")
+			return errors.New("enter an IPv4 address, with or without /prefix")
 		}
-		return errors.New("an address with its prefix, such as 192.0.2.40/24")
+		return errors.New("enter an address with its prefix, such as 192.0.2.40/24")
 	}
 }
 
@@ -387,7 +387,7 @@ func v4AddrSetting() *setting {
 			c.Gateway = ""
 			m.a.gateway, m.a.gwNote = GuessGateway(p, f.RouteGateway), ""
 			if m.a.gateway != "" {
-				m.a.gwNote = "A guess: " + f.RouteGateway + " moved onto this subnet. Check it"
+				m.a.gwNote = "Guessed from the node's gateway " + f.RouteGateway + ". Check it"
 			}
 			return nil
 		},
@@ -452,7 +452,7 @@ func v6AddrSetting() *setting {
 			}
 			return []huh.Field{input("IPv6 address and prefix", &m.a.address6, "2001:db8::40/64", func(s string) error {
 				if !IsIPv6CIDR(s) {
-					return errors.New("an IPv6 address with its prefix")
+					return errors.New("enter an IPv6 address with its prefix")
 				}
 				return nil
 			})}
@@ -510,15 +510,23 @@ func dnsSetting() *setting {
 	}
 }
 
+// mtuDefault names the MTU the container takes when none is given.
+const mtuDefault = "bridge default"
+
 func mtuSetting() *setting {
 	return &setting{
 		label:   "MTU",
 		applies: always,
 		open:    func(*Model) bool { return false },
-		value:   func(m *Model) string { return orNone(m.S.Cfg.MTU) },
+		value: func(m *Model) string {
+			if m.S.Cfg.MTU == "" {
+				return mtuDefault
+			}
+			return m.S.Cfg.MTU
+		},
 		fields: func(m *Model) []huh.Field {
 			m.a.mtu = m.S.Cfg.MTU
-			return []huh.Field{input("MTU", &m.a.mtu, "bridge default", validateRange("576 to 65535", mtuMin, mtuMax))}
+			return []huh.Field{input("MTU", &m.a.mtu, mtuDefault, validateRange("576 to 65535", mtuMin, mtuMax))}
 		},
 		apply: func(m *Model) tea.Cmd {
 			m.S.Cfg.MTU = m.a.mtu
@@ -537,10 +545,10 @@ func ctidSetting() *setting {
 			m.a.ctid = m.S.Cfg.CTID
 			return []huh.Field{input("Container ID", &m.a.ctid, m.S.Facts.NextID, func(s string) error {
 				if !inRange(s, ctidMin, ctidMax) {
-					return errors.New("a number from 100 up")
+					return errors.New("enter a number from 100 up")
 				}
 				if s != m.S.Cfg.CTID && !m.S.Node.IDFree(m.ctx, s) {
-					return errors.New("taken by another guest")
+					return errors.New("ID taken by another guest")
 				}
 				return nil
 			})}
@@ -562,7 +570,7 @@ func hostnameSetting() *setting {
 			m.a.hostname = m.S.Cfg.Hostname
 			return []huh.Field{input("Host name", &m.a.hostname, DefaultHostname, func(s string) error {
 				if !hostnameRE.MatchString(s) {
-					return errors.New("a host name such as kubehenge")
+					return errors.New("enter a host name such as kubehenge")
 				}
 				return nil
 			})}
@@ -605,7 +613,7 @@ func certSetting() *setting {
 		fields: func(m *Model) []huh.Field {
 			m.a.certFile, m.a.keyFile = m.S.Cfg.CertFile, m.S.Cfg.KeyFile
 			return []huh.Field{
-				input("Certificate file", &m.a.certFile, "none, the appliance makes one", nil),
+				input("Certificate file", &m.a.certFile, "none", nil),
 				input("Key file", &m.a.keyFile, "none", func(s string) error {
 					if (s == "") != (m.a.certFile == "") {
 						return errors.New("give both the certificate and its key, or neither")
@@ -730,15 +738,15 @@ func apiFields(m *Model) []huh.Field {
 	return []huh.Field{
 		input("Proxmox VE API address", &m.a.apiURL, "https://pve.example.org:8006", func(s string) error {
 			if !apiURLRE.MatchString(typedAPIURL(s)) {
-				return errors.New("an https:// URL or a host name, such as pve.example.org")
+				return errors.New("enter an https:// URL or a host name, such as pve.example.org")
 			}
 			return nil
 		}).Suggestions(found),
-		input("API CA file", &m.a.apiCA, "none, the CA is found", nil),
+		input("API CA file", &m.a.apiCA, "none", nil),
 		huh.NewConfirm().Title("API certificate").Affirmative("Check").Negative("Do not check").Value(&m.a.apiCheck).
 			Validate(func(check bool) error {
 				if !check && m.a.apiCA != "" {
-					return errors.New("a CA file goes with the check")
+					return errors.New("a CA file needs the certificate check")
 				}
 				return nil
 			}),
@@ -772,7 +780,7 @@ func trustSetting() *setting {
 			m.a.trust = false
 			note := ""
 			if ca.Pinned {
-				note = "\nThe API serves no CA, so only this certificate is trusted. The appliance fails when it is renewed."
+				note = "\nThe API serves no CA, so only this certificate is trusted. The appliance stops working when the certificate is renewed."
 			}
 			return []huh.Field{huh.NewConfirm().Title("Trust this CA for the Proxmox VE API?").
 				Description("Subject  " + ca.Subject + "\nIssuer   " + ca.Issuer + "\nSHA-256  " + ca.Fingerprint[:47] + "\n         " + ca.Fingerprint[48:] + note).
@@ -802,7 +810,7 @@ func proxiesSetting() *setting {
 			return []huh.Field{input("Trusted proxies", &m.a.proxies, "none, such as 192.0.2.0/24", func(s string) error {
 				for _, p := range splitList(s) {
 					if !IsProxyRange(p) {
-						return errors.New("comma-separated addresses or ranges")
+						return errors.New("enter addresses or ranges, comma-separated")
 					}
 				}
 				return nil
@@ -1032,7 +1040,7 @@ func (m *Model) failAction() tea.Cmd {
 // again in it. Another setting starts the container afresh.
 func (m *Model) resume(fixed string) tea.Cmd {
 	m.fixing = false
-	m.stage, m.busy, m.form = stDetect, "Preparing the next try", nil
+	m.stage, m.busy, m.form = stDetect, "Retrying", nil
 	return tea.Batch(m.spin.Tick, func() tea.Msg {
 		ctx := m.ctx
 		switch {

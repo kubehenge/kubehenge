@@ -6,9 +6,9 @@
   ┃ > https://pve1.example.com:8006
 
     API CA file
-    > none, the CA is found
+    > none
 
     API certificate
 
       Check     Do not check
-  enter next  esc back  ctrl+c leave
+  enter next  esc back  ctrl+c quit

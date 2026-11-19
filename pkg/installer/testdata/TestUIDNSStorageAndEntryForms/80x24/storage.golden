@@ -5,4 +5,4 @@
   ┃ Disk storage
   ┃ > local-lvm  lvmthin, 381.5 GiB free
   ┃   tank  zfspool, 381.5 GiB free
-  ↑↓ choose  enter confirm  esc back  ctrl+c leave
+  ↑↓ choose  enter confirm  esc back  ctrl+c quit

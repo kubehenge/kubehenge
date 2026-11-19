@@ -73,7 +73,7 @@ func TestNetworkStepGatewayAnswersButTheAPIDoesNot(t *testing.T) {
 	if n := h.exec.count(apiConnect); n != netTries || *pauses != netTries-1 {
 		t.Errorf("want %d tries and %d pauses, got %d and %d", netTries, netTries-1, n, *pauses)
 	}
-	if fault.Setting != settingAPI || !strings.Contains(fault.Cause, "reaches its gateway 192.0.2.1 but cannot connect to the Proxmox VE API at pve1.example.com on port 8006") {
+	if fault.Setting != settingAPI || !strings.Contains(fault.Cause, "reaches its gateway but not the Proxmox VE API at pve1.example.com:8006") {
 		t.Errorf("want the gateway reachable and the API not, got %q (%s)", fault.Error(), fault.Setting)
 	}
 }
@@ -86,7 +86,7 @@ func TestNetworkStepGatewayAnswersPing(t *testing.T) {
 	h.exec.fail(gwNeighbour, 1)
 	r, _ := networkRunner(t, h)
 	fault := networkError(t, r.stepNetwork(context.Background()))
-	if fault.Setting != settingAPI || !strings.Contains(fault.Cause, "reaches its gateway 192.0.2.1") || !strings.Contains(fault.Cause, "(its gateway answers ping)") {
+	if fault.Setting != settingAPI || !strings.Contains(fault.Cause, "reaches its gateway but not the Proxmox VE API") {
 		t.Errorf("want the gateway reachable and the API not, got %q (%s)", fault.Error(), fault.Setting)
 	}
 }
@@ -100,7 +100,7 @@ func TestNetworkStepNothingAnswers(t *testing.T) {
 	h.exec.on(gwNeighbour, "192.0.2.1 dev eth0 FAILED\n")
 	r, _ := networkRunner(t, h)
 	fault := networkError(t, r.stepNetwork(context.Background()))
-	if fault.Setting != settingNetwork || !strings.Contains(fault.Cause, "at 192.0.2.77 cannot reach its gateway 192.0.2.1: no answer to ARP") ||
+	if fault.Setting != settingNetwork || !strings.Contains(fault.Cause, "at 192.0.2.77 cannot reach gateway 192.0.2.1 (no answer to ARP") ||
 		!strings.Contains(fault.Fix, "--bridge and --vlan") {
 		t.Errorf("want the network and VLAN named, got %q (%s)", fault.Error(), fault.Setting)
 	}
@@ -134,7 +134,7 @@ func TestNetworkStepIPv6OnlyGatewayDoesNotAnswer(t *testing.T) {
 	r, _ := networkRunner(t, h)
 	r.S.Cfg.IP, r.S.Cfg.IP6, r.address, r.address6 = optNone, "2001:db8::77/64", "", "2001:db8::77"
 	fault := networkError(t, r.stepNetwork(context.Background()))
-	if fault.Setting != settingNetwork || !strings.Contains(fault.Cause, "at 2001:db8::77 cannot reach its gateway 2001:db8::1: no answer to neighbour discovery") ||
+	if fault.Setting != settingNetwork || !strings.Contains(fault.Cause, "at 2001:db8::77 cannot reach gateway 2001:db8::1 (no answer to neighbour discovery") ||
 		strings.Contains(fault.Cause, "ARP") {
 		t.Errorf("want the IPv6 address and neighbour discovery, got %q (%s)", fault.Error(), fault.Setting)
 	}
@@ -171,7 +171,7 @@ func TestNetworkStepFixesNameTheFlags(t *testing.T) {
 	h := newHarness(t, opts{})
 	h.exec.fail(nameLookup, 2)
 	r, _ := networkRunner(t, h)
-	if fault := networkError(t, r.stepNetwork(context.Background())); !strings.Contains(fault.Fix, "with --dns") || !strings.Contains(fault.Fix, "with --proxmox-url") {
+	if fault := networkError(t, r.stepNetwork(context.Background())); !strings.Contains(fault.Fix, "--dns ") || !strings.Contains(fault.Fix, "--proxmox-url ") {
 		t.Errorf("the DNS fix names no flag: %q", fault.Fix)
 	}
 	h = newHarness(t, opts{})

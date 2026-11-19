@@ -155,7 +155,7 @@ func TestInstallScriptUsesTheCachedRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err := r.run(t, "--ip", "dhcp")
-	if err != nil || !strings.Contains(out, "using the copy downloaded before") || !strings.Contains(out, "kubehenge-ran install --ip dhcp") {
+	if err != nil || !strings.Contains(out, "using the cached copy") || !strings.Contains(out, "kubehenge-ran install --ip dhcp") {
 		t.Fatalf("the cached release was not used: %v\n%s", err, out)
 	}
 	if err = os.WriteFile(cached, []byte("damaged"), 0o600); err != nil {

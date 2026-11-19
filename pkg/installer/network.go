@@ -18,9 +18,8 @@ const (
 
 // Where a gateway was read, shown beside it.
 const (
-	gwFromVNet  = "the VNet's subnet"
-	gwFromNode  = "this node's route on that network"
-	gwFromGuess = "a guess: the node's gateway moved onto this subnet"
+	gwFromVNet = "the VNet's subnet"
+	gwFromNode = "this node's route on that network"
 )
 
 // Network is a bridge, an Open vSwitch bridge or an SDN VNet of the node.
@@ -50,7 +49,7 @@ func (n *Network) Label() string {
 		parts = append(parts, "subnet "+n.Subnet.String())
 	}
 	if n.Alias != "" {
-		parts = append(parts, n.Alias)
+		parts = append(parts, "alias "+n.Alias)
 	}
 	return strings.Join(parts, ", ")
 }
@@ -275,7 +274,7 @@ func ParseAddress4(text string, known netip.Prefix) (netip.Prefix, bool) {
 // subnet, is not the gateway, and the gateway lies in the subnet.
 func checkPair(addr netip.Prefix, gateway string) error {
 	if !usableHost(addr, addr.Addr()) {
-		return fmt.Errorf("%s is the network or broadcast address of %s, give a host address", addr.Addr(), addr.Masked())
+		return fmt.Errorf("%s is the network or broadcast address of %s. Give a host address", addr.Addr(), addr.Masked())
 	}
 	g, err := netip.ParseAddr(gateway)
 	if gateway == "" || err != nil {
@@ -296,7 +295,7 @@ func checkPair(addr netip.Prefix, gateway string) error {
 func checkPair6(addr netip.Prefix, gateway string) error {
 	a := addr.Addr()
 	if !a.IsGlobalUnicast() || a.IsLinkLocalUnicast() {
-		return fmt.Errorf("%s is no global address, give one the router's prefix covers", a)
+		return fmt.Errorf("%s is not a global address. Give one in the router's prefix", a)
 	}
 	g, err := netip.ParseAddr(gateway)
 	if gateway == "" || err != nil || g.IsLinkLocalUnicast() {

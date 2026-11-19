@@ -6,8 +6,8 @@
 
   Step              Start container
   Cause             container 100 did not start
-  Do                Read the log for Proxmox VE's message
-  Log               /var/log/kubehenge-install.log
+  Fix               Read the log for Proxmox VE's message
+  Log               /var/log/kubehenge-install-20261112-120000-1234567890.log
   Container         100 is kept until you choose
 
   ┃ > Try again

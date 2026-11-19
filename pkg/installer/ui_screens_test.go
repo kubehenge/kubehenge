@@ -218,7 +218,7 @@ func TestUINetworkListNamesEachNetwork(t *testing.T) {
 			u.answer("(this node)")
 			u.golden("networks")
 			screen := u.rec.screen()
-			for _, want := range []string{"vmbr0, bridge, subnet 192.0.2.0/24 (this node)", "vnet01, VNet, zone zone1, tag 20, subnet 198.51.100.0/24, servers"} {
+			for _, want := range []string{"vmbr0, bridge, subnet 192.0.2.0/24 (this node)", "vnet01, VNet, zone zone1, tag 20, subnet 198.51.100.0/24, alias servers"} {
 				if !strings.Contains(screen, want) {
 					t.Errorf("the list lacks %q:\n%s", want, screen)
 				}
@@ -321,7 +321,7 @@ func TestUIWording(t *testing.T) {
 	u.enter(1)
 	u.waitFor("Stopped")
 	failure := u.rec.screen()
-	if strings.Count(failure, "/var/log/kubehenge-install.log") != 1 {
+	if strings.Count(failure, testLogPath) != 1 {
 		t.Errorf("the log path is not on one row alone:\n%s", failure)
 	}
 	if !strings.Contains(failure, "Read the log for Proxmox VE's message") {

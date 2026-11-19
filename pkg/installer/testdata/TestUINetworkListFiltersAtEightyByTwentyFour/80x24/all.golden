@@ -5,7 +5,7 @@
   ┃ /
   ┃ > vmbr0, bridge, subnet 192.0.2.0/24 (this node)
   ┃   vmbr1, bridge
-  ┃   vnet01, VNet, zone zone1, tag 20, subnet 198.51.100.0/24, servers
+  ┃   vnet01, VNet, zone zone1, tag 20, subnet 198.51.100.0/24, alias servers
   ┃   vnet02, VNet, zone zone1, tag 21
   ┃   vnet03, VNet, zone zone1, tag 22
   ┃   vnet04, VNet, zone zone1, tag 23
@@ -14,4 +14,4 @@
   ┃   vnet07, VNet, zone zone1, tag 26
   ┃   vnet08, VNet, zone zone1, tag 27
   ┃   vnet09, VNet, zone zone1, tag 28
-  type to filter  ↑↓ choose  enter confirm  esc back  ctrl+c leave
+  type to filter  ↑↓ choose  enter confirm  esc back  ctrl+c quit

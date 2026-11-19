@@ -110,7 +110,7 @@ func (s *Session) ipv6Text() string {
 	c := &s.Cfg
 	switch c.IP6 {
 	case "":
-		return "off, the container takes none"
+		return "off"
 	case optAuto:
 		return "router advertisements"
 	case optDHCP:
