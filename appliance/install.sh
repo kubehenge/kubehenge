@@ -114,7 +114,7 @@ release_asset() {
         --header 'Accept: application/octet-stream' -o "$2" "${asset_api}/assets/${asset_id}"
 }
 
-release='' release_sha=''
+release='' release_sha='' help=''
 for arg in "$@"; do
     if [ -n "${expect:-}" ]; then
         case "${expect}" in
@@ -128,13 +128,17 @@ for arg in "$@"; do
     case "${arg}" in
         --release) expect=release ;;
         --sha256) expect=sha256 ;;
+        -h | --help | -help) help=1 ;;
         *) ;;
     esac
 done
 
-uid=$(id -u)
-[ "${uid}" -eq 0 ] || fail "run this as root on a Proxmox VE node"
-command -v pct > /dev/null || fail "this is not a Proxmox VE node"
+# The root and node checks are for an install. The options are listed from anywhere.
+if [ -z "${help}" ]; then
+    uid=$(id -u)
+    [ "${uid}" -eq 0 ] || fail "run this as root on a Proxmox VE node"
+    command -v pct > /dev/null || fail "this is not a Proxmox VE node"
+fi
 if [ -n "${release}" ]; then
     [ -n "${release_sha}" ] || fail "--release needs --sha256"
     KUBEHENGE_SHA256=${release_sha}
@@ -154,8 +158,20 @@ if [ -n "${release}" ]; then
     echo "${KUBEHENGE_SHA256}  ${work}/kubehenge.tar.gz" | sha256sum -c --quiet - || fail "${release} does not match its checksum"
     echo "${release}: checksum verified"
 else
-    fetch "https://github.com/kubehenge/kubehenge/releases/download/v${KUBEHENGE_VERSION}/kubehenge_${KUBEHENGE_VERSION}_linux_amd64.tar.gz" \
-        "${work}/kubehenge.tar.gz" "${KUBEHENGE_SHA256}" "Kubehenge ${KUBEHENGE_VERSION}"
+    # A release that was downloaded before is used again when it still matches its checksum, so a
+    # second run, or a failed install run again, downloads nothing.
+    cache=${KUBEHENGE_CACHE_DIR:-${XDG_CACHE_HOME:-${HOME:-/root}/.cache}/kubehenge}
+    cached=${cache}/kubehenge_${KUBEHENGE_VERSION}_${KUBEHENGE_SHA256}.tar.gz
+    if [ -f "${cached}" ] && echo "${KUBEHENGE_SHA256}  ${cached}" | sha256sum -c --quiet - 2> /dev/null; then
+        cp "${cached}" "${work}/kubehenge.tar.gz"
+        echo "Kubehenge ${KUBEHENGE_VERSION}: using the copy downloaded before, checksum verified"
+    else
+        fetch "https://github.com/kubehenge/kubehenge/releases/download/v${KUBEHENGE_VERSION}/kubehenge_${KUBEHENGE_VERSION}_linux_amd64.tar.gz" \
+            "${work}/kubehenge.tar.gz" "${KUBEHENGE_SHA256}" "Kubehenge ${KUBEHENGE_VERSION}"
+        if mkdir -p "${cache}" 2> /dev/null && cp "${work}/kubehenge.tar.gz" "${cached}.part" 2> /dev/null; then
+            mv "${cached}.part" "${cached}"
+        fi
+    fi
 fi
 mkdir "${work}/kubehenge"
 tar -xzf "${work}/kubehenge.tar.gz" -C "${work}/kubehenge"
