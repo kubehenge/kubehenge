@@ -86,11 +86,22 @@ The same with a static address:
 sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
 ```
 
-On a terminal, the installer is a full-screen guide. It detects the node first, then asks DHCP or static (a static address comes prefilled and is checked for use), asks only what is ambiguous, shows a summary to confirm or change, and installs with a live step list. The commands' output goes to `/var/log/kubehenge-install.log`. If DHCP gives the container no address, it offers a static address and retries.
+On a terminal, the installer is a full-screen guide. It detects the node and says what it found, including answers it restored from an earlier run that did not finish (nothing secret is saved). Then it asks the network first:
 
-Without a terminal, with `TERM` empty or `dumb` (a serial console, an editor's shell), or with `--plain`, it prints one line per step and asks nothing. On a node whose own network is static, it then needs `--ip`, or `--ip dhcp` where a DHCP server answers. A dropped SSH session or Ctrl+C removes the container it was making.
+1. The IP version: IPv4, IPv6 or both. IPv4 only gives the container no IPv6 at all.
+2. The network the container attaches to, and its VLAN.
+3. For each version, DHCP, router advertisements (IPv6) or a static address.
+4. A static address, typed with or without `/prefix`. The prefix of the network fills in when it is left out. A free address comes filled in, with how it was checked. The gateway is found from the network and kept in the address's subnet. It is asked only when none is found.
 
-`install.sh` carries the version of its release and the checksums of the release archive and the OpenTofu release. It needs 1 GiB free in `/tmp` (or `TMPDIR`) for the unpacked release. The installer inside the archive carries the container template's checksum. Every download is checked against its checksum before it is used. Once Proxmox's mirror drops that template, the installer takes the one Proxmox's signed template index lists, with the checksum the index gives. To check the script itself before running it, see [Verifying a release](releasing.md#verifying-a-release).
+After the network it asks only what is ambiguous, and shows a summary of everything that will be created to install, change or cancel. The commands' output goes to `/var/log/kubehenge-install.log`.
+
+A step that fails does not end the installer. The screen names the step, the cause and what to do, and offers to change the setting at fault, try again, quit and keep the container to inspect it (`pct enter <id>`), or quit and remove it. A change of the container's network reaches the container that is already there. A change of any other setting creates it afresh, and the downloads are not repeated.
+
+Without a terminal, with `TERM` empty or `dumb` (a serial console, an editor's shell), or with `--plain`, it prints the plan, then one line as each step starts and one as it ends, and asks nothing. A failed step shows its cause beside it. On a node whose own network is static, it then needs `--ip`, or `--ip dhcp` where a DHCP server answers. A dropped SSH session or Ctrl+C removes the container it was making, unless `--keep-failed` is given.
+
+An address is checked on the container's own network by its neighbour table and then by an ARP probe the installer sends itself, which needs no extra package. The result is free, in use or not checked. A probe that gets no answer counts as free only where this node holds an address on that network, or where the gateway answers a probe too. An address that is in use is refused.
+
+`install.sh --help` lists the options from any shell, with no node and no root. `install.sh` carries the version of its release and the checksums of the release archive and the OpenTofu release. It needs 1 GiB free in `/tmp` (or `TMPDIR`) for the unpacked release. The downloaded archive is kept in `~/.cache/kubehenge` (or `KUBEHENGE_CACHE_DIR`) and used again while it matches its checksum. The installer inside the archive carries the container template's checksum. Every download is checked against its checksum before it is used. Once Proxmox's mirror drops that template, the installer takes the one Proxmox's signed template index lists, with the checksum the index gives. To check the script itself before running it, see [Verifying a release](releasing.md#verifying-a-release).
 
 ### Options
 
@@ -102,7 +113,7 @@ Without a terminal, with `TERM` empty or `dumb` (a serial console, an editor's s
 | `--bridge <bridge>` | the bridge of the node's default route, else `vmbr0` | A bridge, Open vSwitch bridge or SDN VNet of the node, which the container attaches to. The installer stops before it downloads anything if there is none of that name. |
 | `--vlan <tag>` | none, or the tag of the VLAN device (such as `vmbr1.20`) the node's default route leaves by | The VLAN tag of the container's network, 1 to 4094. With `--bridge` given, no tag is taken from the route. The installer refuses the default when that bridge is not VLAN aware, since a tag there would cut the node's own VLAN network. |
 | `--mtu <bytes>` | the bridge's | The MTU of the container's network, 576 to 65535. |
-| `--ip dhcp`, `--ip none` or `--ip <address>/<prefix>` | asked | The container's IPv4 address, such as `192.0.2.40/24`. `none` leaves IPv4 out, on an IPv6-only network, and needs `--ip6`. Without a terminal, `dhcp` where the node's own network uses DHCP, else the install stops. |
+| `--ip dhcp`, `--ip none` or `--ip <address>/<prefix>` | asked | The container's IPv4 address, such as `192.0.2.40` or `192.0.2.40/24`, whose prefix is the network's where left out. `none` leaves IPv4 out, on an IPv6-only network, and needs `--ip6`. Without a terminal, `dhcp` where the node's own network uses DHCP, else the install stops. |
 | `--gateway <address>` | none | The default gateway, an IPv4 address, with a static `--ip`. |
 | `--ip6 auto`, `--ip6 dhcp` or `--ip6 <address>/<prefix>` | none | The container's IPv6 address, such as `2001:db8::40/64`. `auto` takes one from the router's advertisements. |
 | `--gateway6 <address>` | none | The default IPv6 gateway, with a static `--ip6`. It may be link-local, such as `fe80::1`. |
@@ -117,7 +128,10 @@ Without a terminal, with `TERM` empty or `dumb` (a serial console, an editor's s
 | `--no-trusted-proxy` | | With `--upgrade`, removes the list of trusted proxies. |
 | `--release <file> --sha256 <hex>` | the published release the script names | Installs a release archive from a file instead, checked against the given checksum. OpenTofu is still downloaded unless `--tofu` names it. |
 | `--tofu <file>` | the published OpenTofu release | Installs OpenTofu from a release archive (`tofu_<version>_linux_amd64.tar.gz`) instead of downloading it. It is checked against the checksum in `install.sh`, so the version must be the one the script names. Together with `--release` and a template on a storage, the node needs no internet access. |
-| `--plain` | off | Prints one line per step and asks nothing, as without a terminal. |
+| `--plain` | off | Prints the plan and one line per step and asks nothing, as without a terminal. |
+| `--yes` | off | Installs without the confirmation of the summary, and accepts an address outside the network's known subnet. |
+| `--dry-run` | off | Prints what would be installed and changes nothing. |
+| `--keep-failed` | off | Keeps the container of a failed install for inspection instead of removing it. |
 | `--pve-entry` or `--no-pve-entry` | asked | Whether to add a Kubernetes entry to this node's Proxmox VE interface ([below](#the-proxmox-ve-interface-entry)). Run without a terminal, it leaves the entry out. |
 | `--upgrade --ctid <id>` | | Upgrades an installed appliance instead ([upgrading.md](upgrading.md#from-the-proxmox-ve-shell)). |
 | `--certificate --ctid <id>` | | Replaces an installed appliance's certificate instead ([details](upgrading.md#the-appliances-certificate)). |
