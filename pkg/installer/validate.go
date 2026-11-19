@@ -13,6 +13,8 @@ import (
 type UserError struct {
 	Cause string
 	Fix   string
+	// Setting is the setting at fault, which the installer offers to change. Empty for none.
+	Setting string
 }
 
 func (e *UserError) Error() string {
@@ -23,6 +25,11 @@ func (e *UserError) Error() string {
 }
 
 func userErr(cause, fix string) error { return &UserError{Cause: cause, Fix: fix} }
+
+// settingErr is a userErr that names the setting at fault.
+func settingErr(setting, cause, fix string) error {
+	return &UserError{Cause: cause, Fix: fix, Setting: setting}
+}
 
 var (
 	dnsNameRE   = regexp.MustCompile(`^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
@@ -97,14 +104,6 @@ func IsProxyRange(s string) bool {
 	return !hasPrefix || inRange(prefix, 0, bits)
 }
 
-// ValidateAddressCIDR checks a static IPv4 address typed as address/prefix.
-func ValidateAddressCIDR(s string) error {
-	if !IsIPv4CIDR(s) {
-		return errors.New("an address with its prefix, such as 192.0.2.40/24")
-	}
-	return nil
-}
-
 // ValidateIPv4 checks a single IPv4 address.
 func ValidateIPv4(s string) error {
 	if !IsIPv4(s) {
@@ -154,10 +153,34 @@ func (c *Config) generalChecks() []optionCheck {
 	}
 }
 
+// pairErrors checks each static address against its gateway, and says what is wrong or nothing.
+func (c *Config) pairErrors() (string, string) {
+	var v4, v6 string
+	if IsIPv4CIDR(c.IP) {
+		if p, err := netip.ParsePrefix(c.IP); err == nil {
+			if perr := checkPair(p, c.Gateway); perr != nil {
+				v4 = perr.Error()
+			}
+		}
+	}
+	if IsIPv6CIDR(c.IP6) {
+		if p, err := netip.ParsePrefix(c.IP6); err == nil {
+			if perr := checkPair6(p, c.Gateway6); perr != nil {
+				v6 = perr.Error()
+			}
+		}
+	}
+	return v4, v6
+}
+
 // networkChecks are the checks of the container's network options.
 func (c *Config) networkChecks() []optionCheck {
+	pair4, pair6 := c.pairErrors()
 	return []optionCheck{
-		{c.IP != "" && c.IP != optDHCP && c.IP != optNone && !IsIPv4CIDR(c.IP), "--ip is dhcp or an IPv4 address with its prefix length, such as 192.0.2.5/24, or none on an IPv6-only network", ""},
+		{c.IP != "" && c.IP != optDHCP && c.IP != optNone && !IsIPv4CIDR(c.IP) && !IsIPv4(c.IP), "--ip is dhcp, an IPv4 address with its prefix length, such as 192.0.2.5/24, or none on an IPv6-only network", ""},
+		{pair4 != "", "--ip and --gateway do not fit: " + pair4, ""},
+		{pair6 != "", "--ip6 and --gateway6 do not fit: " + pair6, ""},
+		{c.IP == optDHCP && c.Gateway != "", "--gateway goes with a static --ip", ""},
 		{c.Gateway != "" && !IsIPv4(c.Gateway), "--gateway is an IPv4 address, such as 192.0.2.1", ""},
 		{c.IP6 != "" && c.IP6 != optAuto && c.IP6 != optDHCP && !IsIPv6CIDR(c.IP6), "--ip6 is auto, dhcp or an IPv6 address with its prefix length, such as 2001:db8::5/64", ""},
 		{c.Gateway6 != "" && !IsIPv6(c.Gateway6), "--gateway6 is an IPv6 address, such as 2001:db8::1", ""},

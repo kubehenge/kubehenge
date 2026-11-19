@@ -21,17 +21,31 @@ type Env struct {
 	Dir     string
 	Work    string
 	LogPath string
-	Proxy   string
-	TofuV   string
-	TofuSH  string
-	Log     *os.File
-	Cleanup func()
+	// AnswersPath is the file the answers of a run that did not finish are kept in.
+	AnswersPath string
+	Proxy       string
+	TofuV       string
+	TofuSH      string
+	Log         *os.File
+	Cleanup     func()
 	// Tune adjusts every runner built from this environment, for tests.
 	Tune func(*Runner)
 }
 
-// LogFile is where the commands' output goes.
-const LogFile = "/var/log/kubehenge-install.log"
+// LogDir and LogPrefix name the log of a run: one file per run, so a later run keeps the log of an
+// earlier failure.
+const (
+	LogDir    = "/var/log"
+	LogPrefix = "kubehenge-install-"
+)
+
+// AnswersFile is where a run that did not finish keeps its answers.
+const AnswersFile = "/var/lib/kubehenge-install/answers.json"
+
+// logName is the log of a run that started at t.
+func logName(t time.Time) string {
+	return LogDir + "/" + LogPrefix + t.UTC().Format("20060102-150405") + ".log"
+}
 
 // NewEnv opens the log, the work directory and the node, ready for a run on this machine.
 func NewEnv(ctx context.Context) (*Env, error) {
@@ -43,9 +57,9 @@ func NewEnv(ctx context.Context) (*Env, error) {
 			return nil, userErr("this is not a Proxmox VE node", "Run it in the shell of the node you want the appliance on")
 		}
 	}
-	e := &Env{LogPath: LogFile}
+	e := &Env{LogPath: logName(time.Now()), AnswersPath: AnswersFile}
 	var err error
-	if e.Log, err = os.OpenFile(LogFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, permFile); err != nil {
+	if e.Log, err = os.OpenFile(e.LogPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, permFile); err != nil {
 		return nil, fmt.Errorf("open file: %w", err)
 	}
 	if e.Work, err = os.MkdirTemp("", "kubehenge-install-"); err != nil {
@@ -58,7 +72,7 @@ func NewEnv(ctx context.Context) (*Env, error) {
 	}
 	host, _ := os.Hostname()
 	host, _, _ = strings.Cut(host, ".")
-	e.Node = &Node{Exec: e.Exec, Hostname: host, LookupHost: lookupHost, Dial: netDial}
+	e.Node = &Node{Exec: e.Exec, Hostname: host, LookupHost: lookupHost, Dial: netDial, Probe: ProbeARP}
 	if data, err := os.ReadFile("/etc/pve/datacenter.cfg"); err == nil {
 		e.Proxy = DatacenterProxy(data)
 	}
@@ -109,7 +123,7 @@ func RunPlain(ctx context.Context, s *Session, newRunner func(emit func(Event)) 
 	if err := s.detect(ctx); err != nil {
 		return err
 	}
-	if err := s.CheckStaticFree(ctx); err != nil {
+	if err := s.CheckAddressing(ctx); err != nil {
 		return err
 	}
 	if err := s.FillStorages(PickBest); err != nil {

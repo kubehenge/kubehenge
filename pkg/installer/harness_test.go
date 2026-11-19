@@ -162,7 +162,12 @@ type harness struct {
 	srv     *httptest.Server
 	chain   []*x509.Certificate
 	hits    int
+	// taken holds the addresses that answer an ARP probe, and silent the devices that answer none.
+	taken, silent map[string]bool
 }
+
+// take makes the address answer ARP probes.
+func (h *harness) take(address string) { h.taken[address] = true }
 
 func newKey(t *testing.T) *ecdsa.PrivateKey {
 	t.Helper()
@@ -357,6 +362,9 @@ func newHarness(t *testing.T, o opts) *harness { //nolint:gocritic // tests pass
 			return nil, errors.New("no such host")
 		},
 		Dial: func(context.Context, string, string) ([]*x509.Certificate, error) { return h.chain, nil },
+		Probe: func(_ context.Context, dev string, target netip.Addr) (bool, error) {
+			return h.taken[target.String()] && !h.silent[dev], nil
+		},
 	}
 	return h
 }

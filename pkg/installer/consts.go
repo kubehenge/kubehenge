@@ -22,6 +22,37 @@ const (
 	stepEntryName       = "entry"
 )
 
+// The settings the installer asks for or changes, which a failure names when it is the one at fault.
+const (
+	settingFamily    = "family"
+	settingNetwork   = "network"
+	settingVLAN      = "vlan"
+	settingV4Mode    = "v4mode"
+	settingV4Addr    = "v4addr"
+	settingV4Gateway = "v4gateway"
+	settingV6Mode    = "v6mode"
+	settingV6Addr    = "v6addr"
+	settingV6Gateway = "v6gateway"
+	settingDNS       = "dns"
+	settingMTU       = "mtu"
+	settingCTID      = "ctid"
+	settingHostname  = "hostname"
+	settingName      = "name"
+	settingCert      = "cert"
+	settingStorage   = "storage"
+	settingTemplate  = "template"
+	settingAPI       = "api"
+	settingProxies   = "proxies"
+	settingEntry     = "entry"
+	settingTrust     = "trust"
+	settingAPIHost   = "apihost"
+	// settingOutside is an address outside the network's known subnet, which the user may confirm.
+	settingOutside = "outside"
+)
+
+// netTries is how many times the connection check retries, a pause apart.
+const netTries = 15
+
 // File modes.
 const (
 	permFile = 0o600
@@ -53,6 +84,8 @@ const (
 	formMargin      = 4
 	maxFormWidth    = 76
 	vlanMax         = 4094
+	ctidMin         = 100
+	ctidMax         = 999999999
 	mtuMin          = 576
 	mtuMax          = 65535
 	eventBuffer     = 256

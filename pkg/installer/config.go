@@ -53,6 +53,13 @@ type Config struct {
 	Certificate bool
 	// Plain forces the one-line-per-step output.
 	Plain bool
+	// Yes installs without the confirmation of the summary, and accepts an address outside the
+	// subnet the node knows of the network.
+	Yes bool
+	// DryRun prints the plan and changes nothing.
+	DryRun bool
+	// KeepFailed leaves a container the install failed in for inspection, where it is otherwise removed.
+	KeepFailed bool
 	// APIHost is the host picked from the API candidates, empty until chosen.
 	APIHost string
 	// TrustServedCA is the user's yes to the CA the API serves.
@@ -107,6 +114,9 @@ func BindFlags(f *pflag.FlagSet, c *Config) {
 	f.BoolVar(&c.Upgrade, "upgrade", false, "upgrade the appliance in container --ctid")
 	f.BoolVar(&c.Certificate, "certificate", false, "replace the certificate of the appliance in container --ctid")
 	f.BoolVar(&c.Plain, "plain", false, "print one line per step instead of the full-screen installer")
+	f.BoolVar(&c.Yes, "yes", false, "install without asking to confirm the summary, and accept an address outside the network's known subnet")
+	f.BoolVar(&c.DryRun, "dry-run", false, "print what would be installed and change nothing")
+	f.BoolVar(&c.KeepFailed, "keep-failed", false, "keep the container of a failed install for inspection instead of removing it")
 	// The entry answers are applied by Normalise once the flags are parsed.
 	c.pveEntryFlags = [2]*bool{pveEntry, noPVEEntry}
 }
@@ -124,6 +134,49 @@ func (c *Config) Normalise() error {
 	}
 	c.Name = strings.TrimSpace(c.Name)
 	return nil
+}
+
+// RepeatArgs are the options that repeat this install's answers, for a command line after a run
+// that did not finish.
+func (c *Config) RepeatArgs() []string {
+	var args []string
+	add := func(name, value string) {
+		if value != "" {
+			args = append(args, name, value)
+		}
+	}
+	add("--ctid", c.CTID)
+	add("--storage", c.Storage)
+	add("--template-storage", c.TemplateStorage)
+	add("--bridge", c.Bridge)
+	add("--vlan", c.VLAN)
+	add("--mtu", c.MTU)
+	add("--ip", c.IP)
+	add("--gateway", c.Gateway)
+	add("--ip6", c.IP6)
+	add("--gateway6", c.Gateway6)
+	add("--dns", c.DNS)
+	if c.Hostname != DefaultHostname {
+		add("--hostname", c.Hostname)
+	}
+	add("--name", c.Name)
+	add("--cert", c.CertFile)
+	add("--key", c.KeyFile)
+	add("--proxmox-url", c.ProxmoxURL)
+	add("--proxmox-ca", c.ProxmoxCA)
+	if c.Insecure {
+		args = append(args, "--proxmox-insecure")
+	}
+	for _, p := range c.TrustedProxies {
+		add("--trusted-proxy", p)
+	}
+	switch c.PVEEntry {
+	case optYes:
+		args = append(args, "--pve-entry")
+	case "no":
+		args = append(args, "--no-pve-entry")
+	}
+	return args
 }
 
 // containerNet returns the container's net0 setting. A gateway goes with a static address only.

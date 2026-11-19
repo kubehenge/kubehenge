@@ -22,6 +22,25 @@ type Session struct {
 	// in the plain output: a choice that leaves part of what they run unable to reach the API.
 	Cautions []string
 
+	// Version is the release being installed, for the summary.
+	Version string
+	// AllowOutside is the user's yes to a static address outside the subnet the node knows of the
+	// network.
+	AllowOutside bool
+	// AddressCheck is the last check of the static address, shown in the summary.
+	AddressCheck AddrCheck
+	// Restored says the answers were read from an earlier run's file.
+	Restored bool
+	// NetworkGiven is set when the options already name part of the container's network, which a
+	// saved network then does not replace.
+	NetworkGiven bool
+	// BridgeGiven and VLANGiven say the options name the network and its VLAN.
+	BridgeGiven, VLANGiven bool
+	// Saved holds the answers of an earlier run, which detect restores.
+	Saved *savedAnswers
+	// AnswersPath is where the answers are saved when the install starts, empty for nowhere.
+	AnswersPath string
+
 	// vlanAware holds what routeVLANError read of each bridge, as a form checks on every key.
 	vlanAware map[string]bool
 }
@@ -42,6 +61,9 @@ func (s *Session) Prepare(ctx context.Context) error {
 	if s.Cfg.TrustedProxies == nil {
 		s.Cfg.TrustedProxies = []string{}
 	}
+	c := &s.Cfg
+	s.NetworkGiven = c.Bridge != "" || c.VLAN != "" || c.MTU != "" || c.IP != "" || c.Gateway != "" || c.IP6 != "" || c.Gateway6 != ""
+	s.BridgeGiven, s.VLANGiven = c.Bridge != "", c.VLAN != ""
 	facts, err := s.Node.Detect(ctx, &s.Cfg)
 	if err != nil {
 		return err
@@ -76,36 +98,87 @@ func (s *Session) Prepare(ctx context.Context) error {
 	return nil
 }
 
-// CheckStaticFree refuses a static --ip that already answers on the bridge, before anything is
-// created. The terminal installer asks for another address instead.
-func (s *Session) CheckStaticFree(ctx context.Context) error {
-	c := &s.Cfg
+// CheckAddressing settles the static addresses of the options against the network they go on,
+// before anything is created: a prefix from the network's subnet where none is given, a gateway the
+// network supplies where none is given, each address with its gateway, the address inside the
+// network's known subnet, and the address free. The terminal installer asks for another address
+// where this refuses one.
+func (s *Session) CheckAddressing(ctx context.Context) error {
+	c, f := &s.Cfg, s.Facts
+	if err := s.checkStatic6(); err != nil {
+		return err
+	}
 	if c.IP == "" || c.IP == optDHCP || c.IP == optNone || c.Bridge == "" {
 		return nil
 	}
-	addr, _, _ := strings.Cut(c.IP, "/")
-	if s.Node.AddressInUse(ctx, s.Facts.addressDevice(c.Bridge, c.VLAN), addr) {
-		return userErr(addr+" answers on the network of "+c.Bridge, "Give a free address with --ip")
+	p, ok := ParseAddress4(c.IP, f.Prefix)
+	if !ok {
+		return settingErr(settingV4Addr, "--ip "+c.IP+" has no prefix length, and the subnet of this network is not known", "Give it as <address>/<prefix>, such as 192.0.2.40/24")
+	}
+	c.IP = p.String()
+	if c.Gateway == "" {
+		if g, err := netip.ParseAddr(f.Gateway); err == nil && p.Contains(g) {
+			c.Gateway = f.Gateway
+		}
+	}
+	if c.Gateway == "" && !s.apiOnLink(p) {
+		return settingErr(settingV4Gateway, "a static address needs a gateway, and this network gives none", "Give it with --gateway")
+	}
+	if err := checkPair(p, c.Gateway); err != nil {
+		return settingErr(settingV4Addr, err.Error(), "Check --ip and --gateway")
+	}
+	if msg := OutsideSubnet(f.Prefix, p); msg != "" && !c.Yes && !s.AllowOutside {
+		return settingErr(settingOutside, msg, "Name the VLAN or network it is on with --vlan or --bridge, or pass --yes to install there anyway")
+	}
+	check := s.Node.CheckAddress(ctx, f.Device, p.Addr().String(), cmpGateway(c.Gateway, f.Gateway), f.NodeHolds)
+	s.AddressCheck = check
+	switch check.State {
+	case AddrInUse:
+		return settingErr(settingV4Addr, p.Addr().String()+" answers on the network of "+c.Bridge, "Give a free address with --ip")
+	case AddrUnchecked:
+		s.noticef("could not check that %s is free: %s", p.Addr(), check.Detail)
+	case AddrFree:
 	}
 	return nil
 }
 
-func contains(list []string, want string) bool {
-	return slices.Contains(list, want)
+// cmpGateway is the gateway the address check tests its probe against.
+func cmpGateway(given, found string) string {
+	if given != "" {
+		return given
+	}
+	return found
 }
 
-// RefreshForBridge detects the bridge's subnet, address suggestion and API candidates again after
-// the user picked another bridge.
-func (s *Session) RefreshForBridge(ctx context.Context, bridge string) {
-	s.Cfg.Bridge = bridge
-	dev := s.Facts.addressDevice(bridge, s.Cfg.VLAN)
-	s.Facts.Prefix = s.Node.bridgeAddress4(ctx, dev)
-	s.Facts.NodeDHCP = s.Node.bridgeIsDHCP(dev)
-	s.Facts.SuggestedIP = ""
-	if s.Facts.Prefix.IsValid() {
-		s.Facts.SuggestedIP = s.Node.SuggestAddress(ctx, dev, s.Facts)
+// checkStatic6 checks a static IPv6 address against its gateway.
+func (s *Session) checkStatic6() error {
+	c := &s.Cfg
+	if !IsIPv6CIDR(c.IP6) {
+		return nil
 	}
-	s.Facts.Candidates = s.Node.APICandidates(ctx, s.Facts, dev)
+	p, err := netip.ParsePrefix(c.IP6)
+	if err != nil {
+		return nil //nolint:nilerr // Validate names a malformed address.
+	}
+	if err := checkPair6(p, c.Gateway6); err != nil {
+		return settingErr(settingV6Addr, err.Error(), "Check --ip6 and --gateway6")
+	}
+	return nil
+}
+
+// apiOnLink reports whether the Proxmox VE API the container will use is in its own subnet, which
+// needs no gateway.
+func (s *Session) apiOnLink(p netip.Prefix) bool {
+	host, _, _ := splitAPI(s.Cfg.ProxmoxURL)
+	if host == "" && len(s.Facts.Candidates) > 0 {
+		host = s.Facts.Candidates[0].Host
+	}
+	a, err := netip.ParseAddr(host)
+	return err == nil && p.Contains(a)
+}
+
+func contains(list []string, want string) bool {
+	return slices.Contains(list, want)
 }
 
 // Questions says which questions the options and the node leave open.

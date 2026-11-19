@@ -127,5 +127,9 @@ func (s *Session) detect(ctx context.Context) error {
 	if err := s.FillStorages(AskTies); err != nil {
 		return err
 	}
-	return s.ResolveAPI(ctx, AskTies)
+	if err := s.ResolveAPI(ctx, AskTies); err != nil {
+		return err
+	}
+	s.Restore(ctx, s.Saved)
+	return nil
 }

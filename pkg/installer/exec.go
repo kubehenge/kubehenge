@@ -61,6 +61,7 @@ func (e *OSExec) Run(ctx context.Context, name string, args ...string) (string, 
 	line := strings.Join(append([]string{name}, args...), " ")
 	e.logf("$ %s\n%s%s", line, stdout.String(), stderr.String())
 	if err != nil {
+		e.logf("error: %v\n", err)
 		code := -1
 		if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 			code = exit.ExitCode()
