@@ -166,7 +166,7 @@ locals {
     "ControlPlaneProvider/talos" = "ghcr.io/kubehenge/cluster-api-control-plane-provider-talos:v0.6.0@sha256:fdd30ae41424e6f36b30c5aa4ab13f46bf159050b365ed2d0194c053523c7bd2"
   }
 
-  # capmox v0.9.2 lacks five fixes and the VM firewall, which scripts/capmox-patches adds to the
+  # capmox v0.9.2 lacks six fixes and the VM firewall, which scripts/capmox-patches adds to the
   # release. A failed clone forgets its VM ID. Kept while the ID stays free, the machine keeps
   # looking for a VM that was never made, and never clones again. A clone's VM ID is stored before the clone starts. The
   # spec and the status are written apart, so a spec write that failed after the clone left its task
@@ -180,7 +180,9 @@ locals {
   # saying how to clear it. A ProxmoxCluster marked for deletion before its Cluster, as a namespace
   # delete does, is requeued every 10 seconds until the Cluster is deleted. Upstream returns without
   # a requeue, and the Cluster watch never passes a Cluster that gains its deletion timestamp, so
-  # the deletion waited for the 10-hour resync. A machine annotated with Proxmox VE security groups
+  # the deletion waited for the 10-hour resync. A VM ID that Proxmox VE 9.2.31 and later report as
+  # "guest ID <id> is already in use" counts as taken. go-proxmox matches only the older "VM <id>
+  # already exists", so every machine delete failed and the VM ID search found no free ID. A machine annotated with Proxmox VE security groups
   # or serving ports gets its VM firewall before the first start, with input policy DROP: an IPSet
   # of the cluster's own addresses and the ProxmoxCluster's further sources, an IPSet of its
   # load-balancer addresses, and rules in that order: its own sources, the groups, its load-balancer
@@ -197,7 +199,7 @@ locals {
     # capmox's own image is built with Go 1.26 on distroless static.
     go         = "go1.26.10"
     base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
-    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:d3742946ec101d4c541ab43157660f5e305d83bb1880348eab0ac1e798071042"
+    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:d1277f222ceed6a2fafca6b341a7c290a0ad0215676e3d8c9610b8a377480605"
   }
 
   # The Add-on Provider for Helm creates a cluster's HelmReleaseProxy under a generated name and

@@ -39,6 +39,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 ### Fixed
 
 - The connection check tries the Proxmox VE API's port for half a minute after the container starts. A gateway that drops ping or answers late no longer stops a working setup.
+- Machines are deleted again on Proxmox VE 9.2.31 and later.
 
 ## [0.5.3] - 2026-11-18
 
