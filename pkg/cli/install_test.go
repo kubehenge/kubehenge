@@ -15,7 +15,7 @@ func TestInstallRefusesBadOptions(t *testing.T) {
 		{[]string{"--name"}, "flag needs an argument: --name"},
 		{[]string{"--ctid", "105", "--storage"}, "flag needs an argument: --storage"},
 		{[]string{"--nope"}, "unknown flag: --nope"},
-		{[]string{"--ip", "192.0.2.5"}, "--ip is dhcp or an IPv4 address with its prefix length"},
+		{[]string{"--ip", "192.0.2.300"}, "--ip is dhcp, an IPv4 address with its prefix length"},
 		{[]string{"--pve-entry", "--no-pve-entry"}, "--pve-entry and --no-pve-entry exclude each other"},
 	}
 	for _, c := range cases {
