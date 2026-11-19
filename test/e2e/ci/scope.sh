@@ -103,8 +103,9 @@ need=
         # The interface, the appliance's commands and what installs the appliance. The interface is
         # also what `kubehenge cluster` reaches, in the one workload test that runs it.
         pkg/ui/* | pkg/cli/serve.go | pkg/cli/cluster.go) need="${need} ${interface_users}" ;;
-        # Only the appliance's service and installer run the built web pages.
-        appliance/* | pkg/appliance/* | web/* | test/e2e/appliance.sh) need="${need} appliance" ;;
+        # Only the appliance's service and installer run the built web pages, and only the appliance's
+        # test runs the installer.
+        appliance/* | pkg/appliance/* | pkg/installer/* | web/* | test/e2e/appliance.sh) need="${need} appliance" ;;
         pkg/cli/appliance.go | pkg/cli/activity.go | pkg/cli/notifications.go | pkg/cli/update.go) need="${need} appliance" ;;
         */testdata/* | test/integration/*) ;;
         # The support bundle is made by every workload test, and by the interface for a cluster.

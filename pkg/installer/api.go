@@ -383,7 +383,7 @@ func apiFailure(connects bool, apiURL, port, caFile string) error {
 		return userErr(fmt.Sprintf("the Proxmox VE API at %s serves a certificate that %s did not sign", apiURL, caFile), "")
 	default:
 		return userErr(fmt.Sprintf("the Proxmox VE API at %s serves a certificate that this cluster's CA did not sign", apiURL),
-			"Give the CA that did with --proxmox-ca <file>, or another URL with --proxmox-url")
+			"Give the CA that signed it with --proxmox-ca <file>, or another URL with --proxmox-url")
 	}
 }
 

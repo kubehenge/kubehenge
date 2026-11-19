@@ -15,7 +15,7 @@ func TestInstallRefusesBadOptions(t *testing.T) {
 		{[]string{"--name"}, "flag needs an argument: --name"},
 		{[]string{"--ctid", "105", "--storage"}, "flag needs an argument: --storage"},
 		{[]string{"--nope"}, "unknown flag: --nope"},
-		{[]string{"--ip", "192.0.2.5"}, "--ip is dhcp or an IPv4 address with its prefix length"},
+		{[]string{"--ip", "192.0.2.300"}, "--ip is dhcp, an IPv4 address with or without /prefix"},
 		{[]string{"--pve-entry", "--no-pve-entry"}, "--pve-entry and --no-pve-entry exclude each other"},
 	}
 	for _, c := range cases {
@@ -27,5 +27,24 @@ func TestInstallRefusesBadOptions(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%v: got %v, want %q", c.args, err, c.want)
 		}
+	}
+}
+
+// The install command's help lists the options under Install, Upgrade and Certificate.
+func TestInstallHelpGroupsTheOptions(t *testing.T) {
+	t.Parallel()
+	root := NewRoot()
+	var out strings.Builder
+	root.SetOut(&out)
+	root.SetErr(io.Discard)
+	root.SetArgs([]string{"install", "--help"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	help := out.String()
+	install, upgrade, certificate := strings.Index(help, "\nInstall:\n"), strings.Index(help, "\nUpgrade:\n"), strings.Index(help, "\nCertificate:\n")
+	if install < 0 || upgrade < install || certificate < upgrade || !strings.Contains(help[upgrade:certificate], "--upgrade") ||
+		!strings.Contains(help[certificate:], "--no-name") || strings.Contains(help[:upgrade], "--certificate") {
+		t.Fatalf("the options are not grouped:\n%s", help)
 	}
 }

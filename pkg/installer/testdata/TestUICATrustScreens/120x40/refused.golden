@@ -1,0 +1,13 @@
+ ▄▄▄▄▄▄▄▄▄   Kubehenge
+ ▀██▀▀▀██▀   Appliance installer
+  ██   ██    Network · Storage · Summary · Install · Done
+
+  Stopped
+
+  Cause             you did not trust the CA the Proxmox VE API at https://pve1.example.com:8006 serves
+  Fix               Give the CA that signed its certificate with the API CA file, or another API address
+  Changed           nothing
+
+  ┃ > Change Proxmox VE API
+  ┃   Quit
+  ↑↓ choose  enter confirm  ctrl+c quit

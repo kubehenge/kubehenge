@@ -21,17 +21,47 @@ type Env struct {
 	Dir     string
 	Work    string
 	LogPath string
-	Proxy   string
-	TofuV   string
-	TofuSH  string
-	Log     *os.File
-	Cleanup func()
+	// AnswersPath is the file the answers of a run that did not finish are kept in.
+	AnswersPath string
+	Proxy       string
+	TofuV       string
+	TofuSH      string
+	Log         *os.File
+	Cleanup     func()
 	// Tune adjusts every runner built from this environment, for tests.
 	Tune func(*Runner)
 }
 
-// LogFile is where the commands' output goes.
-const LogFile = "/var/log/kubehenge-install.log"
+// LogDir and LogPrefix name the log of a run: one file per run, so a later run keeps the log of an
+// earlier failure.
+const (
+	LogDir    = "/var/log"
+	LogPrefix = "kubehenge-install-"
+)
+
+// AnswersFile is where a run that did not finish keeps its answers.
+const AnswersFile = "/var/lib/kubehenge-install/answers.json"
+
+// keptLogs is how many run logs stay in the log directory, the new one included.
+const keptLogs = 10
+
+// openLog creates the log of a run that started at t, in dir, and removes all but the newest
+// keptLogs. A random part after the time keeps two runs started in the same second apart.
+func openLog(dir string, t time.Time) (*os.File, error) {
+	f, err := os.CreateTemp(dir, LogPrefix+t.UTC().Format("20060102-150405")+"-*.log")
+	if err != nil {
+		return nil, fmt.Errorf("create the log: %w", err)
+	}
+	// The names start with the time, so they sort oldest first.
+	if logs, err := filepath.Glob(filepath.Join(dir, LogPrefix+"*.log")); err == nil && len(logs) > keptLogs {
+		for _, old := range logs[:len(logs)-keptLogs] {
+			if old != f.Name() {
+				_ = os.Remove(old)
+			}
+		}
+	}
+	return f, nil
+}
 
 // NewEnv opens the log, the work directory and the node, ready for a run on this machine.
 func NewEnv(ctx context.Context) (*Env, error) {
@@ -43,11 +73,12 @@ func NewEnv(ctx context.Context) (*Env, error) {
 			return nil, userErr("this is not a Proxmox VE node", "Run it in the shell of the node you want the appliance on")
 		}
 	}
-	e := &Env{LogPath: LogFile}
+	e := &Env{AnswersPath: AnswersFile}
 	var err error
-	if e.Log, err = os.OpenFile(LogFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, permFile); err != nil {
-		return nil, fmt.Errorf("open file: %w", err)
+	if e.Log, err = openLog(LogDir, time.Now()); err != nil {
+		return nil, err
 	}
+	e.LogPath = e.Log.Name()
 	if e.Work, err = os.MkdirTemp("", "kubehenge-install-"); err != nil {
 		return nil, fmt.Errorf("mkdir temp: %w", err)
 	}
@@ -58,7 +89,7 @@ func NewEnv(ctx context.Context) (*Env, error) {
 	}
 	host, _ := os.Hostname()
 	host, _, _ = strings.Cut(host, ".")
-	e.Node = &Node{Exec: e.Exec, Hostname: host, LookupHost: lookupHost, Dial: netDial}
+	e.Node = &Node{Exec: e.Exec, Hostname: host, LookupHost: lookupHost, Dial: netDial, Probe: ProbeARP}
 	if data, err := os.ReadFile("/etc/pve/datacenter.cfg"); err == nil {
 		e.Proxy = DatacenterProxy(data)
 	}
@@ -106,19 +137,8 @@ func (e *Env) NewRunner(s *Session, emit func(Event)) *Runner {
 // RunPlain installs with one line per step and no questions. What only a question could settle
 // is an error naming the flag that settles it.
 func RunPlain(ctx context.Context, s *Session, newRunner func(emit func(Event)) *Runner, out io.Writer) error {
-	if err := s.detect(ctx); err != nil {
-		return err
-	}
-	if err := s.CheckStaticFree(ctx); err != nil {
-		return err
-	}
-	if err := s.FillStorages(PickBest); err != nil {
-		return err
-	}
-	if err := s.ResolveAPI(ctx, PickBest); err != nil {
-		return err
-	}
-	if err := s.UnattendedCheck(); err != nil {
+	if err := plainChecks(ctx, s); err != nil {
+		printRepeat(out, &s.Cfg, nil)
 		return err
 	}
 	if s.Cfg.PVEEntry == "" {
@@ -127,6 +147,11 @@ func RunPlain(ctx context.Context, s *Session, newRunner func(emit func(Event)) 
 	for _, n := range append(append([]string(nil), s.Notices...), s.Cautions...) {
 		_, _ = fmt.Fprintln(out, "kubehenge: "+n)
 	}
+	if s.Cfg.DryRun {
+		_, _ = fmt.Fprint(out, dryRunHeading+s.PlanText(false))
+		return nil
+	}
+	_, _ = fmt.Fprint(out, "Installing:\n"+s.PlanText(false))
 	runner := newRunner(nil)
 	labels := map[string]string{}
 	for _, st := range runner.Steps() {
@@ -134,28 +159,79 @@ func RunPlain(ctx context.Context, s *Session, newRunner func(emit func(Event)) 
 	}
 	runner.Emit = func(e Event) {
 		switch e.State {
+		case StepRunning:
+			_, _ = fmt.Fprintf(out, "...  %s\n", labels[e.Step])
 		case StepDone:
 			_, _ = fmt.Fprintf(out, "ok   %s%s\n", labels[e.Step], suffix(e.Detail))
 		case StepSkipped:
 			_, _ = fmt.Fprintf(out, "skip %s%s\n", labels[e.Step], suffix(e.Detail))
 		case StepFailed:
-			_, _ = fmt.Fprintf(out, "fail %s\n", labels[e.Step])
-		case StepPending, StepRunning:
+			_, _ = fmt.Fprintf(out, "fail %s%s\n", labels[e.Step], suffix(e.Detail))
+		case StepPending:
 		}
 	}
 	res, err := runner.Run(ctx)
 	if err != nil {
-		// The cleanup must run even when the run was cancelled.
-		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
-		defer cancel()
-		if runner.Made() {
-			_, _ = fmt.Fprintf(out, "kubehenge: removing container %s after the failure\n", s.Cfg.CTID)
-		}
-		runner.Cleanup(cleanCtx)
+		plainFailed(ctx, s, runner, out)
 		return err
 	}
 	WriteEnd(out, res)
 	return nil
+}
+
+// plainChecks settles what the run needs before it changes anything, or refuses.
+func plainChecks(ctx context.Context, s *Session) error {
+	if err := s.detect(ctx); err != nil {
+		return err
+	}
+	if err := s.CheckAddressing(ctx); err != nil {
+		return err
+	}
+	if err := s.FillStorages(PickBest); err != nil {
+		return err
+	}
+	if err := s.ResolveAPI(ctx, PickBest); err != nil {
+		return err
+	}
+	return s.UnattendedCheck()
+}
+
+// dryRunHeading starts the plan a dry run prints.
+const dryRunHeading = "Dry run, nothing changed. The install would be:\n"
+
+// plainFailed keeps or removes the container of a failed plain run, then names the log and the
+// command that runs the install again.
+func plainFailed(ctx context.Context, s *Session, runner *Runner, out io.Writer) {
+	// The cleanup must run even when the run was cancelled.
+	cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	id := s.Cfg.CTID
+	switch {
+	case s.Cfg.KeepFailed && runner.Made():
+		runner.Keep()
+		_, _ = fmt.Fprintf(out, "kubehenge: keeping container %s. Inspect it with: pct enter %s\n", id, id)
+	case runner.Made():
+		_, _ = fmt.Fprintf(out, "kubehenge: removing container %s after the failure\n", id)
+	}
+	runner.Cleanup(cleanCtx)
+	if runner.Stuck() {
+		_, _ = fmt.Fprintf(out, "kubehenge: container %s could not be removed. Remove it with: pct destroy %s --purge\n", id, id)
+	}
+	_, _ = fmt.Fprintf(out, "kubehenge: log %s\n", runner.LogPath)
+	printRepeat(out, &s.Cfg, runner)
+}
+
+// printRepeat prints the install.sh command that runs the install again with the answers given,
+// when there are any. Where the run's container still holds the ID, the command leaves --ctid out,
+// so the next run takes a free one. The runner is nil before a run.
+func printRepeat(out io.Writer, c *Config, r *Runner) {
+	again := *c
+	if r != nil && r.HoldsID() {
+		again.CTID = ""
+	}
+	if cmd := again.RepeatCommand(); cmd != repeatBase {
+		_, _ = fmt.Fprintf(out, "kubehenge: to run it again with the same answers: %s\n", cmd)
+	}
 }
 
 func suffix(detail string) string {

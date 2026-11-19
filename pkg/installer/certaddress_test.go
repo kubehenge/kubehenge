@@ -73,18 +73,24 @@ func TestTheSummaryShowsTheIPv6CautionOnA80By24Screen(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, opts{dhcp: true})
 	s := h.session(Config{PVEEntry: "no", ProxmoxURL: "https://pve1.example.com:8006"})
-	s.Cautions = []string{apiFamilyCaution("192.0.2.10", "2001:db8::10")}
+	s.Cautions = []string{apiFamilyCaution("192.0.2.10")}
 	model := NewModel(s, func(emit func(Event)) *Runner { return h.runner(s, emit) })
-	rec := &recorder{inner: model, views: make(map[stage]string)}
+	rec := &recorder{inner: model}
 	tm := teatest.NewTestModel(t, rec, teatest.WithInitialTermSize(80, 24))
-	u := &ui{t: t, h: h, s: s, rec: rec, tm: tm}
-	u.waitFor("DHCP")
-	u.enter(2)
-	u.waitFor("Change network")
+	u := &ui{t: t, h: h, s: s, rec: rec, tm: tm, w: 80, l: 24}
+	u.waitFor("Node")
 	u.settle()
-	screen := strings.Join(drawn(rec.viewOf(stSummary), 80, 24), "\n")
+	for range 12 {
+		if strings.Contains(u.rec.screen(), "If it fails") {
+			break
+		}
+		u.enter(1)
+	}
+	u.waitFor("If it fails")
+	u.settle()
+	screen := strings.Join(drawn(rec.screen(), 80, 24), "\n")
 	flat := strings.Join(strings.Fields(screen), " ")
-	for _, want := range []string{"Kubehenge", "Note", "cannot reach the API at 2001:db8::10", "--proxmox-url https://192.0.2.10:8006", "Install"} {
+	for _, want := range []string{"Kubehenge", "Note", "Clusters without IPv6 need 192.0.2.10 in the API certificate.", "--proxmox-url https://192.0.2.10:8006", "Install"} {
 		if !strings.Contains(flat, want) {
 			t.Errorf("the 80 by 24 screen lacks %q:\n%s", want, screen)
 		}
@@ -119,7 +125,7 @@ func TestAPIFamilyNote(t *testing.T) {
 			}
 			continue
 		}
-		want := "The certificate lacks 192.0.2.10, so clusters without IPv6 cannot reach the API at 2001:db8::10. Add it to the certificate, then pass --proxmox-url https://192.0.2.10:8006"
+		want := "Clusters without IPv6 need 192.0.2.10 in the API certificate. Add it, then pass --proxmox-url https://192.0.2.10:8006"
 		if len(s.Cautions) != 1 || s.Cautions[0] != want {
 			t.Errorf("%s: noted %q, want %q", c.name, s.Cautions, want)
 		}

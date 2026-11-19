@@ -1,0 +1,19 @@
+ ▄▄▄▄▄▄▄▄▄   Kubehenge
+ ▀██▀▀▀██▀   Appliance installer
+  ██   ██    Network · Storage · Summary · Install · Done
+
+  Stopped
+
+  Step              Check network
+  Cause             container 100 reaches its gateway but not the Proxmox VE API at
+                    pve1.example.com:8006
+  Fix               Check the route and firewall to port 8006, LISTEN_IP in /etc/default/pveproxy,
+                    or give another API address
+  Log               /var/log/kubehenge-install-20261112-120000-1234567890.log
+  Container         100 is kept until you choose
+
+  ┃ > Change Proxmox VE API
+  ┃   Try again
+  ┃   Quit and keep the container
+  ┃   Quit and remove it
+  ↑↓ choose  enter confirm  ctrl+c quit and keep

@@ -1,0 +1,33 @@
+ ▄▄▄▄▄▄▄▄▄   Kubehenge
+ ▀██▀▀▀██▀   Appliance installer
+  ██   ██    Network · Storage · Summary · Install · Done
+
+  ┃ Change
+  ┃ > IP version         IPv4 only
+  ┃   Network            vmbr0, bridge, subnet 192.0.2.0/24 (this node)
+  ┃   VLAN               none
+  ┃   IPv4 address       DHCP
+  ┃   DNS                this node's: 192.0.2.53
+  ┃   MTU                bridge default
+  ┃   Container ID       100
+  ┃   Host name          kubehenge
+  ┃   DNS name           none
+  ┃   Certificate        made by the appliance
+  ┃   Proxmox VE API     https://pve1.example.com:8006
+  ┃   Trusted proxies    none
+  ┃   Proxmox VE entry   no
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ┃
+  ↑↓ choose  / filter  enter change  esc back  ctrl+c quit

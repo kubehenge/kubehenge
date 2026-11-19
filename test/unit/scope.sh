@@ -187,7 +187,8 @@ expect_lanes pkg/cli/cluster_test.go '[]'
 expect_lanes pkg/appliance/testdata/tofu/main.tf "[${appliance_lane}]"
 # The appliance's own commands.
 for path in pkg/cli/appliance.go pkg/cli/activity.go pkg/cli/notifications.go pkg/cli/update.go pkg/appliance/jobs.go \
-    appliance/install.sh appliance/pve-entry/entry.js test/e2e/appliance.sh pkg/appliance/e2e_test.go; do
+    appliance/install.sh appliance/pve-entry/entry.js test/e2e/appliance.sh pkg/appliance/e2e_test.go \
+    pkg/installer/run.go pkg/installer/upgrade.sh; do
     expect_lanes "${path}" "[${appliance_lane}]"
 done
 # The Go tests that need a Proxmox VE host run in the lane of what they test.

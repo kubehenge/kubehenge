@@ -2,6 +2,7 @@ package installer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -22,6 +23,30 @@ type Session struct {
 	// in the plain output: a choice that leaves part of what they run unable to reach the API.
 	Cautions []string
 
+	// Version is the release being installed, for the summary.
+	Version string
+	// AllowOutside is the user's yes to a static address outside the subnet the node knows of the
+	// network.
+	AllowOutside bool
+	// AddressCheck is the last check of the static address, shown in the summary.
+	AddressCheck AddrCheck
+	// Restored says the answers were read from an earlier run's file, and Dropped names the saved
+	// answers the option checks refused.
+	Restored bool
+	Dropped  []string
+	// NetworkGiven is set when the options already name part of the container's network, which a
+	// saved network then does not replace.
+	NetworkGiven bool
+	// BridgeGiven and VLANGiven say the options name the network and its VLAN.
+	BridgeGiven, VLANGiven bool
+	// HostnameGiven and CTIDGiven say the options name the host name and the container ID, which
+	// saved answers then do not replace.
+	HostnameGiven, CTIDGiven bool
+	// Saved holds the answers of an earlier run, which detect restores.
+	Saved *savedAnswers
+	// AnswersPath is where the answers are saved when the install starts, empty for nowhere.
+	AnswersPath string
+
 	// vlanAware holds what routeVLANError read of each bridge, as a form checks on every key.
 	vlanAware map[string]bool
 }
@@ -36,12 +61,16 @@ func (n Needs) Any() bool { return n != Needs{} }
 
 // Prepare detects the node and refuses what can never work, before any question.
 func (s *Session) Prepare(ctx context.Context) error {
+	s.HostnameGiven, s.CTIDGiven = s.Cfg.Hostname != "", s.Cfg.CTID != ""
 	if s.Cfg.Hostname == "" {
 		s.Cfg.Hostname = DefaultHostname
 	}
 	if s.Cfg.TrustedProxies == nil {
 		s.Cfg.TrustedProxies = []string{}
 	}
+	c := &s.Cfg
+	s.NetworkGiven = c.Bridge != "" || c.VLAN != "" || c.MTU != "" || c.IP != "" || c.Gateway != "" || c.IP6 != "" || c.Gateway6 != ""
+	s.BridgeGiven, s.VLANGiven = c.Bridge != "", c.VLAN != ""
 	facts, err := s.Node.Detect(ctx, &s.Cfg)
 	if err != nil {
 		return err
@@ -71,41 +100,65 @@ func (s *Session) Prepare(ctx context.Context) error {
 	if s.Cfg.CTID == "" {
 		s.Cfg.CTID = facts.NextID
 	} else if !s.Node.IDFree(ctx, s.Cfg.CTID) {
-		return userErr(fmt.Sprintf("--ctid %s is taken by another guest", s.Cfg.CTID), "Name a free id, or leave --ctid out")
+		return userErr(fmt.Sprintf("--ctid %s is taken by another guest", s.Cfg.CTID), "Name a free ID, or leave --ctid out")
 	}
 	return nil
 }
 
-// CheckStaticFree refuses a static --ip that already answers on the bridge, before anything is
-// created. The terminal installer asks for another address instead.
-func (s *Session) CheckStaticFree(ctx context.Context) error {
-	c := &s.Cfg
+// CheckAddressing settles the static addresses of the options against the network they go on,
+// before anything is created: a prefix from the network's subnet where none is given, a gateway the
+// network supplies where none is given, each address with its gateway, the address inside the
+// network's known subnet, and the address free. The terminal installer asks for another address
+// where this refuses one.
+func (s *Session) CheckAddressing(ctx context.Context) error {
+	c, f := &s.Cfg, s.Facts
+	if err := s.checkStatic6(); err != nil {
+		return err
+	}
 	if c.IP == "" || c.IP == optDHCP || c.IP == optNone || c.Bridge == "" {
 		return nil
 	}
-	addr, _, _ := strings.Cut(c.IP, "/")
-	if s.Node.AddressInUse(ctx, s.Facts.addressDevice(c.Bridge, c.VLAN), addr) {
-		return userErr(addr+" answers on the network of "+c.Bridge, "Give a free address with --ip")
+	p, ok := ParseAddress4(c.IP, f.Prefix)
+	if !ok {
+		return settingErr(settingV4Addr, "--ip "+c.IP+" has no prefix length, and the subnet of this network is not known", "Give it as <address>/<prefix>, such as 192.0.2.40/24")
+	}
+	c.IP = p.String()
+	if c.Gateway == "" {
+		if g, err := netip.ParseAddr(f.Gateway); err == nil && p.Contains(g) {
+			c.Gateway = f.Gateway
+		}
+	}
+	if c.Gateway == "" && !s.apiOnLink(p) {
+		return settingErr(settingV4Gateway, "a static address needs a gateway, and this network gives none", "Give it with --gateway")
+	}
+	if err := checkPair(p, c.Gateway); err != nil {
+		return settingErr(settingV4Addr, err.Error(), "Check --ip and --gateway")
+	}
+	if msg := OutsideSubnet(f.Prefix, p); msg != "" && !c.Yes && !s.AllowOutside {
+		return settingErr(settingOutside, msg, "Name the VLAN or network it is on with --vlan or --bridge, or pass --yes to install there anyway")
+	}
+	check := s.Node.CheckAddress(ctx, p.Addr().String(), Link{f.Device, cmpGateway(c.Gateway, f.Gateway), f.NodeHolds})
+	s.AddressCheck = check
+	switch check.State {
+	case AddrInUse:
+		return settingErr(settingV4Addr, p.Addr().String()+" is in use on "+c.Bridge, "Give a free address with --ip")
+	case AddrUnchecked:
+		s.noticef("could not check that %s is free: %s", p.Addr(), check.Detail)
+	case AddrFree:
 	}
 	return nil
+}
+
+// cmpGateway is the gateway the address check tests its probe against.
+func cmpGateway(given, found string) string {
+	if given != "" {
+		return given
+	}
+	return found
 }
 
 func contains(list []string, want string) bool {
 	return slices.Contains(list, want)
-}
-
-// RefreshForBridge detects the bridge's subnet, address suggestion and API candidates again after
-// the user picked another bridge.
-func (s *Session) RefreshForBridge(ctx context.Context, bridge string) {
-	s.Cfg.Bridge = bridge
-	dev := s.Facts.addressDevice(bridge, s.Cfg.VLAN)
-	s.Facts.Prefix = s.Node.bridgeAddress4(ctx, dev)
-	s.Facts.NodeDHCP = s.Node.bridgeIsDHCP(dev)
-	s.Facts.SuggestedIP = ""
-	if s.Facts.Prefix.IsValid() {
-		s.Facts.SuggestedIP = s.Node.SuggestAddress(ctx, dev, s.Facts)
-	}
-	s.Facts.Candidates = s.Node.APICandidates(ctx, s.Facts, dev)
 }
 
 // Questions says which questions the options and the node leave open.
@@ -208,6 +261,9 @@ func (s *Session) ResolveAPI(ctx context.Context, ties Ties) error {
 	}
 	ca, err := s.Node.DecideCA(ctx, c, c.ProxmoxURL)
 	if err != nil {
+		if u, ok := errors.AsType[*UserError](err); ok && u.Setting == "" {
+			u.Setting = settingAPI
+		}
 		return err
 	}
 	s.CA = ca
@@ -248,12 +304,39 @@ func (s *Session) UnattendedCheck() error {
 	if s.CA != nil && s.CA.NeedsTrust && !c.TrustServedCA && c.ProxmoxCA == "" {
 		fix := "Check that it is your CA, then give it with --proxmox-ca <file>"
 		if s.CA.Pinned {
-			fix = "The API serves no CA certificate, so only its own certificate could be trusted. The appliance would then fail when that is renewed. Give the CA that signed it with --proxmox-ca <file>"
+			fix = "Give the CA that signed it with --proxmox-ca <file>. Without it the appliance fails when the certificate is renewed"
 		}
 		return userErr(fmt.Sprintf("the Proxmox VE API at %s serves a certificate from %s (SHA-256 fingerprint %s) that this node does not trust",
 			c.ProxmoxURL, s.CA.Subject, s.CA.Fingerprint), fix)
 	}
 	return nil
+}
+
+// checkStatic6 checks a static IPv6 address against its gateway.
+func (s *Session) checkStatic6() error {
+	c := &s.Cfg
+	if !IsIPv6CIDR(c.IP6) {
+		return nil
+	}
+	p, err := netip.ParsePrefix(c.IP6)
+	if err != nil {
+		return nil //nolint:nilerr // Validate names a malformed address.
+	}
+	if err := checkPair6(p, c.Gateway6); err != nil {
+		return settingErr(settingV6Addr, err.Error(), "Check --ip6 and --gateway6")
+	}
+	return nil
+}
+
+// apiOnLink reports whether the Proxmox VE API the container will use is in its own subnet, which
+// needs no gateway.
+func (s *Session) apiOnLink(p netip.Prefix) bool {
+	host, _, _ := splitAPI(s.Cfg.ProxmoxURL)
+	if host == "" && len(s.Facts.Candidates) > 0 {
+		host = s.Facts.Candidates[0].Host
+	}
+	a, err := netip.ParseAddr(host)
+	return err == nil && p.Contains(a)
 }
 
 // pickAPIHost sets the API host from the candidates. It reports true when a tie is left for the
@@ -266,15 +349,15 @@ func (s *Session) pickAPIHost(ties Ties) (bool, error) {
 	cands := s.Facts.Candidates
 	if len(cands) == 0 {
 		_, file, _ := s.Node.servedCertificate()
-		return false, userErr(fmt.Sprintf("Proxmox VE's certificate (%s) is valid for no name or address of this cluster's nodes", file),
-			"Give the URL the appliance and the clusters reach the API at, by a name or address the certificate is valid for, with --proxmox-url")
+		return false, settingErr(settingAPI, fmt.Sprintf("the certificate in %s covers no name or address of this cluster's nodes", file),
+			"Give a name or address the certificate covers with --proxmox-url")
 	}
 	if len(TiedCandidates(cands)) > 1 && ties != PickBest {
 		return true, nil
 	}
 	c.APIHost = cands[0].Host
 	if len(cands) > 1 {
-		s.noticef("the Proxmox VE API at %s has a certificate that is also valid for %s", c.APIHost, joinHosts(cands[1:]))
+		s.noticef("the API's certificate also covers %s", joinHosts(cands[1:]))
 	}
 	return false, nil
 }
@@ -296,13 +379,13 @@ func (s *Session) noteAPIFamily() {
 	if _, ips := certNames(cert); slices.Contains(ips, bridge.String()) {
 		return
 	}
-	s.Cautions = append(s.Cautions, apiFamilyCaution(bridge.String(), s.Cfg.APIHost))
+	s.Cautions = append(s.Cautions, apiFamilyCaution(bridge.String()))
 }
 
-// apiFamilyCaution is the text of that note, short enough for three lines of the summary at 80
-// columns.
-func apiFamilyCaution(ipv4, ipv6 string) string {
-	return fmt.Sprintf("The certificate lacks %[1]s, so clusters without IPv6 cannot reach the API at %[2]s. Add it to the certificate, then pass --proxmox-url https://%[1]s:8006", ipv4, ipv6)
+// apiFamilyCaution is the text of that note: the cause, then the fix, each short enough for one
+// line of the summary at 80 columns.
+func apiFamilyCaution(ipv4 string) string {
+	return fmt.Sprintf("Clusters without IPv6 need %[1]s in the API certificate. Add it, then pass --proxmox-url https://%[1]s:8006", ipv4)
 }
 
 // checkRouteVLAN refuses the VLAN of the node's default route on its bridge, taken from the route

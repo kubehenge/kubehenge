@@ -31,7 +31,7 @@ func TestNoAddressNamesTheVLAN(t *testing.T) {
 		h.exec.on("pct exec 100 -- ip -4 -o addr show dev eth0", "")
 		h.exec.on(c.call, "")
 		_, err := plainOn(t, h, c.cfg)
-		if err == nil || !strings.Contains(err.Error(), "--vlan is the right one") {
+		if err == nil || !strings.Contains(err.Error(), "Check --vlan and that") {
 			t.Errorf("%s: the error names no VLAN check: %v", c.name, err)
 		}
 	}
@@ -212,7 +212,7 @@ func (h *harness) env() *Env {
 	fetch := NewFetcher("")
 	fetch.Sleep = func(time.Duration) {}
 	return &Env{
-		Node: h.node, Exec: h.exec, Fetch: fetch, Dir: h.dir, Work: h.work, LogPath: "/var/log/kubehenge-install.log",
+		Node: h.node, Exec: h.exec, Fetch: fetch, Dir: h.dir, Work: h.work, LogPath: testLogPath,
 		TofuV: "1.0.0", TofuSH: h.tofuSum, Cleanup: func() {},
 		Tune: func(r *Runner) {
 			r.Sleep = func(time.Duration) { time.Sleep(time.Millisecond) }
@@ -669,7 +669,8 @@ func TestFinishedApplianceIsLeftAlone(t *testing.T) {
 	}
 }
 
-// Ctrl+C on the failure screen keeps the failure and says what was undone and what stays.
+// Ctrl+C on the failure screen keeps the failure and the container that screen said is kept, and
+// says what stays.
 func TestCtrlCOnFailureKeepsTheFailure(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, opts{dhcp: true, rootStorages: 2})
@@ -683,17 +684,20 @@ func TestCtrlCOnFailureKeepsTheFailure(t *testing.T) {
 	streams := ioStreams{in: keys, out: screen, errs: &errs, size: []tea.ProgramOption{tea.WithWindowSize(100, 40)}}
 	ended := make(chan error, 1)
 	go func() { ended <- executeOn(ctx, h.env(), &cfg, streams, true, "xterm") }()
-	for !strings.Contains(strings.ReplaceAll(ansi.Strip(screen.String()), " ", ""), "Container100wasremoved") && ctx.Err() == nil {
+	for !strings.Contains(strings.ReplaceAll(ansi.Strip(screen.String()), " ", ""), "Container100iskeptuntilyouchoose") && ctx.Err() == nil {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if ctx.Err() != nil {
-		t.Fatalf("the failure screen never said what was undone: %q", ansi.Strip(screen.String()))
+		t.Fatalf("the failure screen never said the container is kept: %q", ansi.Strip(screen.String()))
 	}
 	_, _ = typed.Write([]byte{0x03})
 	err := <-ended
-	if err == nil || !strings.Contains(err.Error(), "did not start") || !strings.Contains(err.Error(), "Container 100 was removed.") ||
-		!strings.Contains(err.Error(), "template stays on storage local-lvm") || errs.Len() != 0 {
+	if err == nil || !strings.Contains(err.Error(), "did not start") || !strings.Contains(err.Error(), "Container 100 is kept.") ||
+		!strings.Contains(err.Error(), "template stays on storage local-lvm") || !strings.HasPrefix(errs.String(), "kubehenge: to run it again") || strings.Count(errs.String(), "\n") != 1 {
 		t.Fatalf("Ctrl+C on the failure screen: err %v, said %q", err, errs.String())
+	}
+	if n := h.exec.count("pct destroy"); n != 0 {
+		t.Fatalf("Ctrl+C on the failure screen removed the container: %v", h.exec.calls)
 	}
 }
 
@@ -754,7 +758,7 @@ func TestServedLeafAloneIsPinned(t *testing.T) {
 		t.Fatal("a leaf served alone was not marked")
 	}
 	err := s.UnattendedCheck()
-	if err == nil || !strings.Contains(err.Error(), "fail when that is renewed") {
+	if err == nil || !strings.Contains(err.Error(), "fails when the certificate is renewed") {
 		t.Fatalf("the refusal does not say the pin breaks at renewal: %v", err)
 	}
 }

@@ -4,7 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/netip"
+	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -13,85 +14,94 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 )
 
-// The actions of the summary.
+// The actions of the summary and of a failure.
 const (
 	actInstall = "install"
-	actNetwork = "network"
-	actStorage = "storage"
-	actAPI     = "api"
-	actPVE     = "pve"
+	actChange  = "change"
 	actCancel  = "cancel"
+	actRetry   = "retry"
+	actKeep    = "keep"
+	actQuit    = "quit"
+	actFix     = "fix:"
 )
+
+// keyLeave stops a run, or leaves the installer.
+const keyLeave = "ctrl+c"
 
 type stage int
 
 const (
 	stDetect stage = iota
-	stNetwork
-	stChoices
-	stTrust
-	stPVE
+	stFound
+	stAsk
+	stList
+	stConfirm
 	stSummary
 	stRun
-	stRetry
 	stEnd
 	stFail
 )
 
-var stageNames = []struct {
-	label  string
-	stages []stage
-}{
-	{"Network", []stage{stDetect, stNetwork}},
-	{"Choices", []stage{stChoices, stTrust, stPVE}},
-	{"Summary", []stage{stSummary}},
-	{"Install", []stage{stRun, stRetry}},
-	{"Done", []stage{stEnd, stFail}},
-}
+// The crumbs of the header and the stages each one covers.
+var crumbNames = []string{"Network", "Storage", "Summary", "Install", "Done"}
+
+const (
+	crumbNetwork = iota
+	crumbStorage
+	crumbSummary
+	crumbInstall
+	crumbDone
+)
 
 var hue = lipgloss.Color //nolint:misspell // spellchecker:disable-line, lipgloss spells its constructor Color
 
 var (
 	accent  = hue("#E3B04B")
+	teal    = hue("#0d9488")
 	stone   = hue("#8A8F98")
 	good    = hue("#6CC4A1")
 	bad     = hue("#E5626B")
 	bold    = lipgloss.NewStyle().Bold(true)
 	dim     = lipgloss.NewStyle().Foreground(stone)
 	accentS = lipgloss.NewStyle().Foreground(accent)
+	tealS   = lipgloss.NewStyle().Foreground(teal)
 	goodS   = lipgloss.NewStyle().Foreground(good)
 	badS    = lipgloss.NewStyle().Foreground(bad)
 )
 
 type (
-	detectedMsg struct{ err error }
-	resolvedMsg struct{ err error }
-	probeMsg    struct {
-		address string
-		used    bool
-		// refused is the VLAN check's refusal of the bridge and VLAN, empty when they pass.
-		refused string
-	}
-	eventMsg Event
-	doneMsg  struct {
+	detectedMsg  struct{ err error }
+	refreshedMsg struct{}
+	resolvedMsg  struct{ err error }
+	verifiedMsg  struct{ err error }
+	eventMsg     Event
+	doneMsg      struct {
 		res *Result
 		err error
 	}
-	cleanedMsg struct{}
+	cleanedMsg struct{ then tea.Cmd }
+	resumedMsg struct{ err error }
 )
 
-// answers are the values the forms edit.
+// answers are the values the forms edit, copied from the options when a question opens and back
+// when it is answered.
 type answers struct {
-	mode, address, gateway, dns       string
-	more                              bool
-	ip6, gateway6, bridge, vlan, mtu  string
-	storage, templateStorage, apiHost string
-	trust, pve                        bool
-	action                            string
-	retry                             bool
+	family, mode4, mode6                 string
+	address, gateway, address6, gateway6 string
+	dns, bridge, vlan, mtu               string
+	ctid, hostname, name                 string
+	certFile, keyFile, proxies           string
+	storage, templateStorage, apiHost    string
+	apiURL, apiCA                        string
+	trust, pve, outside, apiCheck        bool
+	action                               string
+	setting                              string
+	gwNote                               string
+	// apiPick says the API question lists the addresses found, and apiTyped that the user asked
+	// for another.
+	apiPick, apiTyped bool
 }
 
 // Model is the full-screen installer.
@@ -108,23 +118,45 @@ type Model struct {
 	bar    progress.Model
 	form   *huh.Form
 	a      answers
-	netErr string
+	// note stands under the open question: what the last answer got wrong.
+	note string
+	// busy says what is being checked while a command runs.
+	busy string
+	// keys are the keys of the open question, shown in the footer.
+	keys string
+	// asking is the setting the open question belongs to.
+	asking string
+	// trail is the settings asked, so that Esc goes back one.
+	trail []string
+	// answered and given say which settings have an answer from the user and which the options gave.
+	answered, given map[string]bool
+	// fromSummary and fixing say where a question returns to: the summary, or a failed run's retry.
+	fromSummary, fixing bool
+	// fixed is the setting a failure sent the user to change.
+	fixed      string
+	table      map[string]*setting
+	leaveAsked bool
+	// dry is the user's choice to print the plan instead of installing.
+	dry bool
 
-	runner *Runner
-	steps  []StepInfo
-	state  map[string]StepState
-	detail map[string]string
-	frac   map[string]float64
-	events chan any
+	runner  *Runner
+	steps   []StepInfo
+	state   map[string]StepState
+	detail  map[string]string
+	frac    map[string]float64
+	started map[string]time.Time
+	now     func() time.Time
+	events  chan any
 	// running closes when the runner's goroutine has returned.
 	running chan struct{}
 	res     *Result
 
-	urlGiven  bool
-	noAddr    *NoAddressError
 	fail      error
 	cancelled bool
 	cleaned   bool
+	// keep says the container stays when the installer ends without the user's choice to remove it:
+	// a failure screen said it is kept until they choose, or the installer crashed.
+	keep bool
 }
 
 // NewModel returns the installer for a session. The runner is built when the run starts.
@@ -133,9 +165,9 @@ func NewModel(s *Session, newRunner func(emit func(Event)) *Runner) *Model {
 	sp := spinner.New(spinner.WithSpinner(spinner.MiniDot), spinner.WithStyle(accentS))
 	return &Model{
 		S: s, NewRunner: newRunner, ctx: ctx, cancel: cancel, width: defaultWidth, height: defaultHeight,
-		spin: sp, bar: progress.New(progress.WithWidth(barWidth)),
-		state: map[string]StepState{}, detail: map[string]string{}, frac: map[string]float64{},
-		urlGiven: s.Cfg.ProxmoxURL != "",
+		spin: sp, bar: progress.New(progress.WithWidth(barWidth)), now: time.Now,
+		state: map[string]StepState{}, detail: map[string]string{}, frac: map[string]float64{}, started: map[string]time.Time{},
+		answered: map[string]bool{}, given: map[string]bool{}, table: newSettings(),
 	}
 }
 
@@ -144,6 +176,9 @@ func (m *Model) Err() error { return m.fail }
 
 // Cancelled reports whether the user left before the run.
 func (m *Model) Cancelled() bool { return m.cancelled }
+
+// DryRun reports whether the user chose to print the plan and stop.
+func (m *Model) DryRun() bool { return m.dry }
 
 // Outcome says what a stopped run undid and what it left, empty when no run started.
 func (m *Model) Outcome() string {
@@ -156,6 +191,9 @@ func (m *Model) Outcome() string {
 // Finished reports whether the run installed the appliance, which the end screen shows.
 func (m *Model) Finished() bool { return m.res != nil }
 
+// Result is what the run installed, nil before it finished.
+func (m *Model) Result() *Result { return m.res }
+
 // Left says what a stopped run left behind that the user must look after, empty for nothing.
 func (m *Model) Left() string {
 	if m.runner == nil {
@@ -164,29 +202,27 @@ func (m *Model) Left() string {
 	return m.runner.Left()
 }
 
-// Shutdown ends a run still going and removes what it made. A signal or a lost terminal ends the
-// program without its own cleanup, which would leave a half-made container behind.
+// Shutdown ends a run still going and removes what it made, unless it is to be kept: with
+// --keep-failed, or once a failure screen said the container stays until the user chooses. A signal
+// or a lost terminal ends the program without its own cleanup, which would leave a half-made
+// container behind.
 func (m *Model) Shutdown(ctx context.Context) {
 	m.cancel()
 	if m.running != nil {
 		<-m.running
 	}
 	if m.runner != nil {
+		if m.keeps() {
+			m.runner.Keep()
+		}
 		m.runner.Cleanup(ctx)
 	}
 }
 
 // Init starts the detection behind one spinner.
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.spin.Tick, func() tea.Msg { return detectedMsg{m.S.detect(m.ctx)} })
-}
-
-func theme(isDark bool) *huh.Styles {
-	s := huh.ThemeCharm(isDark)
-	s.Focused.Title = s.Focused.Title.Foreground(accent).Bold(true)
-	s.Focused.SelectSelector = s.Focused.SelectSelector.Foreground(accent)
-	s.Focused.FocusedButton = s.Focused.FocusedButton.Background(accent).Foreground(hue("#1B1B1B"))
-	return s
+	m.busy = "Detecting this node"
+	return tea.Batch(m.spin.Tick, m.detectCmd())
 }
 
 // Update implements tea.Model.
@@ -200,16 +236,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn // t
 		if cmd, handled := m.onKey(msg); handled {
 			return m, cmd
 		}
+		m.leaveAsked = false
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
 		cmds = append(cmds, cmd)
 	case detectedMsg:
 		return m.afterDetect(msg.err)
+	case refreshedMsg:
+		return m.advanceModel()
 	case resolvedMsg:
-		return m.afterDetect(msg.err)
-	case probeMsg:
-		return m.afterProbe(msg)
+		return m.afterResolve(msg.err)
+	case verifiedMsg:
+		return m.afterVerify(msg.err)
+	case resumedMsg:
+		return m.afterResume(msg.err)
 	case eventMsg:
 		m.onEvent(Event(msg))
 		cmd := m.wait()
@@ -217,7 +258,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn // t
 	case doneMsg:
 		return m.onDone(msg)
 	case cleanedMsg:
-		return m.afterCleanup()
+		m.cleaned = true
+		m.state["remove"] = StepDone
+		return m, msg.then
+	case formMsg:
+		cmd := m.onFormMsg(msg)
+		return m, cmd
 	}
 	if m.form != nil {
 		cmds = append(cmds, m.updateForm(msg))
@@ -228,50 +274,87 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:ireturn // t
 // View implements tea.Model.
 func (m *Model) View() tea.View {
 	v := tea.NewView(m.render())
+	v.AltScreen = true
 	return v
+}
+
+// keeps says a stopped run keeps its container: --keep-failed asks it, or a failure screen said so.
+func (m *Model) keeps() bool { return m.S.Cfg.KeepFailed || m.keep }
+
+func (m *Model) detectCmd() tea.Cmd {
+	return func() tea.Msg { return detectedMsg{m.S.detect(m.ctx)} }
+}
+
+func (m *Model) advanceModel() (*Model, tea.Cmd) {
+	m.busy = ""
+	cmd := m.advance()
+	return m, cmd
+}
+
+// fitList sizes a list of count options to the terminal, and lets the user filter one that is
+// longer than the rows it gets.
+func (m *Model) fitList(sel *huh.Select[string], count int) *huh.Select[string] {
+	sel = sel.Height(max(m.height-listChrome, minListRows))
+	if count > m.height-listChrome {
+		sel = sel.Filtering(true)
+	}
+	return sel
 }
 
 // onKey handles the keys that act on the whole installer, and reports whether it did.
 func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
+	key := msg.String()
 	switch {
-	case msg.String() == "ctrl+c" && m.stage == stRun:
+	case key == keyLeave && m.stage == stRun:
 		m.cancel()
 		return nil, true
-	case m.stage == stEnd || m.stage == stFail:
-		// Even Ctrl+C only closes the screen: the run is over, and its failure stays the result.
+	case m.stage == stEnd:
 		return tea.Quit, true
-	case msg.String() == "ctrl+c":
-		return m.leave(), true
+	case key == keyLeave && m.stage == stFail:
+		return m.quitAndKeep(), true
+	case key == keyLeave:
+		return m.leaveKey(), true
+	case key == "esc" && (m.stage == stAsk || m.stage == stList || m.stage == stConfirm):
+		return m.back(), true
+	case key == "enter" && m.stage == stFound:
+		return m.advance(), true
 	}
 	return nil, false
 }
 
-// afterDetect opens the first question once the detection or a resolution ended.
+// leaveKey asks once before leaving with answers given, then leaves.
+func (m *Model) leaveKey() tea.Cmd {
+	if len(m.answered) > 0 && !m.leaveAsked && m.stage != stDetect {
+		m.leaveAsked = true
+		return nil
+	}
+	return m.leave()
+}
+
+func (m *Model) leave() tea.Cmd {
+	m.cancelled = true
+	m.cancel()
+	return tea.Quit
+}
+
+// afterDetect shows what the detection found, or its failure.
 func (m *Model) afterDetect(err error) (*Model, tea.Cmd) {
+	m.busy = ""
+	if m.S.Facts != nil {
+		// A failed check of the API still offers to change it, then goes on from the options.
+		m.initFromOptions()
+	}
 	if err != nil {
 		return m.failWith(err)
 	}
-	cmd := m.next()
-	return m, cmd
+	m.stage = stFound
+	return m, nil
 }
 
-// afterProbe asks for another address when the one typed answers on the network.
-func (m *Model) afterProbe(msg probeMsg) (*Model, tea.Cmd) {
-	if msg.refused != "" {
-		m.netErr = msg.refused
-		m.stage = stNetwork
-		cmd := m.networkForm()
-		return m, cmd
-	}
-	if msg.used {
-		m.netErr = msg.address + " answers on this network"
-		m.S.Cfg.IP = ""
-		m.stage = stNetwork
-		cmd := m.networkForm()
-		return m, cmd
-	}
-	m.netErr = ""
-	cmd := m.next()
+// failWith ends on the failure screen, for a failure before any run.
+func (m *Model) failWith(err error) (*Model, tea.Cmd) {
+	m.fail, m.stage = err, stFail
+	cmd := m.failForm()
 	return m, cmd
 }
 
@@ -281,14 +364,14 @@ func (m *Model) updateForm(msg tea.Msg) tea.Cmd {
 	if form, ok := f.(*huh.Form); ok {
 		m.form = form
 	}
-	cmds := []tea.Cmd{cmd}
+	cmds := []tea.Cmd{tagged(m.form, cmd)}
 	switch m.form.State {
 	case huh.StateCompleted:
 		m.form = nil
 		cmds = append(cmds, m.formDone())
 	case huh.StateAborted:
 		m.form = nil
-		return m.leave()
+		return m.leaveKey()
 	case huh.StateNormal:
 	}
 	return tea.Batch(cmds...)
@@ -297,357 +380,327 @@ func (m *Model) updateForm(msg tea.Msg) tea.Cmd {
 func (m *Model) formWidth() int { return min(m.width-formMargin, maxFormWidth) }
 
 func (m *Model) startForm(groups ...*huh.Group) tea.Cmd {
-	m.form = huh.NewForm(groups...).WithTheme(huh.ThemeFunc(theme)).WithWidth(m.formWidth()).WithShowHelp(false)
-	return m.form.Init()
+	m.form = huh.NewForm(groups...).WithTheme(huh.ThemeFunc(theme)).WithKeyMap(formKeys()).WithWidth(m.formWidth()).WithShowHelp(false)
+	return tagged(m.form, m.form.Init())
 }
 
-func (m *Model) leave() tea.Cmd {
-	m.cancelled = true
-	m.cancel()
-	return tea.Quit
+// formMsg is a message a form's command sent, with the form that sent it.
+type formMsg struct {
+	form *huh.Form
+	msg  tea.Msg
 }
 
-func (m *Model) failWith(err error) (*Model, tea.Cmd) {
-	m.fail, m.stage, m.form = err, stFail, nil
-	return m, nil
-}
+var cmdList = reflect.TypeFor[[]tea.Cmd]()
 
-// next opens the next question, or the summary.
-func (m *Model) next() tea.Cmd {
-	n := m.S.Questions()
-	switch {
-	case n.Network || n.Bridge || n.DNS:
-		m.stage = stNetwork
-		return m.networkForm()
-	case n.Storage || n.TemplateStorage || n.APIHost:
-		m.stage = stChoices
-		return m.choicesForm(n)
-	case n.TrustCA:
-		m.stage = stTrust
-		return m.trustForm()
-	case n.PVEEntry:
-		m.stage = stPVE
-		return m.startForm(huh.NewGroup(huh.NewConfirm().Title("Proxmox VE entry").
-			Description("A Kubernetes button in this node's interface").Affirmative("Add").Negative("Skip").Value(&m.a.pve)))
-	default:
-		m.stage = stSummary
-		m.a.action = actInstall
-		return m.summaryForm()
-	}
-}
-
-func (m *Model) networkForm() tea.Cmd {
-	f, c, a := m.S.Facts, &m.S.Cfg, &m.a
-	m.prefillNetwork()
-	modeGroup := []huh.Field{huh.NewSelect[string]().Title("Address").
-		Options(huh.NewOption("DHCP", optDHCP), huh.NewOption("Static", optStatic)).Value(&a.mode)}
-	if c.Bridge == "" {
-		opts := huh.NewOptions(f.Bridges...)
-		modeGroup = append(modeGroup, huh.NewSelect[string]().Title("Bridge").Options(opts...).Value(&a.bridge))
-	}
-	dnsField := func() *huh.Input {
-		return huh.NewInput().Title("DNS").Placeholder("192.0.2.53,192.0.2.54").Value(&a.dns).Validate(validateDNS(f))
-	}
-	static := huh.NewGroup(
-		huh.NewInput().Title("IPv4 address").Placeholder("192.0.2.40/24").Value(&a.address).Validate(ValidateAddressCIDR),
-		huh.NewInput().Title("Gateway").Placeholder("192.0.2.1").Value(&a.gateway).Validate(ValidateIPv4),
-		dnsField(),
-	).WithHideFunc(func() bool { return a.mode != optStatic })
-	dhcpDNS := huh.NewGroup(dnsField()).WithHideFunc(func() bool { return a.mode != optDHCP || !f.LoopbackDNSOnly })
-	more := huh.NewGroup(huh.NewConfirm().Title("Advanced").Description("IPv6, bridge, VLAN, MTU").Affirmative("Show").Negative("Skip").Value(&a.more))
-	adv := huh.NewGroup(
-		huh.NewInput().Title("IPv6").Placeholder("auto, dhcp or 2001:db8::40/64").Value(&a.ip6).Validate(validateIPv6),
-		huh.NewInput().Title("IPv6 gateway").Value(&a.gateway6).Validate(validateIPv6Gateway),
-		huh.NewSelect[string]().Title("Bridge").Options(huh.NewOptions(f.Bridges...)...).Value(&a.bridge),
-		huh.NewInput().Title("VLAN").Placeholder("none").Value(&a.vlan).Validate(m.validateVLAN),
-		huh.NewInput().Title("MTU").Placeholder("bridge default").Value(&a.mtu).Validate(validateRange("576 to 65535", mtuMin, mtuMax)),
-	).WithHideFunc(func() bool { return !a.more })
-	return m.startForm(huh.NewGroup(modeGroup...), static, dhcpDNS, more, adv)
-}
-
-// validateVLAN checks the VLAN field against the bridge picked above it, with the check the flags
-// get.
-func (m *Model) validateVLAN(vlan string) error {
-	if err := validateRange("1 to 4094", 1, vlanMax)(vlan); err != nil {
-		return err
-	}
-	bridge := m.a.bridge
-	if bridge == "" {
-		bridge = m.S.Cfg.Bridge
-	}
-	return m.S.routeVLANError(m.ctx, bridge, vlan)
-}
-
-// prefillNetwork fills the network answers from what was detected, the first time.
-func (m *Model) prefillNetwork() {
-	f, c, a := m.S.Facts, &m.S.Cfg, &m.a
-	if a.mode != "" {
-		return
-	}
-	a.mode = optStatic
-	if f.NodeDHCP {
-		a.mode = optDHCP
-	}
-	a.address, a.gateway = "", ""
-	if g, err := netip.ParseAddr(f.Gateway); err == nil && (!f.Prefix.IsValid() || f.Prefix.Contains(g)) {
-		a.gateway = f.Gateway
-	}
-	if f.SuggestedIP != "" {
-		a.address = fmt.Sprintf("%s/%d", f.SuggestedIP, f.Prefix.Bits())
-	}
-	if !f.LoopbackDNSOnly {
-		a.dns = strings.Join(f.DNS, ",")
-	}
-	a.ip6, a.vlan, a.mtu = c.IP6, c.VLAN, c.MTU
-	a.bridge = c.Bridge
-}
-
-func validateDNS(f *Facts) func(string) error {
-	return func(s string) error {
-		if s != "" && !dnsListRE.MatchString(s) {
-			return errors.New("comma-separated name server addresses")
-		}
-		if s == "" && f.LoopbackDNSOnly {
-			return errors.New("required, this node's resolver is on loopback")
-		}
+// tagged has every message of a form's command carry the form. huh's own messages, such as the
+// one an Enter sends to move to the next field, name no form. One still on its way when its form
+// was answered would otherwise reach the next form and answer it too.
+func tagged(f *huh.Form, cmd tea.Cmd) tea.Cmd {
+	if cmd == nil {
 		return nil
-	}
-}
-
-func validateIPv6(s string) error {
-	if s != "" && s != optAuto && s != optDHCP && !IsIPv6CIDR(s) {
-		return errors.New("auto, dhcp or an address with its prefix")
-	}
-	return nil
-}
-
-func validateIPv6Gateway(s string) error {
-	if s != "" && !IsIPv6(s) {
-		return errors.New("an IPv6 address")
-	}
-	return nil
-}
-
-func validateRange(message string, low, high int) func(string) error {
-	return func(s string) error {
-		if s != "" && !inRange(s, low, high) {
-			return errors.New(message)
-		}
-		return nil
-	}
-}
-
-func (m *Model) choicesForm(n Needs) tea.Cmd {
-	f, a := m.S.Facts, &m.a
-	var fields []huh.Field
-	storageOpts := func(list []Storage) []huh.Option[string] {
-		opts := make([]huh.Option[string], len(list))
-		for i, s := range list {
-			opts[i] = huh.NewOption(fmt.Sprintf("%s  %s, %s", s.Name, s.Type, s.FreeText()), s.Name)
-		}
-		return opts
-	}
-	if n.Storage {
-		a.storage = f.RootStorages[0].Name
-		fields = append(fields, huh.NewSelect[string]().Title("Disk storage").Options(storageOpts(f.RootStorages)...).Value(&a.storage))
-	}
-	if n.TemplateStorage {
-		a.templateStorage = f.TemplateStorages[0].Name
-		fields = append(fields, huh.NewSelect[string]().Title("Template storage").Options(storageOpts(f.TemplateStorages)...).Value(&a.templateStorage))
-	}
-	if n.APIHost {
-		tied := TiedCandidates(f.Candidates)
-		opts := make([]huh.Option[string], len(tied))
-		for i, c := range tied {
-			opts[i] = huh.NewOption(c.Host+"  "+c.What, c.Host)
-		}
-		a.apiHost = tied[0].Host
-		fields = append(fields, huh.NewSelect[string]().Title("Proxmox VE API address").Options(opts...).Value(&a.apiHost))
-	}
-	return m.startForm(huh.NewGroup(fields...))
-}
-
-func (m *Model) trustForm() tea.Cmd {
-	ca := m.S.CA
-	m.a.trust = false
-	note := ""
-	if ca.Pinned {
-		note = "\nThe API serves no CA, so only this certificate is trusted. The appliance fails when it is renewed."
-	}
-	return m.startForm(huh.NewGroup(huh.NewConfirm().Title("Trust this CA for the Proxmox VE API?").
-		Description("Subject  " + ca.Subject + "\nIssuer   " + ca.Issuer + "\nSHA-256  " + ca.Fingerprint[:47] + "\n         " + ca.Fingerprint[48:] + note).
-		Affirmative("Trust").Negative("Refuse").Value(&m.a.trust)))
-}
-
-func (m *Model) summaryForm() tea.Cmd {
-	opts := []huh.Option[string]{huh.NewOption("Install", actInstall), huh.NewOption("Change network", actNetwork)}
-	if len(m.S.Facts.RootStorages) > 1 || len(m.S.Facts.TemplateStorages) > 1 {
-		opts = append(opts, huh.NewOption("Change storage", actStorage))
-	}
-	if !m.urlGiven && len(TiedCandidates(m.S.Facts.Candidates)) > 1 {
-		opts = append(opts, huh.NewOption("Change API address", actAPI))
-	}
-	opts = append(opts, huh.NewOption("Change Proxmox VE entry", actPVE), huh.NewOption("Cancel", actCancel))
-	return m.startForm(huh.NewGroup(huh.NewSelect[string]().Title("Next").Options(opts...).Value(&m.a.action)))
-}
-
-// networkDone applies the network answers and probes the typed address.
-func (m *Model) networkDone() tea.Cmd {
-	c, a := &m.S.Cfg, &m.a
-	if a.mode == optDHCP {
-		c.IP, c.Gateway = optDHCP, ""
-	} else {
-		c.IP, c.Gateway = a.address, a.gateway
-	}
-	if a.dns != "" {
-		c.DNS = a.dns
-	}
-	c.IP6, c.Gateway6, c.VLAN, c.MTU = a.ip6, a.gateway6, a.vlan, a.mtu
-	bridge := c.Bridge
-	if a.bridge != "" {
-		bridge = a.bridge
 	}
 	return func() tea.Msg {
-		// The field checked the VLAN against the bridge as it stood then. The bridge can change
-		// after it.
-		if err := m.S.routeVLANError(m.ctx, bridge, c.VLAN); err != nil {
-			return probeMsg{refused: err.Error()}
-		}
-		if bridge != c.Bridge || c.Bridge == "" {
-			m.S.RefreshForBridge(m.ctx, bridge)
-		}
-		if a.mode == optStatic {
-			addr, _, _ := strings.Cut(c.IP, "/")
-			return probeMsg{address: addr, used: m.S.Node.AddressInUse(m.ctx, m.S.Facts.addressDevice(c.Bridge, c.VLAN), addr)}
-		}
-		return probeMsg{}
-	}
-}
-
-// choicesDone applies the storage and API address answers.
-func (m *Model) choicesDone() tea.Cmd {
-	c, a := &m.S.Cfg, &m.a
-	if a.storage != "" {
-		c.Storage = a.storage
-	}
-	if a.templateStorage != "" {
-		c.TemplateStorage = a.templateStorage
-	}
-	if a.apiHost != "" {
-		c.APIHost = a.apiHost
-		return m.resolve()
-	}
-	return m.next()
-}
-
-// formDone applies a finished form and moves on.
-func (m *Model) formDone() tea.Cmd {
-	c, a := &m.S.Cfg, &m.a
-	switch m.stage {
-	case stNetwork:
-		return m.networkDone()
-	case stChoices:
-		return m.choicesDone()
-	case stTrust:
-		if !a.trust {
-			m.fail = apiFailure(true, c.ProxmoxURL, "8006", "")
-			m.stage = stFail
+		msg := cmd()
+		if msg == nil {
 			return nil
 		}
-		c.TrustServedCA = true
-		return m.next()
-	case stPVE:
-		c.PVEEntry = "no"
-		if a.pve {
-			c.PVEEntry = optYes
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			return tea.BatchMsg(taggedAll(f, batch))
 		}
-		return m.next()
+		// tea.Sequence's message type is unexported, so it is known by its shape.
+		if v := reflect.ValueOf(msg); v.Kind() == reflect.Slice && v.Type().ConvertibleTo(cmdList) {
+			if list, ok := reflect.TypeAssert[[]tea.Cmd](v.Convert(cmdList)); ok {
+				if seq := tea.Sequence(taggedAll(f, list)...); seq != nil {
+					return seq()
+				}
+				return nil
+			}
+		}
+		return formMsg{f, msg}
+	}
+}
+
+func taggedAll(f *huh.Form, cmds []tea.Cmd) []tea.Cmd {
+	out := make([]tea.Cmd, len(cmds))
+	for i, c := range cmds {
+		out[i] = tagged(f, c)
+	}
+	return out
+}
+
+// onFormMsg passes a form's message on while the form is open, and drops it once the form is gone.
+// A message of Bubble Tea's own, such as a request for the window's size, goes back to the program.
+func (m *Model) onFormMsg(msg formMsg) tea.Cmd {
+	if m.form == nil || msg.form != m.form {
+		return nil
+	}
+	if t := reflect.TypeOf(msg.msg); !strings.HasPrefix(t.PkgPath(), "charm.land/huh/") && !strings.HasPrefix(t.PkgPath(), "charm.land/bubbles/") {
+		inner := msg.msg
+		return func() tea.Msg { return inner }
+	}
+	return m.updateForm(msg.msg)
+}
+
+func formKeys() *huh.KeyMap {
+	k := huh.NewDefaultKeyMap()
+	k.Select.Left.SetEnabled(true)
+	k.Select.Right.SetEnabled(true)
+	return k
+}
+
+func theme(isDark bool) *huh.Styles {
+	s := huh.ThemeCharm(isDark)
+	s.Focused.Title = s.Focused.Title.Foreground(accent).Bold(true)
+	s.Focused.SelectSelector = s.Focused.SelectSelector.Foreground(accent)
+	s.Focused.FocusedButton = s.Focused.FocusedButton.Background(accent).Foreground(hue("#1B1B1B"))
+	return s
+}
+
+// formDone acts on the answer of the open form.
+func (m *Model) formDone() tea.Cmd {
+	m.leaveAsked = false
+	switch m.stage {
+	case stAsk:
+		return m.settingDone(m.asking)
+	case stList:
+		return m.listDone()
+	case stConfirm:
+		return m.confirmDone()
 	case stSummary:
 		return m.summaryAction()
-	case stRetry:
-		if !a.retry {
-			m.fail = m.runFailure()
-			m.stage = stFail
-			return nil
-		}
-		c.IP, a.mode = "", "static"
-		return m.next()
-	case stDetect, stRun, stEnd, stFail:
+	case stFail:
+		return m.failAction()
+	case stDetect, stFound, stRun, stEnd:
 	}
 	return nil
 }
 
-func (m *Model) resolve() tea.Cmd {
-	return func() tea.Msg { return resolvedMsg{m.S.ResolveAPI(m.ctx, AskTies)} }
+// back returns to the question before the open one, or to the summary or the failure the question
+// was opened from. The typed API address goes back to the list of addresses found.
+func (m *Model) back() tea.Cmd {
+	m.note = ""
+	switch {
+	case m.stage == stList:
+		return m.showSummary()
+	case m.stage == stAsk && m.asking == settingAPI && m.a.apiTyped && len(TiedCandidates(m.S.Facts.Candidates)) > 1:
+		m.a.apiTyped = false
+		return m.open(settingAPI)
+	case len(m.trail) > 1:
+		prev := m.trail[len(m.trail)-2]
+		m.trail = m.trail[:len(m.trail)-2]
+		return m.open(prev)
+	case m.fixing:
+		m.fixing = false
+		m.fail, m.stage = m.runFailure(), stFail
+		return m.failForm()
+	case m.fromSummary:
+		return m.showSummary()
+	}
+	return nil
+}
+
+// advance opens the first question still open, or checks the answers once none is.
+func (m *Model) advance() tea.Cmd {
+	for _, id := range settingOrder {
+		if m.needed(id) {
+			return m.open(id)
+		}
+	}
+	m.busy = "Checking the network settings"
+	m.stage = stDetect
+	return tea.Batch(m.spin.Tick, func() tea.Msg { return verifiedMsg{m.S.CheckAddressing(m.ctx)} })
+}
+
+// afterVerify opens the setting a check refused, or moves on once all pass.
+func (m *Model) afterVerify(err error) (*Model, tea.Cmd) {
+	m.busy = ""
+	if err == nil {
+		cmd := m.allAnswered()
+		return m, cmd
+	}
+	var u *UserError
+	if !errors.As(err, &u) || u.Setting == "" {
+		return m.failWith(err)
+	}
+	if u.Setting == settingOutside {
+		m.stage = stConfirm
+		m.note = u.Cause
+		cmd := m.confirmForm("Use it anyway?", "Use", "Choose another")
+		return m, cmd
+	}
+	m.note = u.Cause
+	m.answered[u.Setting], m.given[u.Setting] = false, false
+	cmd := m.open(u.Setting)
+	return m, cmd
+}
+
+// allAnswered goes on once every question has its answer: back to a failed run, or to the summary.
+func (m *Model) allAnswered() tea.Cmd {
+	if m.fixing {
+		return m.resume(m.fixed)
+	}
+	if m.S.Cfg.Yes {
+		return m.begin()
+	}
+	return m.showSummary()
+}
+
+// begin starts the run, or ends with the plan on a dry run.
+func (m *Model) begin() tea.Cmd {
+	if m.S.Cfg.DryRun {
+		m.dry = true
+		return tea.Quit
+	}
+	return m.startRun()
+}
+
+func (m *Model) confirmForm(title, yes, no string) tea.Cmd {
+	m.a.outside = false
+	m.keys = "←→ choose  enter confirm  esc back  ctrl+c quit"
+	return m.startForm(huh.NewGroup(huh.NewConfirm().Title(title).Affirmative(yes).Negative(no).Value(&m.a.outside)))
+}
+
+// confirmDone applies the answer to an address outside the network's subnet.
+func (m *Model) confirmDone() tea.Cmd {
+	if !m.a.outside {
+		m.note = ""
+		m.answered[settingV4Addr], m.given[settingV4Addr] = false, false
+		return m.open(settingV4Addr)
+	}
+	m.S.AllowOutside = true
+	m.note = ""
+	return m.advance()
+}
+
+// showSummary opens the summary of what is about to be created.
+func (m *Model) showSummary() tea.Cmd {
+	m.stage, m.fromSummary, m.fixing, m.note = stSummary, false, false, ""
+	m.trail = nil
+	install := "Install"
+	if m.S.Cfg.DryRun {
+		install = "Print plan"
+	}
+	m.a.action = actInstall
+	m.keys = "←→ choose  enter confirm  ctrl+c quit"
+	return m.startForm(huh.NewGroup(huh.NewSelect[string]().Inline(true).Options(
+		huh.NewOption(install, actInstall), huh.NewOption("Change a setting", actChange), huh.NewOption("Cancel", actCancel),
+	).Value(&m.a.action)))
 }
 
 func (m *Model) summaryAction() tea.Cmd {
-	c := &m.S.Cfg
 	switch m.a.action {
 	case actInstall:
-		return m.startRun()
-	case actNetwork:
-		c.IP = ""
-	case actStorage:
-		c.Storage, c.TemplateStorage = "", ""
-		if err := m.S.FillStorages(AskTies); err != nil {
-			m.fail, m.stage = err, stFail
-			return nil
-		}
-	case actAPI:
-		c.APIHost, c.ProxmoxURL, m.S.CA = "", "", nil
-		return m.resolve()
-	case actPVE:
-		c.PVEEntry = ""
-	case actCancel:
+		return m.begin()
+	case actChange:
+		return m.settingList()
+	default:
 		m.cancelled = true
 		return tea.Quit
 	}
-	return m.next()
 }
 
-func (m *Model) startRun() tea.Cmd {
-	m.stage = stRun
-	if m.events == nil {
-		m.events = make(chan any, eventBuffer)
-	}
-	if m.runner == nil {
-		m.runner = m.NewRunner(func(e Event) {
-			select {
-			case m.events <- eventMsg(e):
-			case <-m.ctx.Done():
-			}
-		})
-	}
-	m.steps = m.runner.Steps()
-	for _, st := range m.steps {
-		if m.state[st.ID] != StepDone {
-			m.state[st.ID] = StepPending
+// settingList opens the list of settings, each with its value.
+func (m *Model) settingList() tea.Cmd {
+	m.stage, m.fromSummary = stList, true
+	opts := make([]huh.Option[string], 0, len(settingList))
+	for _, id := range settingList {
+		if st := m.table[id]; m.listed(id) {
+			opts = append(opts, huh.NewOption(fmt.Sprintf("%-*s %s", summaryLabelWidth, st.label, st.value(m)), id))
 		}
 	}
-	running := make(chan struct{})
-	m.running = running
-	go func() {
-		res, err := m.runner.Run(m.ctx)
-		close(running)
-		m.events <- doneMsg{res, err}
-	}()
-	return tea.Batch(m.wait(), m.spin.Tick)
+	m.a.setting = opts[0].Value
+	m.keys = "↑↓ choose  / filter  enter change  esc back  ctrl+c quit"
+	sel := m.fitList(huh.NewSelect[string]().Title("Change").Options(opts...).Value(&m.a.setting), len(opts))
+	return m.startForm(huh.NewGroup(sel))
 }
 
-func (m *Model) wait() tea.Cmd {
-	events := m.events
-	return func() tea.Msg { return <-events }
+func (m *Model) listDone() tea.Cmd {
+	id := m.a.setting
+	m.answered[id], m.given[id] = false, false
+	m.trail = nil
+	return m.open(id)
 }
 
-func (m *Model) onEvent(e Event) {
-	m.state[e.Step] = e.State
-	if e.Detail != "" {
-		m.detail[e.Step] = e.Detail
+// open asks one setting.
+func (m *Model) open(id string) tea.Cmd {
+	m.stage, m.asking = stAsk, id
+	if len(m.trail) == 0 || m.trail[len(m.trail)-1] != id {
+		m.trail = append(m.trail, id)
 	}
-	if e.Total > 0 {
-		m.frac[e.Step] = float64(e.Done) / float64(e.Total)
+	fields := m.table[id].fields(m)
+	m.keys = keysOf(fields)
+	return m.startForm(huh.NewGroup(fields...))
+}
+
+// settingDone stores the answer of a setting and moves on.
+func (m *Model) settingDone(id string) tea.Cmd {
+	m.note = ""
+	m.answered[id] = true
+	if cmd := m.table[id].apply(m); cmd != nil {
+		return tea.Batch(m.spin.Tick, cmd)
 	}
+	return m.advance()
+}
+
+// refresh reads the network again after its answers changed.
+func (m *Model) refresh() tea.Cmd {
+	c := &m.S.Cfg
+	m.busy, m.stage = "Reading the network "+c.Bridge, stDetect
+	return func() tea.Msg {
+		m.S.RefreshNetwork(m.ctx, c.Bridge, c.VLAN)
+		return refreshedMsg{}
+	}
+}
+
+// resolve settles the API address and its CA again.
+func (m *Model) resolve() tea.Cmd {
+	m.busy, m.stage = "Checking the Proxmox VE API", stDetect
+	return func() tea.Msg { return resolvedMsg{m.S.ResolveAPI(m.ctx, AskTies)} }
+}
+
+func (m *Model) afterResolve(err error) (*Model, tea.Cmd) {
+	m.busy = ""
+	if err != nil {
+		return m.failWith(err)
+	}
+	cmd := m.advance()
+	return m, cmd
+}
+
+// initFromOptions notes which settings the options and the restored answers already give.
+func (m *Model) initFromOptions() {
+	c, s := &m.S.Cfg, m.S
+	m.given = map[string]bool{}
+	switch {
+	case c.IP == optNone:
+		m.a.family = "v6"
+	case c.IP6 != "":
+		m.a.family = "both"
+	case c.IP != "":
+		m.a.family = "v4"
+	}
+	m.given[settingFamily] = m.a.family != ""
+	m.a.mode4, m.a.mode6 = modeOf(c.IP), modeOf(c.IP6)
+	m.given[settingV4Mode], m.given[settingV6Mode] = m.a.mode4 != "", m.a.mode6 != ""
+	m.given[settingV4Addr] = m.a.mode4 == optStatic
+	m.given[settingV4Gateway] = m.a.mode4 == optDHCP || c.Gateway != ""
+	m.given[settingV6Addr] = m.a.mode6 == optStatic
+	m.given[settingV6Gateway] = m.a.mode6 != optStatic || c.Gateway6 != ""
+	m.given[settingNetwork] = s.BridgeGiven
+	m.given[settingVLAN] = s.VLANGiven
+	m.given[settingDNS] = c.DNS != ""
+}
+
+func modeOf(ip string) string {
+	switch ip {
+	case "", optNone:
+		return ""
+	case optDHCP:
+		return optDHCP
+	case optAuto:
+		return optAuto
+	}
+	return optStatic
 }
 
 func (m *Model) runFailure() error {
@@ -657,280 +710,26 @@ func (m *Model) runFailure() error {
 	return errors.New("the install did not finish")
 }
 
-func (m *Model) onDone(d doneMsg) (*Model, tea.Cmd) {
-	if d.err == nil {
-		m.res, m.stage = d.res, stEnd
-		return m, nil
-	}
-	m.fail = d.err
-	var na *NoAddressError
-	m.noAddr = nil
-	if errors.As(d.err, &na) && na.DHCP && m.ctx.Err() == nil {
-		m.noAddr = na
-	}
-	if m.ctx.Err() != nil {
-		m.fail = errors.New("cancelled")
-	}
-	return m, func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(m.ctx), cleanupTimeout)
-		defer cancel()
-		m.runner.Cleanup(ctx)
-		return cleanedMsg{}
-	}
-}
-
-func (m *Model) afterCleanup() (*Model, tea.Cmd) {
-	m.cleaned = true
-	if m.fail != nil && m.fail.Error() == "cancelled" {
-		m.cancelled = true
-		return m, tea.Quit
-	}
-	if m.noAddr != nil {
-		m.stage = stRetry
-		m.a.retry = true
-		cmd := m.startForm(huh.NewGroup(huh.NewConfirm().Title("No address from DHCP").
-			Description("The container is removed. Use a static address?").Affirmative("Use static").Negative("Stop").Value(&m.a.retry)))
-		return m, cmd
-	}
-	m.stage = stFail
-	return m, nil
-}
-
-func (m *Model) render() string {
-	var b strings.Builder
-	b.WriteString(m.header())
-	b.WriteString("\n")
+func (m *Model) crumb() int {
 	switch m.stage {
-	case stDetect:
-		b.WriteString("  ")
-		b.WriteString(m.spin.View())
-		b.WriteString(" Detecting this node\n")
-	case stSummary:
-		b.WriteString(m.summary())
-		b.WriteString(m.formView())
+	case stDetect, stFound:
+		return crumbNetwork
+	case stAsk:
+		if slices.Contains(storageSettings, m.asking) {
+			return crumbStorage
+		}
+		return crumbNetwork
+	case stList, stSummary, stConfirm:
+		return crumbSummary
 	case stRun:
-		b.WriteString(m.runView())
+		return crumbInstall
 	case stEnd:
-		b.WriteString(m.endView())
+		return crumbDone
 	case stFail:
-		b.WriteString(m.failView())
-	case stNetwork, stChoices, stTrust, stPVE, stRetry:
-		if m.netErr != "" && m.stage == stNetwork {
-			b.WriteString("  ")
-			b.WriteString(badS.Render(m.netErr))
-			b.WriteString("\n\n")
+		if m.runner != nil {
+			return crumbInstall
 		}
-		b.WriteString(m.formView())
+		return crumbNetwork
 	}
-	return b.String()
-}
-
-func (m *Model) formView() string {
-	if m.form == nil {
-		return ""
-	}
-	return indent(m.form.View(), "  ") + "\n" + dim.Render("  enter confirm  ctrl+c leave") + "\n"
-}
-
-func indent(s, pad string) string {
-	lines := strings.Split(s, "\n")
-	for i, l := range lines {
-		lines[i] = pad + l
-	}
-	return strings.Join(lines, "\n")
-}
-
-func (m *Model) header() string {
-	mark := []string{" ▟▀▜ ▟▀▜ ", " █ █ █ █ ", " ▀▀▘ ▀▀▘ "}
-	var crumbs []string
-	for _, s := range stageNames {
-		label := s.label
-		active := false
-		for _, st := range s.stages {
-			active = active || st == m.stage
-		}
-		if active {
-			crumbs = append(crumbs, accentS.Bold(true).Render(label))
-		} else {
-			crumbs = append(crumbs, dim.Render(label))
-		}
-	}
-	right := []string{bold.Render("Kubehenge"), dim.Render("Appliance installer"), strings.Join(crumbs, dim.Render("  ·  "))}
-	var b strings.Builder
-	for i := range mark {
-		b.WriteString(accentS.Render(mark[i]))
-		b.WriteString("  ")
-		b.WriteString(right[i])
-		b.WriteString("\n")
-	}
-	return b.String()
-}
-
-// The columns of the summary: two spaces, a label of this width, then the value.
-const (
-	summaryLabelWidth = 18
-	summaryMargin     = 2
-	minNoteWidth      = 30
-)
-
-// row renders a label and a value in two columns.
-func row(label, value string) string {
-	return strings.Repeat(" ", summaryMargin) + dim.Render(fmt.Sprintf("%-*s", summaryLabelWidth, label)) + value + "\n"
-}
-
-func (m *Model) summary() string {
-	c, f := &m.S.Cfg, m.S.Facts
-	var b strings.Builder
-	address := "DHCP"
-	if c.IP != "dhcp" {
-		address = c.IP
-	}
-	b.WriteString(row("Address", address))
-	if c.Gateway != "" {
-		b.WriteString(row("Gateway", c.Gateway))
-	}
-	dns := c.DNS
-	if dns == "" {
-		dns = "this node's: " + strings.Join(f.DNS, ", ")
-	}
-	b.WriteString(row("DNS", dns))
-	net := c.Bridge
-	if c.VLAN != "" {
-		net += ", VLAN " + c.VLAN
-	}
-	if c.MTU != "" {
-		net += ", MTU " + c.MTU
-	}
-	b.WriteString(row("Bridge", net))
-	if c.IP6 != "" {
-		b.WriteString(row("IPv6", c.IP6+" "+c.Gateway6))
-	}
-	b.WriteString(row("Container", c.CTID+", "+c.Hostname))
-	b.WriteString(row("Disk storage", c.Storage))
-	b.WriteString(row("Template storage", c.TemplateStorage))
-	b.WriteString(row("Proxmox VE API", c.ProxmoxURL))
-	if m.S.CA != nil {
-		b.WriteString(row("API CA", caText(m.S.CA, c)))
-	}
-	if c.Name != "" {
-		b.WriteString(row("DNS name", c.Name))
-	}
-	entry := "no"
-	if c.PVEEntry == optYes {
-		entry = optYes
-	}
-	b.WriteString(row("Proxmox VE entry", entry))
-	for _, n := range m.S.Cautions {
-		// The renderer clips a line at the terminal's width, so a long note wraps under its label.
-		lines := strings.Split(ansi.Wrap(n, max(m.width-summaryLabelWidth-summaryMargin, minNoteWidth), ""), "\n")
-		b.WriteString(row("Note", lines[0]))
-		for _, l := range lines[1:] {
-			b.WriteString(row("", l))
-		}
-	}
-	b.WriteString("\n")
-	return b.String()
-}
-
-func caText(ca *CAChoice, c *Config) string {
-	switch ca.Kind {
-	case CAInsecure:
-		return "not checked"
-	case CACluster:
-		return "this cluster's CA"
-	case CASystem:
-		return "trust store: " + ca.Subject
-	case CAServed:
-		return "served, trusted by you: " + ca.Subject
-	case CAGiven:
-		return c.ProxmoxCA
-	}
-	return ""
-}
-
-func (m *Model) runView() string {
-	var b strings.Builder
-	for _, st := range m.steps {
-		icon, label := dim.Render("·"), dim.Render(st.Label)
-		switch m.state[st.ID] {
-		case StepRunning:
-			icon, label = m.spin.View(), bold.Render(st.Label)
-		case StepDone:
-			icon, label = goodS.Render("✓"), st.Label
-		case StepFailed:
-			icon, label = badS.Render("✗"), st.Label
-		case StepSkipped:
-			icon, label = dim.Render("-"), st.Label
-		case StepPending:
-		}
-		tail := dim.Render(m.detail[st.ID])
-		if f, ok := m.frac[st.ID]; ok && m.state[st.ID] == StepRunning {
-			tail = m.bar.ViewAs(f)
-		}
-		fmt.Fprintf(&b, "  %s %-20s %s\n", icon, label, tail)
-	}
-	b.WriteString("\n")
-	b.WriteString(dim.Render("  ctrl+c stops and removes the container"))
-	b.WriteString("\n")
-	return b.String()
-}
-
-func (m *Model) endView() string {
-	r := m.res
-	var b strings.Builder
-	b.WriteString("  ")
-	b.WriteString(goodS.Bold(true).Render("Kubehenge is running"))
-	b.WriteString("\n\n")
-	b.WriteString(row("Open", accentS.Underline(true).Render(r.URL)))
-	b.WriteString(row("Sign in", "a Proxmox VE administrator"))
-	b.WriteString(row("Container", r.CTID))
-	b.WriteString(row("Version", r.Version))
-	b.WriteString(row("Fingerprint", r.Fingerprint))
-	b.WriteString(row("Valid until", r.ValidUntil.UTC().Format(time.DateOnly)))
-	if r.Name != "" {
-		b.WriteString(row("DNS", "point "+r.Name+" at "+r.Address))
-	}
-	b.WriteString(row("Log", r.LogPath))
-	for _, w := range r.Warnings {
-		b.WriteString("\n  ")
-		b.WriteString(badS.Render(w))
-		b.WriteString("\n")
-	}
-	b.WriteString("\n")
-	b.WriteString(dim.Render("  any key closes"))
-	b.WriteString("\n")
-	return b.String()
-}
-
-func (m *Model) failView() string {
-	var b strings.Builder
-	b.WriteString("  ")
-	b.WriteString(badS.Bold(true).Render("Stopped"))
-	b.WriteString("\n\n")
-	var u *UserError
-	var na *NoAddressError
-	switch {
-	case errors.As(m.fail, &na):
-		u = &na.UserError
-	case errors.As(m.fail, &u):
-	default:
-		u = &UserError{Cause: m.fail.Error()}
-	}
-	b.WriteString(row("Cause", u.Cause))
-	if u.Fix != "" {
-		b.WriteString(row("Do", u.Fix))
-	}
-	if m.runner != nil {
-		b.WriteString(row("Log", m.runner.LogPath))
-		// An unprotected appliance is the failure itself, and the Do row has its fix.
-		if out := m.runner.Outcome(); m.cleaned && out != m.runner.Left() {
-			b.WriteString(row("Left", out))
-		}
-	} else {
-		b.WriteString(row("Changed", "nothing"))
-	}
-	b.WriteString("\n")
-	b.WriteString(dim.Render("  any key closes"))
-	b.WriteString("\n")
-	return b.String()
+	return crumbNetwork
 }

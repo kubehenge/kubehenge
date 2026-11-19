@@ -116,20 +116,16 @@ func TestGatewayPrefillStaysOnTheBridgeSubnet(t *testing.T) {
 	if err := s.Prepare(context.Background()); err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	m := NewModel(s, func(emit func(Event)) *Runner { return h.runner(s, emit) })
-	m.prefillNetwork()
-	if m.a.gateway != "" {
-		t.Fatalf("offered the off-link gateway %q", m.a.gateway)
+	if s.Facts.Gateway != "" {
+		t.Fatalf("offered the off-link gateway %q", s.Facts.Gateway)
 	}
 	h.exec.on("ip -4 route show default", "default via 192.0.2.1 dev vmbr0\n")
 	s2 := h.session(Config{})
 	if err := s2.Prepare(context.Background()); err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	m2 := NewModel(s2, func(emit func(Event)) *Runner { return h.runner(s2, emit) })
-	m2.prefillNetwork()
-	if m2.a.gateway != "192.0.2.1" {
-		t.Fatalf("gateway on the subnet was %q", m2.a.gateway)
+	if s2.Facts.Gateway != "192.0.2.1" {
+		t.Fatalf("gateway on the subnet was %q", s2.Facts.Gateway)
 	}
 }
 
@@ -151,9 +147,9 @@ func TestUnattendedUntrustedCA(t *testing.T) {
 func TestPlainRefusesStaticAddressInUse(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, opts{})
-	h.exec.fail("arping -c 2 -w 3 -I vmbr0 -D 192.0.2.40", 1)
+	h.take("192.0.2.40")
 	_, err := plainOn(t, h, Config{IP: "192.0.2.40/24", Gateway: "192.0.2.1", PVEEntry: "no"})
-	if err == nil || !strings.Contains(err.Error(), "192.0.2.40 answers on the network of vmbr0") || !strings.Contains(err.Error(), "--ip") {
+	if err == nil || !strings.Contains(err.Error(), "192.0.2.40 is in use on vmbr0") || !strings.Contains(err.Error(), "--ip") {
 		t.Fatalf("want the in-use refusal, got %v", err)
 	}
 	if h.exec.changed() != 0 {
@@ -246,22 +242,33 @@ func TestQuestionsTrustCA(t *testing.T) {
 	}
 }
 
-// A duplicate-address answer of arping (exit 1) settles that the address is in use, whatever ping
-// says. Any other arping failure falls back to ping.
-func TestAddressInUseReadsArpingExitCodes(t *testing.T) {
+// An address that answers an ARP probe is in use. One that does not is free only where the node
+// is known to hear the network, and otherwise it is not checked.
+func TestCheckAddressStates(t *testing.T) {
 	t.Parallel()
-	const bridge, address = "vmbr0", "192.0.2.254"
-	duplicate := newHarness(t, opts{})
-	duplicate.exec.fail("arping -c 2 -w 3 -I vmbr0 -D 192.0.2.254", 1)
-	duplicate.exec.fail("ping", 1)
-	if !duplicate.node.AddressInUse(context.Background(), bridge, address) {
-		t.Error("arping found a duplicate and the address was called free")
+	const dev, address, gateway = "vmbr0", "192.0.2.254", "192.0.2.1"
+	ctx := context.Background()
+	h := newHarness(t, opts{})
+	h.take(gateway)
+	if got := h.node.CheckAddress(ctx, address, Link{dev, gateway, true}); got.State != AddrFree {
+		t.Errorf("silent address on a network the node holds: %+v", got)
 	}
-	broken := newHarness(t, opts{})
-	broken.exec.fail("arping -c 2 -w 3 -I vmbr0 -D 192.0.2.254", 2)
-	broken.exec.fail("ping", 1)
-	if broken.node.AddressInUse(context.Background(), bridge, address) {
-		t.Error("an arping that could not run, and a ping nobody answers, called the address in use")
+	if got := h.node.CheckAddress(ctx, address, Link{dev, gateway, false}); got.State != AddrFree {
+		t.Errorf("silent address while the gateway answers: %+v", got)
+	}
+	h.take(address)
+	if got := h.node.CheckAddress(ctx, address, Link{dev, gateway, false}); !got.Taken() {
+		t.Errorf("an answering address was not in use: %+v", got)
+	}
+	h.silent[dev] = true
+	if got := h.node.CheckAddress(ctx, address, Link{dev, gateway, false}); got.State != AddrUnchecked {
+		t.Errorf("a deaf device was trusted: %+v", got)
+	}
+	if got := h.node.CheckAddress(ctx, address, Link{"", gateway, true}); got.State != AddrUnchecked {
+		t.Errorf("no device was checked: %+v", got)
+	}
+	if got := h.node.CheckAddress(ctx, "192.0.2.77", Link{dev, "", false}); got.State != AddrUnchecked {
+		t.Errorf("no witness was trusted: %+v", got)
 	}
 }
 
@@ -300,11 +307,8 @@ func TestStaticPrefillAndAddressInUse(t *testing.T) {
 	if s.Facts.SuggestedIP != "192.0.2.254" || s.Facts.Prefix.Bits() != 24 || s.Facts.Gateway != "192.0.2.1" {
 		t.Fatalf("prefill %s/%d via %s", s.Facts.SuggestedIP, s.Facts.Prefix.Bits(), s.Facts.Gateway)
 	}
-	h.exec.fail("arping -c 2 -w 3 -I vmbr0 -D 192.0.2.254", 1)
-	if !h.node.AddressInUse(context.Background(), "vmbr0", "192.0.2.254") {
-		t.Fatal("an address that answers is free")
-	}
-	if got := h.node.SuggestAddress(context.Background(), "vmbr0", s.Facts); got != "192.0.2.253" {
+	h.take("192.0.2.254")
+	if got, _ := h.node.SuggestAddress(context.Background(), "vmbr0", s.Facts); got != "192.0.2.253" {
 		t.Fatalf("the next suggestion is %q", got)
 	}
 }

@@ -1,0 +1,14 @@
+ ▄▄▄▄▄▄▄▄▄   Kubehenge
+ ▀██▀▀▀██▀   Appliance installer
+  ██   ██    Network · Storage · Summary · Install · Done
+
+  ┃ Proxmox VE API address
+  ┃ > https://pve1.example.com:8006
+
+    API CA file
+    > none
+
+    API certificate
+
+      Check     Do not check
+  enter next  esc back  ctrl+c quit

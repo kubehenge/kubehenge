@@ -79,7 +79,7 @@ func TestValidateOptions(t *testing.T) {
 		{Config{Insecure: true, Certificate: true}, "--proxmox-insecure goes with an install or --upgrade"},
 		{Config{TrustedProxies: []string{"pve"}}, "--trusted-proxy pve: use an IPv4 or IPv6 address"},
 		{Config{NoTrustedProxy: true}, "--no-trusted-proxy goes with --upgrade"},
-		{Config{IP: "192.0.2.5"}, "--ip is dhcp or an IPv4 address with its prefix length"},
+		{Config{IP: "192.0.2.5/99"}, "--ip is dhcp, an IPv4 address with or without /prefix"},
 		{Config{Gateway: "x"}, "--gateway is an IPv4 address"},
 		{Config{IP6: "x"}, "--ip6 is auto, dhcp or an IPv6 address"},
 		{Config{Gateway6: "x", IP6: "2001:db8::5/64"}, "--gateway6 is an IPv6 address"},
@@ -272,10 +272,11 @@ func TestApplianceAddresses(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, opts{})
 	h.exec.on("pct config 100", "net0: name=eth0,bridge=vmbr0,ip=192.0.2.40/24,gw=192.0.2.1,ip6=2001:db8::40/64\n")
-	r := h.runner(h.session(Config{CTID: "100"}), nil)
+	r := h.runner(h.session(Config{CTID: "100", IP6: "2001:db8::40/64"}), nil)
 	if v4, v6 := r.addresses(context.Background()); v4 != "192.0.2.40" || v6 != "2001:db8::40" {
 		t.Errorf("configured: %s %s", v4, v6)
 	}
+	r = h.runner(h.session(Config{CTID: "100", IP6: "auto"}), nil)
 	h.exec.on("pct config 100", "net0: name=eth0,bridge=vmbr0,ip=dhcp,ip6=auto\n")
 	h.exec.on("pct exec 100 -- ip -4 -o addr show dev eth0", "2: eth0    inet 203.0.113.7/24 scope global eth0\n")
 	h.exec.on("pct exec 100 -- ip -6 -o addr show dev eth0", "2: eth0    inet6 2001:db8::99/64 scope global temporary dynamic\n2: eth0    inet6 2001:db8::77/64 scope global dynamic\n")
@@ -533,7 +534,7 @@ func TestNetworkDetection(t *testing.T) {
 	h := newHarness(t, opts{})
 	h.exec.on("pvesh get /nodes/pve1/network", `[{"type":"bridge","iface":"vmbr7"},{"type":"OVSBridge","iface":"vmbr0"},{"type":"bond","iface":"bond0"}]`)
 	h.exec.on("pvesh get /cluster/sdn/vnets", `[{"vnet":"vn1"}]`)
-	if got := strings.Join(h.node.bridges(context.Background()), ", "); got != "vmbr0, vmbr7, vn1" {
+	if got := strings.Join(networkNames(h.node.networks(context.Background())), ", "); got != "vmbr0, vmbr7, vn1" {
 		t.Errorf("bridges: %s", got)
 	}
 	for route, want := range map[string]string{

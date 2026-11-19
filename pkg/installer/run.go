@@ -96,10 +96,13 @@ type Runner struct {
 	unprotected bool
 	done        map[string]bool
 	created     bool
+	// ipv4Only says the container's IPv6 was switched off at its start.
+	ipv4Only bool
 	// removed and stuck say how Cleanup's removal of the container went, fetched that this run
 	// downloaded the template, which stays for the next run.
 	removed     bool
 	stuck       bool
+	kept        bool
 	fetched     bool
 	started     bool
 	partial     string
@@ -292,6 +295,21 @@ func (r *Runner) Made() bool {
 	return r.created
 }
 
+// Stuck reports whether Cleanup's last removal of the container failed.
+func (r *Runner) Stuck() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stuck
+}
+
+// HoldsID reports whether a container of this run still holds its ID: kept, not yet removed, its
+// removal refused, or finished but not protected.
+func (r *Runner) HoldsID() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.kept || r.created || r.stuck || r.unprotected
+}
+
 // Left says what a stopped run left behind that the user must look after, empty for nothing.
 func (r *Runner) Left() string {
 	r.mu.Lock()
@@ -308,6 +326,8 @@ func (r *Runner) Outcome() string {
 	switch {
 	case r.unprotected:
 		return r.unprotectedText()
+	case r.kept:
+		said = "Container " + id + " is kept. Inspect it with: pct enter " + id + ". Remove it with: pct destroy " + id + " --purge"
 	case r.created:
 		said = "Container " + id + " is still there. Remove it with: pct destroy " + id + " --purge"
 	case r.stuck:
@@ -321,6 +341,51 @@ func (r *Runner) Outcome() string {
 		said += " The container template stays on storage " + r.S.Cfg.TemplateStorage + " for the next run."
 	}
 	return said
+}
+
+// Keep leaves the container of a failed run where it is, for inspection. Cleanup then removes only
+// the half-downloaded template.
+func (r *Runner) Keep() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.created {
+		r.kept, r.created = true, false
+	}
+}
+
+// Renet gives the kept container the network settings now in the options, and has the steps from
+// its start on run again. The container is stopped for it, since a running one takes some of the
+// changes only at its next start.
+func (r *Runner) Renet(ctx context.Context) error {
+	c := &r.S.Cfg
+	_, _ = r.pct(ctx, "stop", c.CTID)
+	// A refused change leaves the container stopped, so the next try starts it again either way.
+	r.Redo(stepStartName)
+	args := []string{"set", c.CTID, "--net0", c.containerNet()}
+	if c.DNS != "" {
+		args = append(args, "--nameserver", strings.ReplaceAll(c.DNS, ",", " "))
+	} else {
+		// No name servers given means the node's, which the container uses once its own are gone.
+		args = append(args, "--delete", "nameserver")
+	}
+	if _, err := r.pct(ctx, args...); err != nil {
+		return settingErr(settingNetwork, "Proxmox VE would not change container "+c.CTID+"'s network", "See "+r.LogPath+" for its message")
+	}
+	return nil
+}
+
+// Redo has the step named and every step after it run again, for a setting the container takes as
+// it is.
+func (r *Runner) Redo(from string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	again := false
+	for _, st := range r.Steps() {
+		again = again || st.ID == from
+		if again {
+			delete(r.done, st.ID)
+		}
+	}
 }
 
 // Cleanup removes what a failed run made, so running it again starts clean. It is safe to call
@@ -340,7 +405,7 @@ func (r *Runner) Cleanup(ctx context.Context) {
 	_, _ = r.pct(ctx, "stop", id)
 	_, err := r.pct(ctx, "destroy", id, "--purge", "--destroy-unreferenced-disks", "1")
 	r.removed, r.stuck = err == nil, err != nil
-	r.created, r.started = false, false
+	r.created, r.started, r.ipv4Only = false, false, false
 	for _, s := range []string{"create", "start", "address", "network", "certificate", "install", "service", "updates", "entry"} {
 		delete(r.done, s)
 	}
@@ -441,7 +506,7 @@ func (r *Runner) stepTofu(ctx context.Context) error {
 func (r *Runner) templatePath(ctx context.Context) (string, error) {
 	out, err := r.Exec.Run(ctx, "pvesm", "path", r.S.Cfg.TemplateStorage+":vztmpl/"+r.template)
 	if err != nil {
-		return "", userErr("storage "+r.S.Cfg.TemplateStorage+" gives no path for the container template", "Name another with --template-storage")
+		return "", settingErr(settingTemplate, "storage "+r.S.Cfg.TemplateStorage+" gives no path for the container template", "Name another with --template-storage")
 	}
 	return strings.TrimSpace(out), nil
 }
@@ -515,12 +580,12 @@ func (r *Runner) needSpace(ctx context.Context, dir string, kib int64, what, fix
 func (r *Runner) stepCreate(ctx context.Context) error {
 	c := &r.S.Cfg
 	if !r.S.Node.IDFree(ctx, c.CTID) {
-		return userErr(fmt.Sprintf("id %s was taken by another guest while the installer ran", c.CTID), "Run it again, or name a free id with --ctid")
+		return settingErr(settingCTID, fmt.Sprintf("ID %s was taken by another guest during the install", c.CTID), "Run it again, or name a free ID with --ctid")
 	}
 	args := []string{
 		"create", c.CTID, c.TemplateStorage + ":vztmpl/" + r.template,
-		"--hostname", c.Hostname, "--cores", "2", "--memory", "1024", "--swap", "512",
-		"--rootfs", c.Storage + ":8", "--mp0", c.Storage + ":1,mp=" + keyDir + ",backup=0",
+		"--hostname", c.Hostname, "--cores", ctCores, "--memory", ctMemoryMiB, "--swap", ctSwapMiB,
+		"--rootfs", c.Storage + ":" + ctDiskGiB, "--mp0", c.Storage + ":" + ctKeysGiB + ",mp=" + keyDir + ",backup=0",
 		"--net0", c.containerNet(),
 	}
 	if c.DNS != "" {
@@ -533,7 +598,7 @@ func (r *Runner) stepCreate(ctx context.Context) error {
 	}
 	out, err := r.pct(ctx, args...)
 	if err != nil && idTaken(c.CTID, out, err) {
-		return userErr(fmt.Sprintf("id %s was taken by another guest while the installer ran", c.CTID), "Run it again, or name a free id with --ctid")
+		return settingErr(settingCTID, fmt.Sprintf("ID %s was taken by another guest during the install", c.CTID), "Run it again, or name a free ID with --ctid")
 	}
 	// Past Proxmox VE's existence check the id is locked for this create alone. Whatever stopped
 	// the create after that, a cancel included, what it left is this run's to remove.
@@ -560,9 +625,42 @@ func idTaken(id, out string, err error) bool {
 	return regexp.MustCompile(`\b(?:CT|VM) ` + q + ` already exists on node\b|/pve-config-` + q + `\.lock' - got timeout`).MatchString(text)
 }
 
+// ipv4OnlyScript switches IPv6 off in the container, now and at every boot. Without it the kernel
+// takes an address from the router's advertisements whatever the container's configuration says.
+const ipv4OnlyScript = `
+set -e
+mkdir -p /etc/sysctl.d
+printf 'net.ipv6.conf.all.disable_ipv6 = 1\nnet.ipv6.conf.default.disable_ipv6 = 1\n' > /etc/sysctl.d/60-kubehenge-ipv4-only.conf
+for scope in all default eth0; do
+    echo 1 > "/proc/sys/net/ipv6/conf/$scope/disable_ipv6"
+done
+`
+
+// ipv6OnScript undoes ipv4OnlyScript, for a container switched IPv6 off whose network now has IPv6.
+const ipv6OnScript = `
+set -e
+rm -f /etc/sysctl.d/60-kubehenge-ipv4-only.conf
+for scope in all default eth0; do
+    echo 0 > "/proc/sys/net/ipv6/conf/$scope/disable_ipv6"
+done
+`
+
 func (r *Runner) stepStart(ctx context.Context) error {
-	if _, err := r.pct(ctx, "start", r.S.Cfg.CTID); err != nil {
-		return userErr("container "+r.S.Cfg.CTID+" did not start", "See "+r.LogPath+" for Proxmox VE's message")
+	c := &r.S.Cfg
+	if _, err := r.pct(ctx, "start", c.CTID); err != nil {
+		return userErr("container "+c.CTID+" did not start", "See "+r.LogPath+" for Proxmox VE's message")
+	}
+	switch {
+	case c.IP6 == "":
+		if _, err := r.inCT(ctx, "sh", "-c", ipv4OnlyScript); err != nil {
+			return userErr("container "+c.CTID+" would not switch IPv6 off", "See "+r.LogPath+" for the command's message")
+		}
+		r.ipv4Only = true
+	case r.ipv4Only:
+		if _, err := r.inCT(ctx, "sh", "-c", ipv6OnScript); err != nil {
+			return userErr("container "+c.CTID+" would not switch IPv6 on", "See "+r.LogPath+" for the command's message")
+		}
+		r.ipv4Only = false
 	}
 	r.finish("start", "")
 	return nil
@@ -579,6 +677,9 @@ func (r *Runner) addresses(ctx context.Context) (string, string) {
 		if m := regexp.MustCompile(`\binet ([0-9.]+)`).FindStringSubmatch(out); m != nil {
 			v4 = m[1]
 		}
+	}
+	if r.S.Cfg.IP6 == "" {
+		return v4, ""
 	}
 	if m := cfgIP6RE.FindStringSubmatch(conf); m != nil {
 		v6 = m[1]
@@ -610,18 +711,20 @@ func (r *Runner) stepAddress(ctx context.Context) error {
 	if r.address == "" && r.address6 == "" {
 		if c.IP == optNone {
 			return &NoAddressError{
-				Cause: "container " + c.CTID + " got no IPv6 address",
-				Fix:   "Check that --vlan is the right one and that the router advertises a prefix or a DHCPv6 server answers on it, or give --ip6 and --gateway6",
+				Cause:   "container " + c.CTID + " got no IPv6 address",
+				Fix:     "Check --vlan and that a router or DHCPv6 server answers on it, or give --ip6 and --gateway6",
+				Setting: settingV6Mode,
 			}
 		}
 		return &NoAddressError{
-			DHCP:  c.IP == optDHCP,
-			Cause: "container " + c.CTID + " got no IPv4 address",
-			Fix:   "Check that --vlan is the right one and that a DHCP server answers on it, or give --ip <address>/<prefix> --gateway <address>",
+			DHCP:    c.IP == optDHCP,
+			Cause:   "container " + c.CTID + " got no IPv4 address",
+			Fix:     "Check --vlan and that a DHCP server answers on it, or give --ip <address>/<prefix> --gateway <address>",
+			Setting: settingV4Mode,
 		}
 	}
 	if c.IP6 != "" && r.address6 == "" {
-		r.warnings = append(r.warnings, "container "+c.CTID+" has no IPv6 address yet, so its certificate names its IPv4 address only. Check --ip6, then run: sh install.sh --certificate --ctid "+c.CTID)
+		r.warnings = append(r.warnings, "container "+c.CTID+" has no IPv6 address, so its certificate names IPv4 only. Fix IPv6, then run: sh install.sh --certificate --ctid "+c.CTID)
 	}
 	shown := r.address
 	if shown == "" {
@@ -646,50 +749,122 @@ func (r *Runner) containerGateway(ctx context.Context) string {
 	return ""
 }
 
+// stepNetwork waits for the container's link, then tests what the appliance needs: a name of the
+// Proxmox VE API that resolves and a connection to its port, retried for netTries pauses. A gateway
+// that drops ping is no fault while the API connects. Only a failure is diagnosed.
 func (r *Runner) stepNetwork(ctx context.Context) error {
 	c := &r.S.Cfg
-	if gw := r.containerGateway(ctx); gw != "" {
-		_, err := r.inCT(ctx, "sh", "-c", `command -v ping > /dev/null || exit 127; ping -c 1 -W 3 "$1" > /dev/null`, "sh", gw)
-		var ce *CmdError
-		if err != nil && errors.As(err, &ce) && ce.Code != 127 {
-			option := "--gateway"
-			if strings.Contains(gw, ":") {
-				option = "--gateway6"
-			}
-			return userErr(fmt.Sprintf("container %s at %s cannot reach its gateway %s", c.CTID, r.address, gw),
-				"Check that the VLAN matches the network of the address, and that "+option+" is on it")
-		}
+	if err := r.waitLink(ctx); err != nil {
+		return err
 	}
 	hosts := r.apiHostsOrdered()
-	reachable := ""
+	_, port, _ := splitAPI(c.ProxmoxURL)
+	reachable, resolved := "", false
+	for try := range netTries {
+		if reachable, resolved = r.reachAPI(ctx, hosts, port); reachable != "" {
+			break
+		}
+		if try < netTries-1 {
+			if err := r.pause(ctx); err != nil {
+				return err
+			}
+		}
+	}
+	if reachable == "" && !resolved {
+		return settingErr(settingDNS, "the container cannot resolve any name of the Proxmox VE API (tried "+strings.Join(hosts, ", ")+")",
+			"Give --dns name servers the container reaches, or a --proxmox-url address the certificate covers")
+	}
+	if reachable == "" {
+		return r.networkFailure(ctx, hosts, port)
+	}
+	if reachable != hosts[0] {
+		r.S.noticef("the container cannot use %s, so the appliance and the clusters reach the Proxmox VE API at %s", hosts[0], reachable)
+		c.ProxmoxURL = APIURL(reachable)
+	}
+	r.finish("network", "Proxmox VE API reachable")
+	return nil
+}
+
+// waitLink waits for the container's interface to have a carrier.
+func (r *Runner) waitLink(ctx context.Context) error {
+	for try := range netTries {
+		if _, err := r.inCT(ctx, "sh", "-c", "ip -o link show dev eth0 | grep -q LOWER_UP"); err == nil {
+			return nil
+		}
+		if try < netTries-1 {
+			if err := r.pause(ctx); err != nil {
+				return err
+			}
+		}
+	}
+	return settingErr(settingNetwork, "container "+r.S.Cfg.CTID+"'s network interface has no link", "Check --bridge, --vlan and the uplink of the network")
+}
+
+// reachAPI tries each name of the API in order and returns the first one that resolves and takes a
+// connection on the port. The second result is whether any name resolved.
+func (r *Runner) reachAPI(ctx context.Context, hosts []string, port string) (string, bool) {
+	resolved := false
 	for _, h := range hosts {
 		if !isAddress(h) {
 			if _, err := r.inCT(ctx, "getent", "hosts", h); err != nil {
 				continue
 			}
 		}
-		reachable = h
-		break
-	}
-	if reachable == "" {
-		return userErr("the container cannot resolve any name of the Proxmox VE API (tried "+strings.Join(hosts, ", ")+")",
-			"Give an address its certificate is valid for with --proxmox-url, or name servers the container reaches with --dns")
-	}
-	if reachable != hosts[0] {
-		r.S.noticef("the container cannot resolve %s, so the appliance and the clusters reach the Proxmox VE API at %s", hosts[0], reachable)
-		c.ProxmoxURL = APIURL(reachable)
-	}
-	_, port, _ := splitAPI(c.ProxmoxURL)
-	if _, err := r.inCT(ctx, "timeout", "5", "bash", "-c", `exec 3<>"/dev/tcp/$1/$2"`, "bash", reachable, port); err != nil {
-		hint := ""
-		if r.containerGateway(ctx) == "" {
-			hint = " The container has no default route, so give --gateway."
+		resolved = true
+		if _, err := r.inCT(ctx, "timeout", "5", "bash", "-c", `exec 3<>"/dev/tcp/$1/$2"`, "bash", h, port); err == nil {
+			return h, true
 		}
-		return userErr(fmt.Sprintf("container %s cannot connect to the Proxmox VE API at %s on port %s", c.CTID, reachable, port),
-			"Check the node's firewall for that port and pveproxy's LISTEN_IP in /etc/default/pveproxy."+hint)
 	}
-	r.finish("network", "gateway and API reachable")
-	return nil
+	return "", resolved
+}
+
+// neighbourRE reads the state of an entry of the container's neighbour table.
+var neighbourRE = regexp.MustCompile(`\b(REACHABLE|STALE|DELAY|PERMANENT|PROBE|FAILED|INCOMPLETE)\b`)
+
+// networkFailure explains why the API cannot be reached although a name of it resolves. It pings
+// the gateway three times, and when that fails reads the container's neighbour table, which shows
+// whether the gateway answered ARP.
+func (r *Runner) networkFailure(ctx context.Context, hosts []string, port string) error {
+	c := &r.S.Cfg
+	gw := r.containerGateway(ctx)
+	if gw == "" {
+		setting, fix := r.noRouteFix()
+		return settingErr(setting, fmt.Sprintf("container %s has no default route, so it cannot connect to the Proxmox VE API at %s on port %s", c.CTID, hosts[0], port), fix)
+	}
+	ping, state := "its gateway did not answer ping", ""
+	if _, err := r.inCT(ctx, "ping", "-c", "3", "-W", "2", gw); err == nil {
+		// A gateway that answers ping has answered ARP, whatever the neighbour table shows.
+		ping, state = "its gateway answers ping", "REACHABLE"
+	} else if out, err := r.inCT(ctx, "ip", "neigh", "show", gw, "dev", "eth0"); err == nil {
+		state = neighbourRE.FindString(out)
+	}
+	switch state {
+	case "", "FAILED", "INCOMPLETE":
+		address, probe := r.address, "ARP"
+		if strings.Contains(gw, ":") {
+			address, probe = r.address6, "neighbour discovery"
+		}
+		return settingErr(settingNetwork, fmt.Sprintf("container %s at %s cannot reach gateway %s (no answer to %s, %s)", c.CTID, address, gw, probe, ping),
+			"Check that --bridge and --vlan carry the address and that the gateway is on that network")
+	}
+	return settingErr(settingAPI, fmt.Sprintf("container %s reaches its gateway but not the Proxmox VE API at %s", c.CTID, net.JoinHostPort(hosts[0], port)),
+		"Check the route and firewall to port "+port+", LISTEN_IP in /etc/default/pveproxy, or give another URL with --proxmox-url")
+}
+
+// noRouteFix is the setting and the fix for a container without a default route, by how it gets
+// its address: a gateway to give for a static one, else the network whose DHCP server or router
+// should have sent one.
+func (r *Runner) noRouteFix() (string, string) {
+	c := &r.S.Cfg
+	switch {
+	case c.IP != optNone && modeOf(c.IP) == optStatic:
+		return settingV4Gateway, "Give the container a gateway with --gateway"
+	case c.IP != optNone:
+		return settingNetwork, "Check that the DHCP server on --bridge and --vlan sends a gateway, or give --ip <address>/<prefix> --gateway <address>"
+	case modeOf(c.IP6) == optStatic:
+		return settingV6Gateway, "Give the container an IPv6 gateway with --gateway6"
+	}
+	return settingV6Mode, "Check that a router advertises on --bridge and --vlan, or give --ip6 and --gateway6"
 }
 
 // apiHostsOrdered returns the chosen API host, then the other candidates in rank order.

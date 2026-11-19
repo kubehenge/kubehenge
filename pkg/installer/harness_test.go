@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -162,7 +163,12 @@ type harness struct {
 	srv     *httptest.Server
 	chain   []*x509.Certificate
 	hits    int
+	// taken holds the addresses that answer an ARP probe, and silent the devices that answer none.
+	taken, silent map[string]bool
 }
+
+// take makes the address answer ARP probes.
+func (h *harness) take(address string) { h.taken[address] = true }
 
 func newKey(t *testing.T) *ecdsa.PrivateKey {
 	t.Helper()
@@ -250,7 +256,7 @@ func storageTable(n int, kind string) string {
 func newHarness(t *testing.T, o opts) *harness { //nolint:gocritic // tests pass an opts literal.
 	t.Helper()
 	root, work, dir := t.TempDir(), t.TempDir(), t.TempDir()
-	h := &harness{t: t, exec: &fakeExec{}, root: root, work: work, dir: dir}
+	h := &harness{t: t, exec: &fakeExec{}, root: root, work: work, dir: dir, taken: map[string]bool{}, silent: map[string]bool{}}
 	if o.rootStorages == 0 {
 		o.rootStorages = 1
 	}
@@ -357,14 +363,14 @@ func newHarness(t *testing.T, o opts) *harness { //nolint:gocritic // tests pass
 			return nil, errors.New("no such host")
 		},
 		Dial: func(context.Context, string, string) ([]*x509.Certificate, error) { return h.chain, nil },
+		Probe: func(_ context.Context, dev string, target netip.Addr) (bool, error) {
+			return h.taken[target.String()] && !h.silent[dev], nil
+		},
 	}
 	return h
 }
 
 func (h *harness) session(cfg Config) *Session { //nolint:gocritic // tests pass a Config literal.
-	if cfg.Hostname == "" {
-		cfg.Hostname = DefaultHostname
-	}
 	cfg.Tofu = h.tofu
 	return &Session{Node: h.node, Cfg: cfg}
 }
@@ -377,6 +383,9 @@ func (h *harness) runner(s *Session, emit func(Event)) *Runner {
 		Sleep: func(time.Duration) {}, Now: func() time.Time { return time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC) },
 		TofuV: "1.0.0", TofuSH: h.tofuSum,
 		Realms:  func(context.Context, string, string, []byte) int { return http.StatusOK },
-		LogPath: "/var/log/kubehenge-install.log", Pin: h.pin,
+		LogPath: testLogPath, Pin: h.pin,
 	}
 }
+
+// testLogPath is a run's log, named as openLog names it.
+const testLogPath = LogDir + "/" + LogPrefix + "20261112-120000-1234567890.log"

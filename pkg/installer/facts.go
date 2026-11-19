@@ -37,6 +37,7 @@ type Facts struct {
 	Node          string
 	FQDN          string
 	Bridges       []string
+	Networks      []Network
 	DefaultBridge string
 	// DefaultVLAN is the tag of the VLAN device (such as vmbr0.20) the default route leaves by.
 	DefaultVLAN string
@@ -44,9 +45,18 @@ type Facts struct {
 	VLANFromRoute bool
 	// NodeDHCP is whether the node's own bridge address comes from DHCP, which is the best
 	// sign that its network has a DHCP server.
-	NodeDHCP         bool
-	Prefix           netip.Prefix
-	Gateway          string
+	NodeDHCP bool
+	Prefix   netip.Prefix
+	Gateway  string
+	// GatewayFrom says where Gateway was read, empty for none.
+	GatewayFrom string
+	// RouteGateway is the gateway of this node's own default route, whichever network the container
+	// goes on.
+	RouteGateway string
+	// Device is what the node asks the container's network through, and NodeHolds whether it holds an
+	// address there of its own.
+	Device           string
+	NodeHolds        bool
 	DNS              []string
 	LoopbackDNSOnly  bool
 	RootStorages     []Storage
@@ -56,6 +66,7 @@ type Facts struct {
 	NextID           string
 	Existing         []Appliance
 	SuggestedIP      string
+	SuggestedCheck   AddrCheck
 	Candidates       []APICandidate
 	Members          []Member
 	// TemplateTight holds the storages that take templates but have under 200 MiB free.
@@ -81,6 +92,8 @@ type Node struct {
 	LookupHost func(ctx context.Context, name string) ([]string, error)
 	// Dial returns the certificates the API at host:port serves.
 	Dial func(ctx context.Context, host, port string) ([]*x509.Certificate, error)
+	// Probe sends an ARP probe for an address on a device and reports whether anything answered.
+	Probe func(ctx context.Context, dev string, target netip.Addr) (bool, error)
 }
 
 // workKiB is what OpenTofu's archive and its copy need beside the release that install.sh unpacked
@@ -225,9 +238,10 @@ func (n *Node) Detect(ctx context.Context, cfg *Config) (*Facts, error) {
 	if out, err := n.run(ctx, "hostname", "-f"); err == nil {
 		f.FQDN = strings.ToLower(strings.TrimSpace(out))
 	}
-	f.Bridges = n.bridges(ctx)
+	f.Networks = n.networks(ctx)
+	f.Bridges = networkNames(f.Networks)
 	gw, dev := n.defaultRoute(ctx)
-	f.Gateway = gw
+	f.RouteGateway = gw
 	f.DefaultBridge = pickDefaultBridge(f.Bridges, dev)
 	if bridge, tag := vlanOfDevice(f.Bridges, dev); bridge != "" {
 		f.DefaultBridge, f.DefaultVLAN = bridge, tag
@@ -262,14 +276,8 @@ func (n *Node) Detect(ctx context.Context, cfg *Config) (*Facts, error) {
 		bridge = f.DefaultBridge
 	}
 	if bridge != "" {
-		dev := f.addressDevice(bridge, cfg.VLAN)
-		f.Prefix = n.bridgeAddress4(ctx, dev)
-		f.NodeDHCP = n.bridgeIsDHCP(dev)
-		if f.Prefix.IsValid() {
-			f.SuggestedIP = n.SuggestAddress(ctx, dev, f)
-		}
 		f.Members = n.clusterAddresses(ctx)
-		f.Candidates = n.APICandidates(ctx, f, dev)
+		n.refreshNetwork(ctx, f, bridge, cfg.VLAN)
 	}
 	return f, nil
 }
@@ -282,15 +290,6 @@ func vlanOfDevice(bridges []string, dev string) (string, string) {
 		return "", ""
 	}
 	return dev[:i], dev[i+1:]
-}
-
-// addressDevice is the device that holds the node's address on the container's network: the
-// bridge, else the bridge's VLAN device where the node's default route leaves by it.
-func (f *Facts) addressDevice(bridge, vlan string) string {
-	if f.DefaultVLAN != "" && bridge == f.DefaultBridge && vlan == f.DefaultVLAN {
-		return bridge + "." + vlan
-	}
-	return bridge
 }
 
 func shortText(short []Storage) string {
@@ -313,40 +312,19 @@ func pickDefaultBridge(bridges []string, routeDev string) string {
 	return ""
 }
 
-// AddressInUse probes the bridge for the address: the neighbour table first, then an ARP
-// duplicate-address probe, else a ping where arping is missing.
-func (n *Node) AddressInUse(ctx context.Context, bridge, address string) bool {
-	if out, err := n.run(ctx, "ip", "neigh", "show", address, "dev", bridge); err == nil {
-		for _, state := range []string{"REACHABLE", "STALE", "DELAY", "PERMANENT", "PROBE"} {
-			if strings.Contains(out, state) {
-				return true
-			}
-		}
-	}
-	_, err := n.run(ctx, "arping", "-c", "2", "-w", "3", "-I", bridge, "-D", address)
-	if err == nil {
-		return false
-	}
-	var ce *CmdError
-	if errors.As(err, &ce) && ce.Code == 1 {
-		return true
-	}
-	_, err = n.run(ctx, "ping", "-c", "1", "-W", "1", "-I", bridge, address)
-	return err == nil
-}
-
-// SuggestAddress returns a free-looking address in the bridge's subnet, empty for none. It walks
-// down from the top of the subnet, past the gateway, the node and every known neighbour.
-func (n *Node) SuggestAddress(ctx context.Context, bridge string, f *Facts) string {
+// SuggestAddress returns a free-looking address in the subnet of the device, empty for none, and how
+// it was checked. It walks down from the top of the subnet, past the gateway, the node and every
+// known neighbour.
+func (n *Node) SuggestAddress(ctx context.Context, dev string, f *Facts) (string, AddrCheck) {
 	prefix := f.Prefix.Masked()
 	if prefix.Bits() > maxSuggestBits {
-		return ""
+		return "", AddrCheck{}
 	}
 	skip := map[netip.Addr]bool{f.Prefix.Addr(): true}
 	if g, err := netip.ParseAddr(f.Gateway); err == nil {
 		skip[g] = true
 	}
-	if out, err := n.run(ctx, "ip", "-4", "neigh", "show", "dev", bridge); err == nil {
+	if out, err := n.run(ctx, "ip", "-4", "neigh", "show", "dev", dev); err == nil {
 		for line := range strings.SplitSeq(out, "\n") {
 			if fields := strings.Fields(line); len(fields) > 0 {
 				if a, err := netip.ParseAddr(fields[0]); err == nil {
@@ -362,11 +340,11 @@ func (n *Node) SuggestAddress(ctx context.Context, bridge string, f *Facts) stri
 			continue
 		}
 		tries++
-		if !n.AddressInUse(ctx, bridge, a.String()) {
-			return a.String()
+		if check := n.CheckAddress(ctx, a.String(), Link{dev, f.Gateway, f.NodeHolds}); !check.Taken() {
+			return a.String(), check
 		}
 	}
-	return ""
+	return "", AddrCheck{}
 }
 
 func (n *Node) path(p string) string { return filepath.Join(n.Root, p) }
@@ -381,33 +359,6 @@ func (n *Node) readFile(p string) ([]byte, error) {
 
 func (n *Node) run(ctx context.Context, name string, args ...string) (string, error) {
 	return n.Exec.Run(ctx, name, args...) //nolint:wrapcheck // the caller names the command, and CmdError carries it.
-}
-
-// bridges lists the bridges, Open vSwitch bridges and SDN VNets a container can attach to.
-func (n *Node) bridges(ctx context.Context) []string {
-	seen := map[string]bool{}
-	var list []string
-	add := func(name string) {
-		if name != "" && !seen[name] {
-			seen[name] = true
-			list = append(list, name)
-		}
-	}
-	if out, err := n.run(ctx, "pvesh", "get", "/nodes/"+n.Hostname+"/network", "--output-format", "json"); err == nil {
-		for _, m := range jsonList(out) {
-			if t := str(m, "type"); t == "bridge" || t == "OVSBridge" {
-				add(str(m, "iface"))
-			}
-		}
-	}
-	// Where SDN is not set up, the call fails and there are none.
-	if out, err := n.run(ctx, "pvesh", "get", "/cluster/sdn/vnets", "--output-format", "json"); err == nil {
-		for _, m := range jsonList(out) {
-			add(str(m, "vnet"))
-		}
-	}
-	slices.Sort(list)
-	return list
 }
 
 func (n *Node) defaultRoute(ctx context.Context) (string, string) {

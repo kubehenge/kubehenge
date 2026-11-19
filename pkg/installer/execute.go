@@ -2,6 +2,7 @@ package installer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -52,8 +53,9 @@ func executeOn(ctx context.Context, env *Env, cfg *Config, streams ioStreams, in
 	}
 
 	plain := !interactive || cfg.Plain || !CanDrawScreen(term)
-	if !plain && cfg.IP != "" && cfg.PVEEntry != "" {
-		// Every flag the road needs is given: detect once, and ask only what a tie leaves open.
+	if !plain && cfg.Yes && cfg.IP != "" && cfg.PVEEntry != "" {
+		// Every flag the road needs is given and the summary needs no yes: detect once, and ask only
+		// what a tie leaves open.
 		if err = s.detect(ctx); err != nil {
 			return err
 		}
@@ -62,34 +64,62 @@ func executeOn(ctx context.Context, env *Env, cfg *Config, streams ioStreams, in
 	if plain {
 		return RunPlain(ctx, s, newRunner, stdout)
 	}
+	s.AnswersPath = env.AnswersPath
+	if s.Facts == nil && s.AnswersPath != "" {
+		s.Saved = loadAnswers(s.AnswersPath)
+	}
 	model := NewModel(s, newRunner)
 	prog := tea.NewProgram(model, append([]tea.ProgramOption{tea.WithInput(stdin), tea.WithOutput(stdout), tea.WithContext(ctx)}, streams.size...)...)
 	_, err = prog.Run()
+	if errors.Is(err, tea.ErrProgramPanic) {
+		// The user never chose to remove what a crashed installer made.
+		model.keep = true
+	}
 	cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 	defer cancel()
 	model.Shutdown(cleanCtx)
+	return model.ended(err, streams)
+}
+
+// ended is what an interactive install returns once the program ended with err: the run's error
+// with what is left of it, or nil with the dry run's plan or the cancel printed. An install that
+// stopped with answers given also prints the command that runs it again.
+func (m *Model) ended(err error, streams ioStreams) error {
 	if err != nil {
-		if model.Finished() {
+		if m.Finished() {
 			// A signal on the end screen, such as a dropped SSH session, ends a finished install.
 			return nil
 		}
-		if left := model.Left(); left != "" {
-			return fmt.Errorf("run: %w. %s", err, left)
+		m.repeatOnStop(streams)
+		if outcome := m.Outcome(); outcome != "" {
+			return fmt.Errorf("run: %w. %s", err, outcome)
 		}
 		return fmt.Errorf("run: %w", err)
 	}
-	outcome := model.Outcome()
-	if model.Cancelled() {
+	if m.DryRun() {
+		_, _ = fmt.Fprint(streams.out, dryRunHeading+m.S.PlanText(true))
+		return nil
+	}
+	m.repeatOnStop(streams)
+	outcome := m.Outcome()
+	if m.Cancelled() {
 		if outcome == "" {
 			outcome = "Nothing was changed."
 		}
 		_, _ = fmt.Fprintln(streams.errs, "Cancelled. "+outcome)
 		return nil
 	}
-	if err = model.Err(); err != nil && outcome != "" && outcome != model.Left() {
+	if err = m.Err(); err != nil && outcome != "" && outcome != m.Left() {
 		return fmt.Errorf("%w. %s", err, outcome)
 	}
 	return err
+}
+
+// repeatOnStop prints the command that runs an install again, once it stopped with answers given.
+func (m *Model) repeatOnStop(streams ioStreams) {
+	if !m.Finished() && (m.runner != nil || len(m.answered) > 0) {
+		printRepeat(streams.errs, &m.S.Cfg, m.runner)
+	}
 }
 
 // CanDrawScreen reports whether a terminal of this TERM value can show the full-screen installer.
@@ -127,5 +157,7 @@ func (s *Session) detect(ctx context.Context) error {
 	if err := s.FillStorages(AskTies); err != nil {
 		return err
 	}
+	// Restored before the API is checked, so that a failed check still offers the restored answers.
+	s.Restore(ctx, s.Saved)
 	return s.ResolveAPI(ctx, AskTies)
 }
