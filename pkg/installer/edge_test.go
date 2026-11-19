@@ -758,7 +758,7 @@ func TestServedLeafAloneIsPinned(t *testing.T) {
 		t.Fatal("a leaf served alone was not marked")
 	}
 	err := s.UnattendedCheck()
-	if err == nil || !strings.Contains(err.Error(), "fail when that is renewed") {
+	if err == nil || !strings.Contains(err.Error(), "fails when the certificate is renewed") {
 		t.Fatalf("the refusal does not say the pin breaks at renewal: %v", err)
 	}
 }
