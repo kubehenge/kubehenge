@@ -321,7 +321,7 @@ func (m *Model) runView() string {
 		}
 	}
 	stop := "  ctrl+c stops and removes the container"
-	if m.S.Cfg.KeepFailed {
+	if m.keeps() {
 		stop = "  ctrl+c stops and keeps the container"
 	}
 	b.WriteString("\n")

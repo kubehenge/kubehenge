@@ -669,7 +669,8 @@ func TestFinishedApplianceIsLeftAlone(t *testing.T) {
 	}
 }
 
-// Ctrl+C on the failure screen keeps the failure and says what was undone and what stays.
+// Ctrl+C on the failure screen keeps the failure and the container that screen said is kept, and
+// says what stays.
 func TestCtrlCOnFailureKeepsTheFailure(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, opts{dhcp: true, rootStorages: 2})
@@ -691,9 +692,12 @@ func TestCtrlCOnFailureKeepsTheFailure(t *testing.T) {
 	}
 	_, _ = typed.Write([]byte{0x03})
 	err := <-ended
-	if err == nil || !strings.Contains(err.Error(), "did not start") || !strings.Contains(err.Error(), "Container 100 was removed.") ||
+	if err == nil || !strings.Contains(err.Error(), "did not start") || !strings.Contains(err.Error(), "Container 100 is kept.") ||
 		!strings.Contains(err.Error(), "template stays on storage local-lvm") || errs.Len() != 0 {
 		t.Fatalf("Ctrl+C on the failure screen: err %v, said %q", err, errs.String())
+	}
+	if n := h.exec.count("pct destroy"); n != 0 {
+		t.Fatalf("Ctrl+C on the failure screen removed the container: %v", h.exec.calls)
 	}
 }
 

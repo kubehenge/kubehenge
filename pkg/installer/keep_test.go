@@ -90,6 +90,32 @@ func TestUIKeepFailedHoldsForCtrlCDuringTheRun(t *testing.T) {
 	}
 }
 
+// Ctrl+C in a run tried again keeps the container the failure screen said is kept, and the run
+// screen says so.
+func TestUICtrlCDuringARetriedRunKeepsTheContainer(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true})
+	h.exec.on("pct exec 100 -- ip -4 -o addr show dev eth0", "")
+	u := startUI(t, h, Config{PVEEntry: "no"})
+	u.toSummary()
+	u.enter(1)
+	u.waitFor("Quit and remove it")
+	tries := h.exec.count("pct exec 100 -- ip -4 -o addr show")
+	h.exec.stall("pct exec 100 -- ip -4 -o addr show dev eth0")
+	u.down(1)
+	u.enter(1)
+	u.waitFor("ctrl+c stops and keeps the container")
+	for h.exec.count("pct exec 100 -- ip -4 -o addr show") == tries {
+		time.Sleep(5 * time.Millisecond)
+	}
+	u.press(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	m := u.finish()
+	m.Shutdown(context.Background())
+	if h.exec.count("pct destroy") != 0 || !strings.Contains(m.Outcome(), "is kept") {
+		t.Fatalf("Ctrl+C in the retried run removed the container: %q %v", m.Outcome(), h.exec.calls)
+	}
+}
+
 // On a terminal, a full set of flags without --yes still shows the summary before anything is made.
 func TestTerminalAsksForTheSummaryWithoutYes(t *testing.T) {
 	t.Parallel()

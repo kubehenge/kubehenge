@@ -212,12 +212,15 @@ func (m *Model) Shutdown(ctx context.Context) {
 		<-m.running
 	}
 	if m.runner != nil {
-		if m.S.Cfg.KeepFailed || m.keep {
+		if m.keeps() {
 			m.runner.Keep()
 		}
 		m.runner.Cleanup(ctx)
 	}
 }
+
+// keeps says a stopped run keeps its container: --keep-failed asks it, or a failure screen said so.
+func (m *Model) keeps() bool { return m.S.Cfg.KeepFailed || m.keep }
 
 // Init starts the detection behind one spinner.
 func (m *Model) Init() tea.Cmd {
@@ -308,7 +311,7 @@ func (m *Model) onKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	case m.stage == stEnd:
 		return tea.Quit, true
 	case key == keyLeave && m.stage == stFail:
-		return m.quitAndRemove(), true
+		return m.quitAndKeep(), true
 	case key == keyLeave:
 		return m.leaveKey(), true
 	case key == "esc" && (m.stage == stAsk || m.stage == stList || m.stage == stConfirm):

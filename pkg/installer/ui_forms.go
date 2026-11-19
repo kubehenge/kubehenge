@@ -925,13 +925,21 @@ func (m *Model) onDone(d doneMsg) (*Model, tea.Cmd) {
 	}
 	if m.ctx.Err() != nil {
 		m.cancelled = true
-		if m.S.Cfg.KeepFailed {
+		if m.keeps() {
 			m.runner.Keep()
 		}
 		cmd := m.cleanCmd(tea.Quit)
 		return m, cmd
 	}
 	return m.failWith(d.err)
+}
+
+// quitAndKeep leaves the container of a failed run where it is.
+func (m *Model) quitAndKeep() tea.Cmd {
+	if m.runner != nil {
+		m.runner.Keep()
+	}
+	return tea.Quit
 }
 
 // quitAndRemove leaves after removing the container, if the run made one.
@@ -989,7 +997,7 @@ func (m *Model) failForm() tea.Cmd {
 	m.a.action = opts[0].Value
 	m.keys = "↑↓ choose  enter confirm  ctrl+c quit"
 	if made {
-		m.keys = "↑↓ choose  enter confirm  ctrl+c quit and remove"
+		m.keys = "↑↓ choose  enter confirm  ctrl+c quit and keep"
 	}
 	return m.startForm(huh.NewGroup(huh.NewSelect[string]().Options(opts...).Value(&m.a.action)))
 }
@@ -1014,8 +1022,7 @@ func (m *Model) failAction() tea.Cmd {
 	case action == actRetry:
 		return m.resume("")
 	case action == actKeep:
-		m.runner.Keep()
-		return tea.Quit
+		return m.quitAndKeep()
 	}
 	return m.quitAndRemove()
 }
