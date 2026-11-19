@@ -7,6 +7,26 @@ import (
 	"time"
 )
 
+// A new run's log leaves the newest ten logs and removes the older ones.
+func TestRunLogsKeepTheNewestTen(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	at := time.Date(2026, 11, 19, 13, 41, 0, 0, time.UTC)
+	var names []string
+	for i := range 12 {
+		f, err := openLog(dir, at.Add(time.Duration(i)*time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, f.Name())
+		_ = f.Close()
+	}
+	left, _ := filepath.Glob(filepath.Join(dir, LogPrefix+"*.log"))
+	if len(left) != keptLogs || left[0] != names[2] || left[len(left)-1] != names[11] {
+		t.Fatalf("want the newest %d of %v, got %v", keptLogs, names, left)
+	}
+}
+
 // Two runs started in the same second write two logs, each named after the time.
 func TestTwoRunsInOneSecondGetTwoLogs(t *testing.T) {
 	t.Parallel()

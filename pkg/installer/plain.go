@@ -42,12 +42,23 @@ const (
 // AnswersFile is where a run that did not finish keeps its answers.
 const AnswersFile = "/var/lib/kubehenge-install/answers.json"
 
-// openLog creates the log of a run that started at t, in dir. A random part after the time keeps
-// two runs started in the same second apart.
+// keptLogs is how many run logs stay in the log directory, the new one included.
+const keptLogs = 10
+
+// openLog creates the log of a run that started at t, in dir, and removes all but the newest
+// keptLogs. A random part after the time keeps two runs started in the same second apart.
 func openLog(dir string, t time.Time) (*os.File, error) {
 	f, err := os.CreateTemp(dir, LogPrefix+t.UTC().Format("20060102-150405")+"-*.log")
 	if err != nil {
 		return nil, fmt.Errorf("create the log: %w", err)
+	}
+	// The names start with the time, so they sort oldest first.
+	if logs, err := filepath.Glob(filepath.Join(dir, LogPrefix+"*.log")); err == nil && len(logs) > keptLogs {
+		for _, old := range logs[:len(logs)-keptLogs] {
+			if old != f.Name() {
+				_ = os.Remove(old)
+			}
+		}
 	}
 	return f, nil
 }
