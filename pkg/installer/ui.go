@@ -339,6 +339,7 @@ func (m *Model) failWith(err error) (*Model, tea.Cmd) {
 	return m, cmd
 }
 
+// updateForm passes a message to the open form and acts on its end.
 func (m *Model) updateForm(msg tea.Msg) tea.Cmd {
 	f, cmd := m.form.Update(msg)
 	if form, ok := f.(*huh.Form); ok {
