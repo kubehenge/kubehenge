@@ -217,6 +217,15 @@ func familySetting() *setting {
 	}
 }
 
+// networkLabel is the network's line in the list, with the network this node uses marked.
+func (m *Model) networkLabel(n *Network) string {
+	l := n.Label()
+	if n.Name == m.S.Facts.DefaultBridge {
+		l += " (this node)"
+	}
+	return l
+}
+
 func networkSetting() *setting {
 	return &setting{
 		label:   "Network",
@@ -225,7 +234,7 @@ func networkSetting() *setting {
 		value: func(m *Model) string {
 			c := &m.S.Cfg
 			if n, ok := m.S.Facts.network(c.Bridge); ok {
-				return n.Label(c.Bridge == m.S.Facts.DefaultBridge)
+				return m.networkLabel(&n)
 			}
 			return c.Bridge
 		},
@@ -233,8 +242,9 @@ func networkSetting() *setting {
 			f := m.S.Facts
 			m.a.bridge = m.S.Cfg.Bridge
 			opts := make([]huh.Option[string], len(f.Networks))
-			for i, n := range f.Networks {
-				opts[i] = huh.NewOption(n.Label(n.Name == f.DefaultBridge), n.Name)
+			for i := range f.Networks {
+				n := &f.Networks[i]
+				opts[i] = huh.NewOption(m.networkLabel(n), n.Name)
 			}
 			sel := choose("Network", &m.a.bridge, opts...).Height(max(m.height-12, 4))
 			if len(opts) > m.height-12 {

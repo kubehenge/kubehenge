@@ -2,6 +2,7 @@ package installer
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"net/netip"
 	"slices"
