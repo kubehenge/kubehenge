@@ -121,6 +121,15 @@ func TestIncompleteChain(t *testing.T) {
 	interPool := x509.NewCertPool()
 	interPool.AddCert(p.inter)
 
+	t.Run("self-signed leaf", func(t *testing.T) {
+		t.Parallel()
+		key := genKey(t, "p256")
+		self := issue(t, "self.example.org", 0, key.Public(), nil, key)
+		bundle := mustRead(t, []File{{"self.pem", join(certPEM(self), keyPKCS8PEM(t, key))}}, "", nil)
+		if bundle.Incomplete || len(bundle.Chain) != 1 || len(bundle.Dropped) != 0 {
+			t.Fatalf("Incomplete=%v chain=%d dropped=%q, want a complete chain of the one certificate", bundle.Incomplete, len(bundle.Chain), bundle.Dropped)
+		}
+	})
 	t.Run("issuer missing", func(t *testing.T) {
 		t.Parallel()
 		for _, roots := range []*x509.CertPool{nil, rootPool} {

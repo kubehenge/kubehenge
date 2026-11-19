@@ -47,11 +47,18 @@ type Bundle struct {
 	MissingIssuer string
 }
 
+// signingKey is what RSA, ECDSA and Ed25519 private keys offer. Other key types, such as X25519,
+// cannot serve TLS.
+type signingKey interface {
+	crypto.Signer
+	Equal(other crypto.PrivateKey) bool
+}
+
 // material is everything found in the files so far.
 type material struct {
 	certs     []*x509.Certificate
 	certFiles []string
-	key       crypto.Signer
+	key       signingKey
 	keyFile   string
 	names     []string
 }
@@ -103,77 +110,6 @@ func Read(files []File, passphrase string, roots *x509.CertPool, now time.Time) 
 	return bundle, nil
 }
 
-func checkValidity(cert *x509.Certificate, file string, now time.Time) error {
-	switch {
-	case now.After(cert.NotAfter):
-		return fmt.Errorf("the certificate in %s expired on %s", file, cert.NotAfter.UTC().Format(time.RFC3339))
-	case now.Before(cert.NotBefore):
-		return fmt.Errorf("the certificate in %s is not valid before %s", file, cert.NotBefore.UTC().Format(time.RFC3339))
-	}
-	return nil
-}
-
-// leafIndex finds the certificate for the key. When a renewed certificate keeps its key, the one
-// that expires last is the leaf.
-func (m *material) leafIndex() int {
-	pub, ok := m.key.Public().(interface {
-		Equal(other crypto.PublicKey) bool
-	})
-	if !ok {
-		return -1
-	}
-	leaf := -1
-	for i, c := range m.certs {
-		if pub.Equal(c.PublicKey) && (leaf < 0 || c.NotAfter.After(m.certs[leaf].NotAfter)) {
-			leaf = i
-		}
-	}
-	return leaf
-}
-
-// buildChain follows signatures upwards from the leaf. A self-signed root is marked used but left
-// out of the chain, and rooted says the walk ended on one (or on a self-signed leaf).
-func (m *material) buildChain(leaf int) ([]int, map[int]bool, bool) {
-	used := map[int]bool{leaf: true}
-	chain := []int{leaf}
-	current := leaf
-	for !selfSigned(m.certs[current]) {
-		next := -1
-		for i, c := range m.certs {
-			if !used[i] && m.certs[current].CheckSignatureFrom(c) == nil {
-				next = i
-				break
-			}
-		}
-		if next < 0 {
-			return chain, used, false
-		}
-		used[next] = true
-		current = next
-		if selfSigned(m.certs[current]) {
-			return chain, used, true
-		}
-		chain = append(chain, current)
-	}
-	return chain, used, true
-}
-
-// selfSigned checks the signature rather than the names, as chain building does.
-func selfSigned(cert *x509.Certificate) bool {
-	return cert.CheckSignature(cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature) == nil
-}
-
-// trusted reports whether a certificate in roots signed cert.
-func trusted(cert *x509.Certificate, roots *x509.CertPool, now time.Time) bool {
-	if roots == nil {
-		return false
-	}
-	_, err := cert.Verify(x509.VerifyOptions{
-		Roots: roots, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-	})
-	return err == nil
-}
-
 func (m *material) addCert(cert *x509.Certificate, file string) {
 	for _, have := range m.certs {
 		if bytes.Equal(have.Raw, cert.Raw) {
@@ -184,15 +120,16 @@ func (m *material) addCert(cert *x509.Certificate, file string) {
 	m.certFiles = append(m.certFiles, file)
 }
 
-func (m *material) addKey(key crypto.Signer, file string) error {
+func (m *material) addKey(parsed crypto.PrivateKey, file string) error {
+	key, ok := parsed.(signingKey)
+	if !ok {
+		return fmt.Errorf("%s holds a private key of a type that cannot sign", file)
+	}
 	if m.key == nil {
 		m.key, m.keyFile = key, file
 		return nil
 	}
-	same, ok := m.key.(interface {
-		Equal(other crypto.PrivateKey) bool
-	})
-	if !ok || !same.Equal(key) {
+	if !m.key.Equal(key) {
 		return fmt.Errorf("%s and %s hold different private keys, and a certificate has only one", m.keyFile, file)
 	}
 	return nil
@@ -258,16 +195,12 @@ func (m *material) addBlock(name string, block *pem.Block, passphrase string) (b
 	case "PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY":
 		return true, m.addPEMKey(name, block, passphrase)
 	case "ENCRYPTED PRIVATE KEY":
-		key, err := withPassphrases(passphrase, func(pw string) (crypto.Signer, error) {
+		key, err := withPassphrases(passphrase, func(pw string) (crypto.PrivateKey, error) {
 			parsed, err := pkcs8.ParsePKCS8PrivateKey(block.Bytes, []byte(pw))
 			if err != nil {
 				return nil, fmt.Errorf("parse: %w", err)
 			}
-			signer, ok := parsed.(crypto.Signer)
-			if !ok {
-				return nil, errors.New("not a signing key")
-			}
-			return signer, nil
+			return parsed, nil
 		})
 		if err != nil {
 			return false, fmt.Errorf("%s: %w", name, ErrPassphrase)
@@ -287,18 +220,18 @@ func (m *material) addPEMKey(name string, block *pem.Block, passphrase string) e
 		}
 		return m.addKey(key, name)
 	}
-	key, err := withPassphrases(passphrase, func(pw string) (crypto.Signer, error) {
+	key, err := withPassphrases(passphrase, func(pw string) (crypto.PrivateKey, error) {
 		// The legacy header form has no other reader. A wrong passphrase mostly shows as a key that
 		// does not parse, so the parse is part of the attempt.
 		der, err := x509.DecryptPEMBlock(block, []byte(pw)) //nolint:staticcheck // the OpenSSL header form has no replacement in the standard library
 		if err != nil {
 			return nil, fmt.Errorf("decrypt: %w", err)
 		}
-		signer, ok := parseKey(der)
+		parsed, ok := parseKey(der)
 		if !ok {
 			return nil, errors.New("not a private key")
 		}
-		return signer, nil
+		return parsed, nil
 	})
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, ErrPassphrase)
@@ -321,11 +254,7 @@ func (m *material) readDER(f File, passphrase string) error {
 		if err != nil {
 			return pfx{}, fmt.Errorf("decode: %w", err)
 		}
-		signer, ok := key.(crypto.Signer)
-		if !ok {
-			return pfx{}, errors.New("not a signing key")
-		}
-		return pfx{signer, append([]*x509.Certificate{leaf}, chain...)}, nil
+		return pfx{key, append([]*x509.Certificate{leaf}, chain...)}, nil
 	})
 	switch {
 	case err == nil:
@@ -350,7 +279,7 @@ func (m *material) readDER(f File, passphrase string) error {
 
 // pfx is what a PKCS#12 file holds: one key, and the leaf followed by its chain.
 type pfx struct {
-	key   crypto.Signer
+	key   crypto.PrivateKey
 	certs []*x509.Certificate
 }
 
@@ -364,10 +293,9 @@ func withPassphrases[T any](passphrase string, try func(string) (T, error)) (T, 
 	return got, err
 }
 
-func parseKey(der []byte) (crypto.Signer, bool) {
+func parseKey(der []byte) (crypto.PrivateKey, bool) {
 	if k, err := x509.ParsePKCS8PrivateKey(der); err == nil {
-		signer, ok := k.(crypto.Signer)
-		return signer, ok
+		return k, true
 	}
 	if k, err := x509.ParsePKCS1PrivateKey(der); err == nil {
 		return k, true

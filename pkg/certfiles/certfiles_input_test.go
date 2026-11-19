@@ -1,6 +1,7 @@
 package certfiles
 
 import (
+	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -46,6 +47,21 @@ func TestPassphraseErrors(t *testing.T) {
 	}
 }
 
+// A legacy key block that decrypts to something that is no key reads as a wrong passphrase, since
+// that is how a wrong passphrase mostly shows.
+func TestLegacyKeyThatDecryptsToGarbage(t *testing.T) {
+	t.Parallel()
+	//nolint:staticcheck // the OpenSSL header form has no replacement in the standard library
+	block, err := x509.EncryptPEMBlock(rand.Reader, "RSA PRIVATE KEY", []byte("not a key"), []byte(secret), x509.PEMCipherAES256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Read([]File{{"key.pem", pem.EncodeToMemory(block)}}, secret, nil, testNow)
+	if !errors.Is(err, ErrPassphrase) {
+		t.Fatalf("error %v is not ErrPassphrase", err)
+	}
+}
+
 func TestGarbageInput(t *testing.T) {
 	t.Parallel()
 	p := newPKI(t, "p256")
@@ -58,6 +74,18 @@ func TestGarbageInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	pfx := pfxFor(t, pkcs12.Modern, p, "")
+	noCerts, err := pkcs7.DegenerateCertificate([]byte{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	x25519, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	x25519DER, err := x509.MarshalPKCS8PrivateKey(x25519)
+	if err != nil {
+		t.Fatal(err)
+	}
 	const notKey = "not a certificate or private key"
 	cases := map[string]struct {
 		data []byte
@@ -69,6 +97,9 @@ func TestGarbageInput(t *testing.T) {
 		"request.csr":   {pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}), "holds CERTIFICATE REQUEST, " + notKey},
 		"public.pem":    {pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER}), "holds PUBLIC KEY, " + notKey},
 		"public.der":    {pubDER, "is a public key, " + notKey},
+		"no-certs.p7b":  {noCerts, "is " + notKey},
+		"bad-p7.pem":    {pem.EncodeToMemory(&pem.Block{Type: "PKCS7", Bytes: []byte("not asn1")}), "has a PKCS7 block that holds no valid certificates"},
+		"x25519.pem":    {pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: x25519DER}), "holds a private key of a type that cannot sign"},
 		"bad-block.pem": {pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not asn1")}), "has a CERTIFICATE block that is not a valid certificate"},
 	}
 	for name, c := range cases {
