@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/spf13/pflag"
 )
 
 const fakeBinary = "#!/bin/sh\necho \"kubehenge-ran $*\"\n"
@@ -82,12 +84,25 @@ func (r *scriptRun) run(t *testing.T, args ...string) (string, error) {
 	return string(out), err
 }
 
-// --help is answered before the root and node checks, so it works from any shell.
+// asNode gives the script a root user and a pct, so it goes on to the download.
+func (r *scriptRun) asNode(t *testing.T) {
+	t.Helper()
+	bin := filepath.Join(filepath.Dir(r.script), "bin")
+	for name, body := range map[string]string{"id": "#!/bin/sh\necho 0\n", "pct": "#!/bin/sh\nexit 0\n"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o700); err != nil { //nolint:gosec // a script the test runs.
+			t.Fatal(err)
+		}
+	}
+}
+
+// --help lists the options as a non-root user on no node, with no network and no space to unpack
+// a release.
 func TestInstallScriptHelpNeedsNoNode(t *testing.T) {
 	t.Parallel()
 	r := newScriptRun(t)
-	out, err := r.run(t, "--release", r.archive, "--sha256", r.sum, "--help")
-	if err != nil || !strings.Contains(out, "kubehenge-ran install --release") || !strings.Contains(out, "--help") {
+	r.env = append(r.env, "TMPDIR=/nonexistent")
+	out, err := r.run(t, "--help")
+	if err != nil || !strings.Contains(out, "--proxmox-url string") || strings.Contains(out, "kubehenge-ran") || strings.Contains(out, "kubehenge:") {
 		t.Fatalf("--help: %v\n%s", err, out)
 	}
 	if out, err = r.run(t, "--release", r.archive, "--sha256", r.sum); err == nil || !strings.Contains(out, "kubehenge:") {
@@ -95,10 +110,32 @@ func TestInstallScriptHelpNeedsNoNode(t *testing.T) {
 	}
 }
 
+// The options install.sh lists are the ones `kubehenge install` takes, word for word.
+func TestInstallScriptHelpListsTheFlags(t *testing.T) {
+	t.Parallel()
+	src, err := os.ReadFile(filepath.Join("..", "..", "appliance", "install.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, listed, ok := strings.Cut(strings.ReplaceAll(string(src), "\r\n", "\n"), "\nOptions:\n")
+	listed, _, found := strings.Cut(listed, "\nOPTIONS\n")
+	if !ok || !found {
+		t.Fatal("install.sh has no list of options")
+	}
+	listed, _, _ = strings.Cut(listed, "\n  -h, --help")
+	f := pflag.NewFlagSet("install", pflag.ContinueOnError)
+	var c Config
+	BindFlags(f, &c)
+	if want := strings.TrimSuffix(f.FlagUsages(), "\n"); listed != want {
+		t.Fatalf("install.sh lists other options than the installer takes. Want:\n%s\ngot:\n%s", want, listed)
+	}
+}
+
 // A release that was downloaded before is used from the cache, and a corrupt copy is not.
 func TestInstallScriptUsesTheCachedRelease(t *testing.T) {
 	t.Parallel()
 	r := newScriptRun(t)
+	r.asNode(t)
 	if err := os.MkdirAll(r.cache, 0o750); err != nil {
 		t.Fatal(err)
 	}
@@ -110,14 +147,14 @@ func TestInstallScriptUsesTheCachedRelease(t *testing.T) {
 	if err = os.WriteFile(cached, data, 0o600); err != nil { //nolint:gosec // into the test's own temporary folder
 		t.Fatal(err)
 	}
-	out, err := r.run(t, "--help")
-	if err != nil || !strings.Contains(out, "using the copy downloaded before") || !strings.Contains(out, "kubehenge-ran install --help") {
+	out, err := r.run(t, "--ip", "dhcp")
+	if err != nil || !strings.Contains(out, "using the copy downloaded before") || !strings.Contains(out, "kubehenge-ran install --ip dhcp") {
 		t.Fatalf("the cached release was not used: %v\n%s", err, out)
 	}
 	if err = os.WriteFile(cached, []byte("damaged"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if out, err = r.run(t, "--help"); err == nil || !strings.Contains(out, "could not download") {
+	if out, err = r.run(t, "--ip", "dhcp"); err == nil || !strings.Contains(out, "could not download") {
 		t.Fatalf("a damaged copy was used: %v\n%s", err, out)
 	}
 }
