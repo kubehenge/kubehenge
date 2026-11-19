@@ -1,9 +1,31 @@
 package installer
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+// Two runs started in the same second write two logs, each named after the time.
+func TestTwoRunsInOneSecondGetTwoLogs(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	at := time.Date(2026, 11, 19, 13, 41, 28, 0, time.UTC)
+	first, err := openLog(dir, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = first.Close() }()
+	second, err := openLog(dir, at)
+	if err != nil {
+		t.Fatalf("the second run in the same second: %v", err)
+	}
+	defer func() { _ = second.Close() }()
+	if first.Name() == second.Name() || !strings.HasPrefix(filepath.Base(second.Name()), LogPrefix+"20261119-134128-") {
+		t.Errorf("logs %s and %s", first.Name(), second.Name())
+	}
+}
 
 // The plain output prints the plan before it changes anything, a line as each step starts, and the
 // line of a finished step.

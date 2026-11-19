@@ -42,9 +42,14 @@ const (
 // AnswersFile is where a run that did not finish keeps its answers.
 const AnswersFile = "/var/lib/kubehenge-install/answers.json"
 
-// logName is the log of a run that started at t.
-func logName(t time.Time) string {
-	return LogDir + "/" + LogPrefix + t.UTC().Format("20060102-150405") + ".log"
+// openLog creates the log of a run that started at t, in dir. A random part after the time keeps
+// two runs started in the same second apart.
+func openLog(dir string, t time.Time) (*os.File, error) {
+	f, err := os.CreateTemp(dir, LogPrefix+t.UTC().Format("20060102-150405")+"-*.log")
+	if err != nil {
+		return nil, fmt.Errorf("create the log: %w", err)
+	}
+	return f, nil
 }
 
 // NewEnv opens the log, the work directory and the node, ready for a run on this machine.
@@ -57,11 +62,12 @@ func NewEnv(ctx context.Context) (*Env, error) {
 			return nil, userErr("this is not a Proxmox VE node", "Run it in the shell of the node you want the appliance on")
 		}
 	}
-	e := &Env{LogPath: logName(time.Now()), AnswersPath: AnswersFile}
+	e := &Env{AnswersPath: AnswersFile}
 	var err error
-	if e.Log, err = os.OpenFile(e.LogPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, permFile); err != nil {
-		return nil, fmt.Errorf("open file: %w", err)
+	if e.Log, err = openLog(LogDir, time.Now()); err != nil {
+		return nil, err
 	}
+	e.LogPath = e.Log.Name()
 	if e.Work, err = os.MkdirTemp("", "kubehenge-install-"); err != nil {
 		return nil, fmt.Errorf("mkdir temp: %w", err)
 	}
