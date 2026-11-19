@@ -219,9 +219,6 @@ func (m *Model) Shutdown(ctx context.Context) {
 	}
 }
 
-// keeps says a stopped run keeps its container: --keep-failed asks it, or a failure screen said so.
-func (m *Model) keeps() bool { return m.S.Cfg.KeepFailed || m.keep }
-
 // Init starts the detection behind one spinner.
 func (m *Model) Init() tea.Cmd {
 	m.busy = "Detecting this node"
@@ -280,6 +277,9 @@ func (m *Model) View() tea.View {
 	v.AltScreen = true
 	return v
 }
+
+// keeps says a stopped run keeps its container: --keep-failed asks it, or a failure screen said so.
+func (m *Model) keeps() bool { return m.S.Cfg.KeepFailed || m.keep }
 
 func (m *Model) detectCmd() tea.Cmd {
 	return func() tea.Msg { return detectedMsg{m.S.detect(m.ctx)} }

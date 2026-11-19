@@ -119,8 +119,9 @@ func BindFlags(f *pflag.FlagSet, c *Config) {
 	f.BoolVar(&c.KeepFailed, "keep-failed", false, "keep the container of a failed install for inspection instead of removing it")
 	// The entry answers are applied by Normalise once the flags are parsed.
 	c.pveEntryFlags = [2]*bool{pveEntry, noPVEEntry}
-	for group, names := range map[string][]string{groupUpgrade: {"upgrade", "no-trusted-proxy"}, groupCertificate: {"certificate", "no-name"}} {
-		for _, name := range names {
+	// Each group holds the flag of its mode, named as the group, and the flag only that mode takes.
+	for group, only := range map[string]string{groupUpgrade: "no-trusted-proxy", groupCertificate: "no-name"} {
+		for _, name := range []string{strings.ToLower(group), only} {
 			_ = f.SetAnnotation(name, flagGroup, []string{group})
 		}
 	}
@@ -172,18 +173,15 @@ func (c *Config) Normalise() error {
 }
 
 // RepeatCommand is the install.sh command that runs an install again with this one's answers.
-// The options hold no secret: a certificate's key is named by its file. A kept container still
-// holds the ID, so the next run then takes a free one.
-func (c *Config) RepeatCommand(kept bool) string {
+// The options hold no secret: a certificate's key is named by its file.
+func (c *Config) RepeatCommand() string {
 	args := []string{"sh", "install.sh"}
 	add := func(name, value string) {
 		if value != "" {
 			args = append(args, name, shellWord(value))
 		}
 	}
-	if !kept {
-		add("--ctid", c.CTID)
-	}
+	add("--ctid", c.CTID)
 	add("--storage", c.Storage)
 	add("--template-storage", c.TemplateStorage)
 	add("--bridge", c.Bridge)
@@ -212,8 +210,12 @@ func (c *Config) RepeatCommand(kept bool) string {
 		flag string
 		on   bool
 	}{
-		{"--proxmox-insecure", c.Insecure}, {"--pve-entry", c.PVEEntry == optYes}, {"--no-pve-entry", c.PVEEntry == "no"},
-		{"--plain", c.Plain}, {"--yes", c.Yes}, {"--keep-failed", c.KeepFailed},
+		{"--proxmox-insecure", c.Insecure},
+		{"--pve-entry", c.PVEEntry == optYes},
+		{"--no-pve-entry", c.PVEEntry == "no"},
+		{"--plain", c.Plain},
+		{"--yes", c.Yes},
+		{"--keep-failed", c.KeepFailed},
 	}
 	for _, s := range switches {
 		if s.on {

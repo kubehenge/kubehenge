@@ -12,7 +12,7 @@ func TestRunLogsKeepTheNewestTen(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	at := time.Date(2026, 11, 19, 13, 41, 0, 0, time.UTC)
-	var names []string
+	names := make([]string, 0, 12)
 	for i := range 12 {
 		f, err := openLog(dir, at.Add(time.Duration(i)*time.Minute))
 		if err != nil {

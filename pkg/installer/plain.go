@@ -183,24 +183,35 @@ func RunPlain(ctx context.Context, s *Session, newRunner func(emit func(Event)) 
 	}
 	res, err := runner.Run(ctx)
 	if err != nil {
-		// The cleanup must run even when the run was cancelled.
-		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
-		defer cancel()
-		kept := s.Cfg.KeepFailed && runner.Made()
-		switch {
-		case kept:
-			runner.Keep()
-			_, _ = fmt.Fprintf(out, "kubehenge: keeping container %s. Inspect it with: pct enter %s\n", s.Cfg.CTID, s.Cfg.CTID)
-		case runner.Made():
-			_, _ = fmt.Fprintf(out, "kubehenge: removing container %s after the failure\n", s.Cfg.CTID)
-		}
-		runner.Cleanup(cleanCtx)
-		_, _ = fmt.Fprintf(out, "kubehenge: log %s\n", runner.LogPath)
-		_, _ = fmt.Fprintf(out, "kubehenge: to run it again with the same answers: %s\n", s.Cfg.RepeatCommand(kept))
+		plainFailed(ctx, s, runner, out)
 		return err
 	}
 	WriteEnd(out, res)
 	return nil
+}
+
+// plainFailed keeps or removes the container of a failed plain run, then names the log and the
+// command that runs the install again.
+func plainFailed(ctx context.Context, s *Session, runner *Runner, out io.Writer) {
+	// The cleanup must run even when the run was cancelled.
+	cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	kept := s.Cfg.KeepFailed && runner.Made()
+	switch {
+	case kept:
+		runner.Keep()
+		_, _ = fmt.Fprintf(out, "kubehenge: keeping container %s. Inspect it with: pct enter %s\n", s.Cfg.CTID, s.Cfg.CTID)
+	case runner.Made():
+		_, _ = fmt.Fprintf(out, "kubehenge: removing container %s after the failure\n", s.Cfg.CTID)
+	}
+	runner.Cleanup(cleanCtx)
+	_, _ = fmt.Fprintf(out, "kubehenge: log %s\n", runner.LogPath)
+	again := s.Cfg
+	if kept {
+		// The kept container holds the ID, so the next run takes a free one.
+		again.CTID = ""
+	}
+	_, _ = fmt.Fprintf(out, "kubehenge: to run it again with the same answers: %s\n", again.RepeatCommand())
 }
 
 func suffix(detail string) string {

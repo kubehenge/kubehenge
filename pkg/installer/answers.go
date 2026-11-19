@@ -80,70 +80,88 @@ func (s *Session) Restore(ctx context.Context, a *savedAnswers) bool {
 		return false
 	}
 	c, f := &s.Cfg, s.Facts
-	restored := false
-	// try applies one group of saved values, and undoes it when the options no longer pass.
-	try := func(apply func()) bool {
-		before := *c
-		apply()
-		if c.Validate() != nil {
-			*c = before
-			return false
-		}
-		restored = true
-		return true
-	}
-	// take is try that names the group when it is dropped.
-	take := func(what string, apply func()) bool {
-		if try(apply) {
-			return true
-		}
-		s.Dropped = append(s.Dropped, what)
-		return false
-	}
-	fill := func(what string, dst *string, value string) {
-		if *dst == "" && value != "" {
-			take(what, func() { *dst = value })
-		}
-	}
-	if !s.NetworkGiven && a.Bridge != "" && slices.Contains(f.Bridges, a.Bridge) && take("network", func() { c.Bridge, c.VLAN = a.Bridge, a.VLAN }) {
-		fill("MTU", &c.MTU, a.MTU)
-		// The two versions' addresses pass together where one is none, so they are tried together first.
-		v4 := func() { c.IP, c.Gateway = a.IP, a.Gateway }
-		v6 := func() { c.IP6, c.Gateway6 = a.IP6, a.Gateway6 }
-		if a.IP+a.IP6 != "" && !try(func() { v4(); v6() }) {
-			if a.IP != "" {
-				take("IPv4 address", v4)
-			}
-			if a.IP6 != "" {
-				take("IPv6 address", v6)
-			}
-		}
+	r := &restoring{s: s}
+	if !s.NetworkGiven && a.Bridge != "" && slices.Contains(f.Bridges, a.Bridge) && r.take("network", func() { c.Bridge, c.VLAN = a.Bridge, a.VLAN }) {
+		r.network(a)
 		s.RefreshNetwork(ctx, c.Bridge, c.VLAN)
 	}
-	fill("DNS", &c.DNS, a.DNS)
-	fill("DNS name", &c.Name, a.Name)
+	r.fill("DNS", &c.DNS, a.DNS)
+	r.fill("DNS name", &c.Name, a.Name)
 	if !s.HostnameGiven && a.Hostname != "" && a.Hostname != DefaultHostname {
-		take("host name", func() { c.Hostname = a.Hostname })
+		r.take("host name", func() { c.Hostname = a.Hostname })
 	}
 	if c.Storage == "" && hasStorage(f.RootStorages, a.Storage) {
-		c.Storage, restored = a.Storage, true
+		c.Storage, r.restored = a.Storage, true
 	}
 	if c.TemplateStorage == "" && hasStorage(f.TemplateStorages, a.TemplateStorage) {
-		c.TemplateStorage, restored = a.TemplateStorage, true
+		c.TemplateStorage, r.restored = a.TemplateStorage, true
 	}
 	switch a.PVEEntry {
 	case optYes, "no":
-		fill("Proxmox VE entry", &c.PVEEntry, a.PVEEntry)
+		r.fill("Proxmox VE entry", &c.PVEEntry, a.PVEEntry)
 	case "":
 	default:
 		s.Dropped = append(s.Dropped, "Proxmox VE entry")
 	}
 	if len(c.TrustedProxies) == 0 && len(a.TrustedProxies) > 0 {
-		take("trusted proxies", func() { c.TrustedProxies = slices.Clone(a.TrustedProxies) })
+		r.take("trusted proxies", func() { c.TrustedProxies = slices.Clone(a.TrustedProxies) })
 	}
 	if !s.CTIDGiven && a.CTID != "" && a.CTID != c.CTID && inRange(a.CTID, ctidMin, ctidMax) && s.Node.IDFree(ctx, a.CTID) {
-		c.CTID, restored = a.CTID, true
+		c.CTID, r.restored = a.CTID, true
 	}
-	s.Restored = restored
-	return restored
+	s.Restored = r.restored
+	return r.restored
+}
+
+// restoring applies saved answers to a session's options, one group at a time.
+type restoring struct {
+	s        *Session
+	restored bool
+}
+
+// try applies one group of saved values, and undoes it when the options no longer pass.
+func (r *restoring) try(apply func()) bool {
+	c := &r.s.Cfg
+	before := *c
+	apply()
+	if c.Validate() != nil {
+		*c = before
+		return false
+	}
+	r.restored = true
+	return true
+}
+
+// take is try that names the group in Dropped when it is refused.
+func (r *restoring) take(what string, apply func()) bool {
+	if r.try(apply) {
+		return true
+	}
+	r.s.Dropped = append(r.s.Dropped, what)
+	return false
+}
+
+// fill takes a saved value for an option still empty.
+func (r *restoring) fill(what string, dst *string, value string) {
+	if *dst == "" && value != "" {
+		r.take(what, func() { *dst = value })
+	}
+}
+
+// network takes the MTU and the addresses of the saved network, each on its own.
+func (r *restoring) network(a *savedAnswers) {
+	c := &r.s.Cfg
+	r.fill("MTU", &c.MTU, a.MTU)
+	// The two versions' addresses pass together where one is none, so they are tried together first.
+	v4 := func() { c.IP, c.Gateway = a.IP, a.Gateway }
+	v6 := func() { c.IP6, c.Gateway6 = a.IP6, a.Gateway6 }
+	if a.IP+a.IP6 == "" || r.try(func() { v4(); v6() }) {
+		return
+	}
+	if a.IP != "" {
+		r.take("IPv4 address", v4)
+	}
+	if a.IP6 != "" {
+		r.take("IPv6 address", v6)
+	}
 }
