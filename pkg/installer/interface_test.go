@@ -1101,3 +1101,12 @@ func TestInterfaceScreens(t *testing.T) {
 		})
 	}
 }
+
+// --name is lowercased, as DNS names are compared.
+func TestNormaliseLowercasesTheNameOption(t *testing.T) {
+	t.Parallel()
+	c := Config{Name: " KubeHenge.Example.org "}
+	if err := c.Normalise(); err != nil || c.Name != "kubehenge.example.org" {
+		t.Errorf("%q %v", c.Name, err)
+	}
+}
