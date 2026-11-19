@@ -511,6 +511,31 @@ func TestUIRestoresAndForgetsAnswers(t *testing.T) {
 	}
 }
 
+// A saved answer the checks refuse is named on the found screen, and the rest of its network comes
+// back.
+func TestUIRestoreNamesWhatItDropped(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{dhcp: true})
+	path := filepath.Join(t.TempDir(), "answers.json")
+	saved := &Config{Bridge: "vmbr0", MTU: "abc", IP: "192.0.2.40/24", Gateway: "192.0.2.1", Hostname: "bad_host!", DNS: "192.0.2.53"}
+	if err := saveAnswers(path, saved); err != nil {
+		t.Fatal(err)
+	}
+	u := startUIWith(t, h, Config{PVEEntry: "no"}, 80, 24, func(s *Session) {
+		s.AnswersPath, s.Saved = path, loadAnswers(path)
+	})
+	u.waitFor("which this version refuses")
+	u.golden("dropped")
+	if screen := u.rec.screen(); !strings.Contains(screen, "the saved MTU and host name") {
+		t.Errorf("the dropped answers are not named:\n%s", screen)
+	}
+	u.press(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	u.finish()
+	if c := u.s.Cfg; c.IP != "192.0.2.40/24" || c.MTU != "" || c.Hostname != DefaultHostname {
+		t.Errorf("want the address without the MTU and host name, got %q %q %q", c.IP, c.MTU, c.Hostname)
+	}
+}
+
 // --dry-run ends with the plan and changes nothing. --yes skips the confirmation.
 func TestUIDryRunAndYes(t *testing.T) {
 	t.Parallel()

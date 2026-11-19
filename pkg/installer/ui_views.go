@@ -201,9 +201,18 @@ func (m *Model) foundView() string {
 			b.WriteString(m.row("Note", n))
 		}
 	}
-	if m.S.Restored {
+	if m.S.Restored || len(m.S.Dropped) > 0 {
 		b.WriteString("\n")
+	}
+	if m.S.Restored {
 		b.WriteString(m.row("Restored", "your answers from the last run. Nothing secret is saved. Change any on the summary."))
+	}
+	if d := m.S.Dropped; len(d) > 0 {
+		list := d[len(d)-1]
+		if len(d) > 1 {
+			list = strings.Join(d[:len(d)-1], ", ") + " and " + list
+		}
+		b.WriteString(m.row("Dropped", "the saved "+list+", which this version refuses"))
 	}
 	b.WriteString("\n")
 	b.WriteString(dim.Render("  enter continue  ctrl+c leave"))

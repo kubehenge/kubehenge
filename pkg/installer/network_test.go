@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -192,8 +193,8 @@ func TestRestoreDropsWhatTheChecksRefuse(t *testing.T) {
 	s.Restore(context.Background(), saved)
 	c := s.Cfg
 	switch {
-	case c.MTU != "" || c.IP == "192.0.2.40/24":
-		t.Errorf("a network with a bad MTU was restored: %q %q", c.MTU, c.IP)
+	case c.MTU != "" || c.IP != "192.0.2.40/24":
+		t.Errorf("want the address without the bad MTU, got %q %q", c.MTU, c.IP)
 	case c.Hostname != DefaultHostname || c.Name != "" || len(c.TrustedProxies) != 0 || c.PVEEntry != "":
 		t.Errorf("a refused value was restored: %q %q %v %q", c.Hostname, c.Name, c.TrustedProxies, c.PVEEntry)
 	case c.DNS != "192.0.2.53":
@@ -201,6 +202,10 @@ func TestRestoreDropsWhatTheChecksRefuse(t *testing.T) {
 	}
 	if err := c.Validate(); err != nil {
 		t.Errorf("the restored options fail their checks: %v", err)
+	}
+	want := []string{"MTU", "DNS name", "host name", "Proxmox VE entry", "trusted proxies"}
+	if !slices.Equal(s.Dropped, want) {
+		t.Errorf("want %v named as dropped, got %v", want, s.Dropped)
 	}
 }
 

@@ -30,8 +30,10 @@ type Session struct {
 	AllowOutside bool
 	// AddressCheck is the last check of the static address, shown in the summary.
 	AddressCheck AddrCheck
-	// Restored says the answers were read from an earlier run's file.
+	// Restored says the answers were read from an earlier run's file, and Dropped names the saved
+	// answers the option checks refused.
 	Restored bool
+	Dropped  []string
 	// NetworkGiven is set when the options already name part of the container's network, which a
 	// saved network then does not replace.
 	NetworkGiven bool
