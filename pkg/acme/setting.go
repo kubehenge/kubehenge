@@ -281,13 +281,15 @@ func (s *Setting) secrets() []string {
 	return out
 }
 
-// scrub takes every secret out of text.
+// scrub takes every secret out of text, also where a provider's error repeats it escaped in a URL.
 func (s *Setting) scrub(text string) string {
 	if s == nil {
 		return text
 	}
 	for _, secret := range s.secrets() {
-		text = strings.ReplaceAll(text, secret, "[removed]")
+		for _, form := range []string{secret, url.QueryEscape(secret), url.PathEscape(secret)} {
+			text = strings.ReplaceAll(text, form, "[removed]")
+		}
 	}
 	return text
 }

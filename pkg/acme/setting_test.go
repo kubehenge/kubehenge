@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io/fs"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -144,6 +145,20 @@ func TestSecretsAreKeptPrivateAndNeverShown(t *testing.T) {
 	for _, text := range []string{logs.String(), stringify(t, v), stringify(t, shown)} {
 		if strings.Contains(text, hmacSecret) || strings.Contains(text, tokenSecret) {
 			t.Errorf("a secret appears in %q", text)
+		}
+	}
+}
+
+// A provider that sends its credential in a URL repeats it escaped in its errors, as a base64
+// token's + / and = are. That form is taken out too.
+func TestAnEscapedSecretIsTakenOutOfErrors(t *testing.T) {
+	t.Parallel()
+	const token = "fake+token/for=tests"
+	set := &Setting{DNSCredentials: map[string]string{"DODE_TOKEN": token}}
+	text := set.scrub(`Get "https://dns.example.org/update?token=` + url.QueryEscape(token) + `": dial tcp: refused, path /` + url.PathEscape(token) + " raw " + token)
+	for _, form := range []string{token, url.QueryEscape(token), url.PathEscape(token)} {
+		if strings.Contains(text, form) {
+			t.Errorf("%q remains in %q", form, text)
 		}
 	}
 }
