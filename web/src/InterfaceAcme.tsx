@@ -425,7 +425,7 @@ export function Acme({ view, name, waiting, running, locked, run }: AcmeProps): 
           <Field
             label="DNS provider"
             hint={
-              provider === "" ? undefined : (
+              providers.includes(provider) ? (
                 <a
                   href={`https://go-acme.github.io/lego/dns/${encodeURIComponent(provider)}/`}
                   target="_blank"
@@ -433,7 +433,7 @@ export function Acme({ view, name, waiting, running, locked, run }: AcmeProps): 
                 >
                   Its variables
                 </a>
-              )
+              ) : undefined
             }
           >
             {(id) => (

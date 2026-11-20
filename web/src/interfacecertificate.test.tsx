@@ -716,7 +716,10 @@ describe("interface certificate", () => {
     await user.type(screen.getByLabelText("Server CA"), "-----BEGIN CERTIFICATE-----");
     await user.type(screen.getByLabelText("Contact e-mail"), "admin@example.org");
     await user.selectOptions(screen.getByLabelText("Proof"), "dns-01");
-    await user.type(screen.getByLabelText("DNS provider"), "rfc2136");
+    // A name lego does not know gets no link to a page that does not exist.
+    await user.type(screen.getByLabelText("DNS provider"), "rfc");
+    expect(screen.queryByRole("link", { name: "Its variables" })).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText("DNS provider"), "2136");
     expect(screen.getByRole("link", { name: "Its variables" })).toHaveAttribute(
       "href",
       "https://go-acme.github.io/lego/dns/rfc2136/",
