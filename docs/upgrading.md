@@ -405,7 +405,7 @@ pct exec <ctid> -- kubehenge appliance certificate address kubehenge.example.org
 - Any other certificate stays, and the page warns until one valid for the new name replaces it.
 - Links in notifications and sign-in go to the new address at once. Headlamp takes it at its next start, after 15 minutes unused.
 - Update the redirect URLs your identity provider has registered, as [below](#names-and-addresses).
-- The Proxmox VE interface entry keeps the old address. On each node with the entry, run `sh /usr/local/sbin/kubehenge-pve-entry --url https://kubehenge.example.org`. It leaves the certificate as it is.
+- The Proxmox VE interface entry keeps the old address. Move it with `sh /usr/local/sbin/kubehenge-pve-entry --url https://kubehenge.example.org` on each node that has it.
 
 ### The appliance's own CA
 
@@ -462,14 +462,14 @@ A certificate given this way is kept in `/var/lib/kubehenge`, which backups of t
 `--cert` takes comma-separated files in any mix of PEM, DER, PKCS#7 and PKCS#12 (a `.pfx` or `.p12`). The certificate, its chain and its key may share a file or sit in several. `--key` adds a file to the list. Encrypted material needs `--cert-passphrase-file <file>`, whose first line is the passphrase. Without a terminal, the installer stops before it creates anything when that option is missing.
 
 - The certificate must be valid for the name, or for the fixed address where there is no name, and have more than a day left. With less than 30 days left it is taken with a caution giving the last day.
-- A chain that lacks its issuer is taken with a caution naming the issuer. Add the file that holds it. This node's trust store counts as known issuers.
+- A chain that lacks its issuer is taken with a caution naming the issuer to add. Issuers in this node's trust store count as known.
 - Certificates in the files that the chain does not use are left out, and the installer says which.
-- Without `--cert`, the installer asks whether to make a certificate or read files. Where the Proxmox VE API's certificate comes from a CA outside the cluster, files of your own are preselected, since browsers that trust that CA warn about a certificate made here.
+- Without `--cert`, the installer asks whether to make a certificate or read files. It preselects files when an outside CA signed the Proxmox VE API's certificate, since browsers trusting that CA warn about one made here.
 - Saved answers keep the file paths and never the passphrase.
 
 ### DNS check
 
-With a name, the installer looks it up on this node and says whether it points at the appliance, at another address, nowhere, or could not be checked. None of these stops the install. A name that did not point at the appliance gets the appliance's address beside it on the last screen.
+With a name, the installer looks it up on this node. It says whether the name points at the appliance, at another address or nowhere, or could not be checked. None of these stops the install. A name that did not point at the appliance gets the appliance's address beside it on the last screen.
 
 ### Names and addresses
 
