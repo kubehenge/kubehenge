@@ -346,14 +346,14 @@ describe("interface certificate", () => {
     render(<InterfaceCertificate />);
     await user.click(await screen.findByRole("radio", { name: "Appliance CA" }));
     expect(screen.queryByRole("heading", { name: "Appliance CA" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Sign with appliance CA" }));
-    const dialog = within(screen.getByRole("dialog", { name: "Sign with appliance CA" }));
+    await user.click(screen.getByRole("button", { name: "Use appliance CA" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Use appliance CA" }));
     expect(
       dialog.getByText(
         "Browsers accept the certificate once they trust the appliance's CA. The CA signs for this appliance's names only.",
       ),
     ).toBeInTheDocument();
-    await user.click(dialog.getByRole("button", { name: "Sign with appliance CA" }));
+    await user.click(dialog.getByRole("button", { name: "Use appliance CA" }));
     await expect(screen.findByText(fingerprint("EF"))).resolves.toBeInTheDocument();
     expect(screen.getByText("Appliance CA", { selector: "dd" })).toBeInTheDocument();
     const box = screen.getByRole("region", { name: "Appliance CA" });
@@ -380,7 +380,7 @@ describe("interface certificate", () => {
     const { container } = render(<InterfaceCertificate />);
     await user.click(await screen.findByRole("button", { name: "Change address" }));
     const dialog = within(screen.getByRole("dialog", { name: "Change public address" }));
-    const field = dialog.getByRole("textbox", { name: "DNS name or IP address" });
+    const field = dialog.getByRole("textbox", { name: "Name or address" });
     expect(field).toHaveValue("kubehenge.example.org");
     await user.clear(field);
     expect(dialog.getByRole("button", { name: "Change address" })).toBeDisabled();

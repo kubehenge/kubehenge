@@ -179,7 +179,7 @@ function ChangeAddress({
             </>
           }
         >
-          <Field label="DNS name or IP address" error={error}>
+          <Field label="Name or address" error={error}>
             {(id) => (
               <input
                 id={id}
@@ -489,9 +489,9 @@ const ways: { id: WayId; label: string; body: (p: WayProps) => JSX.Element }[] =
     body: (p) => (
       <Confirmed
         way={p}
-        action="Sign with appliance CA"
+        action="Use appliance CA"
         busyAction="Signing…"
-        title="Sign with appliance CA"
+        title="Use appliance CA"
         effect="Browsers accept the certificate once they trust the appliance's CA. The CA signs for this appliance's names only."
         call={api.signInterfaceCertificateByApplianceCA}
       />
