@@ -158,8 +158,8 @@ func TestTheAppliancesCertificateIsSignedAgainWhenAThirdIsLeft(t *testing.T) {
 	}
 }
 
-// A reset forgets the CA with the certificate. A certificate that names nothing gives the CA
-// nothing to sign for.
+// A reset forgets the CA with the certificate. A certificate that names nothing, with no public
+// address, gives the CA nothing to sign for.
 func TestAResetForgetsTheAppliancesCA(t *testing.T) {
 	t.Parallel()
 	h, a, c := administered(t)
@@ -170,6 +170,7 @@ func TestAResetForgetsTheAppliancesCA(t *testing.T) {
 	if got := storedFiles(t, c); len(got) != 0 {
 		t.Errorf("the appliance directory holds %v", got)
 	}
+	h.server.PublicURL = ""
 	nameless := issueCertificate(t, h.clock.Add(-time.Hour), h.clock.AddDate(1, 0, 0), nil)
 	c.live.Store(&servedCertificate{pair: tlsPair(t, nameless), source: certificateInstaller})
 	refusal(t, a.do("POST", "/api/appliance/certificate/appliance-ca", ""), http.StatusUnprocessableEntity, "no-names")
