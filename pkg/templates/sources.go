@@ -402,7 +402,8 @@ func findChecksum(sums []byte, file string) (string, error) {
 		}
 		return strings.ToLower(sum), nil
 	}
-	return "", fmt.Errorf("%s is not listed in its checksum file", file)
+	// A mirror lists only its newest builds, so the publisher's next folder may still hold this one.
+	return "", absentError{fmt.Errorf("%s is not listed in its checksum file", file)}
 }
 
 func fingerprint(e *openpgp.Entity) string {

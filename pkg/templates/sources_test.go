@@ -272,6 +272,23 @@ func TestARotatedImageComesFromTheVault(t *testing.T) {
 	}
 }
 
+// A mirror lists only its newest build once there is one newer than the pin, while the vault keeps
+// the pinned one. A checksum file that does not list the build sends the build on to the next
+// folder, as a missing file does.
+func TestAnUnlistedBuildIsLookedForInTheVault(t *testing.T) {
+	t.Parallel()
+	s, files := fakePublishers(t)
+	for _, name := range []string{"/CHECKSUM", "/CHECKSUM.asc"} {
+		files[almaVaultDir+name] = files[almaFixtureDir+name]
+	}
+	older := almaBuild
+	older.Build = almaMinor + "-20000101.0"
+	_, err := almaLinux{}.Image(context.Background(), s, &older)
+	if err == nil || !strings.Contains(err.Error(), "in none of its folders") || !strings.Contains(err.Error(), "not listed") {
+		t.Errorf("a build the mirror no longer lists: %v, want it looked for in the vault too", err)
+	}
+}
+
 // Fails a release whose build lost its pin, or whose pin is no SHA-256. Rocky Linux's fixture signs
 // a fixed build, so this is the test that reads its release's own pin.
 func TestEveryNamedBuildIsPinned(t *testing.T) {
