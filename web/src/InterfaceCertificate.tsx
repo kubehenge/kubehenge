@@ -156,7 +156,7 @@ function addressEffects(c: Certificate, name: string): string[] {
     "appliance-ca":
       c.applianceCA === undefined || permits(c.applianceCA, name)
         ? "The appliance CA signs a certificate for the new address."
-        : "A new appliance CA signs for the new address. Devices that trusted the old CA warn until they trust the new one.",
+        : "A new appliance CA signs for the new address. Devices warn until they trust the new CA.",
     acme: "ACME orders a certificate for the new address.",
   };
   return [

@@ -438,9 +438,7 @@ describe("interface certificate", () => {
     await user.clear(field);
     await user.type(field, "moved.example.org");
     expect(
-      dialog.getByText(
-        "A new appliance CA signs for the new address. Devices that trusted the old CA warn until they trust the new one.",
-      ),
+      dialog.getByText("A new appliance CA signs for the new address. Devices warn until they trust the new CA."),
     ).toBeInTheDocument();
     expect(dialog.getByText("The Proxmox VE interface entry keeps the old address.")).toBeInTheDocument();
     await user.click(dialog.getByRole("button", { name: "Cancel" }));
