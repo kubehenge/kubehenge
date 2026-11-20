@@ -123,6 +123,10 @@ EOF
 # of their lists, here those of the service on loopback.
 cat > "${bin}/python3" << EOF
 #!/bin/sh
+if [ "\${2:-}" = fill ]; then
+    sed 's/\\\$basearch/x86_64/g' "\$3"
+    exit
+fi
 cat > /dev/null
 printf 'appstream %s\nbaseos %s\n' '${site}/mirrorlist/appstream' '${site}/mirrorlist/baseos'
 EOF
@@ -267,6 +271,99 @@ has "the metalink gives way to the vault" "${pinned}/rocky-appstream.repo" "mirr
 lacks "and goes" "${pinned}/rocky-appstream.repo" "metalink="
 has "the folder gives way to the vault" "${pinned}/kubehenge-containerd.repo" "mirrorlist=file://${vaulted}/kubehenge-containerd"
 lacks "and goes" "${pinned}/kubehenge-containerd.repo" "baseurl="
+
+# A mirror one sync behind the repository's own server serves older packages, so its repomd.xml's
+# revision decides. Each case has a list of its own, under the id the vault file names.
+# revision <mirror> <revision>: AppStream's repomd.xml on that mirror, XML with that revision.
+revision() {
+    repomd "$1" AppStream "<?xml version=\"1.0\"?><repomd><revision>$2</revision></repomd>"
+}
+# stale_case <id> <own folder> <mirror>...: the vault file of one repository and its list of mirrors,
+# each of them the AppStream folder of the mirror with dnf's variable in it.
+stale_case() {
+    id=$1 own=$2
+    shift 2
+    mkdir -p "${root}/stale"
+    printf '%s %s %s\n' "${id}" "${own}" "${site}/vault/AppStream/x86_64/os/" > "${root}/stale/vault"
+    : > "${root}/stale/${id}"
+    for m in "$@"; do
+        case ${m} in
+            http*) printf '%s\n' "${m}" >> "${root}/stale/${id}" ;;
+            *) printf '%s/%s/AppStream/$basearch/os/\n' "${site}" "${m}" >> "${root}/stale/${id}" ;;
+        esac
+    done
+}
+# stale_run: the step on that vault file and list.
+stale_run() {
+    drop_stale_mirrors "${root}/stale/vault" "${root}/stale" 2> "${root}/said"
+}
+own_folder=${site}/own/AppStream/x86_64/os/
+revision own 200
+revision behind 199
+revision same 200
+revision newer 201
+revision older 100
+
+stale_case appstream "${own_folder}" behind same
+stale_run
+holds "a mirror behind the own server is dropped, one as new stays first" "${root}/stale/appstream" \
+    "${site}/same/AppStream/\$basearch/os/"
+has "and the log names it" "${root}/said" \
+    "appstream: dropping ${site}/behind/AppStream/\$basearch/os/, its revision 199 is behind 200"
+
+stale_case appstream "${own_folder}" newer same
+stale_run
+holds "a mirror newer than the own server stays" "${root}/stale/appstream" "${site}/newer/AppStream/\$basearch/os/
+${site}/same/AppStream/\$basearch/os/"
+
+stale_case appstream "${own_folder}" behind older
+stale_run
+holds "with every mirror behind the list is the own server alone" "${root}/stale/appstream" "${own_folder}"
+has "and the log says so" "${root}/said" "appstream: every mirror is behind ${own_folder}, reading it alone"
+stale_repos=${root}/stale-repos
+mkdir "${stale_repos}"
+printf '[appstream]\nmirrorlist=https://mirrors.almalinux.org/mirrorlist/10.2/appstream?arch=x86_64_v2\nenabled=1\n' \
+    > "${stale_repos}/almalinux-appstream.repo"
+point_at_mirrors "${stale_repos}" "${root}/stale"
+rm -f "${root}/read"
+# shellcheck disable=SC2310 # the status is the answer looked for.
+dnf_reads "${stale_repos}" 2> /dev/null && status=0 || status=$?
+expect "dnf reads the own server's folder" 0 "${status}"
+has "and no other" "${root}/read" "${site}/own/AppStream/x86_64/os/repodata/repomd.xml"
+
+stale_case appstream "${own_folder}" http://127.0.0.1:1/AppStream/os/ behind
+stale_run
+holds "a mirror that does not answer stays" "${root}/stale/appstream" "http://127.0.0.1:1/AppStream/os/"
+
+stale_case appstream http://127.0.0.1:1/own/AppStream/ behind same
+stale_run
+holds "an own server that does not answer leaves the list as it is" "${root}/stale/appstream" "${site}/behind/AppStream/\$basearch/os/
+${site}/same/AppStream/\$basearch/os/"
+has "and says so" "${root}/said" "appstream: http://127.0.0.1:1/own/AppStream/ gives no revision, keeping its mirrors"
+
+stale_case appstream "${own_folder}" vault
+printf '%s\n' "${site}/vault/AppStream/x86_64/os/" > "${root}/stale/appstream"
+revision vault 100
+stale_run
+holds "a list use_vault set to the vault is left alone" "${root}/stale/appstream" "${site}/vault/AppStream/x86_64/os/"
+
+stale_case rocky-appstream "${own_folder}"
+rm "${root}/stale/rocky-appstream"
+stale_run
+listed=no
+[ ! -e "${root}/stale/rocky-appstream" ] || listed=yes
+expect "a repository on a metalink gets no list" no "${listed}"
+printf '[rocky-appstream]\nmetalink=https://mirrors.rockylinux.org/metalink?arch=$basearch&repo=AppStream-10.1\nenabled=1\n' \
+    > "${stale_repos}/rocky.repo"
+point_at_mirrors "${stale_repos}" "${root}/stale"
+has "and keeps its metalink" "${stale_repos}/rocky.repo" 'metalink=https://mirrors.rockylinux.org/metalink?arch=$basearch&repo=AppStream-10.1'
+
+# The list's entries hold dnf's variables, so the stand-in for dnf fills them in before the read. The
+# service has the filled path only, and the entry in the list stays as it came.
+stale_case appstream "${own_folder}" behind
+stale_run
+lacks "a mirror's variables are filled in before its revision is read" "${root}/stale/appstream" "${site}/behind/"
+has "and the list's entries keep their variables" "${root}/said" "dropping ${site}/behind/AppStream/\$basearch/os/"
 
 if [ "${failures}" -ne 0 ]; then
     echo "el-mirrors: ${failures} of $((passes + failures)) checks failed"

@@ -82,6 +82,8 @@ The image comes from the publisher's mirror (`repo.almalinux.org`, `dl.rockylinu
 
 Every package a build installs comes from the image's minor release, such as 10.2. A newer minor release reaches templates only with a Kubehenge release that pins its image. Once the publisher moves the minor release to its vault, the build reads every repository of the node OS there. kubeadm's containerd comes from the same minor release's EPEL folder. On Rocky Linux it comes from EPEL's archive once EPEL moves the folder there.
 
+Some of AlmaLinux's mirrors lag a sync behind. A build reads only those whose `repomd.xml` is as new as the publisher's own server's. This adds up to a minute to a build. When every mirror lags, the build reads the publisher's server.
+
 ### Package checks
 
 Every package a build installs is signed, and checked against a key accepted only with its known fingerprint. The keys are the family's own, pkgs.k8s.io's for kubeadm and Rancher's for the RKE2 and k3s policies. For kubeadm's containerd, which the EL families do not carry, the key is EPEL's (on AlmaLinux, AlmaLinux's own build of EPEL for `x86-64-v2`).
@@ -131,7 +133,7 @@ Talos templates have no builds. Talos nodes take their updates by upgrading Talo
 
 ### Kernel check
 
-A build records its kernel and a hash of its packages in the template's description when it ends. The refresh compares each build with the previous one of its line. An older kernel means the mirror was one sync behind.
+A build records its kernel and a hash of its packages in the template's description when it ends. The refresh compares each build with the previous one of its line. An older kernel means the mirror was one sync behind. AlmaLinux builds drop every mirror whose repository index is older than the one on the publisher's own server, so this happens only when that server is behind. Rocky Linux's metalinks ensure the same.
 
 Such a build is kept out of the builds clusters move to. The Administration page marks it "Older than the previous build". The controller asks for another build an hour later, up to 3 times. After the third, the build stays out until a newer one arrives. A build from before this check is never older.
 
