@@ -405,7 +405,7 @@ pct exec <ctid> -- kubehenge appliance certificate address kubehenge.example.org
 - Any other certificate stays, and the page warns until one valid for the new name replaces it.
 - Links in notifications and sign-in go to the new address at once. Headlamp takes it at its next start, after 15 minutes unused.
 - Update the redirect URLs your identity provider has registered, as [below](#names-and-addresses).
-- The Proxmox VE interface entry keeps the old address until `install.sh --certificate` runs. That command keeps the new name where this node's DNS resolves it to the appliance, and makes a new certificate.
+- The Proxmox VE interface entry keeps the old address. On each node with the entry, run `sh /usr/local/sbin/kubehenge-pve-entry --url https://kubehenge.example.org`. It leaves the certificate as it is.
 
 ### The appliance's own CA
 
