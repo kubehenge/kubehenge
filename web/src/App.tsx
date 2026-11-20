@@ -1,19 +1,16 @@
 import { Suspense, useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type JSX } from "react";
 
 import { ApiError, api, isDemo, setSignedOutHandler, setUpgradedHandler } from "./api";
+import { runsOutSoon } from "./certificate-expiry";
 import { Console } from "./Console";
 import { FleetProvider } from "./fleet";
 import { RoutePage, routeAt } from "./Pages";
-import { usePath } from "./router";
+import { Link, usePath } from "./router";
 import { SignIn } from "./SignIn";
 import type { Session, SetupStatus } from "./types";
 import { ErrorBoundary, Skeleton } from "./ui";
 
-const msPerDay = 86_400_000;
 const mibPerGiB = 1024;
-
-// Administrators are warned this many days before the certificate runs out. It is renewed on the node.
-const certificateWarningDays = 30;
 
 // A setup status that could not be read is asked for again after this long.
 const setupRetry = 5000;
@@ -275,8 +272,9 @@ function ApplianceWarnings({
       {certificate && (
         <p className="warning" role="alert">
           {certificate.expired ? "Appliance certificate expired on " : "Appliance certificate expires on "}
-          {certificate.expires.toLocaleDateString(undefined, { dateStyle: "long" })}. Renew it on the Proxmox VE node:{" "}
-          <code>sh install.sh --certificate --ctid {ctid}</code>
+          {certificate.expires.toLocaleDateString(undefined, { dateStyle: "long" })}. Replace it under{" "}
+          <Link to="/administration/interface-certificate">Interface certificate</Link>, or renew it on the Proxmox VE
+          node: <code>sh install.sh --certificate --ctid {ctid}</code>
         </p>
       )}
       {credentials && (
@@ -290,13 +288,12 @@ function ApplianceWarnings({
   );
 }
 
-// certificateWarning is the warning about the appliance's certificate when it runs out within
-// certificateWarningDays, or has.
+// certificateWarning is the warning about a certificate or credentials running out within
+// certificateWarningDays, or having.
 function certificateWarning(expiry: string | undefined): { expires: Date; expired: boolean } | undefined {
   if (expiry === undefined || expiry === "") {
     return undefined;
   }
   const expires = new Date(expiry);
-  const left = expires.getTime() - Date.now();
-  return left < certificateWarningDays * msPerDay ? { expires, expired: left < 0 } : undefined;
+  return runsOutSoon(expires) ? { expires, expired: expires.getTime() < Date.now() } : undefined;
 }
