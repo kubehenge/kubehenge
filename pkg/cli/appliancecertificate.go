@@ -263,7 +263,7 @@ func printCertificate(cmd *cobra.Command, v *certificateAnswer) error {
 		default:
 			resolves = ", does not resolve to this appliance"
 		}
-		row(t, "Public address",v.PublicURL+resolves)
+		row(t, "Public address", v.PublicURL+resolves)
 	}
 	if v.NotServed != "" {
 		row(t, "Not served", "the stored certificate, since "+v.NotServed)
