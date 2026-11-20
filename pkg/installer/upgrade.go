@@ -92,6 +92,21 @@ func (r *Runner) currentCertificate(ctx context.Context) *x509.Certificate {
 	return c
 }
 
+// storedCertificate is the certificate an administrator gave the interface, nil when there is none
+// or it is outside its validity, since the interface then serves the installer's. Only the file's
+// certificates are read, never its key, because every command's output goes to the log.
+func (r *Runner) storedCertificate(ctx context.Context) *x509.Certificate {
+	out, err := r.inCT(ctx, "sed", "-n", "/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p", appliance.InterfaceCertificatePath)
+	if err != nil {
+		return nil
+	}
+	c, err := parseCertFile([]byte(out))
+	if err != nil || r.Now().Before(c.NotBefore) || r.Now().After(c.NotAfter) {
+		return nil
+	}
+	return c
+}
+
 // signedHere reports whether this cluster's CA signed the certificate.
 func (r *Runner) signedHere(c *x509.Certificate) bool {
 	data, err := r.S.Node.readFile(clusterCA)
@@ -213,7 +228,7 @@ func (r *Runner) ReplaceCertificate(ctx context.Context, out io.Writer) (*Result
 	}
 	// A certificate an administrator gave the interface is served before the installer's, so asking
 	// for the installer's again takes it away.
-	if _, err = r.inCT(ctx, "rm", "-f", keyDir+"/"+appliance.InterfaceCertificateFile); err != nil {
+	if _, err = r.inCT(ctx, "rm", "-f", appliance.InterfaceCertificatePath); err != nil {
 		return nil, userErr("removing the stored certificate from container "+c.CTID+" failed", "See "+r.LogPath)
 	}
 	// Not while the management cluster is applied or removed: the restart would cut the run off.
@@ -346,12 +361,8 @@ func (r *Runner) Upgrade(ctx context.Context, out io.Writer) (*Result, error) {
 			return nil, err
 		}
 	}
-	// A certificate the installer made is renewed once it has less than 60 days left. The restart
-	// below puts it into use.
-	if current := r.currentCertificate(ctx); current != nil && current.NotAfter.Before(r.Now().Add(certRenewBefore)) {
-		if err = r.renewCertificate(ctx, current, out); err != nil {
-			return nil, err
-		}
+	if err = r.upgradeCertificate(ctx, out); err != nil {
+		return nil, err
 	}
 	r.sayf(out, "== starting Kubehenge %s, and checking that it serves", r.version)
 	proxies := strings.Join(c.TrustedProxies, ",")
@@ -527,6 +538,24 @@ func (r *Runner) ensureKeyVolume(ctx context.Context, out io.Writer) error {
 	}
 	if _, err := r.pct(ctx, "set", c.CTID, fmt.Sprintf("--mp%d", free), storage+":1,mp="+keyDir+",backup=0"); err != nil {
 		return userErr("adding the key volume to container "+c.CTID+" failed", "See "+r.LogPath)
+	}
+	return nil
+}
+
+// upgradeCertificate renews a certificate the installer made once it has less than 60 days left,
+// also while the interface serves another, since a reset goes back to it. The upgrade's restart
+// puts it into use. An expiry warning is about the certificate served.
+func (r *Runner) upgradeCertificate(ctx context.Context, out io.Writer) error {
+	soon := r.Now().Add(certRenewBefore)
+	current, stored := r.currentCertificate(ctx), r.storedCertificate(ctx)
+	if current != nil && current.NotAfter.Before(soon) && (stored == nil || r.madeHere(current)) {
+		if err := r.renewCertificate(ctx, current, out); err != nil {
+			return err
+		}
+	}
+	if stored != nil && stored.NotAfter.Before(soon) {
+		r.sayf(out, "kubehenge: the certificate an administrator gave the interface is valid until %s. Give the interface a new one before then",
+			stored.NotAfter.UTC().Format(time.RFC1123))
 	}
 	return nil
 }

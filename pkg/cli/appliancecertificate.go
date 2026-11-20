@@ -13,12 +13,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-
-	"github.com/kubehenge/kubehenge/pkg/appliance"
 )
-
-// storedCertificateFile is where the interface keeps the certificate an administrator gave it.
-const storedCertificateFile = "/var/lib/kubehenge-keys/" + appliance.InterfaceCertificateFile
 
 const certificatePath = "/api/appliance/certificate"
 

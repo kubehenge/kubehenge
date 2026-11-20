@@ -115,8 +115,9 @@ The interface acts in the management cluster with its own kubeconfig.`,
 		"address or CIDR range of a reverse proxy in front of the interface, repeatable. From one, the sign-in limits count the client in X-Forwarded-For, "+
 			"so one person's failures no longer lock out everyone behind the proxy. Without it forwarding headers are ignored (env KUBEHENGE_TRUSTED_PROXIES, comma-separated)")
 	f.StringVar(&a.Dir, "appliance-dir", "", "run as Kubehenge's appliance, keeping the management cluster's state in this directory and setting it up from the interface. "+
-		"Without it, the management cluster is the one in KUBECONFIG")
-	f.StringVar(&a.KeyDir, "key-dir", "", "with --appliance-dir, a directory on a volume that backups leave out. It holds the keys for what automatic upgrades of the management cluster keep and for kubehenge login sessions, and the certificate an administrator gave the interface. Without it, those upgrades cannot be switched on, those sessions end when the interface restarts and the certificate cannot be changed")
+		"The directory also keeps the certificate an administrator gives the interface. "+
+		"Without it, the management cluster is the one in KUBECONFIG and the certificate cannot be changed")
+	f.StringVar(&a.KeyDir, "key-dir", "", "with --appliance-dir, a directory on a volume that backups leave out. It holds the keys for what automatic upgrades of the management cluster keep and for kubehenge login sessions. Without it, those upgrades cannot be switched on and those sessions end when the interface restarts")
 	f.StringVar(&o.headlampListen, "headlamp-listen", "", "address to serve the shared Headlamp on, behind the interface's sign-in, or empty for none")
 	f.StringVar(&o.headlampUpstream, "headlamp-upstream", "", "the Headlamp server, such as http://127.0.0.1:4466")
 	f.StringVar(&o.headlampKubeconfig, "headlamp-kubeconfig", "", "file the Headlamp server reads its clusters from, written by the interface")
@@ -402,13 +403,10 @@ func (o *serveOptions) setUpHeadlamp() error {
 }
 
 // loadCertificate has the interface serve the certificate of --tls-cert and --tls-key, or the one an
-// administrator gave it, which the appliance's key directory keeps.
+// administrator gave it, which the appliance's directory keeps. Container backups hold that
+// directory, so a restore serves the certificate the administrator chose.
 func (o *serveOptions) loadCertificate(now time.Time) error {
-	keyDir := ""
-	if o.a.Dir != "" {
-		keyDir = o.a.KeyDir
-	}
-	o.s.Certificate = ui.NewInterfaceCertificate(keyDir, o.certFile, o.keyFile)
+	o.s.Certificate = ui.NewInterfaceCertificate(o.a.Dir, o.certFile, o.keyFile)
 	return o.s.Certificate.Load(now, o.s.Log) //nolint:wrapcheck // the error names the flags already
 }
 

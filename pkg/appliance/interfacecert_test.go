@@ -107,3 +107,22 @@ func TestStoredInterfaceCertificateReadsOnlyAFileTheInterfaceWouldServe(t *testi
 		t.Error("a certificate that ran out was read")
 	}
 }
+
+// When the interface serves the installer's certificate where the check expects the stored one, the
+// refusal names the stored file, which is the certificate the interface should present.
+func TestServiceCheckNamesTheStoredFileItExpected(t *testing.T) {
+	t.Parallel()
+	installer, given := issueFor127(t, 4), issueFor127(t, 5)
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{installer.pair}, MinVersion: tls.VersionTLS12}
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	stored := writeFile(t, InterfaceCertificateFile, []byte("# source: uploaded\n"), given.key, given.cert)
+	c := &ServiceCheck{
+		CertFile: writeFile(t, "tls.crt", installer.cert), StoredFile: stored, Address: srv.Listener.Addr().String(),
+		Wait: time.Second, Settle: time.Millisecond, Restarts: func(context.Context) (int, error) { return 0, nil },
+	}
+	if err := c.Healthy(t.Context()); err == nil || !strings.Contains(err.Error(), "serves a certificate other than "+stored) {
+		t.Errorf("serving the installer's certificate where the stored one is expected: %v", err)
+	}
+}

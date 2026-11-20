@@ -79,10 +79,10 @@ After any of them, apply the management cluster again to carry the change to it 
 
 ### From the appliance's shell
 
-`kubehenge appliance` inside the appliance does what the Administration page does, as a client of its interface. It acts as the Proxmox VE user `kubehenge login` signed in ([signing in](clusters.md#signing-in-and-finding-clusters)), so the same privileges and refusals apply. Inside the appliance, give `kubehenge login` the interface's own certificate as `--ca`.
+`kubehenge appliance` inside the appliance does what the Administration page does, as a client of its interface. It acts as the Proxmox VE user `kubehenge login` signed in ([signing in](clusters.md#signing-in-and-finding-clusters)), so the same privileges and refusals apply. Inside the appliance, `kubehenge login` trusts the certificate the interface serves without `--ca`.
 
 ```sh
-pct exec <ctid> -- kubehenge login https://127.0.0.1 --ca /etc/kubehenge/tls.crt --user root@pam --password-file /root/password
+pct exec <ctid> -- kubehenge login https://127.0.0.1 --user root@pam --password-file /root/password
 pct exec <ctid> -- kubehenge appliance upgrades
 pct exec <ctid> -- kubehenge appliance upgrade 0.2.0
 ```
@@ -390,9 +390,9 @@ pct exec <ctid> -- kubehenge appliance certificate reset
 
 `replace` takes the files [`--cert` takes](#certificate-files), with the same checks, and the certificate must be valid for the host of the public URL. `self-sign` makes a certificate for the names and addresses of the one served, valid for 824 days. `reset` serves the installer's again. Open sessions and Headlamp keep working through a change.
 
-A certificate given this way is kept in the key volume, which backups of the container leave out. After a restore, the installer's certificate is served until it is given again. `--upgrade` leaves it, and the upgrade's health check expects it.
+A certificate given this way is kept in `/var/lib/kubehenge`, which backups of the container hold, so a restore serves it again. `--upgrade` leaves it, and the upgrade's health check expects it. While it is served, `--upgrade` warns of its expiry 60 days ahead.
 
-`kubehenge login` pins the certificate it was given with `--ca`. After a change to one that CA does not vouch for, `kubehenge` commands fail until `kubehenge login` is run again with the new CA.
+`kubehenge login` in the appliance trusts the certificate served, whichever it is. Elsewhere a login trusts a certificate its `--ca` or the system's trust store vouches for. A change to one neither vouches for stops `kubehenge` commands. Their error names the new certificate's fingerprint. Run `kubehenge login` again with its CA.
 
 ### Certificate files
 

@@ -11,3 +11,4 @@
 
 - `--cert` takes one or more files in any format, and `--key` is optional.
 - `install.sh --certificate` removes a certificate given through the interface.
+- `kubehenge login` trusts a certificate its `--ca` or the system's trust store vouches for. In the appliance it trusts the certificate the interface serves without `--ca`.

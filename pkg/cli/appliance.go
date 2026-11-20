@@ -59,7 +59,7 @@ Run it in the appliance. Every command except health reaches the interface as th
 "kubehenge login" signed in. The user's privileges and the interface's checks apply as on its pages.
 
 Sign in first, in the appliance with
-"kubehenge login https://127.0.0.1 --ca /etc/kubehenge/tls.crt --user root@pam --password-file <file>".`,
+"kubehenge login https://127.0.0.1 --user root@pam --password-file <file>".`,
 	}
 	cmd.AddCommand(o.healthCommand(), o.upgradesCommand(), o.upgradeCommand(), o.etcdBackupsCommand(), o.notificationsCommand(),
 		o.activityCommand(), o.takeOverCommand(), o.readyForRebootCommand(), o.exportCommand(), o.importCommand(),
@@ -121,8 +121,8 @@ func (o *applianceOptions) healthCommand() *cobra.Command {
 			return o.check.Healthy(cmd.Context())
 		},
 	}
-	cmd.Flags().StringVar(&o.check.CertFile, "cert", "/etc/kubehenge/tls.crt", "certificate the interface must present")
-	cmd.Flags().StringVar(&o.check.StoredFile, "stored-cert", storedCertificateFile, "certificate an administrator gave the interface, which it must present instead while the file reads cleanly")
+	cmd.Flags().StringVar(&o.check.CertFile, "cert", appliance.InstallerCertificatePath, "certificate the interface must present")
+	cmd.Flags().StringVar(&o.check.StoredFile, "stored-cert", appliance.InterfaceCertificatePath, "certificate an administrator gave the interface, which it must present instead while the file reads cleanly")
 	cmd.Flags().StringVar(&o.check.Address, "address", "127.0.0.1:443", "where the interface listens")
 	cmd.Flags().DurationVar(&o.check.Wait, "wait", healthWait, "how long the interface has to answer")
 	cmd.Flags().DurationVar(&o.check.Settle, "settle", healthSettle, "how long the interface must stay up after it answers")

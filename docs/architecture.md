@@ -975,12 +975,13 @@ Users sign in through the Proxmox VE API, with no second user directory. Every P
 
 The interface and Headlamp take their certificate from one function on each handshake, so a change reaches the next connection of either with no restart and signs no one out.
 
-- The installer's certificate (`--tls-cert`, `--tls-key`) is served until an administrator gives another. That one is kept in `interface-certificate.pem` in the key directory, mode 0600, written whole to a temporary file, synced and renamed over the old one.
+- The installer's certificate (`--tls-cert`, `--tls-key`) is served until an administrator gives another. That one is kept in `interface-certificate.pem` in the appliance directory (`--appliance-dir`), mode 0600, written whole to a temporary file, synced and renamed over the old one.
 - At a start, the stored file is served when it reads cleanly (a key and certificate that pair, with time left). Otherwise the installer's is served, the reason is logged, and administrators see it with the certificate.
 - Administrators only (`Sys.Modify` on `/`) read and change it. `GET /api/appliance/certificate` shows it. `PUT` replaces it with uploaded files (`multipart/form-data`, up to 8 files of 1 MiB, in any format, with an optional `passphrase` field). `POST /api/appliance/certificate/self-signed` makes a self-signed one for the names and addresses of the one served. `DELETE` serves the installer's again. `kubehenge appliance certificate` does the same four things.
 - An upload is refused with a `code` and a sentence when it is unreadable, needs a passphrase, ends within a day, or is not valid for the host of `--public-url`. A refusal changes nothing. One change runs at a time, and a second gets `busy`.
 - Each change is in the activity log with its user and the new fingerprint. No answer or log line holds a key or a passphrase.
-- The key directory is left out of container backups, so a restore serves the installer's certificate until an administrator gives the other again. `install.sh --certificate` removes the stored file. `--upgrade` leaves it, and the updater's health check expects it.
+- The appliance directory is on the container's root disk, which its backups hold, so a restore serves the certificate the administrator gave. `install.sh --certificate` removes the stored file. `--upgrade` leaves it, warns of its expiry, and the updater's health check expects it.
+- `kubehenge login` in the appliance trusts the certificate served, read again on each command. Elsewhere it trusts what `--ca` or the system's roots vouch for. The appliance's export leaves the certificate out, since a new appliance gets its own from the installer.
 - The demo does all of it in memory.
 
 #### Behind a reverse proxy

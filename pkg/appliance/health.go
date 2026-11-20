@@ -5,12 +5,10 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -124,24 +122,7 @@ func (c *ServiceCheck) Client() (*http.Client, string, error) {
 
 // expected is the certificate the interface should serve, and the file it came from.
 func (c *ServiceCheck) expected() (*x509.Certificate, string, error) {
-	if c.StoredFile != "" {
-		if leaf, err := StoredInterfaceCertificate(c.StoredFile, time.Now()); err == nil {
-			return leaf, c.StoredFile, nil
-		}
-	}
-	raw, err := os.ReadFile(c.CertFile)
-	if err != nil {
-		return nil, "", fmt.Errorf("the interface's certificate: %w", err)
-	}
-	block, _ := pem.Decode(raw)
-	if block == nil {
-		return nil, "", fmt.Errorf("the interface's certificate %s holds no PEM", c.CertFile)
-	}
-	leaf, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, "", fmt.Errorf("the interface's certificate: %w", err)
-	}
-	return leaf, c.CertFile, nil
+	return ServedCertificate(c.CertFile, c.StoredFile, time.Now())
 }
 
 func (c *ServiceCheck) untilAnswers(ctx context.Context, client *http.Client, url string) error {

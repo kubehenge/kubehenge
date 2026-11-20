@@ -65,7 +65,7 @@ func issueCertificate(t *testing.T, notBefore, notAfter time.Time, names []strin
 }
 
 // serveCertificate makes the installer's certificate for names and ips, valid until notAfter, and
-// has h's interface serve it from files, with a key directory of its own.
+// has h's interface serve it from files, with an appliance directory of its own.
 func (h *harness) serveCertificate(notAfter time.Time, names []string, ips ...string) *InterfaceCertificate {
 	h.t.Helper()
 	b := issueCertificate(h.t, h.clock.Add(-24*time.Hour), notAfter, names, ips...)
@@ -100,7 +100,9 @@ func administered(t *testing.T) (*harness, *browser, *InterfaceCertificate) {
 	return h, a, c
 }
 
-func (c *InterfaceCertificate) fingerprint() string { return fingerprintOf(c.served().pair.Leaf) }
+func (c *InterfaceCertificate) fingerprint() string {
+	return appliance.Fingerprint(c.served().pair.Leaf)
+}
 
 // goodCertificate is a certificate for the public name, valid for a year, as files.
 func goodCertificate(t *testing.T, h *harness) *certfiles.Bundle {
@@ -212,7 +214,7 @@ func handshake(t *testing.T, get func(*tls.ClientHelloInfo) (*tls.Certificate, e
 	if err := conn.HandshakeContext(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	return fingerprintOf(conn.ConnectionState().PeerCertificates[0])
+	return appliance.Fingerprint(conn.ConnectionState().PeerCertificates[0])
 }
 
 // Both listeners ask one function for their certificate on each handshake, so a change reaches the
@@ -229,7 +231,7 @@ func TestBothListenersTakeTheirCertificateFromOneFunction(t *testing.T) {
 	}
 	uploaded := goodCertificate(t, h)
 	expect(t, a.upload(filePart("host.pem", uploaded.CertPEM), filePart("host.key", uploaded.KeyPEM)), http.StatusOK)
-	want := fingerprintOf(uploaded.Leaf)
+	want := appliance.Fingerprint(uploaded.Leaf)
 	for _, listener := range []string{"interface", "Headlamp"} {
 		if got := handshake(t, c.GetCertificate); got != want || got == before {
 			t.Errorf("after the change the %s listener presents %s, want %s", listener, got, want)
@@ -308,7 +310,7 @@ func TestACertificateIsWrittenAtomicallyAndAFailureChangesNothing(t *testing.T) 
 	first := goodCertificate(t, h)
 	certificateOf(t, a.upload(filePart("a.pem", first.CertPEM), filePart("a.key", first.KeyPEM)))
 	if got := storedFiles(t, c); len(got) != 1 || got[0] != appliance.InterfaceCertificateFile {
-		t.Fatalf("the key directory holds %v after a change, want the one file", got)
+		t.Fatalf("the appliance directory holds %v after a change, want the one file", got)
 	}
 	path := filepath.Join(c.dir, appliance.InterfaceCertificateFile)
 	if info, err := os.Stat(path); err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
@@ -330,7 +332,7 @@ func TestACertificateIsWrittenAtomicallyAndAFailureChangesNothing(t *testing.T) 
 			t.Errorf("failing at %s, the stored file changed: %v", step, err)
 		}
 		if got := storedFiles(t, c); len(got) != 1 {
-			t.Errorf("failing at %s, the key directory holds %v", step, got)
+			t.Errorf("failing at %s, the appliance directory holds %v", step, got)
 		}
 	}
 }
@@ -390,7 +392,7 @@ func TestAStoredCertificateIsServedOnlyWhenItReadsCleanly(t *testing.T) {
 	}
 	next := NewInterfaceCertificate(c.dir, c.certFile, c.keyFile)
 	next.Roots = c.Roots
-	if err := next.Load(h.clock, nil); err != nil || next.fingerprint() != fingerprintOf(uploaded.Leaf) || next.served().notServed != "" {
+	if err := next.Load(h.clock, nil); err != nil || next.fingerprint() != appliance.Fingerprint(uploaded.Leaf) || next.served().notServed != "" {
 		t.Errorf("the good stored file is not served: %v %s", err, next.served().notServed)
 	}
 	if err := os.Remove(path); err != nil {
@@ -424,7 +426,7 @@ func TestAStartRemovesWhatACutOffChangeLeft(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := storedFiles(t, c); len(got) != 0 {
-		t.Errorf("the key directory holds %v", got)
+		t.Errorf("the appliance directory holds %v", got)
 	}
 }
 
@@ -467,7 +469,7 @@ func TestAStoredCertificateSurvivesARestart(t *testing.T) {
 		}
 		return next
 	}
-	if next := restarted(); next.fingerprint() != fingerprintOf(uploaded.Leaf) || next.served().source != certificateUploaded {
+	if next := restarted(); next.fingerprint() != appliance.Fingerprint(uploaded.Leaf) || next.served().source != certificateUploaded {
 		t.Errorf("after a restart: %s from %s", next.fingerprint(), next.served().source)
 	}
 	if got := certificateOf(t, a.do("POST", "/api/appliance/certificate/self-signed", "")); got.Source != certificateSelfSigned {
@@ -484,7 +486,7 @@ func TestAdministratorsSeeTheServedCertificate(t *testing.T) {
 	_, a, c := administered(t)
 	v := certificateOf(t, a.do("GET", "/api/appliance/certificate", ""))
 	leaf := c.served().pair.Leaf
-	if v.Source != "installer" || v.Fingerprint != fingerprintOf(leaf) || !v.SelfSigned || !v.Changeable || v.PublicURL != "https://"+certificateHost ||
+	if v.Source != "installer" || v.Fingerprint != appliance.Fingerprint(leaf) || !v.SelfSigned || !v.Changeable || v.PublicURL != "https://"+certificateHost ||
 		strings.Join(v.DNSNames, ",") != certificateHost+",kubehenge" || strings.Join(v.IPAddresses, ",") != "192.0.2.40" ||
 		v.PublicNameResolves == nil || !*v.PublicNameResolves || len(v.Chain) != 1 || !v.NotAfter.Equal(leaf.NotAfter) || v.Issuer == "" || v.Subject == "" {
 		t.Errorf("view = %+v", v)
@@ -587,7 +589,7 @@ func TestAnUploadTakesEncryptedFilesInAnyFormat(t *testing.T) {
 		t.Fatal("a refused passphrase changed the certificate")
 	}
 	v := certificateOf(t, a.upload(filePart("host.pfx", pfx), formPart{"passphrase", "", []byte("open sesame")}))
-	if v.Source != certificateUploaded || v.Fingerprint != fingerprintOf(good.Leaf) {
+	if v.Source != certificateUploaded || v.Fingerprint != appliance.Fingerprint(good.Leaf) {
 		t.Errorf("a PKCS#12 upload gave %+v", v)
 	}
 	unused := issueCertificate(t, h.clock.Add(-time.Hour), h.clock.AddDate(1, 0, 0), []string{"unused.example.org"})
@@ -597,7 +599,7 @@ func TestAnUploadTakesEncryptedFilesInAnyFormat(t *testing.T) {
 		filePart("host.pem", append([]byte("subject=CN=host\n"), good.CertPEM...)),
 	}
 	v = certificateOf(t, a.upload(order...))
-	if v.Fingerprint != fingerprintOf(good.Leaf) || len(v.LeftOut) == 0 || v.LeftOut == nil {
+	if v.Fingerprint != appliance.Fingerprint(good.Leaf) || len(v.LeftOut) == 0 || v.LeftOut == nil {
 		t.Errorf("files in any order gave %+v", v)
 	}
 }
@@ -625,7 +627,7 @@ func TestASelfSignedCertificateCoversTheNamesOfTheServedOne(t *testing.T) {
 	before := c.fingerprint()
 	v := certificateOf(t, a.do("POST", "/api/appliance/certificate/self-signed", ""))
 	leaf := c.served().pair.Leaf
-	if v.Source != certificateSelfSigned || !v.SelfSigned || v.Fingerprint == before || v.Fingerprint != fingerprintOf(leaf) {
+	if v.Source != certificateSelfSigned || !v.SelfSigned || v.Fingerprint == before || v.Fingerprint != appliance.Fingerprint(leaf) {
 		t.Errorf("view = %+v", v)
 	}
 	if strings.Join(leaf.DNSNames, ",") != certificateHost+",kubehenge" || len(leaf.IPAddresses) != 1 || !leaf.IPAddresses[0].Equal(net.ParseIP("192.0.2.40")) {
@@ -662,7 +664,7 @@ func TestAResetServesTheInstallersCertificateAndForgetsTheStoredOne(t *testing.T
 	installer := c.fingerprint()
 	refusal2 := func() {
 		if got := storedFiles(t, c); len(got) != 0 {
-			t.Errorf("the key directory holds %v", got)
+			t.Errorf("the appliance directory holds %v", got)
 		}
 	}
 	v := certificateOf(t, a.do("DELETE", "/api/appliance/certificate", ""))
@@ -691,7 +693,7 @@ func TestAResetThatCannotForgetTheFileChangesNothing(t *testing.T) {
 	certificateOf(t, a.upload(filePart("a.pem", uploaded.CertPEM), filePart("a.key", uploaded.KeyPEM)))
 	c.files = removeFails{}
 	refusal(t, a.do("DELETE", "/api/appliance/certificate", ""), http.StatusInternalServerError, "store")
-	if c.fingerprint() != fingerprintOf(uploaded.Leaf) {
+	if c.fingerprint() != appliance.Fingerprint(uploaded.Leaf) {
 		t.Error("the interface serves the installer's while the stored file stays")
 	}
 }
@@ -720,7 +722,7 @@ func TestCertificateChangesAreSerialised(t *testing.T) {
 	}
 	close(hold.release)
 	certificateOf(t, <-done)
-	if c.fingerprint() != fingerprintOf(first.Leaf) {
+	if c.fingerprint() != appliance.Fingerprint(first.Leaf) {
 		t.Error("the first change was lost")
 	}
 	hold.entered = nil
@@ -746,11 +748,11 @@ func TestCertificateChangesAreSerialised(t *testing.T) {
 	}
 	wg.Wait()
 	if len(storedFiles(t, c)) > 1 {
-		t.Fatalf("the key directory holds %v", storedFiles(t, c))
+		t.Fatalf("the appliance directory holds %v", storedFiles(t, c))
 	}
 	stored, err := c.readStored(h.clock)
 	switch {
-	case err == nil && fingerprintOf(stored.pair.Leaf) != c.fingerprint():
+	case err == nil && appliance.Fingerprint(stored.pair.Leaf) != c.fingerprint():
 		t.Error("the stored file and the certificate served differ")
 	case err != nil && c.served().source != certificateInstaller:
 		t.Errorf("serves %s from nothing stored: %v", c.served().source, err)
@@ -807,9 +809,9 @@ func TestOnlyAdministratorsChangeTheCertificate(t *testing.T) {
 	}
 }
 
-// With no key directory a certificate has nowhere to be kept, so a change is refused and a show
-// says so.
-func TestWithoutAKeyDirectoryTheCertificateCannotChange(t *testing.T) {
+// With no appliance directory a certificate has nowhere to be kept, so a change is refused and a
+// show says so.
+func TestWithoutAnApplianceDirectoryTheCertificateCannotChange(t *testing.T) {
 	t.Parallel()
 	h, a, c := administered(t)
 	c.dir = ""
@@ -817,9 +819,9 @@ func TestWithoutAKeyDirectoryTheCertificateCannotChange(t *testing.T) {
 		t.Error("a certificate with nowhere to be kept says it is changeable")
 	}
 	good := goodCertificate(t, h)
-	refusal(t, a.upload(filePart("a.pem", good.CertPEM), filePart("a.key", good.KeyPEM)), http.StatusConflict, "no-key-directory")
-	refusal(t, a.do("POST", "/api/appliance/certificate/self-signed", ""), http.StatusConflict, "no-key-directory")
-	refusal(t, a.do("DELETE", "/api/appliance/certificate", ""), http.StatusConflict, "no-key-directory")
+	refusal(t, a.upload(filePart("a.pem", good.CertPEM), filePart("a.key", good.KeyPEM)), http.StatusConflict, "no-appliance-directory")
+	refusal(t, a.do("POST", "/api/appliance/certificate/self-signed", ""), http.StatusConflict, "no-appliance-directory")
+	refusal(t, a.do("DELETE", "/api/appliance/certificate", ""), http.StatusConflict, "no-appliance-directory")
 }
 
 // No answer, log line or activity entry holds a key or a passphrase, and each change is recorded
@@ -858,7 +860,7 @@ func TestNoKeyOrPassphraseIsAnsweredOrLogged(t *testing.T) {
 		}
 	}
 	if got := logged.String(); !strings.Contains(got, "interface certificate replaced") || !strings.Contains(got, `"user":"admin@pve"`) ||
-		!strings.Contains(got, fingerprintOf(good.Leaf)) || !strings.Contains(got, "interface certificate made self-signed") || !strings.Contains(got, "set back to the installer") {
+		!strings.Contains(got, appliance.Fingerprint(good.Leaf)) || !strings.Contains(got, "interface certificate made self-signed") || !strings.Contains(got, "set back to the installer") {
 		t.Errorf("the changes are not all recorded: %s", got)
 	}
 	if !strings.Contains(logged.String(), `"level":"ERROR"`) {
@@ -875,7 +877,7 @@ func TestTheActivityLogRecordsCertificateChanges(t *testing.T) {
 	rec := a.do("GET", "/api/activity", "")
 	expect(t, rec, http.StatusOK)
 	got := rec.Body.String()
-	if !strings.Contains(got, "interface certificate replaced") || !strings.Contains(got, "admin@pve") || !strings.Contains(got, fingerprintOf(good.Leaf)) || strings.Contains(got, "PRIVATE KEY") {
+	if !strings.Contains(got, "interface certificate replaced") || !strings.Contains(got, "admin@pve") || !strings.Contains(got, appliance.Fingerprint(good.Leaf)) || strings.Contains(got, "PRIVATE KEY") {
 		t.Errorf("activity = %s", got)
 	}
 }
@@ -935,7 +937,7 @@ func TestTheDemoChangesTheCertificateInMemory(t *testing.T) {
 	req.Header.Set(csrfHeader, b.csrf)
 	up := httptest.NewRecorder()
 	b.handler.ServeHTTP(up, req)
-	if got := certificateOf(t, up); got.Source != certificateUploaded || got.Fingerprint != fingerprintOf(good.Leaf) {
+	if got := certificateOf(t, up); got.Source != certificateUploaded || got.Fingerprint != appliance.Fingerprint(good.Leaf) {
 		t.Errorf("the demo's upload gave %+v", got)
 	}
 	if got := certificateOf(t, b.do("POST", "/api/appliance/certificate/self-signed", "")); got.Source != certificateSelfSigned {

@@ -64,8 +64,9 @@ const (
 )
 
 // InterfaceCertificate is the certificate the interface and Headlamp serve. It is the installer's,
-// in files, until an administrator gives another, which is kept in the key directory and served
-// from then on, also after a restart. A change takes effect for the next connection.
+// in files, until an administrator gives another. That one is kept in the appliance's directory,
+// which backups hold, and served from then on, also after a restart. A change takes effect for the
+// next connection.
 type InterfaceCertificate struct {
 	// Roots complete the chain of an uploaded certificate. Nil takes the system's.
 	Roots *x509.CertPool
@@ -73,7 +74,7 @@ type InterfaceCertificate struct {
 	Lookup func(ctx context.Context, host string) ([]netip.Addr, error)
 
 	dir, certFile, keyFile string
-	// memory keeps changes in memory, for the demo, which has no key directory.
+	// memory keeps changes in memory, for the demo, which has no appliance directory.
 	memory bool
 	// readInstaller reads the installer's certificate. The demo has its own.
 	readInstaller func(now time.Time) (*servedCertificate, error)
@@ -336,15 +337,6 @@ func (c *InterfaceCertificate) reset(now time.Time) (*servedCertificate, error) 
 	return next, nil
 }
 
-func fingerprintOf(c *x509.Certificate) string {
-	sum := sha256.Sum256(c.Raw)
-	parts := make([]string, len(sum))
-	for i, b := range sum {
-		parts[i] = fmt.Sprintf("%02X", b)
-	}
-	return strings.Join(parts, ":")
-}
-
 // certificateNames are the DNS names and addresses a certificate is valid for.
 func certificateNames(cert *x509.Certificate) ([]string, []netip.Addr) {
 	var ips []netip.Addr
@@ -419,7 +411,7 @@ func (s *Server) certificateViewOf(ctx context.Context, c *InterfaceCertificate)
 	names, ips := certificateNames(leaf)
 	v := certificateView{
 		Source: served.source, Subject: leaf.Subject.String(), DNSNames: names, IPAddresses: []string{}, Issuer: leaf.Issuer.String(),
-		NotBefore: leaf.NotBefore.UTC(), NotAfter: leaf.NotAfter.UTC(), Fingerprint: fingerprintOf(leaf), Chain: []string{},
+		NotBefore: leaf.NotBefore.UTC(), NotAfter: leaf.NotAfter.UTC(), Fingerprint: appliance.Fingerprint(leaf), Chain: []string{},
 		Incomplete: served.incomplete, MissingIssuer: served.missing, SelfSigned: isSelfSigned(leaf),
 		PublicURL: s.PublicURL, NotServed: served.notServed, Changeable: c.canChange(),
 	}
@@ -511,7 +503,7 @@ func (s *Server) certificateTarget(w http.ResponseWriter, r *http.Request, u use
 func (s *Server) certificateToChange(w http.ResponseWriter, r *http.Request, u user) *InterfaceCertificate {
 	c := s.certificateTarget(w, r, u)
 	if c != nil && !c.canChange() {
-		writeCertificateError(w, http.StatusConflict, "no-key-directory", "The interface has no key directory to keep a certificate in. Start it with --key-dir", nil)
+		writeCertificateError(w, http.StatusConflict, "no-appliance-directory", "The interface has no appliance directory to keep a certificate in. Start it with --appliance-dir", nil)
 		return nil
 	}
 	return c
@@ -537,12 +529,12 @@ func lockChange(w http.ResponseWriter, c *InterfaceCertificate) bool {
 // changeFailed answers a change that could not be kept. Nothing was changed.
 func (s *Server) changeFailed(w http.ResponseWriter, r *http.Request, err error) {
 	s.Log.ErrorContext(r.Context(), "interface certificate change", "error", err)
-	writeCertificateError(w, http.StatusInternalServerError, "store", "The certificate could not be kept. Check the key directory and try again", nil)
+	writeCertificateError(w, http.StatusInternalServerError, "store", "The certificate could not be kept. Check the appliance directory and try again", nil)
 }
 
 // changed records a change, with the user and the new fingerprint and nothing of the key.
 func (s *Server) changed(r *http.Request, u user, what string, served *servedCertificate) {
-	s.Log.InfoContext(r.Context(), what, "user", u.ticket.Username, "source", served.source, "fingerprint", fingerprintOf(served.pair.Leaf))
+	s.Log.InfoContext(r.Context(), what, "user", u.ticket.Username, "source", served.source, "fingerprint", appliance.Fingerprint(served.pair.Leaf))
 }
 
 // uploadCertificate replaces the certificate with the one in the files sent.
