@@ -42,12 +42,7 @@ type ServiceCheck struct {
 
 // Healthy is the check.
 func (c *ServiceCheck) Healthy(ctx context.Context) error {
-	client, base, err := c.Client()
-	if err != nil {
-		return err
-	}
-	url := base + "/api/health"
-	err = c.untilAnswers(ctx, client, url)
+	err := c.untilAnswers(ctx)
 	if err != nil {
 		return err
 	}
@@ -71,7 +66,7 @@ func (c *ServiceCheck) Healthy(ctx context.Context) error {
 	if after != before {
 		return fmt.Errorf("the interface stopped and was restarted %d times within %s of starting", after-before, c.Settle)
 	}
-	return answers(ctx, client, url)
+	return c.untilAnswers(ctx)
 }
 
 // Client accepts only the served certificate itself, so the check holds for one Proxmox VE's CA signed,
@@ -125,12 +120,19 @@ func (c *ServiceCheck) expected() (*x509.Certificate, string, error) {
 	return ServedCertificate(c.CertFile, c.StoredFile, time.Now())
 }
 
-func (c *ServiceCheck) untilAnswers(ctx context.Context, client *http.Client, url string) error {
+// untilAnswers asks until the interface answers, each time on the certificate on disk then, since
+// ACME may deliver one while the check runs.
+func (c *ServiceCheck) untilAnswers(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, c.Wait)
 	defer cancel()
 	var last error
 	for {
-		err := answers(ctx, client, url)
+		client, base, err := c.Client()
+		if err != nil {
+			return err
+		}
+		err = answers(ctx, client, base+"/api/health")
+		client.CloseIdleConnections()
 		if err == nil {
 			return nil
 		}
