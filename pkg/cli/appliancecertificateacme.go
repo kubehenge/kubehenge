@@ -27,7 +27,7 @@ address. The proof is tls-alpn-01 on port 443, http-01 on port 80 or dns-01 thro
 Saving the setting starts the first order and returns. Show the certificate to follow it. The HMAC
 key and the DNS credentials are read from files. A file of DNS credentials holds one NAME=value line
 per variable the provider reads, as the provider's documentation names them. Choosing another
-certificate (replace, self-sign, reset) removes the setting.`,
+certificate (replace, self-sign, appliance-ca, reset) removes the setting.`,
 		Example: `  kubehenge appliance certificate acme --proof tls-alpn-01
   kubehenge appliance certificate acme --directory https://ca.example.org/acme/directory --directory-ca-file ca.pem --eab-key-id kid --eab-hmac-key-file hmac.txt
   kubehenge appliance certificate acme --proof dns-01 --dns-provider rfc2136 --dns-credentials-file dns.env --resolver 192.0.2.53:53`,

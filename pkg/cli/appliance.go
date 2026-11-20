@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -570,11 +571,27 @@ func secretFrom(file, env string) (string, error) {
 	if file == "" {
 		return os.Getenv(env), nil
 	}
-	raw, err := os.ReadFile(file) //nolint:gosec // the file the person running the command named
+	raw, err := readNamedFile(file)
 	if err != nil {
-		return "", fmt.Errorf("reading %s: %w", file, err)
+		return "", err
 	}
 	return string(trimNewline(raw)), nil
+}
+
+// readNamedFile reads a file the person running the command named. Its error names the file once,
+// where the system's own names it twice.
+func readNamedFile(path string) ([]byte, error) {
+	raw, err := os.ReadFile(path) //nolint:gosec // the file the person running the command named
+	var pathErr *fs.PathError
+	switch {
+	case err == nil:
+		return raw, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, fmt.Errorf("%s does not exist. Give the path of an existing file", path)
+	case errors.As(err, &pathErr):
+		return nil, fmt.Errorf("reading %s: %w", path, pathErr.Err)
+	}
+	return nil, fmt.Errorf("reading %s: %w", path, err)
 }
 
 func pause(ctx context.Context) error {

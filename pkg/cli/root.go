@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -38,7 +39,36 @@ func NewRoot() *cobra.Command {
 	// commands as the other groups do.
 	root.InitDefaultCompletionCmd()
 	refuseUnknownCommands(root)
+	refuseUnknownCommandsInHelp(root)
 	return root
+}
+
+// helpRefusalKey holds where Execute takes the refusal of a --help that names no command.
+type helpRefusalKey struct{}
+
+// Execute runs root and returns what failed, a --help after an unknown command included.
+func Execute(ctx context.Context, root *cobra.Command) error {
+	var refused error
+	err := root.ExecuteContext(context.WithValue(ctx, helpRefusalKey{}, &refused))
+	if err == nil {
+		err = refused
+	}
+	return err
+}
+
+// refuseUnknownCommandsInHelp refuses a word that names none of a group's commands when --help
+// follows it. Cobra prints the group's help there and succeeds without checking the word.
+func refuseUnknownCommandsInHelp(root *cobra.Command) {
+	help := root.HelpFunc()
+	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
+		words := cmd.Flags().Args()
+		refused, ok := cmd.Context().Value(helpRefusalKey{}).(*error)
+		if ok && len(words) > 0 && cmd.HasAvailableSubCommands() {
+			*refused = unknownCommand(cmd, words[0])
+			return
+		}
+		help(cmd, args)
+	})
 }
 
 // internalCommands are the commands Kubehenge's own pods, units and tests start. No administrator

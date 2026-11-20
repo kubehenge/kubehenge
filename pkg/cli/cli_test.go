@@ -38,7 +38,7 @@ func runIn(t *testing.T, loginFile string, args ...string) (string, error) {
 	root.SetOut(&out)
 	root.SetErr(&out)
 	root.SetArgs(args)
-	err := root.ExecuteContext(ctx)
+	err := Execute(ctx, root)
 	return out.String(), err
 }
 
@@ -403,14 +403,22 @@ func TestGroupsRefuseUnknownCommands(t *testing.T) {
 		{[]string{"completion", "fissh"}, `unknown command "fissh" for "kubehenge completion": did you mean fish?`},
 		{[]string{"completion", "sh"}, `unknown command "sh" for "kubehenge completion": did you mean bash, fish or zsh?`},
 		{[]string{"clustr"}, `unknown command "clustr" for "kubehenge": did you mean cluster?`},
+		// Cobra checks no word before --help, and a group with a run of its own is no exception.
+		{[]string{"appliance", "certificate", "acme", "off", "--help"}, `unknown command "off" for "kubehenge appliance certificate acme": its commands are order and providers`},
+		{[]string{"cluster", "lsit", "--help"}, `unknown command "lsit" for "kubehenge cluster": did you mean list?`}, // spellchecker:disable-line
 	} {
 		if _, err := run(t, c.args...); err == nil || err.Error() != c.want {
 			t.Errorf("%q: err = %v, want %q", c.args, err, c.want)
 		}
 	}
-	out, err := run(t, "cluster")
-	if err != nil || !strings.Contains(out, "Available Commands:") {
-		t.Errorf("cluster alone printed %q, %v; want its help", out, err)
+	for _, args := range [][]string{{"cluster"}, {"cluster", "--help"}, {"appliance", "certificate", "acme", "--proof", "dns-01", "--help"}} {
+		out, err := run(t, args...)
+		if err != nil || !strings.Contains(out, "Available Commands:") {
+			t.Errorf("%q printed %q, %v; want its help", args, out, err)
+		}
+	}
+	if out, err := run(t, "cluster", "get", "web", "--help"); err != nil || !strings.Contains(out, "Usage:") {
+		t.Errorf("a command's own help after its argument printed %q, %v", out, err)
 	}
 }
 

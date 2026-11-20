@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"mime/multipart"
 	"net/http"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -54,8 +53,10 @@ type caAnswer struct {
 func (o *applianceOptions) certificateCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "certificate",
-		Short: "Show the certificate the interface serves",
-		Args:  noArgs,
+		Short: "Show or change the certificate the interface serves",
+		Long: `Show the certificate the interface serves. Its commands change it, with no restart, as the
+interface's certificate page does.`,
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
 				var v certificateAnswer
@@ -94,12 +95,10 @@ certificate stays until one for the new name replaces it.`,
 func (o *applianceOptions) certificateApplianceCACommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "appliance-ca",
-		Short: "Serve a certificate the appliance's own CA signs for the names the current one covers",
-		Long: `Serve a certificate the appliance's own CA signs for the names the current one covers. The CA is
-made the first time, and again when the names move outside it. It may sign only for these names and
-addresses, so trusting it once trusts nothing else. Print it to trust it with
-"kubehenge appliance certificate ca". The certificate is signed again when the interface starts
-with under a third of its lifetime left.`,
+		Short: "Serve a certificate the appliance's own CA signs for the public address",
+		Long: `Serve a certificate the appliance's own CA signs for the public address and the names the current
+one covers. The CA may sign only for these names, so trusting it trusts nothing else. Print it
+with "kubehenge appliance certificate ca".`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
@@ -171,8 +170,10 @@ public name and for at least another day.`,
 func (o *applianceOptions) certificateSelfSignCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "self-sign",
-		Short: "Serve a new self-signed certificate for the names the current one covers",
-		Args:  noArgs,
+		Short: "Serve a new self-signed certificate for the public address",
+		Long: `Serve a new self-signed certificate for the public address and the names the current one covers.
+Browsers warn about it until they trust it.`,
+		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
 				return o.changeCertificate(ctx, cmd, s, http.MethodPost, certificatePath+"/self-signed", nil)
@@ -216,9 +217,9 @@ func uploadBody(paths []string, passphrase string) (formBody, error) {
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
 	for _, path := range paths {
-		raw, err := os.ReadFile(path) //nolint:gosec // the file the person running the command named
+		raw, err := readNamedFile(path)
 		if err != nil {
-			return formBody{}, fmt.Errorf("reading %s: %w", path, err)
+			return formBody{}, err
 		}
 		part, err := w.CreateFormFile("file", filepath.Base(path))
 		if err != nil {

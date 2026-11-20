@@ -25,7 +25,7 @@ func shutdownSignals(ignored func(os.Signal) bool) []os.Signal {
 func main() {
 	limitMemory()
 	ctx, stop := signal.NotifyContext(context.Background(), shutdownSignals(signal.Ignored)...)
-	err := cli.NewRoot().ExecuteContext(ctx)
+	err := cli.Execute(ctx, cli.NewRoot())
 	stop()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "kubehenge:", err)

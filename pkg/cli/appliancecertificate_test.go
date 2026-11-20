@@ -213,8 +213,8 @@ func TestApplianceCertificateShowsAndChangesWhatTheInterfaceServes(t *testing.T)
 	if got := f.form.files[filepath.Base(pem)] + f.form.files[filepath.Base(key)]; got != "CERTKEY" || len(f.form.files) != 2 || f.form.passphrase != "" {
 		t.Errorf("the interface got %v with passphrase %q", f.form.files, f.form.passphrase)
 	}
-	if _, err = f.run(f.args("admin@pve", "certificate", "replace", "host.pfx")...); err == nil {
-		t.Error("a file that is not there was sent")
+	if _, err = f.run(f.args("admin@pve", "certificate", "replace", "host.pfx")...); err == nil || err.Error() != "host.pfx does not exist. Give the path of an existing file" {
+		t.Errorf("a file that is not there: %v", err)
 	}
 	pfx := namedFile(t, "host.pfx", "PFX")
 	if _, err = f.run(f.args("admin@pve", "certificate", "replace", pfx)...); err == nil || !strings.Contains(err.Error(), "host.pfx is encrypted. Send its passphrase") {
