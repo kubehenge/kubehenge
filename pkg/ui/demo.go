@@ -100,6 +100,7 @@ func fillDemo(s *Server, clock func() time.Time, dir string, raw []byte) error {
 	if err != nil {
 		return err
 	}
+	fleet.clock = clock
 	scheme, mapper, err := demoScheme()
 	if err != nil {
 		return err

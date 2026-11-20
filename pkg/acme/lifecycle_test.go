@@ -179,14 +179,6 @@ func (b *bench) manager(t *testing.T) *Manager {
 	return m
 }
 
-func (*bench) run(t *testing.T, m *Manager) {
-	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() { m.Run(ctx); close(done) }()
-	t.Cleanup(func() { cancel(); <-done })
-}
-
 func (b *bench) orders() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -214,7 +206,7 @@ func TestFailedOrdersBackOffAndGiveUpAfterADay(t *testing.T) {
 	current := Served{Leaf: leafOf(t, &Issued{CertPEM: first(selfSigned(t, b.clock.Now(), 24*time.Hour))}), Source: "uploaded"}
 	b.serving = current
 	b.obtain = func(int) error { return errors.New("the server is down") }
-	b.run(t, b.m)
+	runUntilCleanup(t, b.m)
 	if _, err := b.m.Save(httpRequest()); err != nil {
 		t.Fatal(err)
 	}
@@ -229,16 +221,16 @@ func TestFailedOrdersBackOffAndGiveUpAfterADay(t *testing.T) {
 		}
 		waits = append(waits, w.d)
 		v := b.m.View()
-		if !strings.Contains(v.Error, "the server is down") || v.State != "failing" || v.NextAttempt == nil {
+		if !strings.Contains(v.Error, "The server is down") || v.State != "failing" || v.NextAttempt == nil {
 			t.Fatalf("the view is %+v", v)
 		}
 		b.clock.elapse(w)
 	}
 	v := b.m.View()
-	if v.NextAttempt != nil || v.State != "failing" || !strings.Contains(v.Error, "the server is down") {
+	if v.NextAttempt != nil || v.State != "failing" || !strings.Contains(v.Error, "The server is down") {
 		t.Errorf("after giving up the view is %+v", v)
 	}
-	if msg, gaveUp := b.m.Failed(); !gaveUp || !strings.Contains(msg, "the server is down") {
+	if msg, gaveUp := b.m.Failed(); !gaveUp || !strings.Contains(msg, "The server is down") {
 		t.Errorf("Failed gives %q, %v", msg, gaveUp)
 	}
 	if got := strings.Count(b.logs.String(), "giving up"); got != 1 {
@@ -318,7 +310,7 @@ func TestRenewalHappensAtTheTimeTheServerGives(t *testing.T) {
 	t.Parallel()
 	b := newBench(t, t.TempDir())
 	b.ari = func(*x509.Certificate) (time.Time, error) { return b.clock.Now().Add(10 * 24 * time.Hour), nil }
-	b.run(t, b.m)
+	runUntilCleanup(t, b.m)
 	leaf := b.issueFirst(t, b.m)
 	w := b.clock.next(t)
 	if w.d != ariEvery {
@@ -344,7 +336,7 @@ func TestRenewalHappensAtTheTimeTheServerGives(t *testing.T) {
 func TestRenewalFallsBackToAThirdOfTheLifetime(t *testing.T) {
 	t.Parallel()
 	b := newBench(t, t.TempDir())
-	b.run(t, b.m)
+	runUntilCleanup(t, b.m)
 	leaf := b.issueFirst(t, b.m)
 	w := b.clock.next(t)
 	wantAt := leaf.NotAfter.Add(-30 * 24 * time.Hour)
@@ -386,7 +378,7 @@ func TestARestartCarriesTheOrderOn(t *testing.T) {
 	// A new process reads the files.
 	m2 := b.manager(t)
 	close(b.gate)
-	b.run(t, m2)
+	runUntilCleanup(t, m2)
 	until(t, "the order to finish after the restart", func() bool { return b.delivers() == 1 })
 	b.mu.Lock()
 	got := b.serving.Order
@@ -396,7 +388,7 @@ func TestARestartCarriesTheOrderOn(t *testing.T) {
 	}
 	// Another restart finds a certificate served and an order done, and orders nothing.
 	m3 := b.manager(t)
-	b.run(t, m3)
+	runUntilCleanup(t, m3)
 	w := b.clock.next(t)
 	if b.orders() != 2 || w.d <= 0 {
 		t.Errorf("%d orders and a wait of %v after the restart", b.orders(), w.d)
@@ -409,7 +401,7 @@ func TestOneOrderRunsAtATime(t *testing.T) {
 	t.Parallel()
 	b := newBench(t, t.TempDir())
 	b.gate, b.entered = make(chan struct{}), make(chan struct{}, 8)
-	b.run(t, b.m)
+	runUntilCleanup(t, b.m)
 	if _, err := b.m.Save(httpRequest()); err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +432,7 @@ func TestDisablingRemovesTheSettingAndItsSecrets(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	b := newBench(t, dir)
-	b.run(t, b.m)
+	runUntilCleanup(t, b.m)
 	if _, err := b.m.Save(httpRequest()); err != nil {
 		t.Fatal(err)
 	}

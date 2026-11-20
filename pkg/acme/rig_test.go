@@ -55,6 +55,7 @@ func newFakeDNS(t *testing.T) *fakeDNS {
 	t.Helper()
 	f := &fakeDNS{txt: map[string][]string{}, tsigName: "kubehenge-key.", tsigSecret: base64.StdEncoding.EncodeToString([]byte("secret-tsig-key-for-tests"))}
 	var lc net.ListenConfig
+	var lastErr error
 	for range 20 {
 		pc, err := lc.ListenPacket(t.Context(), "udp", "127.0.0.1:0")
 		if err != nil {
@@ -63,6 +64,7 @@ func newFakeDNS(t *testing.T) *fakeDNS {
 		l, err := lc.Listen(t.Context(), "tcp", pc.LocalAddr().String())
 		if err != nil {
 			_ = pc.Close()
+			lastErr = err
 			continue
 		}
 		f.Addr = pc.LocalAddr().String()
@@ -76,7 +78,7 @@ func newFakeDNS(t *testing.T) *fakeDNS {
 		t.Cleanup(func() { _ = udp.Shutdown(); _ = tcp.Shutdown() })
 		return f
 	}
-	t.Fatal("no port for the fake DNS server")
+	t.Fatalf("no port for the fake DNS server: %v", lastErr)
 	return nil
 }
 
@@ -301,10 +303,24 @@ func newRig(t *testing.T, o rigOptions) *rig {
 	r.server = startACMEServer(t, acmeOptions{bindings: o.bindings, httpPort: ports.httpPort, tlsPort: ports.tlsPort, resolver: r.dns.Addr})
 	m.Roots = r.server.pool()
 	r.m = m
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go m.Run(ctx)
+	runUntilCleanup(t, m)
 	return r
+}
+
+// runUntilCleanup runs the manager until the test ends, and waits for it to stop before the
+// directory it writes to is removed.
+func runUntilCleanup(t *testing.T, m *Manager) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	stopped := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		<-stopped
+	})
+	go func() {
+		defer close(stopped)
+		m.Run(ctx)
+	}()
 }
 
 // next waits for the next certificate delivered.

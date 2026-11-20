@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // SourceACME is the source the interface's certificate is given when ACME issued it.
@@ -434,10 +435,22 @@ func (m *Manager) obtainAndDeliver(ctx context.Context, set *Setting, id string,
 	return m.Deliver(ctx, &Issued{Generation: set.Generation, OrderID: id, CertPEM: cert, KeyPEM: key})
 }
 
+// sentence starts an error with a capital, as the interface shows it, unless its first word is a
+// name such as a domain or a path.
+func sentence(s string) string {
+	first, _, _ := strings.Cut(s, " ")
+	if first == "" || strings.ContainsAny(first, `./\`) {
+		return s
+	}
+	r := []rune(s)
+	r[0] = unicode.ToUpper(r[0])
+	return string(r)
+}
+
 // fail records a failed order, with the time it ends, and gives up after a day of failures.
 func (m *Manager) fail(set *Setting, st *State, err error) {
 	now := m.now()
-	st.Error, st.ErrorAt = set.scrub(err.Error()), now
+	st.Error, st.ErrorAt = sentence(set.scrub(err.Error())), now
 	if st.FailingSince.IsZero() {
 		st.FailingSince = now
 	}
@@ -508,7 +521,7 @@ func timePtr(t time.Time) *time.Time {
 func (m *Manager) viewLocked(set *Setting, st *State) *View {
 	v := &View{
 		Directory: set.Directory, Email: set.Email, Proof: set.Proof, Profile: set.Profile, DirectoryCASet: set.DirectoryCA != "",
-		DNSProvider: set.DNSProvider, DNSCredentialsSet: []string{}, Resolvers: slices.Clone(set.Resolvers), GivenUp: st.GivenUp,
+		DNSProvider: set.DNSProvider, DNSCredentialsSet: []string{}, Resolvers: append([]string{}, set.Resolvers...), GivenUp: st.GivenUp,
 		Error: st.Error, ErrorAt: timePtr(st.ErrorAt), NextAttempt: timePtr(st.NextAttempt), LastSuccess: timePtr(st.LastSuccess),
 		PublicName: m.PublicName(),
 	}

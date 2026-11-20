@@ -6,7 +6,9 @@
 # project's own modules add a patent grant to BSD-3-Clause, which the licence data names
 # LicenseRef-scancode-google-patent-license-golang; it only gives rights. The Python Software
 # Foundation's licences (argparse's, ported to JavaScript) are permissive as well. MIT-0, 0BSD and
-# BlueOak-1.0.0 ask less than MIT: no notice to keep, and BlueOak adds a patent grant.
+# BlueOak-1.0.0 ask less than MIT: no notice to keep, and BlueOak adds a patent grant. UPL-1.0 asks
+# for the notice MIT does and adds a patent grant. Oracle's cloud SDK, which a DNS provider brings,
+# is under it beside Apache-2.0.
 allow-licenses:
   - 0BSD
   - Apache-2.0
@@ -22,6 +24,7 @@ allow-licenses:
   - OFL-1.1
   - PSF-2.0
   - Python-2.0
+  - UPL-1.0
 # yamllint, under the GPL, only checks the repository's YAML in CI: nothing Kubehenge distributes
 # includes or links it. spdystream's LICENSE is Apache-2.0 and its NOTICE adds only BSD-3-Clause
 # code from the Go project; the licence data adds LicenseRef-scancode-unknown beside the two.

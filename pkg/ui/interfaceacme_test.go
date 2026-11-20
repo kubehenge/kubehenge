@@ -353,7 +353,7 @@ func TestDemoAnswersACMEWithAnIssuedAndAFailingState(t *testing.T) {
 		t.Fatalf("saving dns-01: %d %s", rec.Code, rec.Body)
 	}
 	waitFor(t, "the demo's failing state", func() bool { v := show(); return v != nil && v.State == "failing" })
-	if v := show(); v.Error != demoACMEFailure || v.NextAttempt == nil || v.DNSProvider != "cloudflare" {
+	if v := show(); v.Error != "T"+demoACMEFailure[1:] || v.NextAttempt == nil || v.DNSProvider != "cloudflare" {
 		t.Errorf("the failing state is %+v", v)
 	}
 	if rec = b.do("GET", "/api/appliance/certificate/acme/providers", ""); rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), acmeSecretToken) {

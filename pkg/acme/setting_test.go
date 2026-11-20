@@ -67,6 +67,10 @@ func TestSettingIsKeptAndShownBack(t *testing.T) {
 	if got := m.View(); got == nil || got.Directory != v.Directory {
 		t.Errorf("a later view is %+v", got)
 	}
+	// The interface reads both lists as arrays, never null.
+	if s := stringify(t, v); !strings.Contains(s, `"resolvers":[]`) || !strings.Contains(s, `"dnsCredentialsSet":[]`) {
+		t.Errorf("the view's lists are %s", s)
+	}
 	for req, code := range map[*Request]string{
 		{Directory: "http://ca.example.org/dir", Proof: ProofHTTP}:                                          CodeDirectory,
 		{Directory: DirectoryLetsEncrypt, Proof: "dns-02"}:                                                  CodeProof,
@@ -131,6 +135,9 @@ func TestSecretsAreKeptPrivateAndNeverShown(t *testing.T) {
 	}
 	m.fail(&Setting{HMACKey: hmacSecret, DNSCredentials: map[string]string{"FAKE_TOKEN": tokenSecret}}, &State{}, errors.New("rejected "+tokenSecret+" and "+hmacSecret))
 	shown := m.View()
+	if !strings.HasPrefix(shown.Error, "Rejected ") {
+		t.Errorf("the error shown is %q, not a sentence", shown.Error)
+	}
 	if v.ExternalAccountBinding == nil || !v.ExternalAccountBinding.HMACKeySet || len(v.DNSCredentialsSet) != 1 || v.DNSCredentialsSet[0] != "FAKE_TOKEN" {
 		t.Errorf("the view does not say which secrets are set: %+v", v)
 	}

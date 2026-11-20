@@ -405,6 +405,45 @@ func readsEveryClustersHealth(t *testing.T, edits map[string]func(*demoCluster))
 	}
 }
 
+// The demo's clock runs on, and its nodes renew their leases and keep their time with it. However long
+// the demo runs, only the Proxmox VE node it sets ahead warns of its clock.
+func TestDemoNodeClocksFollowTheDemosClock(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	at := demoAt
+	clock := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return at
+	}
+	s := &Server{Assets: fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>Kubehenge</title>")}}}
+	cleanup, err := demoFrom(t.Context(), s, clock, demoFleetJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cleanup)
+	b := &demoBrowser{t: t, handler: s.Handler()}
+	b.signIn()
+	fleet, err := newDemoFleet(demoAt, demoFleetJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	at = at.Add(10 * time.Minute)
+	mu.Unlock()
+	skewed := "Proxmox VE node " + fleet.skewedNode() + " clock is off by 1m35s"
+	for i := range fleet.data.Clusters {
+		name := fleet.data.Clusters[i].Name
+		var h healthView
+		decodeDemo(t, b.do("GET", "/api/clusters/"+demoNamespace+"/"+name+"/health", ""), &h)
+		for j := range h.Attention {
+			if what := h.Attention[j].What; strings.Contains(what, "clock is off") && what != skewed {
+				t.Errorf("%s ten minutes on: %q", name, what)
+			}
+		}
+	}
+}
+
 // The demo's staging cluster sets labels and a taint on its pool, one node has a taint besides, and the
 // restricted level would refuse its pods.
 func TestDemoShowsPoolLabelsTaintsAndPodChecks(t *testing.T) {
