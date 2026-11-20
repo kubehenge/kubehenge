@@ -71,6 +71,14 @@ func (f *fakeInterface) certificateRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/appliance/certificate", f.admin(func(w http.ResponseWriter, _ *http.Request) {
 		answer(w, http.StatusOK, view("installer", ""))
 	}))
+	mux.HandleFunc("PUT /api/appliance/certificate/address", f.admin(func(w http.ResponseWriter, r *http.Request) {
+		name, ok := f.bodies[r.Method+" "+r.URL.Path]["name"].(string)
+		if !ok || name != "moved.example.org" {
+			answer(w, http.StatusUnprocessableEntity, `{"error":"\"`+name+`\" is not a DNS name or an IP address","code":"bad-address"}`)
+			return
+		}
+		answer(w, http.StatusOK, strings.Replace(view("self-signed", ""), "https://kubehenge.example.org", "https://moved.example.org", 1))
+	}))
 	withACME := func(w http.ResponseWriter, r *http.Request) {
 		f.acme = append(f.acme, r.Method+" "+r.URL.Path)
 		if f.bodies[r.Method+" "+r.URL.Path]["proof"] == "dns-02" {
@@ -226,6 +234,23 @@ func TestApplianceCertificateShowsAndChangesWhatTheInterfaceServes(t *testing.T)
 	}
 	if _, err = f.run(f.args("admin@pve", "certificate", "replace")...); err == nil || !strings.Contains(err.Error(), "give the certificate files") {
 		t.Errorf("replace without files: %v", err)
+	}
+}
+
+// address sends the name as it is given and shows the address the interface answers with, or its
+// refusal.
+func TestApplianceCertificateAddressChangesThePublicAddress(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	out, err := f.run(f.args("admin@pve", "certificate", "address", "moved.example.org")...)
+	if err != nil || !strings.Contains(out, "Public URL   https://moved.example.org") {
+		t.Errorf("address: %v\n%s", err, out)
+	}
+	if _, err = f.run(f.args("admin@pve", "certificate", "address", "bank example")...); err == nil || !strings.Contains(err.Error(), `"bank example" is not a DNS name`) {
+		t.Errorf("a refused name: %v", err)
+	}
+	if _, err = f.run(f.args("admin@pve", "certificate", "address")...); err == nil || !strings.Contains(err.Error(), "give the DNS name or IP address") {
+		t.Errorf("without a name: %v", err)
 	}
 }
 

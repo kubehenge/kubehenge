@@ -119,6 +119,34 @@ func TestPublicName(t *testing.T) {
 	}
 }
 
+// The address an administrator set on the certificate page comes before the name a certificate
+// signed here carries, under the same DNS check, since the container wrote it.
+func TestPublicNameFromThePage(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	h := newHarness(t, opts{hosts: map[string][]string{"moved.example.org": {"192.0.2.40"}}})
+	c, err := h.node.MakeCertificate("kubehenge", []string{"192.0.2.40"}, "kubehenge.example.org", time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parseCertFile(c.CertPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := h.runner(h.session(Config{CTID: "100"}), nil)
+	for set, want := range map[string]string{
+		"https://moved.example.org\n": "moved.example.org",
+		"https://bank.example.com":    "",
+		"https://192.0.2.40":          "",
+		"":                            "kubehenge.example.org",
+	} {
+		h.exec.on("pct exec 100 -- cat /var/lib/kubehenge/public-url", set)
+		if got := r.publicName(ctx, parsed, "192.0.2.40", io.Discard); got != want {
+			t.Errorf("the page set %q: got %q, want %q", set, got, want)
+		}
+	}
+}
+
 // Only a 404 for the pinned template sends the install to the index. Any other answer, and an
 // unreachable mirror, leave it to the download and its own error.
 func TestTemplateGone(t *testing.T) {

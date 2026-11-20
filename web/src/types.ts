@@ -1293,6 +1293,8 @@ export interface InterfaceCertificate {
   publicURL?: string;
   /** Whether the public URL's name leads to this appliance. Absent when it is not known. */
   publicNameResolves?: boolean;
+  /** Whether the certificate is valid for the public URL's name or address. */
+  publicNameCovered?: boolean;
   /** Why a stored certificate is not served, when one is not. */
   notServed?: string;
   /** False where the interface has nowhere to keep a change. */

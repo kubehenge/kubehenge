@@ -564,10 +564,11 @@ func (s *Server) clusterName(c *clusterv1.Cluster) string {
 }
 
 func (s *Server) notifyLink(path string) string {
-	if s.PublicURL == "" {
+	public := s.PublicAddress()
+	if public == "" {
 		return ""
 	}
-	return strings.TrimSuffix(s.PublicURL, "/") + path
+	return strings.TrimSuffix(public, "/") + path
 }
 
 func (s *Server) notifyStatePath() string {

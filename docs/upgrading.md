@@ -393,6 +393,20 @@ pct exec <ctid> -- kubehenge appliance certificate reset
 
 Its Cluster CA choice gives the node command above, since the cluster CA's key stays on the node.
 
+### The public address
+
+The page's Change address button, or `address`, changes the DNS name or IP address people open the interface at, with no restart:
+
+```sh
+pct exec <ctid> -- kubehenge appliance certificate address kubehenge.example.org
+```
+
+- A self-signed certificate or one of the appliance's CA is made again for it, and ACME orders one.
+- Any other certificate stays, and the page warns until one valid for the new name replaces it.
+- Links in notifications and sign-in go to the new address at once. Headlamp takes it at its next start, after 15 minutes unused.
+- Update the redirect URLs your identity provider has registered, as [below](#names-and-addresses).
+- The Proxmox VE interface entry keeps the old address until `install.sh --certificate` runs. That command keeps the new name where this node's DNS resolves it to the appliance, and makes a new certificate.
+
 ### The appliance's own CA
 
 `appliance-ca` serves a certificate signed by a CA the appliance makes for itself. Trust that CA once, and browsers accept the certificate without a warning:

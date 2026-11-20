@@ -31,6 +31,16 @@ const (
 	InterfaceCAFile = "interface-ca.pem"
 	// InterfaceCAPath is InterfaceCAFile in the appliance's directory.
 	InterfaceCAPath = "/var/lib/kubehenge/" + InterfaceCAFile
+	// PublicURLFile holds the public address an administrator gave the interface after the install,
+	// which it uses instead of --public-url.
+	PublicURLFile = "public-url"
+	// PublicURLPath is PublicURLFile in the appliance's directory.
+	PublicURLPath = "/var/lib/kubehenge/" + PublicURLFile
+	// HeadlampEnvFile gives Headlamp the callback address of the public address an administrator
+	// set. Its unit reads it after the installer's, so it wins.
+	HeadlampEnvFile = "headlamp.env"
+	// HeadlampEnvPath is HeadlampEnvFile in the appliance's directory.
+	HeadlampEnvPath = "/var/lib/kubehenge/" + HeadlampEnvFile
 	// InstallerCertificatePath is the certificate the installer made, which the interface serves
 	// while no other is stored.
 	InstallerCertificatePath = "/etc/kubehenge/tls.crt"

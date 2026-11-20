@@ -77,8 +77,13 @@ type InterfaceCertificate struct {
 	Roots *x509.CertPool
 	// Lookup gives the addresses a name resolves to. Nil asks the system's resolver.
 	Lookup func(ctx context.Context, host string) ([]netip.Addr, error)
+	// HeadlampPort is the port of the shared Headlamp, whose callback follows a changed public
+	// address. Empty when there is none.
+	HeadlampPort string
 
 	dir, certFile, keyFile string
+	// address is the public address an administrator set, nil when none is.
+	address atomic.Pointer[string]
 	// memory keeps changes in memory, for the demo, which has no appliance directory.
 	memory bool
 	// readInstaller reads the installer's certificate. The demo has its own.
@@ -131,6 +136,7 @@ func (c *InterfaceCertificate) Load(now time.Time, log *slog.Logger) error {
 	problem := ""
 	if c.dir != "" {
 		c.removeLeftovers()
+		c.loadAddress(log)
 		stored, err := c.readStored(now)
 		switch {
 		case err == nil:
@@ -308,12 +314,13 @@ func (c *InterfaceCertificate) fileOps() certificateFiles { //nolint:ireturn // 
 	return c.files
 }
 
-// removeLeftovers deletes the temporary files a change cut off by a crash left, which hold a key.
+// removeLeftovers deletes the temporary files a change cut off by a crash left, some holding a key.
 func (c *InterfaceCertificate) removeLeftovers() {
-	left, _ := filepath.Glob(c.storedPath() + ".*")
-	ca, _ := filepath.Glob(filepath.Join(c.dir, appliance.InterfaceCAFile+".*"))
-	for _, name := range append(left, ca...) {
-		_ = c.fileOps().Remove(name)
+	for _, name := range []string{appliance.InterfaceCertificateFile, appliance.InterfaceCAFile, appliance.PublicURLFile, appliance.HeadlampEnvFile} {
+		left, _ := filepath.Glob(filepath.Join(c.dir, name+".*"))
+		for _, file := range left {
+			_ = c.fileOps().Remove(file)
+		}
 	}
 }
 
@@ -455,6 +462,9 @@ type certificateView struct {
 	// PublicNameResolves tells whether the public name leads to one of the appliance's own
 	// addresses. Absent when there is no public name or the appliance does not know its addresses.
 	PublicNameResolves *bool `json:"publicNameResolves,omitempty"`
+	// PublicNameCovered tells whether the certificate is valid for the public name. Absent when
+	// there is no public name.
+	PublicNameCovered *bool `json:"publicNameCovered,omitempty"`
 	// NotServed is why the file an administrator stored is not served.
 	NotServed string `json:"notServed,omitempty"`
 	// Changeable tells whether the interface has somewhere to keep a changed certificate.
@@ -481,7 +491,11 @@ func (s *Server) certificateViewOf(ctx context.Context, c *InterfaceCertificate)
 		Source: served.source, Subject: leaf.Subject.String(), DNSNames: names, IPAddresses: []string{}, Issuer: leaf.Issuer.String(),
 		NotBefore: leaf.NotBefore.UTC(), NotAfter: leaf.NotAfter.UTC(), Fingerprint: appliance.Fingerprint(leaf), Chain: []string{},
 		Incomplete: served.incomplete, MissingIssuer: served.missing, SelfSigned: isSelfSigned(leaf),
-		PublicURL: s.PublicURL, NotServed: served.notServed, Changeable: c.canChange(),
+		PublicURL: s.PublicAddress(), NotServed: served.notServed, Changeable: c.canChange(),
+	}
+	if host := s.publicHost(); host != "" {
+		covered := leaf.VerifyHostname(host) == nil
+		v.PublicNameCovered = &covered
 	}
 	if v.DNSNames == nil {
 		v.DNSNames = []string{}
@@ -505,7 +519,7 @@ func (s *Server) certificateViewOf(ctx context.Context, c *InterfaceCertificate)
 // publicHost is the host of the public address, without a port or brackets. Empty when there is
 // none.
 func (s *Server) publicHost() string {
-	u, err := url.Parse(s.PublicURL)
+	u, err := url.Parse(s.PublicAddress())
 	if err != nil {
 		return ""
 	}

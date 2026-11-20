@@ -47,7 +47,7 @@ func administeredWithACME(t *testing.T) acmeRig {
 	m := acme.New(c.dir)
 	now := h.clock
 	m.Name = func() string {
-		u, err := url.Parse(h.server.PublicURL)
+		u, err := url.Parse(h.server.PublicAddress())
 		if err != nil {
 			return ""
 		}
@@ -64,8 +64,8 @@ func administeredWithACME(t *testing.T) acmeRig {
 		}
 		return quietProvider{}, nil
 	}
-	m.Obtain = func(context.Context, *acme.Setting, string, *x509.Certificate) ([]byte, []byte, error) {
-		b := issueCertificate(t, now.Add(-time.Hour), now.AddDate(0, 0, 90), []string{certificateHost}, certificateAddress.String())
+	m.Obtain = func(_ context.Context, _ *acme.Setting, name string, _ *x509.Certificate) ([]byte, []byte, error) {
+		b := issueCertificate(t, now.Add(-time.Hour), now.AddDate(0, 0, 90), []string{name}, certificateAddress.String())
 		return b.CertPEM, b.KeyPEM, nil
 	}
 	m.ARI = func(context.Context, *acme.Setting, *x509.Certificate) (time.Time, error) {

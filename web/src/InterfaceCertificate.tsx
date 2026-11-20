@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useRef, useState, type ChangeEvent, type JSX } from "react";
+import { Fragment, useEffect, useId, useRef, useState, type ChangeEvent, type JSX, type ReactNode } from "react";
 
 import { ApiError, api } from "./api";
 import { daysLeft, runsOutSoon } from "./certificate-expiry";
@@ -70,6 +70,7 @@ function Warnings({ c }: { c: Certificate }): JSX.Element | null {
     c.incomplete && `Chain incomplete, missing ${c.missingIssuer ?? "an issuer"}`,
     c.selfSigned && "Self-signed, so browsers warn",
     c.publicNameResolves === false && `${hostOf(c.publicURL ?? "")} does not resolve to this appliance`,
+    c.publicNameCovered === false && `Not valid for ${hostOf(c.publicURL ?? "")}, so browsers warn`,
     filled(c.notServed) && `Stored certificate not served, ${c.notServed}`,
   ].filter((l): l is string => typeof l === "string");
   if (lines.length === 0) {
@@ -121,6 +122,81 @@ function Fingerprint({ value }: { value: string }): JSX.Element {
   );
 }
 
+/** ChangeAddress sets the name or address users reach the interface at. */
+function ChangeAddress({
+  current,
+  disabled,
+  running,
+  run,
+}: {
+  current: string;
+  disabled: boolean;
+  running: boolean;
+  run: (call: () => Promise<Replaced>) => Promise<unknown>;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState(current);
+  const [error, setError] = useState<string>();
+  const submit = async (): Promise<void> => {
+    setError(undefined);
+    const failed = await run(() => api.setInterfaceAddress(name.trim()));
+    if (failed === undefined) {
+      setOpen(false);
+    } else {
+      setError(errorMessage(failed));
+    }
+  };
+  return (
+    <>
+      <div>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => {
+            setName(current);
+            setError(undefined);
+            setOpen(true);
+          }}
+        >
+          {running ? "Changing…" : "Change address"}
+        </button>
+      </div>
+      {open && (
+        <Dialog
+          title="Change public address"
+          onClose={() => setOpen(false)}
+          onSubmit={() => {
+            void submit();
+          }}
+          actions={
+            <>
+              <button type="button" onClick={() => setOpen(false)}>
+                Cancel
+              </button>
+              <button type="submit" className="primary" disabled={running || name.trim() === ""}>
+                {running ? "Changing…" : "Change address"}
+              </button>
+            </>
+          }
+        >
+          <Field label="DNS name or IP address" error={error}>
+            {(id) => (
+              <input
+                id={id}
+                value={name}
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(e) => setName(e.target.value)}
+              />
+            )}
+          </Field>
+          <p>Self-signed, appliance CA and ACME certificates follow the new name.</p>
+        </Dialog>
+      )}
+    </>
+  );
+}
+
 /** OwnCA is the appliance's own CA, to download and trust once. */
 function OwnCA({ ca }: { ca: ApplianceCA }): JSX.Element {
   const heading = useId();
@@ -150,7 +226,7 @@ function OwnCA({ ca }: { ca: ApplianceCA }): JSX.Element {
 }
 
 /** Facts is what the interface serves: where it came from, whom it covers and how long it holds. */
-function Facts({ c }: { c: Certificate }): JSX.Element {
+function Facts({ c, changeAddress }: { c: Certificate; changeAddress: ReactNode }): JSX.Element {
   const covers = [...(c.dnsNames ?? []), ...(c.ipAddresses ?? [])];
   return (
     <dl className="summary">
@@ -188,6 +264,7 @@ function Facts({ c }: { c: Certificate }): JSX.Element {
                 text={c.publicNameResolves ? "Resolves" : "Does not resolve"}
               />
             )}
+            {changeAddress}
           </dd>
         </>
       )}
@@ -465,7 +542,7 @@ export function InterfaceCertificate({
 }): JSX.Element {
   const { data, error, put } = usePoll(api.interfaceCertificate, pollIdle);
   const [chosenWay, setChosenWay] = useState<WayId>();
-  const [running, setRunning] = useState<WayId>();
+  const [running, setRunning] = useState<WayId | "address">();
   const [leftOut, setLeftOut] = useState<string[]>([]);
   const name = useId();
 
@@ -482,7 +559,7 @@ export function InterfaceCertificate({
   // A certificate from ACME opens on its setting, any other on an upload.
   const way = chosenWay ?? (data.acme === undefined ? "upload" : "acme");
   const runFor =
-    (id: WayId) =>
+    (id: WayId | "address") =>
     async (call: () => Promise<Replaced>): Promise<unknown> => {
       setRunning(id);
       try {
@@ -503,7 +580,17 @@ export function InterfaceCertificate({
       <div className="box">
         <h3>Interface certificate</h3>
         <Warnings c={data} />
-        <Facts c={data} />
+        <Facts
+          c={data}
+          changeAddress={
+            <ChangeAddress
+              current={hostOf(data.publicURL ?? "")}
+              disabled={waiting || locked}
+              running={running === "address"}
+              run={runFor("address")}
+            />
+          }
+        />
         {leftOut.length > 0 && <p className="muted">Left out: {leftOut.join(", ")}</p>}
         <ErrorBox message={error} />
       </div>

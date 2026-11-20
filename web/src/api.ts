@@ -476,6 +476,8 @@ export interface Api {
   /** signInterfaceCertificateByApplianceCA serves a certificate the appliance's own CA signs, making the CA first. */
   signInterfaceCertificateByApplianceCA: () => Promise<InterfaceCertificate>;
   resetInterfaceCertificate: () => Promise<InterfaceCertificate>;
+  /** setInterfaceAddress changes the name or address users reach the interface at. */
+  setInterfaceAddress: (name: string) => Promise<InterfaceCertificate>;
   /** setInterfaceACME saves the ACME setting, which starts the first order. */
   setInterfaceACME: (req: ACMERequest) => Promise<InterfaceCertificate>;
   orderInterfaceACME: () => Promise<InterfaceCertificate>;
@@ -676,6 +678,7 @@ export const api: Api = {
   makeInterfaceCertificateSelfSigned: () => request("POST", `${interfaceCertificatePath}/self-signed`),
   signInterfaceCertificateByApplianceCA: () => request("POST", `${interfaceCertificatePath}/appliance-ca`),
   resetInterfaceCertificate: () => request("DELETE", interfaceCertificatePath),
+  setInterfaceAddress: (name) => request("PUT", `${interfaceCertificatePath}/address`, { name }),
   setInterfaceACME: (req) => request("PUT", `${interfaceCertificatePath}/acme`, req),
   orderInterfaceACME: () => request("POST", `${interfaceCertificatePath}/acme/order`),
   acmeProviders: () => request("GET", `${interfaceCertificatePath}/acme/providers`),

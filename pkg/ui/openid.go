@@ -24,7 +24,7 @@ const noPublicURL = "OpenID sign-in needs the public address. An administrator s
 // ok is false while none is configured. The address the browser used is never taken instead: the
 // Host header is the client's to choose, and a sign-in code must go nowhere it names.
 func (s *Server) redirectURL() (string, bool) {
-	base := strings.TrimSuffix(s.PublicURL, "/")
+	base := strings.TrimSuffix(s.PublicAddress(), "/")
 	return base + "/api/openid/callback", base != ""
 }
 
@@ -43,14 +43,15 @@ func sameHost(a, b string) bool {
 // place the identity provider returns to. The state cookie is host-only (__Host-), so the return
 // would find none if the sign-in began elsewhere. It reports whether it answered the request.
 func (s *Server) atPublicURL(w http.ResponseWriter, r *http.Request) bool {
-	public, err := url.Parse(s.PublicURL)
+	address := s.PublicAddress()
+	public, err := url.Parse(address)
 	if err != nil || public.Host == "" || sameHost(r.Host, public.Host) || r.URL.Query().Has(movedToPublicURL) {
 		return false
 	}
 	q := r.URL.Query()
 	q.Set(movedToPublicURL, "1")
 	// The target is the configured public address, never the Host header the client chose.
-	http.Redirect(w, r, strings.TrimSuffix(s.PublicURL, "/")+r.URL.Path+"?"+q.Encode(), http.StatusSeeOther) //nolint:gosec // the configured public address
+	http.Redirect(w, r, strings.TrimSuffix(address, "/")+r.URL.Path+"?"+q.Encode(), http.StatusSeeOther) //nolint:gosec // the configured public address
 	return true
 }
 

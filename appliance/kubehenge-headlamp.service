@@ -16,8 +16,10 @@ StateDirectory=kubehenge-headlamp-server
 Environment=HOME=/var/lib/kubehenge-headlamp-server
 # HEADLAMP_CONFIG_OIDC_CALLBACK_URL, written by the installer: the address identity providers send
 # people back to, https://<appliance>:8443/oidc-callback. Headlamp answers only to its loopback
-# address, so it cannot work this out from requests.
+# address, so it cannot work this out from requests. The interface writes the second file when an
+# administrator changes the public address on its certificate page. Read last, it wins.
 EnvironmentFile=-/etc/kubehenge/headlamp.env
+EnvironmentFile=-/var/lib/kubehenge/headlamp.env
 # The plugins Headlamp ships, which the interface serves only while the shared Headlamp offers its
 # actions.
 Environment=HEADLAMP_STATIC_PLUGINS_DIR=/usr/local/share/kubehenge/headlamp/static-plugins

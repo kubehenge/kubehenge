@@ -68,7 +68,26 @@ func (o *applianceOptions) certificateCommand() *cobra.Command {
 	}
 	o.jsonFlag(cmd)
 	cmd.AddCommand(o.certificateReplaceCommand(), o.certificateSelfSignCommand(), o.certificateApplianceCACommand(), o.certificateCACommand(),
-		o.certificateResetCommand(), o.certificateACMECommand())
+		o.certificateResetCommand(), o.certificateACMECommand(), o.certificateAddressCommand())
+	return cmd
+}
+
+func (o *applianceOptions) certificateAddressCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "address <name>",
+		Short: "Change the DNS name or IP address users reach the interface at",
+		Long: `Change the DNS name or IP address users reach the interface at, with no restart. A self-signed
+certificate or one of the appliance's CA is made again for it, and ACME orders one. Any other
+certificate stays until one for the new name replaces it.`,
+		Example: `  kubehenge appliance certificate address kubehenge.example.org`,
+		Args:    argsSay(cobra.ExactArgs(1), "give the DNS name or IP address"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
+				return o.changeCertificate(ctx, cmd, s, http.MethodPut, certificatePath+"/address", map[string]string{"name": args[0]})
+			})
+		},
+	}
+	o.jsonFlag(cmd)
 	return cmd
 }
 

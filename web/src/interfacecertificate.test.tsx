@@ -367,6 +367,41 @@ describe("interface certificate", () => {
     vi.unstubAllGlobals();
   });
 
+  it("15: changes the public address in a dialog, shows a refusal at its field and warns when the certificate misses it", async () => {
+    const moved = "https://moved.example.org";
+    const calls = fakeServer({
+      ...read(),
+      [`PUT ${path}/address`]: sequence([
+        { status: 422, body: { error: '"bank example" is not a DNS name or an IP address', code: "bad-address" } },
+        { body: certificate({ publicURL: moved, publicNameCovered: false }) },
+      ]),
+    });
+    const user = userEvent.setup({ delay: null });
+    const { container } = render(<InterfaceCertificate />);
+    await user.click(await screen.findByRole("button", { name: "Change address" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Change public address" }));
+    const field = dialog.getByRole("textbox", { name: "DNS name or IP address" });
+    expect(field).toHaveValue("kubehenge.example.org");
+    await user.clear(field);
+    expect(dialog.getByRole("button", { name: "Change address" })).toBeDisabled();
+    await user.type(field, "bank example");
+    await user.click(dialog.getByRole("button", { name: "Change address" }));
+    await expect(dialog.findByText('"bank example" is not a DNS name or an IP address')).resolves.toBeInTheDocument();
+    expect(field).toHaveAccessibleDescription('"bank example" is not a DNS name or an IP address');
+    await expectNoViolations(container, "interface certificate, address refused");
+
+    await user.clear(field);
+    await user.type(field, " moved.example.org ");
+    await user.click(dialog.getByRole("button", { name: "Change address" }));
+    await expect(screen.findByText(moved)).resolves.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByText("Not valid for moved.example.org, so browsers warn")).toBeInTheDocument();
+    expect(calls.filter((c) => c.key === `PUT ${path}/address`).map((c) => c.body)).toStrictEqual([
+      { name: "bank example" },
+      { name: "moved.example.org" },
+    ]);
+  });
+
   it("9: disables the actions with a reason when nothing can change, and keeps the form on busy", async () => {
     fakeServer(read({ changeable: false }));
     const { unmount } = render(<InterfaceCertificate />);
@@ -491,9 +526,11 @@ describe("interface certificate", () => {
     await screen.findByText("Source");
     await expectNoViolations(container, "interface certificate, warnings");
 
-    // Tab order: the copy button, the radios (one stop), the file picker.
+    // Tab order: the copy button, the address change, the radios (one stop), the file picker.
     await user.tab();
     expect(screen.getByRole("button", { name: "Copy fingerprint" })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Change address" })).toHaveFocus();
     await user.tab();
     expect(screen.getByRole("radio", { name: "Upload files" })).toHaveFocus();
     await user.tab();

@@ -672,7 +672,7 @@ func TestReplaceCertificate(t *testing.T) {
 func TestReplaceCertificateForgetsTheOneAnAdministratorGave(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	const remove = "pct exec 100 -- rm -f /var/lib/kubehenge/interface-certificate.pem /var/lib/kubehenge/interface-ca.pem"
+	const remove = "pct exec 100 -- rm -f /var/lib/kubehenge/interface-certificate.pem /var/lib/kubehenge/interface-ca.pem /var/lib/kubehenge/public-url /var/lib/kubehenge/headlamp.env"
 	h, r, out := upgradeHarness(t)
 	h.exec.on("pct config 100", "hostname: kubehenge\ntags: kubehenge\nnet0: name=eth0,bridge=vmbr0,ip=192.0.2.40/24\n")
 	r.S.Cfg.Upgrade, r.S.Cfg.Certificate, r.S.Cfg.Name = false, true, "kubehenge.example.org"

@@ -421,11 +421,14 @@ func (o *serveOptions) setUpHeadlamp() error {
 // directory, so a restore serves the certificate the administrator chose.
 func (o *serveOptions) loadCertificate(now time.Time) error {
 	o.s.Certificate = ui.NewInterfaceCertificate(o.a.Dir, o.certFile, o.keyFile)
+	if _, port, err := net.SplitHostPort(o.headlampListen); err == nil {
+		o.s.Certificate.HeadlampPort = port
+	}
 	if o.a.Dir != "" {
 		m := acme.New(o.a.Dir)
 		m.Log, m.HTTPListening = o.s.Log, o.httpListen != ""
 		m.Name = func() string {
-			u, err := url.Parse(o.s.PublicURL)
+			u, err := url.Parse(o.s.PublicAddress())
 			if err != nil {
 				return ""
 			}
