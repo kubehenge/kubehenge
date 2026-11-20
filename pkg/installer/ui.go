@@ -95,6 +95,9 @@ type answers struct {
 	ctid, hostname, name                 string
 	certChoice, certPaths, certFile      string
 	passphrase, proxies                  string
+	// certInput is the open files input, and completed the value its suggestions were made for.
+	certInput *huh.Input
+	completed string
 	// certStep is the step of the certificate question: the choice, its files or a passphrase.
 	certStep                          int
 	storage, templateStorage, apiHost string
@@ -368,6 +371,7 @@ func (m *Model) updateForm(msg tea.Msg) tea.Cmd {
 	if form, ok := f.(*huh.Form); ok {
 		m.form = form
 	}
+	m.completeCertPaths()
 	cmds := []tea.Cmd{tagged(m.form, cmd)}
 	switch m.form.State {
 	case huh.StateCompleted:

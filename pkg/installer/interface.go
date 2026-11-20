@@ -442,6 +442,16 @@ func (s *Session) CheckCertificate() error {
 	return nil
 }
 
+// completeCertPaths offers completions for the files typed so far. It runs on the update loop,
+// since huh runs a SuggestionsFunc on a goroutine of its own while the input writes the same string.
+func (m *Model) completeCertPaths() {
+	if m.a.certInput == nil || m.a.certPaths == m.a.completed {
+		return
+	}
+	m.a.completed = m.a.certPaths
+	m.a.certInput.Suggestions(completePaths(m.a.certPaths))
+}
+
 // completePaths completes the last path of a comma-separated list, as whole values for an input.
 func completePaths(value string) []string {
 	last := value
@@ -531,12 +541,15 @@ func certFields(m *Model) []huh.Field {
 		if files := m.S.Cfg.ownFiles(); len(files) > 0 {
 			m.a.certPaths = strings.Join(files, ",")
 		}
-		return []huh.Field{input("Certificate files", &m.a.certPaths, "cert.pem,key.pem", func(s string) error {
+		m.a.certInput = input("Certificate files", &m.a.certPaths, "cert.pem,key.pem", func(s string) error {
 			if len(splitList(s)) == 0 {
 				return errors.New("enter one or more files, comma-separated")
 			}
 			return nil
-		}).SuggestionsFunc(func() []string { return completePaths(m.a.certPaths) }, &m.a.certPaths)}
+		})
+		m.a.completed = "\x00"
+		m.completeCertPaths()
+		return []huh.Field{m.a.certInput}
 	case certStepPassphrase:
 		return []huh.Field{input("Passphrase for "+filepath.Base(m.a.certFile), &m.a.passphrase, "", func(s string) error {
 			if s == "" {
