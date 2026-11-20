@@ -522,9 +522,16 @@ jobs:
               > "$out/cluster-objects.json" 2>&1 || true
             kubectl get pods -A --no-headers \
               -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name |
-              grep -E -- '-system ' | while read -r ns pod; do
+              grep -E -- '-system |^cert-manager ' | while read -r ns pod; do
                 kubectl logs -n "$ns" "$pod" --all-containers --prefix --tail=-1 || true
               done > "$out/controllers.log" 2>&1
+            # Which webhooks cert-manager's cainjector has given a CA, since one without it fails
+            # every call with "certificate signed by unknown authority".
+            kubectl get validatingwebhookconfigurations,mutatingwebhookconfigurations -o json |
+              jq -r '.items[] | .kind + " " + .metadata.name + " " +
+                (.metadata.annotations["cert-manager.io/inject-ca-from"] // "-") + " " +
+                ([.webhooks[]? | if (.clientConfig.caBundle // "") == "" then "none" else "set" end] | join(","))' \
+              > "$out/webhook-cas.txt" 2>&1 || true
             # A test can fail inside a workload cluster, such as one that never connects to Rancher:
             # each cluster still standing, with the logs of Rancher's pods and of every pod that is
             # not running or has restarted. RKE2's provider leaves its kubeconfig Secrets untyped,
