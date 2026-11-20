@@ -19,11 +19,13 @@ export function AdminPage({
   status,
   running,
   reload,
+  onSetupChanged,
 }: {
   view: AdminView;
   status: SetupStatus;
   running: boolean;
   reload: () => Promise<void>;
+  onSetupChanged: () => void;
 }): JSX.Element {
   switch (view) {
     case "appliance": {
@@ -53,14 +55,8 @@ export function AdminPage({
     case "certificates": {
       return (
         <section className="panel">
+          <InterfaceCertificate onChanged={onSetupChanged} />
           <SharedDNS01 />
-        </section>
-      );
-    }
-    case "interface-certificate": {
-      return (
-        <section className="panel">
-          <InterfaceCertificate />
         </section>
       );
     }

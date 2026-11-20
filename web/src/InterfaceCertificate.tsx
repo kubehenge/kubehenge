@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ChangeEvent, type JSX } from "react";
+import { Fragment, useEffect, useId, useRef, useState, type ChangeEvent, type JSX } from "react";
 
 import { ApiError, api } from "./api";
 import { daysLeft, runsOutSoon } from "./certificate-expiry";
@@ -44,23 +44,26 @@ function hostOf(url: string): string {
 }
 
 /** Warnings are the facts about a certificate that an administrator has to act on, one line each. */
-function Warnings({ c }: { c: Certificate }): JSX.Element {
+function Warnings({ c }: { c: Certificate }): JSX.Element | null {
   const ends = new Date(c.notAfter);
   const days = daysLeft(ends);
+  const lines = [
+    runsOutSoon(ends) &&
+      (days < 0 ? `Expired on ${dateOf(c.notAfter)}` : `Expires in ${days === 0 ? "under a day" : `${days} days`}`),
+    c.incomplete && `Chain incomplete, missing ${c.missingIssuer ?? "an issuer"}`,
+    c.selfSigned && "Self-signed, so browsers warn",
+    c.publicNameResolves === false && `${hostOf(c.publicURL ?? "")} does not resolve to this appliance`,
+    filled(c.notServed) && `Stored certificate not served, ${c.notServed}`,
+  ].filter((l): l is string => typeof l === "string");
+  if (lines.length === 0) {
+    return null;
+  }
   return (
-    <>
-      {runsOutSoon(ends) && (
-        <p className="warning">
-          {days < 0 ? `Expired on ${dateOf(c.notAfter)}` : `Expires in ${days === 0 ? "under a day" : `${days} days`}`}
-        </p>
-      )}
-      {c.incomplete && <p className="warning">Chain incomplete, missing {c.missingIssuer ?? "an issuer"}</p>}
-      {c.selfSigned && <p className="warning">Self-signed, so browsers warn</p>}
-      {c.publicNameResolves === false && (
-        <p className="warning">{hostOf(c.publicURL ?? "")} does not resolve to this appliance</p>
-      )}
-      {filled(c.notServed) && <p className="warning">Stored certificate not served, {c.notServed}</p>}
-    </>
+    <div className="warning warning-lines">
+      {lines.map((l) => (
+        <p key={l}>{l}</p>
+      ))}
+    </div>
   );
 }
 
@@ -73,7 +76,20 @@ function Fingerprint({ value }: { value: string }): JSX.Element {
   };
   return (
     <>
-      <span className="key">{value}</span>
+      <span className="key fingerprint">
+        {value.split(":").map((pair, i) => (
+          // Pairs repeat, so a pair's place is its only identity.
+          // eslint-disable-next-line react/no-array-index-key
+          <Fragment key={i}>
+            {i > 0 && (
+              <>
+                :<wbr />
+              </>
+            )}
+            {pair}
+          </Fragment>
+        ))}
+      </span>
       <div>
         <button
           type="button"
@@ -355,9 +371,10 @@ const ways: { id: WayId; label: string; body: (p: WayProps) => JSX.Element }[] =
 
 /**
  * InterfaceCertificate shows the certificate the interface serves, and changes it: files an
- * administrator gives, a new self-signed certificate, or the one the installer made.
+ * administrator gives, a new self-signed certificate, or the one the installer made. onChanged lets
+ * the rest of the interface drop its warning about the certificate it replaced.
  */
-export function InterfaceCertificate(): JSX.Element {
+export function InterfaceCertificate({ onChanged }: { onChanged?: () => void }): JSX.Element {
   const { data, error, put } = usePoll(api.interfaceCertificate, pollIdle);
   const [way, setWay] = useState<WayId>("upload");
   const [running, setRunning] = useState<WayId>();
@@ -382,6 +399,7 @@ export function InterfaceCertificate(): JSX.Element {
         const { leftOut: left = [], ...view } = await call();
         setLeftOut(left);
         put(() => view);
+        onChanged?.();
         return undefined;
       } catch (err) {
         return err;

@@ -2866,6 +2866,16 @@ fieldset.choices legend {
   background: color-mix(in srgb, var(--warning) 8%, var(--surface));
 }
 
+/* Several warnings about one thing share a box, a line each. */
+.warning-lines {
+  display: grid;
+  gap: 4px;
+}
+
+.warning-lines p {
+  margin: 0;
+}
+
 /* What to act on before the rest of the page, such as a stalled roll or deletion: its own callout,
    in the colour of how bad it is, with the way out inside it. */
 .callout {
@@ -3215,6 +3225,12 @@ details.advanced > summary {
   font-family: var(--mono);
   font-size: 12px;
   word-break: break-all;
+}
+
+/* A fingerprint breaks between its pairs, never inside one. */
+.key.fingerprint {
+  display: block;
+  word-break: normal;
 }
 
 .log {

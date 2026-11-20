@@ -976,7 +976,7 @@ const interfaceCertificate = (over: Record<string, unknown> = {}): Record<string
     },
   },
 });
-const certificatePath = "/administration/interface-certificate";
+const certificatePath = "/administration/certificates";
 
 const cases: Case[] = [
   {
@@ -1160,7 +1160,7 @@ const cases: Case[] = [
   {
     name: "error: certificates",
     path: "/administration/certificates",
-    routes: { ...admin, ...failing("GET /api/credentials/dns01") },
+    routes: { ...admin, ...interfaceCertificate(), ...failing("GET /api/credentials/dns01") },
     ready: shown,
   },
   {
@@ -1199,7 +1199,12 @@ const cases: Case[] = [
   { name: "appliance, failed upgrade", path: "/administration/appliance", routes: richAdmin, ready: loaded },
   { name: "backups, snapshots", path: "/administration/backups", routes: richAdmin, ready: loaded },
   { name: "templates, built", path: "/administration/templates", routes: richAdmin, ready: loaded },
-  { name: "certificates, token stored", path: "/administration/certificates", routes: richAdmin, ready: loaded },
+  {
+    name: "certificates, token stored",
+    path: "/administration/certificates",
+    routes: { ...richAdmin, ...interfaceCertificate() },
+    ready: loaded,
+  },
   { name: "notifications, sent", path: "/administration/notifications", routes: richAdmin, ready: loaded },
   { name: "activity, entries", path: "/administration/activity", routes: richAdmin, ready: loaded },
   {
@@ -1348,7 +1353,12 @@ const cases: Case[] = [
   { name: "administration, appliance", path: "/administration/appliance", routes: admin, ready: loaded },
   { name: "administration, backups", path: "/administration/backups", routes: admin, ready: loaded },
   { name: "administration, templates", path: "/administration/templates", routes: admin, ready: loaded },
-  { name: "administration, certificates", path: "/administration/certificates", routes: admin, ready: loaded },
+  {
+    name: "administration, certificates",
+    path: "/administration/certificates",
+    routes: { ...admin, ...interfaceCertificate() },
+    ready: loaded,
+  },
   { name: "administration, notifications", path: "/administration/notifications", routes: admin, ready: loaded },
   { name: "administration, activity", path: "/administration/activity", routes: admin, ready: loaded },
   {

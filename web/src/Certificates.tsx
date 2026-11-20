@@ -953,7 +953,7 @@ export function CertificatesDialog({ cluster: c, onClose }: { cluster: Cluster; 
 export function SharedDNS01(): JSX.Element {
   return (
     <div className="box">
-      <h3>Certificates</h3>
+      <h3>Cluster certificates</h3>
       <CredentialField
         label="Shared DNS-01 credential"
         purpose="dns01"

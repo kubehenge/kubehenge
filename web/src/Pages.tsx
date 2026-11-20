@@ -114,7 +114,7 @@ export function RoutePage({
       return <Setup onReady={onSetupChanged} />;
     }
     case "administration": {
-      return <Administration view={route.view} onGone={onSetupChanged} />;
+      return <Administration view={route.view} onSetupChanged={onSetupChanged} />;
     }
     case "forbidden": {
       return <NoPage title="Administrators only">Needs the Administrator role on / in Proxmox VE.</NoPage>;

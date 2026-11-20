@@ -59,7 +59,7 @@ describe("interface certificate", () => {
       "GET /api/runs": { body: [] },
       ...read(),
     };
-    window.history.replaceState(null, "", "/administration/interface-certificate");
+    window.history.replaceState(null, "", "/administration/certificates");
     fakeServer({
       ...signedIn,
       ...answers,
@@ -67,8 +67,9 @@ describe("interface certificate", () => {
     });
     const { unmount } = render(<App />);
     const views = await screen.findByRole("navigation", { name: "Administration pages" });
-    expect(within(views).getByRole("link", { name: "Interface certificate" })).toHaveAttribute("aria-current", "page");
+    expect(within(views).getByRole("link", { name: "Certificates" })).toHaveAttribute("aria-current", "page");
     await expect(screen.findByRole("heading", { name: "Interface certificate" })).resolves.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Cluster certificates" })).toBeInTheDocument();
     unmount();
 
     fakeServer({
@@ -93,7 +94,7 @@ describe("interface certificate", () => {
     expect(screen.getByText("CN=Example Org CA", { selector: "dd" })).toBeInTheDocument();
     expect(screen.getByText(dateOf(c.notAfter))).toBeInTheDocument();
     expect(screen.getByText("120 days left")).toBeInTheDocument();
-    expect(screen.getByText(c.fingerprint)).toBeInTheDocument();
+    expect(screen.getByText(c.fingerprint).querySelectorAll("wbr")).toHaveLength(31);
     const chain = within(screen.getByRole("list"));
     expect(chain.getAllByRole("listitem").map((li) => li.textContent)).toStrictEqual(c.chain);
     expect(screen.getByText("https://kubehenge.example.org")).toBeInTheDocument();
@@ -121,6 +122,8 @@ describe("interface certificate", () => {
     expect(screen.getByText("Self-signed, so browsers warn")).toBeInTheDocument();
     expect(screen.getByText("kubehenge.example.org does not resolve to this appliance")).toBeInTheDocument();
     expect(screen.getByText("Stored certificate not served, the file holds no key")).toBeInTheDocument();
+    expect(document.querySelectorAll(".warning")).toHaveLength(1);
+    expect(document.querySelectorAll(".warning p")).toHaveLength(5);
     unmount();
 
     const over = inDays(-3);
@@ -386,8 +389,8 @@ describe("interface certificate", () => {
     });
     render(<App />);
     await screen.findByText(/certificate expires on/u);
-    const link = screen.getByRole("link", { name: "Interface certificate" });
-    expect(link).toHaveAttribute("href", "/administration/interface-certificate");
+    const link = screen.getByRole("link", { name: "Certificates" });
+    expect(link).toHaveAttribute("href", "/administration/certificates");
     expect(link.closest("p")).toHaveTextContent(/certificate expires on/u);
   });
 
@@ -483,5 +486,29 @@ describe("interface certificate", () => {
     await expectNoViolations(container, "interface certificate, running");
     answer.answer({ body: certificate({ source: "self-signed", selfSigned: true }) });
     await screen.findByText("Self-signed, so browsers warn");
+  });
+
+  it("14: drops the setup page's expiry warning once the certificate is replaced", async () => {
+    window.history.replaceState(null, "", "/administration/certificates");
+    const fresh = { appliance: true, ready: true, allowed: true, applianceVMID: 105 };
+    let setup: object = { ...fresh, certificateExpires: inDays(10) };
+    fakeServer({
+      ...signedIn,
+      ...read({ notAfter: inDays(10) }),
+      "GET /api/setup": () => ({ body: setup }),
+      [`PUT ${path}`]: () => {
+        setup = fresh;
+        return { body: certificate() };
+      },
+      "GET /api/clusters": { body: [] },
+      "GET /api/fleet/health": { body: [] },
+      "GET /api/runs": { body: [] },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await screen.findByText(/certificate expires on/u);
+    await user.upload(await screen.findByLabelText("Certificate files"), pem("site.pem"));
+    await user.click(screen.getByRole("button", { name: "Replace" }));
+    await waitFor(() => expect(screen.queryByText(/certificate expires on/u)).not.toBeInTheDocument());
   });
 });

@@ -273,8 +273,8 @@ function ApplianceWarnings({
         <p className="warning" role="alert">
           {certificate.expired ? "Appliance certificate expired on " : "Appliance certificate expires on "}
           {certificate.expires.toLocaleDateString(undefined, { dateStyle: "long" })}. Replace it under{" "}
-          <Link to="/administration/interface-certificate">Interface certificate</Link>, or renew it on the Proxmox VE
-          node: <code>sh install.sh --certificate --ctid {ctid}</code>
+          <Link to="/administration/certificates">Certificates</Link>, or renew it on the Proxmox VE node:{" "}
+          <code>sh install.sh --certificate --ctid {ctid}</code>
         </p>
       )}
       {credentials && (

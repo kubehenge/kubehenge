@@ -378,7 +378,7 @@ It restarts the interface and the shared Headlamp, then prints the new fingerpri
 
 ### From the interface
 
-Administrators show and change the certificate with no shell and no restart, on the Administration page or in the appliance with `kubehenge appliance certificate`:
+Administrators show and change the certificate with no shell and no restart, under Administration, Certificates, or in the appliance with `kubehenge appliance certificate`:
 
 ```sh
 pct exec <ctid> -- kubehenge appliance certificate
