@@ -484,6 +484,12 @@ type uploadView struct {
 }
 
 func (s *Server) certificateViewOf(ctx context.Context, c *InterfaceCertificate) certificateView {
+	// ACME's state is read before the certificate. An order delivers before it reads issued, so an
+	// issued state never shows beside the certificate it replaced.
+	var acmeView *acme.View
+	if c.acme != nil {
+		acmeView = c.acme.View()
+	}
 	served := c.served()
 	leaf := served.pair.Leaf
 	names, ips := certificateNames(leaf)
@@ -507,9 +513,7 @@ func (s *Server) certificateViewOf(ctx context.Context, c *InterfaceCertificate)
 		v.Chain = append(v.Chain, cert.Subject.String())
 	}
 	v.PublicNameResolves = s.publicNameResolves(ctx, c)
-	if c.acme != nil {
-		v.ACME = c.acme.View()
-	}
+	v.ACME = acmeView
 	if ca, err := c.loadCA(); err == nil && ca != nil {
 		v.ApplianceCA = ca.view()
 	}

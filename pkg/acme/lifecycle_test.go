@@ -491,7 +491,8 @@ func TestDisablingRemovesTheSettingAndItsSecrets(t *testing.T) {
 	if _, err := b.m.Save(httpRequest()); err != nil {
 		t.Fatal(err)
 	}
-	until(t, "the first certificate", func() bool { return b.delivers() == 1 })
+	// The order is over once it says issued, its progress written. Until then it may still write.
+	until(t, "the first certificate", func() bool { v := b.m.View(); return b.delivers() == 1 && v != nil && v.State == "issued" })
 	if err := b.m.store.write(accountFile, []byte("{}")); err != nil {
 		t.Fatal(err)
 	}
