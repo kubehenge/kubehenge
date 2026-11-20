@@ -143,8 +143,13 @@ type addressMove struct {
 
 // addressMoved tells that none of the addresses the certificate is for is the appliance's any
 // more, as after its DHCP lease changed or a move to another network. Nil while one still is, or
-// while the user reaches the appliance by a DNS name the certificate is for.
+// while the user reaches the appliance by a DNS name the certificate is for. Only the installer's
+// certificate counts, the one the node renews, and only while no public address was set: an
+// address set by hand may be a proxy's or a NAT's, and the certificate page judges the others.
 func (s *Server) addressMoved(host string) *addressMove {
+	if c := s.Certificate; c != nil && (c.address.Load() != nil || c.served().source != certificateInstaller) {
+		return nil
+	}
 	names, ips := s.certificateCovers()
 	if len(ips) == 0 || s.OwnAddresses == nil {
 		return nil

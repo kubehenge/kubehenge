@@ -431,6 +431,26 @@ func TestAStartRemovesWhatACutOffChangeLeft(t *testing.T) {
 	}
 }
 
+// Only the installer's certificate, which the node renews, brings the moved-address banner. A
+// public address set by hand may be a proxy's or a NAT's, so it brings none either.
+func TestOnlyTheInstallersCertificateTellsOfAMove(t *testing.T) {
+	t.Parallel()
+	for _, change := range []func(a *browser){
+		func(a *browser) { certificateOf(t, a.do("POST", "/api/appliance/certificate/self-signed", "")) },
+		func(a *browser) { moveTo(t, a, "198.51.100.7") },
+	} {
+		h, a, _ := administered(t)
+		h.server.Appliance = &appliance.Appliance{Dir: t.TempDir()}
+		moved := netip.MustParseAddr("192.0.2.41")
+		h.server.OwnAddresses = func() []netip.Addr { return []netip.Addr{moved} }
+		a.host = moved.String()
+		change(a)
+		if got := a.do("GET", "/api/setup", "").Body.String(); strings.Contains(got, "addressMoved") {
+			t.Errorf("setup = %s", got)
+		}
+	}
+}
+
 // What Setup tells about the certificate follows the one served: its expiry and the names and
 // addresses it is for.
 func TestTheExpiryAndNamesFollowTheServedCertificate(t *testing.T) {
