@@ -22,3 +22,4 @@
 ### Fixed
 
 - Rancher's agent in a registered cluster runs its helm operations in Rancher's pinned shell image. It used its own default, named by tag alone.
+- A template build finds its pinned AlmaLinux or Rocky Linux image in the vault once the mirror lists only newer builds.
