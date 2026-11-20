@@ -392,6 +392,33 @@ pct exec <ctid> -- kubehenge appliance certificate reset
 
 Its Cluster CA choice gives the node command above, since the cluster CA's key stays on the node.
 
+### ACME
+
+`kubehenge appliance certificate acme` gets the certificate from an ACME server and renews it. That is Let's Encrypt by default, or an organisation's own server:
+
+```sh
+pct exec <ctid> -- kubehenge appliance certificate acme --proof tls-alpn-01
+pct exec <ctid> -- kubehenge appliance certificate acme --directory https://ca.example.org/acme/directory \
+  --directory-ca-file ca.pem --eab-key-id kid --eab-hmac-key-file hmac.txt
+pct exec <ctid> -- kubehenge appliance certificate acme --proof dns-01 --dns-provider rfc2136 \
+  --dns-credentials-file dns.env --resolver 192.0.2.53:53
+pct exec <ctid> -- kubehenge appliance certificate acme order
+pct exec <ctid> -- kubehenge appliance certificate acme providers
+```
+
+- The certificate is for the host of the public URL, which must be a DNS name.
+- The proof is `tls-alpn-01` on port 443, `http-01` on port 80 or `dns-01` through a DNS provider. The ACME server must reach the appliance on that port, and `dns-01` needs none.
+- `dns-01` takes any DNS provider in `providers`. Its credentials file holds a `NAME=value` line per variable named in [lego's provider documentation](https://go-acme.github.io/lego/dns/).
+- The HMAC key and the DNS credentials come from files, never from arguments.
+- Saving starts the first order. `kubehenge appliance certificate` shows how it stands.
+- `replace`, `self-sign`, `reset` and `install.sh --certificate` remove the setting and its secrets.
+
+#### Renewal and failures
+
+Renewal follows the time the ACME server gives, or starts when a third of the lifetime is left.
+
+A failed order is retried after a minute, then after twice as long each time, up to an hour. After a day of failures it stops, and administrators get a notification. Save the setting again or run `order` once the cause is fixed.
+
 ### Where it is kept
 
 A certificate given this way is kept in `/var/lib/kubehenge`, which backups of the container hold, so a restore serves it again. `--upgrade` leaves it, and the upgrade's health check expects it. While it is served, `--upgrade` warns of its expiry 60 days ahead.

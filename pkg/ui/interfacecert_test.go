@@ -650,7 +650,7 @@ func TestASelfSignedCertificateCoversTheNamesOfTheServedOne(t *testing.T) {
 
 func tlsPair(t *testing.T, b *certfiles.Bundle) tls.Certificate {
 	t.Helper()
-	served, err := newServed(b, certificateInstaller)
+	served, err := newServed(b, certificateInstaller, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -30,6 +30,7 @@ ExecStart=/usr/local/bin/kubehenge serve \
     --tls-cert /etc/kubehenge/tls.crt \
     --tls-key /etc/kubehenge/tls.key \
     --listen :443 \
+    --http-listen :80 \
     --headlamp-listen :8443 \
     --headlamp-upstream http://127.0.0.1:4466 \
     --headlamp-kubeconfig /var/lib/kubehenge-headlamp/kubeconfig
@@ -43,7 +44,7 @@ RestartSec=5s
 KillMode=mixed
 TimeoutStopSec=170s
 
-# Port 443 is the one privilege it keeps.
+# Ports 443 and 80 (ACME's http-01 proof and the redirect to https) are the one privilege it keeps.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=yes

@@ -78,6 +78,9 @@ const notifyRepeatEvery = 7 * 24 * time.Hour
 // notifyEtcdBackupsKey is the problem that the management cluster's etcd is not backed up.
 const notifyEtcdBackupsKey = "management/etcd-backups"
 
+// notifyCertificateKey is the problem that the interface gave up getting its certificate from ACME.
+const notifyCertificateKey = "management/certificate"
+
 // notifyExportKey is the problem that the appliance's state was not exported since its backup
 // settings last changed.
 const notifyExportKey = "management/export"
@@ -167,6 +170,7 @@ func (s *Server) notifyOnce(ctx context.Context) {
 	}
 	s.findManagement(ctx, kube, namespaces, &found)
 	s.findBackupGaps(&found)
+	s.findCertificate(&found)
 	if kube != nil && namespaces != nil {
 		s.findClusters(ctx, kube, namespaces, &found)
 	}

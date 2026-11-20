@@ -984,6 +984,31 @@ The interface and Headlamp take their certificate from one function on each hand
 - `kubehenge login` in the appliance trusts the certificate served, read again on each command. Elsewhere it trusts what `--ca` or the system's roots vouch for. The appliance's export leaves the certificate out, since a new appliance gets its own from the installer.
 - The demo does all of it in memory.
 
+#### ACME
+
+The appliance's ACME client is lego, run inside the interface. Its setting, progress and account key are `acme-*` files in the appliance directory, mode 0600.
+
+| Call | Does |
+| --- | --- |
+| `PUT /api/appliance/certificate/acme` | saves the setting and starts the first order |
+| `POST /api/appliance/certificate/acme/order` | orders again now |
+| `GET /api/appliance/certificate/acme/providers` | lists the DNS providers |
+| `GET /api/appliance/certificate` | carries the state under `acme` |
+
+- Refusals have a `code`, as uploads do.
+- The interface's listener answers tls-alpn-01. It offers `acme-tls/1` only while a challenge is pending for the name asked.
+- `--http-listen` (port 80) answers http-01 and sends every other request to https.
+- dns-01 builds the named lego provider with its credentials in the environment for that moment only. The `exec` provider is refused.
+
+#### ACME orders
+
+- One order runs at a time and gives up after 30 minutes. Its result is served only while its setting is still the one saved.
+- A restart carries an order on under the same order ID.
+- Renewal follows the server's renewal information (ARI), asked every 6 hours, or a third of the lifetime before expiry.
+- A failure is retried after a minute, then twice as long each time up to an hour. It stops after a day with a notification.
+- No answer, view or log line holds the HMAC key or a DNS credential. Errors are scrubbed of both.
+- Any other certificate change, and `install.sh --certificate`, removes the setting and its secrets.
+
 #### Behind a reverse proxy
 
 The interface needs a host name of its own, never a path such as `https://tools.example.org/kubehenge/`, because its pages and API use absolute paths.

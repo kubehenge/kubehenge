@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"math/big"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,6 +104,7 @@ func TestServeRefusesWhatItCannotServe(t *testing.T) {
 		{"Proxmox VE over HTTP", func(_ *serveOptions, conn *pve.Config) { conn.URL = "http://127.0.0.1:8006" }, "the Proxmox VE API"},
 		{"an appliance without the CA", func(_ *serveOptions, conn *pve.Config) { conn.CAFile = "" }, "--proxmox-ca is required in the appliance"},
 		{"Headlamp without its upstream", func(o *serveOptions, _ *pve.Config) { o.headlampListen = "127.0.0.1:0" }, "--headlamp-listen needs"},
+		{"port 80 without the appliance directory", func(o *serveOptions, _ *pve.Config) { o.a.Dir, o.httpListen = "", ":80" }, "--http-listen needs --appliance-dir"},
 		{"a trusted proxy that is a name", func(o *serveOptions, _ *pve.Config) { o.trustedProxies = []string{"proxy.example"} }, `--trusted-proxy: "proxy.example"`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -259,6 +261,57 @@ func TestServeGivesBothListenersTheCertificateOfOneHolder(t *testing.T) {
 			t.Errorf("%s presents a certificate other than the interface's, or none", addr)
 		}
 		want = got
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Errorf("serve gave %v once its context ended", err)
+	}
+}
+
+// In the appliance the interface listens on port 80 beside its own port, for ACME's http-01 proof,
+// and sends everything else to https. The manager that orders the certificate knows it listens.
+func TestServeListensOnPlainHTTPForACMEAndRedirects(t *testing.T) {
+	t.Parallel()
+	free := func() string {
+		l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = l.Close() }()
+		return l.Addr().String()
+	}
+	o, _ := serveOptionsIn(t, t.TempDir())
+	o.listen, o.httpListen = free(), free()
+	o.s.PublicURL = "https://kubehenge.example.org"
+	if err := o.loadCertificate(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	m := o.s.Certificate.ACME()
+	if m == nil || !m.HTTPListening || m.PublicName() != "kubehenge.example.org" {
+		t.Fatalf("the manager is %+v", m)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- o.serve(ctx) }()
+	hc := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Timeout: 5 * time.Second}
+	var res *http.Response
+	for range 100 {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+o.httpListen+"/clusters?x=1", http.NoBody)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Host = "kubehenge.example.org"
+		if res, err = hc.Do(req); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if res == nil {
+		t.Fatal("port 80 never answered")
+	}
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusPermanentRedirect || res.Header.Get("Location") != "https://kubehenge.example.org/clusters?x=1" {
+		t.Errorf("port 80 answered %d to %q", res.StatusCode, res.Header.Get("Location"))
 	}
 	cancel()
 	if err := <-done; err != nil {

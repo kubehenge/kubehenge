@@ -27,6 +27,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/kubehenge/kubehenge/pkg/acme"
 	"github.com/kubehenge/kubehenge/pkg/appliance"
 	"github.com/kubehenge/kubehenge/pkg/backupstore"
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
@@ -65,6 +66,7 @@ type serveOptions struct {
 	updateSpool  string
 	releaseIndex string
 	listen       string
+	httpListen   string
 	certFile     string
 	keyFile      string
 	logs         logOptions
@@ -101,6 +103,7 @@ The interface acts in the management cluster with its own kubeconfig.`,
 	f := cmd.Flags()
 	proxmoxFlags(f, conn)
 	f.StringVar(&o.listen, "listen", ":8443", "address to serve on")
+	f.StringVar(&o.httpListen, "http-listen", "", "with --appliance-dir, an address to serve plain HTTP on, such as :80. It answers ACME's http-01 proof and sends every other request to the same path on https. Empty for none")
 	f.StringVar(&o.certFile, "tls-cert", "", "PEM file with the interface's certificate and any intermediates, served until an administrator gives another")
 	f.StringVar(&o.keyFile, "tls-key", "", "PEM file with the certificate's private key")
 	f.StringVar(&s.WorkloadPool, "workload-pool", "kubehenge", "Proxmox VE pool the clusters' own pools nest under, as the controller's --workload-pool")
@@ -159,11 +162,8 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 	if o.demo {
 		return o.runDemo(ctx)
 	}
-	if o.certFile == "" || o.keyFile == "" {
-		return errors.New("--tls-cert and --tls-key are required: the interface carries Proxmox VE passwords and is served over HTTPS only")
-	}
-	if err := provisioner.ValidWorkloadPool(s.WorkloadPool); err != nil {
-		return fmt.Errorf("--workload-pool: %w", err)
+	if err := o.checkServeFlags(); err != nil {
+		return err
 	}
 	if o.a.Dir != "" {
 		knowTheAppliance(s, o.a.Dir)
@@ -226,6 +226,20 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 	return o.serve(ctx)
 }
 
+// checkServeFlags refuses the flags the interface cannot serve with outside the demo.
+func (o *serveOptions) checkServeFlags() error {
+	if o.certFile == "" || o.keyFile == "" {
+		return errors.New("--tls-cert and --tls-key are required: the interface carries Proxmox VE passwords and is served over HTTPS only")
+	}
+	if err := provisioner.ValidWorkloadPool(o.s.WorkloadPool); err != nil {
+		return fmt.Errorf("--workload-pool: %w", err)
+	}
+	if o.httpListen != "" && o.a.Dir == "" {
+		return errors.New("--http-listen needs --appliance-dir, which keeps the certificate it serves a challenge for")
+	}
+	return nil
+}
+
 // runDemo serves the interface over sample clusters held in memory. Nothing it does reaches a
 // Proxmox VE host or a cluster: every client behind the interface is the demo's own.
 func (o *serveOptions) runDemo(ctx context.Context) error {
@@ -240,8 +254,8 @@ func (o *serveOptions) runDemo(ctx context.Context) error {
 			return fmt.Errorf("--listen %s: without --tls-cert the demo serves on a loopback address only, such as %s", o.listen, demoListen)
 		}
 	}
-	if o.headlampListen != "" || o.a.Dir != "" {
-		return errors.New("--demo takes no --headlamp-listen or --appliance-dir")
+	if o.headlampListen != "" || o.a.Dir != "" || o.httpListen != "" {
+		return errors.New("--demo takes no --headlamp-listen, --http-listen or --appliance-dir")
 	}
 	var err error
 	if o.s.Log, err = o.logs.slogLogger(os.Stderr); err != nil {
@@ -261,7 +275,7 @@ func (o *serveOptions) runDemo(ctx context.Context) error {
 			return err
 		}
 	}
-	cleanup, err := ui.SetUpDemo(&o.s, clock)
+	cleanup, err := ui.SetUpDemo(ctx, &o.s, clock)
 	if err != nil {
 		return fmt.Errorf("--demo: %w", err)
 	}
@@ -407,6 +421,18 @@ func (o *serveOptions) setUpHeadlamp() error {
 // directory, so a restore serves the certificate the administrator chose.
 func (o *serveOptions) loadCertificate(now time.Time) error {
 	o.s.Certificate = ui.NewInterfaceCertificate(o.a.Dir, o.certFile, o.keyFile)
+	if o.a.Dir != "" {
+		m := acme.New(o.a.Dir)
+		m.Log, m.HTTPListening = o.s.Log, o.httpListen != ""
+		m.Name = func() string {
+			u, err := url.Parse(o.s.PublicURL)
+			if err != nil {
+				return ""
+			}
+			return u.Hostname()
+		}
+		o.s.Certificate.UseACME(m)
+	}
 	return o.s.Certificate.Load(now, o.s.Log) //nolint:wrapcheck // the error names the flags already
 }
 
@@ -429,15 +455,11 @@ func (o *serveOptions) serve(ctx context.Context) error {
 			}
 		})
 	}
-	servers := []*http.Server{newServer(o.listen, s.Handler(), interfaceRequestTimeout)}
-	if s.Headlamp != nil {
-		servers = append(servers, newServer(o.headlampListen, s.HeadlampHandler(), 0))
-	}
-	for _, srv := range servers {
-		if o.certFile != "" {
-			// Both listeners read the certificate on each handshake, so a change reaches the next
-			// connection and no restart.
-			srv.TLSConfig.GetCertificate = s.Certificate.GetCertificate
+	servers := o.httpsServers()
+	if manager := s.Certificate.ACME(); manager != nil && o.a.Dir != "" {
+		wg.Go(func() { manager.Run(ctx) })
+		if o.httpListen != "" {
+			servers = append(servers, newPlainServer(o.httpListen, manager.HTTPHandler()))
 		}
 	}
 	wg.Go(func() {
@@ -451,7 +473,7 @@ func (o *serveOptions) serve(ctx context.Context) error {
 	errs := make(chan error, len(servers))
 	for _, srv := range servers {
 		s.Log.Info("serving", "address", srv.Addr)
-		if o.certFile == "" {
+		if o.certFile == "" || srv.TLSConfig == nil {
 			go func() { errs <- srv.ListenAndServe() }()
 		} else {
 			go func() { errs <- srv.ListenAndServeTLS("", "") }()
@@ -467,6 +489,26 @@ func (o *serveOptions) serve(ctx context.Context) error {
 		return nil
 	}
 	return fmt.Errorf("serving: %w", err)
+}
+
+// httpsServers are the interface's server and, when Headlamp is set up, Headlamp's.
+func (o *serveOptions) httpsServers() []*http.Server {
+	s := &o.s
+	servers := []*http.Server{newServer(o.listen, s.Handler(), interfaceRequestTimeout)}
+	if s.Headlamp != nil {
+		servers = append(servers, newServer(o.headlampListen, s.HeadlampHandler(), 0))
+	}
+	if o.certFile == "" {
+		return servers
+	}
+	// Both listeners read the certificate on each handshake, so a change reaches the next connection
+	// and no restart.
+	for _, srv := range servers {
+		srv.TLSConfig.GetCertificate = s.Certificate.GetCertificate
+	}
+	// Only the interface's listener answers ACME's TLS challenge.
+	servers[0].TLSConfig.GetConfigForClient = s.Certificate.ConfigForClient(servers[0].TLSConfig)
+	return servers
 }
 
 // newServer serves h over HTTPS. A timeout of 0 lets requests run on: a watch or a terminal through
@@ -485,6 +527,16 @@ func newServer(addr string, h http.Handler, timeout time.Duration) *http.Server 
 		WriteTimeout:      timeout,
 		IdleTimeout:       idleTimeout,
 		MaxHeaderBytes:    maxHeaderBytes,
+	}
+}
+
+// newPlainServer serves h over plain HTTP, for the answers to ACME's http-01 proof and the redirect
+// to https that every other request gets.
+func newPlainServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr: addr, Handler: h,
+		ReadHeaderTimeout: readHeaderTimeout, ReadTimeout: readHeaderTimeout, WriteTimeout: readHeaderTimeout,
+		IdleTimeout: idleTimeout, MaxHeaderBytes: maxHeaderBytes,
 	}
 }
 

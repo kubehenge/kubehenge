@@ -20,6 +20,12 @@ const (
 	// InterfaceCertificatePath is InterfaceCertificateFile in the directory kubehenge.service gives
 	// the interface as --appliance-dir.
 	InterfaceCertificatePath = "/var/lib/kubehenge/" + InterfaceCertificateFile
+	// ACMEFilePrefix starts the name of each file in the appliance's directory that holds the
+	// interface's ACME setting, progress and account. Whoever puts a certificate in place that ACME
+	// must not replace removes them all with one pattern.
+	ACMEFilePrefix = "acme-"
+	// ACMEFilesPattern matches those files, as a shell reads it.
+	ACMEFilesPattern = "/var/lib/kubehenge/" + ACMEFilePrefix + "*"
 	// InstallerCertificatePath is the certificate the installer made, which the interface serves
 	// while no other is stored.
 	InstallerCertificatePath = "/etc/kubehenge/tls.crt"

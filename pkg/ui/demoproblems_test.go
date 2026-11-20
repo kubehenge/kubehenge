@@ -75,7 +75,7 @@ func demoFleetEdited(t *testing.T, edits map[string]func(*demoCluster)) []byte {
 func newDemoWith(t *testing.T, edits map[string]func(*demoCluster)) *demoBrowser {
 	t.Helper()
 	s := &Server{Assets: fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>Kubehenge</title>")}}}
-	cleanup, err := demoFrom(s, func() time.Time { return demoAt }, demoFleetEdited(t, edits))
+	cleanup, err := demoFrom(t.Context(), s, func() time.Time { return demoAt }, demoFleetEdited(t, edits))
 	if err != nil {
 		t.Fatal(err)
 	}

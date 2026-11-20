@@ -32,6 +32,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/kubehenge/kubehenge/pkg/acme"
 	"github.com/kubehenge/kubehenge/pkg/appliance"
 	"github.com/kubehenge/kubehenge/pkg/certfiles"
 )
@@ -41,6 +42,7 @@ const (
 	certificateInstaller  = "installer"
 	certificateUploaded   = "uploaded"
 	certificateSelfSigned = "self-signed"
+	certificateACME       = acme.SourceACME
 )
 
 const (
@@ -61,6 +63,9 @@ const (
 	lookupTimeout  = 2 * time.Second
 	// sourceLine opens the stored file, before its first PEM block, which readers skip.
 	sourceLine = "# source: "
+	// orderLine follows it for a certificate from ACME, naming the order that issued it, so that a
+	// restart knows the order was delivered.
+	orderLine = "# order: "
 )
 
 // InterfaceCertificate is the certificate the interface and Headlamp serve. It is the installer's,
@@ -80,6 +85,11 @@ type InterfaceCertificate struct {
 	readInstaller func(now time.Time) (*servedCertificate, error)
 	files         certificateFiles
 	rootsOnce     sync.Once
+	// demoIssue makes the certificates the demo's ACME orders give.
+	demoIssue func(at time.Time) (certPEM, keyPEM []byte, err error)
+	// acme orders and renews the certificate when an administrator set it up. Nil when the interface
+	// has nowhere to keep ACME's setting.
+	acme *acme.Manager
 
 	// mu is held by whoever changes the certificate, so that the stored file and the certificate
 	// served are always the same one.
@@ -96,6 +106,8 @@ type servedCertificate struct {
 	missing    string
 	// notServed is why the stored file is left alone and not served.
 	notServed string
+	// order is the ACME order that issued the certificate.
+	order string
 }
 
 // NewInterfaceCertificate serves the certificate files the installer made, or the one in dir when
@@ -138,7 +150,12 @@ func (c *InterfaceCertificate) Load(now time.Time, log *slog.Logger) error {
 
 // GetCertificate is the one place both listeners take their certificate from. Reading the current
 // one on each handshake is what lets a change reach the next connection with no restart.
-func (c *InterfaceCertificate) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+func (c *InterfaceCertificate) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+	if c.acme != nil {
+		if challenge := c.acme.ChallengeCertificate(hello); challenge != nil {
+			return challenge, nil
+		}
+	}
 	served := c.live.Load()
 	if served == nil {
 		return nil, errors.New("no certificate is loaded")
@@ -174,11 +191,28 @@ func (c *InterfaceCertificate) readStored(now time.Time) (*servedCertificate, er
 	if err != nil {
 		return nil, fmt.Errorf("reading the stored certificate: %w", err)
 	}
-	source := certificateUploaded
-	if first, _, _ := strings.Cut(string(raw), "\n"); first == sourceLine+certificateSelfSigned {
-		source = certificateSelfSigned
+	source, order := storedHeader(string(raw))
+	return newServed(b, source, order)
+}
+
+// storedHeader reads the source, and for ACME the order, from the comment lines that open the
+// stored file. A file without them was uploaded.
+func storedHeader(raw string) (string, string) {
+	source, order := certificateUploaded, ""
+	for line := range strings.Lines(raw) {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, sourceLine):
+			if s := strings.TrimPrefix(line, sourceLine); s == certificateSelfSigned || s == certificateACME {
+				source = s
+			}
+		case strings.HasPrefix(line, orderLine):
+			order = strings.TrimPrefix(line, orderLine)
+		default:
+			return source, order
+		}
 	}
-	return newServed(b, source)
+	return source, order
 }
 
 // readInstallerFiles reads --tls-cert and --tls-key. An expired certificate is served all the same,
@@ -218,13 +252,13 @@ func (c *InterfaceCertificate) installerChain(leaf *x509.Certificate, now time.T
 	return b
 }
 
-func newServed(b *certfiles.Bundle, source string) (*servedCertificate, error) {
+func newServed(b *certfiles.Bundle, source, order string) (*servedCertificate, error) {
 	pair, err := tls.X509KeyPair(b.CertPEM, b.KeyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("the certificate and key do not make a pair: %w", err)
 	}
 	pair.Leaf = b.Leaf
-	return &servedCertificate{pair: pair, source: source, chain: b.Chain, incomplete: b.Incomplete, missing: b.MissingIssuer}, nil
+	return &servedCertificate{pair: pair, source: source, order: order, chain: b.Chain, incomplete: b.Incomplete, missing: b.MissingIssuer}, nil
 }
 
 // certificateFiles are the file operations a change makes, which a test fails one at a time.
@@ -282,7 +316,7 @@ func (c *InterfaceCertificate) removeLeftovers() {
 
 // store writes the certificate to a temporary file beside the stored one, syncs it and renames it
 // over the stored one, so that a crash leaves the old file or the new one.
-func (c *InterfaceCertificate) store(b *certfiles.Bundle, source string) (err error) {
+func (c *InterfaceCertificate) store(b *certfiles.Bundle, source, order string) (err error) {
 	f, err := c.fileOps().CreateTemp(c.dir, appliance.InterfaceCertificateFile+".*")
 	if err != nil {
 		return err //nolint:wrapcheck // the file operations name what failed
@@ -292,7 +326,11 @@ func (c *InterfaceCertificate) store(b *certfiles.Bundle, source string) (err er
 			_ = c.fileOps().Remove(f.Name())
 		}
 	}()
-	data := slices.Concat([]byte(sourceLine+source+"\n"), b.KeyPEM, b.CertPEM)
+	header := sourceLine + source + "\n"
+	if order != "" {
+		header += orderLine + order + "\n"
+	}
+	data := slices.Concat([]byte(header), b.KeyPEM, b.CertPEM)
 	if _, err = f.Write(data); err != nil {
 		_ = f.Close()
 		return fmt.Errorf("writing the certificate: %w", err)
@@ -307,14 +345,26 @@ func (c *InterfaceCertificate) store(b *certfiles.Bundle, source string) (err er
 	return c.fileOps().Rename(f.Name(), c.storedPath()) //nolint:wrapcheck // the file operations name what failed
 }
 
-// replace keeps b and serves it. The caller holds mu.
+// replace keeps b, which an administrator chose, and serves it. ACME stops with it, so that it never
+// replaces a certificate chosen after it. The caller holds mu.
 func (c *InterfaceCertificate) replace(b *certfiles.Bundle, source string) (*servedCertificate, error) {
-	next, err := newServed(b, source)
+	next, err := newServed(b, source, "")
 	if err != nil {
 		return nil, err
 	}
+	undo := c.stopACME()
+	served, err := c.install(next, b)
+	if err != nil {
+		undo.Restore()
+		return nil, err
+	}
+	return served, nil
+}
+
+// install keeps b, which next was made from, and serves next. The caller holds mu.
+func (c *InterfaceCertificate) install(next *servedCertificate, b *certfiles.Bundle) (*servedCertificate, error) {
 	if !c.memory {
-		if err = c.store(b, source); err != nil {
+		if err := c.store(b, next.source, next.order); err != nil {
 			return nil, err
 		}
 	}
@@ -322,14 +372,17 @@ func (c *InterfaceCertificate) replace(b *certfiles.Bundle, source string) (*ser
 	return next, nil
 }
 
-// reset serves the installer's certificate again and forgets the stored one. The caller holds mu.
+// reset serves the installer's certificate again and forgets the stored one, and ACME with it. The
+// caller holds mu.
 func (c *InterfaceCertificate) reset(now time.Time) (*servedCertificate, error) {
 	next, err := c.readInstaller(now)
 	if err != nil {
 		return nil, err
 	}
+	undo := c.stopACME()
 	if !c.memory {
 		if err = c.fileOps().Remove(c.storedPath()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			undo.Restore()
 			return nil, err //nolint:wrapcheck // the file operations name what failed
 		}
 	}
@@ -395,6 +448,8 @@ type certificateView struct {
 	NotServed string `json:"notServed,omitempty"`
 	// Changeable tells whether the interface has somewhere to keep a changed certificate.
 	Changeable bool `json:"changeable"`
+	// ACME is the ACME setting and how its order stands. Absent when ACME is not set.
+	ACME *acme.View `json:"acme,omitempty"`
 }
 
 // uploadView is the answer to an upload: the certificate now served, and what the files held that
@@ -425,6 +480,9 @@ func (s *Server) certificateViewOf(ctx context.Context, c *InterfaceCertificate)
 		v.Chain = append(v.Chain, cert.Subject.String())
 	}
 	v.PublicNameResolves = s.publicNameResolves(ctx, c)
+	if c.acme != nil {
+		v.ACME = c.acme.View()
+	}
 	return v
 }
 
@@ -767,6 +825,7 @@ const (
 	demoPublicURL = "https://" + demoHost
 
 	// The demo's certificates, relative to the day it shows.
+	demoACMEDays      = 90
 	demoDay           = 24 * time.Hour
 	demoCAYears       = 9
 	demoLeafSerial    = 2
@@ -801,7 +860,7 @@ func demoCertificate(now time.Time) (*InterfaceCertificate, error) {
 	if err != nil {
 		return nil, err
 	}
-	installer, err := newServed(leaf, certificateInstaller)
+	installer, err := newServed(leaf, certificateInstaller, "")
 	if err != nil {
 		return nil, err
 	}
@@ -809,6 +868,25 @@ func demoCertificate(now time.Time) (*InterfaceCertificate, error) {
 		Roots: x509.NewCertPool(), memory: true,
 		Lookup:        func(context.Context, string) ([]netip.Addr, error) { return []netip.Addr{demoAddress}, nil },
 		readInstaller: func(time.Time) (*servedCertificate, error) { copied := *installer; return &copied, nil },
+	}
+	// A certificate ordered through ACME in the demo is the same kind, from the same CA, with a key
+	// of its own each time.
+	c.demoIssue = func(at time.Time) ([]byte, []byte, error) {
+		key, keyErr := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if keyErr != nil {
+			return nil, nil, fmt.Errorf("making a key: %w", keyErr)
+		}
+		b, issueErr := bundleOf(&x509.Certificate{
+			SerialNumber: big.NewInt(at.Unix()), Subject: pkix.Name{CommonName: demoHost},
+			NotBefore: at.Add(-time.Hour), NotAfter: at.AddDate(0, 0, demoACMEDays),
+			DNSNames:    []string{demoHost},
+			KeyUsage:    x509.KeyUsageDigitalSignature,
+			ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		}, ca.Leaf, caKey, key, ca.Leaf)
+		if issueErr != nil {
+			return nil, nil, issueErr
+		}
+		return b.CertPEM, b.KeyPEM, nil
 	}
 	err = c.Load(now, nil)
 	return c, err
@@ -827,6 +905,7 @@ func (s *Server) fillDemoCertificate(now time.Time) error {
 	if s.PublicURL == "" {
 		s.PublicURL = demoPublicURL
 	}
+	s.Certificate.useDemoACME(s.now)
 	s.OwnAddresses = func() []netip.Addr { return []netip.Addr{demoAddress} }
 	return nil
 }

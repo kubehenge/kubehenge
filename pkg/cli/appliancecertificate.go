@@ -13,28 +13,31 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/kubehenge/kubehenge/pkg/acme"
 )
 
 const certificatePath = "/api/appliance/certificate"
 
 // certificateAnswer is what the interface says of the certificate it serves.
 type certificateAnswer struct {
-	Source             string    `json:"source"`
-	Subject            string    `json:"subject"`
-	DNSNames           []string  `json:"dnsNames"`
-	IPAddresses        []string  `json:"ipAddresses"`
-	Issuer             string    `json:"issuer"`
-	NotBefore          time.Time `json:"notBefore"`
-	NotAfter           time.Time `json:"notAfter"`
-	Fingerprint        string    `json:"fingerprint"`
-	Chain              []string  `json:"chain"`
-	Incomplete         bool      `json:"incomplete"`
-	MissingIssuer      string    `json:"missingIssuer"`
-	SelfSigned         bool      `json:"selfSigned"`
-	PublicURL          string    `json:"publicURL"`
-	PublicNameResolves *bool     `json:"publicNameResolves"`
-	NotServed          string    `json:"notServed"`
-	LeftOut            []string  `json:"leftOut"`
+	Source             string     `json:"source"`
+	Subject            string     `json:"subject"`
+	DNSNames           []string   `json:"dnsNames"`
+	IPAddresses        []string   `json:"ipAddresses"`
+	Issuer             string     `json:"issuer"`
+	NotBefore          time.Time  `json:"notBefore"`
+	NotAfter           time.Time  `json:"notAfter"`
+	Fingerprint        string     `json:"fingerprint"`
+	Chain              []string   `json:"chain"`
+	Incomplete         bool       `json:"incomplete"`
+	MissingIssuer      string     `json:"missingIssuer"`
+	SelfSigned         bool       `json:"selfSigned"`
+	PublicURL          string     `json:"publicURL"`
+	PublicNameResolves *bool      `json:"publicNameResolves"`
+	NotServed          string     `json:"notServed"`
+	LeftOut            []string   `json:"leftOut"`
+	ACME               *acme.View `json:"acme"`
 }
 
 // certificateCommand shows and changes the certificate the interface serves, as its Administration
@@ -55,7 +58,7 @@ func (o *applianceOptions) certificateCommand() *cobra.Command {
 		},
 	}
 	o.jsonFlag(cmd)
-	cmd.AddCommand(o.certificateReplaceCommand(), o.certificateSelfSignCommand(), o.certificateResetCommand())
+	cmd.AddCommand(o.certificateReplaceCommand(), o.certificateSelfSignCommand(), o.certificateResetCommand(), o.certificateACMECommand())
 	return cmd
 }
 
@@ -197,5 +200,6 @@ func printCertificate(cmd *cobra.Command, v *certificateAnswer) error {
 	if len(v.LeftOut) > 0 {
 		row(t, "Left out", strings.Join(v.LeftOut, ", "))
 	}
+	printACME(t, v.ACME)
 	return flush(t)
 }

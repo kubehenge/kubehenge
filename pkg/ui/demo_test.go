@@ -42,7 +42,7 @@ type demoBrowser struct {
 func newDemo(t *testing.T) (*Server, *demoBrowser) {
 	t.Helper()
 	s := &Server{Assets: fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>Kubehenge</title>")}}}
-	cleanup, err := SetUpDemo(s, func() time.Time { return demoAt })
+	cleanup, err := SetUpDemo(t.Context(), s, func() time.Time { return demoAt })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +373,7 @@ func readsEveryClustersHealth(t *testing.T, edits map[string]func(*demoCluster))
 		Log:    slog.New(slog.NewTextHandler(logged, nil)),
 	}
 	raw := demoFleetEdited(t, edits)
-	cleanup, err := demoFrom(s, func() time.Time { return demoAt }, raw)
+	cleanup, err := demoFrom(t.Context(), s, func() time.Time { return demoAt }, raw)
 	if err != nil {
 		t.Fatal(err)
 	}

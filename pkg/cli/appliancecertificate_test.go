@@ -60,6 +60,99 @@ func (f *fakeInterface) certificateRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/appliance/certificate", f.admin(func(w http.ResponseWriter, _ *http.Request) {
 		answer(w, http.StatusOK, view("installer", ""))
 	}))
+	withACME := func(w http.ResponseWriter, r *http.Request) {
+		f.acme = append(f.acme, r.Method+" "+r.URL.Path)
+		if f.bodies[r.Method+" "+r.URL.Path]["proof"] == "dns-02" {
+			answer(w, http.StatusUnprocessableEntity, `{"error":"The proof is tls-alpn-01, http-01 or dns-01. Give one of these","code":"acme-proof"}`)
+			return
+		}
+		answer(w, http.StatusAccepted, strings.TrimSuffix(view("acme", ""), "}")+`,"acme":`+fakeACME+`}`)
+	}
+	mux.HandleFunc("PUT /api/appliance/certificate/acme", f.admin(withACME))
+	mux.HandleFunc("POST /api/appliance/certificate/acme/order", f.admin(withACME))
+	mux.HandleFunc("GET /api/appliance/certificate/acme/providers", f.admin(func(w http.ResponseWriter, _ *http.Request) {
+		answer(w, http.StatusOK, `{"providers":["cloudflare","rfc2136"],"variablesListed":false}`)
+	}))
+}
+
+const fakeACME = `{"directory":"https://acme.example.org/dir","proof":"dns-01","dnsProvider":"rfc2136","dnsCredentialsSet":["RFC2136_TSIG_SECRET"],
+	"resolvers":[],"state":"failing","givenUp":false,"error":"the DNS provider could not add the record","errorAt":"2026-11-20T09:00:00Z",
+	"nextAttempt":"2026-11-20T09:02:00Z","lastSuccess":"2026-10-20T09:00:00Z","nextRenewal":"2026-12-20T09:00:00Z"}`
+
+// The acme command sends the setting with its secrets read from files, never from arguments, shows
+// the ACME state, orders on demand and lists the DNS providers.
+func TestApplianceCertificateACMESetsOrdersAndShowsTheState(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	hmac := namedFile(t, "hmac.txt", "aG1hYy1rZXk\n")
+	ca := namedFile(t, "ca.pem", "CA PEM")
+	creds := namedFile(t, "dns.env", "# the DNS server\nRFC2136_NAMESERVER=192.0.2.53:53\nRFC2136_TSIG_SECRET=c2VjcmV0=\n\n")
+	out, err := f.run(f.args("admin@pve", "certificate", "acme", "--directory", "https://acme.example.org/dir", "--directory-ca-file", ca,
+		"--eab-key-id", "kid", "--eab-hmac-key-file", hmac, "--proof", "dns-01", "--dns-provider", "rfc2136", "--dns-credentials-file", creds,
+		"--resolver", "192.0.2.53:53", "--email", "admin@example.org")...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const put = "PUT /api/appliance/certificate/acme"
+	sent := f.bodies[put]
+	if len(f.acme) != 1 || f.acme[0] != put || sent == nil {
+		t.Fatalf("the interface got %v %v", f.acme, sent)
+	}
+	binding, credentials := object(t, sent, "externalAccountBinding"), object(t, sent, "dnsCredentials")
+	if sent["directory"] != "https://acme.example.org/dir" || sent["proof"] != "dns-01" || sent["dnsProvider"] != "rfc2136" || sent["directoryCA"] != "CA PEM" ||
+		binding["keyID"] != "kid" || binding["hmacKey"] != "aG1hYy1rZXk" || credentials["RFC2136_TSIG_SECRET"] != "c2VjcmV0=" || credentials["RFC2136_NAMESERVER"] != "192.0.2.53:53" ||
+		sent["email"] != "admin@example.org" {
+		t.Errorf("the request was %v", sent)
+	}
+	for _, want := range []string{
+		"ACME                  failing", "ACME proof            dns-01 through rfc2136", "ACME credentials set  RFC2136_TSIG_SECRET",
+		"ACME error            the DNS provider could not add the record (2026-11-20T09:00:00Z)", "ACME retry            2026-11-20T09:02:00Z",
+		"ACME next renewal     2026-12-20T09:00:00Z",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the output lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+// object is the JSON object a request sent under key.
+func object(t *testing.T, sent map[string]any, key string) map[string]any {
+	t.Helper()
+	o, ok := sent[key].(map[string]any)
+	if !ok {
+		t.Fatalf("%s is %v, not an object", key, sent[key])
+	}
+	return o
+}
+
+// With no setting given the acme command sends the defaults. A refusal, an HMAC key as an argument and
+// a bad credentials file fail, and order and providers reach the interface.
+func TestApplianceCertificateACMEDefaultsRefusalsOrderAndProviders(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	const put = "PUT /api/appliance/certificate/acme"
+	out, err := f.run(f.args("admin@pve", "certificate", "acme", "--json")...)
+	if err != nil || !json.Valid([]byte(out)) {
+		t.Errorf("--json: %v\n%s", err, out)
+	}
+	if sent := f.bodies[put]; sent["directory"] != "letsencrypt" || sent["proof"] != "tls-alpn-01" || sent["externalAccountBinding"] != nil {
+		t.Errorf("the defaults sent %v", sent)
+	}
+	if _, err = f.run(f.args("admin@pve", "certificate", "acme", "--proof", "dns-02")...); err == nil || !strings.Contains(err.Error(), "Give one of these") {
+		t.Errorf("a refusal gives %v", err)
+	}
+	if _, err = f.run(f.args("admin@pve", "certificate", "acme", "--eab-hmac-key", "secret")...); err == nil {
+		t.Error("an HMAC key was taken as an argument")
+	}
+	if _, err = f.run(f.args("admin@pve", "certificate", "acme", "--dns-credentials-file", namedFile(t, "bad.env", "NOEQUALS\n"))...); err == nil || !strings.Contains(err.Error(), "line 1 is not NAME=value") {
+		t.Errorf("a bad credentials file gives %v", err)
+	}
+	if out, err = f.run(f.args("admin@pve", "certificate", "acme", "order")...); err != nil || f.acme[len(f.acme)-1] != "POST /api/appliance/certificate/acme/order" || !strings.Contains(out, "ACME proof") {
+		t.Errorf("order: %v %v\n%s", err, f.acme, out)
+	}
+	if out, err = f.run(f.args("admin@pve", "certificate", "acme", "providers")...); err != nil || out != "cloudflare\nrfc2136\n" {
+		t.Errorf("providers: %v %q", err, out)
+	}
 }
 
 // namedFile writes content as it is into a file called name.

@@ -6,6 +6,8 @@
 - `--cert-passphrase-file` gives the passphrase of encrypted certificate files.
 - Administrators replace the interface's certificate with files in any format, make a self-signed one, get the node command for a cluster-CA one, or go back to the installer's ([upgrading.md](upgrading.md#from-the-interface)).
 - `kubehenge appliance certificate` does the same from the CLI. A change reaches the next connection with no restart.
+- `kubehenge appliance certificate acme` gets the certificate from Let's Encrypt or your own ACME server and renews it. Proof is on port 443, port 80 or by DNS-01 through any DNS provider ([upgrading.md](upgrading.md#acme)).
+- The appliance listens on port 80 for ACME's http-01 proof and sends every other request to https.
 
 ### Changed
 

@@ -65,12 +65,12 @@ var errDemo = errors.New("the demo changes nothing")
 // cluster, and changes are refused, except those of the interface's certificate, which stay in
 // memory. clock is the demo's time, which its sample data is dated
 // against. The appliance it sets up keeps its settings in a folder that cleanup removes.
-func SetUpDemo(s *Server, clock func() time.Time) (func(), error) {
-	return demoFrom(s, clock, demoFleetJSON)
+func SetUpDemo(ctx context.Context, s *Server, clock func() time.Time) (func(), error) {
+	return demoFrom(ctx, s, clock, demoFleetJSON)
 }
 
 // demoFrom is SetUpDemo over the fleet raw holds, in the form of demo-fleet.json.
-func demoFrom(s *Server, clock func() time.Time, raw []byte) (func(), error) {
+func demoFrom(ctx context.Context, s *Server, clock func() time.Time, raw []byte) (func(), error) {
 	if s.Appliance != nil || s.Headlamp != nil || s.Upgrades != nil {
 		return nil, errors.New("the demo runs without the appliance, Headlamp or upgrades")
 	}
@@ -78,10 +78,19 @@ func demoFrom(s *Server, clock func() time.Time, raw []byte) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("the demo's appliance: %w", err)
 	}
-	cleanup := func() { _ = os.RemoveAll(dir) }
+	ctx, stop := context.WithCancel(ctx)
+	var running sync.WaitGroup
+	cleanup := func() {
+		stop()
+		running.Wait()
+		_ = os.RemoveAll(dir)
+	}
 	if err := fillDemo(s, clock, dir, raw); err != nil {
 		cleanup()
 		return nil, err
+	}
+	if s.Certificate != nil && s.Certificate.acme != nil {
+		running.Go(func() { s.Certificate.acme.Run(ctx) })
 	}
 	return cleanup, nil
 }

@@ -231,6 +231,10 @@ func (r *Runner) ReplaceCertificate(ctx context.Context, out io.Writer) (*Result
 	if _, err = r.inCT(ctx, "rm", "-f", appliance.InterfaceCertificatePath); err != nil {
 		return nil, userErr("removing the stored certificate from container "+c.CTID+" failed", "See "+r.LogPath)
 	}
+	// So that ACME does not replace the certificate chosen here at its next renewal.
+	if _, err = r.inCT(ctx, "sh", "-c", "rm -f "+appliance.ACMEFilesPattern); err != nil {
+		return nil, userErr("removing the ACME setting from container "+c.CTID+" failed", "See "+r.LogPath)
+	}
 	// Not while the management cluster is applied or removed: the restart would cut the run off.
 	_, err = r.inCT(ctx, "flock", "-n", "-E", "75", "/var/lib/kubehenge", "sh", "-c", "systemctl restart kubehenge.service && systemctl stop kubehenge-headlamp.service")
 	var ce *CmdError

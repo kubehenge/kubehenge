@@ -688,3 +688,25 @@ func TestReplaceCertificateForgetsTheOneAnAdministratorGave(t *testing.T) {
 		t.Errorf("a stored certificate that cannot be removed: %v", err)
 	}
 }
+
+// An ACME setting would order a certificate over the one the installer replaces, so it goes too,
+// before the interface restarts, and a setting that cannot be removed stops the replacement.
+func TestReplaceCertificateRemovesTheACMESetting(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const remove = "pct exec 100 -- sh -c rm -f /var/lib/kubehenge/acme-*"
+	h, r, out := upgradeHarness(t)
+	h.exec.on("pct config 100", "hostname: kubehenge\ntags: kubehenge\nnet0: name=eth0,bridge=vmbr0,ip=192.0.2.40/24\n")
+	r.S.Cfg.Upgrade, r.S.Cfg.Certificate, r.S.Cfg.Name = false, true, "kubehenge.example.org"
+	if _, err := r.ReplaceCertificate(ctx, out); err != nil {
+		t.Fatal(err)
+	}
+	removed, restarted := slices.Index(h.exec.calls, remove), slices.IndexFunc(h.exec.calls, func(c string) bool { return strings.HasPrefix(c, "pct exec 100 -- flock") })
+	if h.exec.count(remove) != 1 || removed > restarted {
+		t.Errorf("the ACME setting is removed once, before the restart: %v", h.exec.calls)
+	}
+	h.exec.failWith(remove, "no such file system")
+	if _, err := r.ReplaceCertificate(ctx, out); err == nil || !strings.Contains(err.Error(), "removing the ACME setting") {
+		t.Errorf("an ACME setting that cannot be removed: %v", err)
+	}
+}
