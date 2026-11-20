@@ -93,7 +93,12 @@ On a terminal, the installer is a full-screen guide. It says what it found on th
 3. For each version, DHCP, router advertisements (IPv6) or a static address.
 4. A static address, with or without `/prefix`, which the network's prefix fills in. A free address comes filled in, with how it was checked. The gateway is found from the network, within the address's subnet, and asked only when none is found.
 
-It then asks only what is ambiguous and shows a summary to install, change or cancel. Each run writes the commands' output to a log of its own, `/var/log/kubehenge-install-<UTC time>-<random>.log`. The newest ten are kept.
+Then it asks about the interface:
+
+1. The DNS name people open it at, or none to use the appliance's address. The summary says when the name has no record or points elsewhere.
+2. Its certificate: one made here and signed by the Proxmox VE CA, files of your own, or one from ACME ([details](upgrading.md#the-interfaces-certificate)).
+
+It then asks only what is ambiguous, such as the storage, and shows a summary to install, change or cancel. Each run writes the commands' output to a log of its own, `/var/log/kubehenge-install-<UTC time>-<random>.log`. The newest ten are kept.
 
 A failed step keeps the installer open. The screen gives the cause and the fix, and offers to change the setting at fault, try again, quit and keep the container (`pct enter <id>`), or quit and remove it. Once it says the container is kept, only the last choice removes it. Before that, Ctrl+C or a lost session removes it unless `--keep-failed` is given. A new network or Proxmox VE API setting reaches the existing container. Any other change creates it afresh without repeating the downloads.
 
