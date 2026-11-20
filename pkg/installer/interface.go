@@ -463,10 +463,11 @@ func completePaths(value string) []string {
 	}
 	head := value[:len(value)-len(last)]
 	dir, base := filepath.Split(last)
-	if dir == "" {
-		dir = "."
+	read := dir
+	if read == "" {
+		read = "."
 	}
-	entries, err := os.ReadDir(dir)
+	entries, err := os.ReadDir(read)
 	if err != nil {
 		return nil
 	}

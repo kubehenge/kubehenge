@@ -401,7 +401,7 @@ export function InterfaceCertificate(): JSX.Element {
       </div>
       <div className="box fields">
         <h3>Change certificate</h3>
-        {locked && <p className="muted">No key directory, so changes cannot be kept</p>}
+        {locked && <p className="muted">No appliance directory, so changes cannot be kept</p>}
         <fieldset className="choices" disabled={waiting || locked}>
           <legend>New source</legend>
           {ways.map((w) => (

@@ -320,7 +320,7 @@ describe("interface certificate", () => {
   it("9: disables the actions with a reason when nothing can change, and keeps the form on busy", async () => {
     fakeServer(read({ changeable: false }));
     const { unmount } = render(<InterfaceCertificate />);
-    await expect(screen.findByText("No key directory, so changes cannot be kept")).resolves.toBeInTheDocument();
+    await expect(screen.findByText("No appliance directory, so changes cannot be kept")).resolves.toBeInTheDocument();
     expect(screen.getByLabelText("Certificate files")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Replace" })).toBeDisabled();
     for (const radio of screen.getAllByRole("radio")) {

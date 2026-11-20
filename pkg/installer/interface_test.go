@@ -1110,3 +1110,15 @@ func TestNormaliseLowercasesTheNameOption(t *testing.T) {
 		t.Errorf("%q %v", c.Name, err)
 	}
 }
+
+// The files input completes what is typed into it, not only what it opened with.
+// It changes the working folder, since a temporary folder's path is wider than the field.
+func TestFilesFormCompletesWhileTyping(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "zz-target.pem"), []byte("x"))
+	t.Chdir(dir)
+	u := ownUI(t, newHarness(t, opts{dhcp: true}), Config{Name: "kubehenge.example.org"}, 100, 40)
+	u.toFiles()
+	u.paste("zz-t")
+	u.waitFor("zz-target.pem")
+}
