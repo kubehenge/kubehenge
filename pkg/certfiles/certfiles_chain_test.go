@@ -46,9 +46,11 @@ func TestOnePrivateKey(t *testing.T) {
 	t.Run("none", func(t *testing.T) {
 		t.Parallel()
 		_, err := Read([]File{chain, {"more.pem", certPEM(other.leaf)}}, "", nil, testNow)
-		if err == nil || !strings.Contains(err.Error(), "no private key was found") ||
-			!strings.Contains(err.Error(), "chain.pem") || !strings.Contains(err.Error(), "more.pem") {
+		if err == nil || err.Error() != "chain.pem, more.pem hold no private key" {
 			t.Fatalf("error %v does not say no key was found and name both files", err)
+		}
+		if _, err = Read([]File{chain}, "", nil, testNow); err == nil || err.Error() != "chain.pem holds no private key" {
+			t.Fatalf("error %v does not say one file holds no key", err)
 		}
 	})
 	t.Run("two different", func(t *testing.T) {

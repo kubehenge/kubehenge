@@ -10,9 +10,9 @@ import (
 func checkValidity(cert *x509.Certificate, file string, now time.Time) error {
 	switch {
 	case now.After(cert.NotAfter):
-		return fmt.Errorf("the certificate in %s expired on %s", file, cert.NotAfter.UTC().Format(time.RFC3339))
+		return fmt.Errorf("%s holds a certificate that expired on %s", file, cert.NotAfter.UTC().Format(time.RFC3339))
 	case now.Before(cert.NotBefore):
-		return fmt.Errorf("the certificate in %s is not valid before %s", file, cert.NotBefore.UTC().Format(time.RFC3339))
+		return fmt.Errorf("%s holds a certificate that is not valid before %s", file, cert.NotBefore.UTC().Format(time.RFC3339))
 	}
 	return nil
 }

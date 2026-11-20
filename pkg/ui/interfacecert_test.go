@@ -566,11 +566,11 @@ func TestAnUploadIsLimitedAndRefusedBeforeItChangesAnything(t *testing.T) {
 		{"a body that is too large", func() *httptest.ResponseRecorder {
 			return a.uploadWith(maxCertificateFiles*maxCertificateFile+uploadOverhead+1, filePart("a", good.CertPEM))
 		}, 413, "too-large", "8 files of 1 MiB"},
-		{"text", func() *httptest.ResponseRecorder { return a.upload(filePart("notes.txt", []byte("hello"))) }, 422, "unreadable", ""},
-		{"a certificate without its key", func() *httptest.ResponseRecorder { return a.upload(filePart("a.pem", good.CertPEM)) }, 422, "unreadable", ""},
+		{"text", func() *httptest.ResponseRecorder { return a.upload(filePart("notes.txt", []byte("hello"))) }, 422, "unreadable", "notes.txt is not a certificate"},
+		{"a certificate without its key", func() *httptest.ResponseRecorder { return a.upload(filePart("a.pem", good.CertPEM)) }, 422, "unreadable", "a.pem holds no private key. Send the certificate, its key and its intermediates"},
 		{"a certificate that ran out", func() *httptest.ResponseRecorder {
 			return a.upload(filePart("a.pem", ran.CertPEM), filePart("a.key", ran.KeyPEM))
-		}, 422, "unreadable", ""},
+		}, 422, "unreadable", "a.pem holds a certificate that expired on"},
 		{"a certificate with a day left or less", func() *httptest.ResponseRecorder {
 			return a.upload(filePart("a.pem", soon.CertPEM), filePart("a.key", soon.KeyPEM))
 		}, 422, "expires-soon", "ends on 2026-10-13"},

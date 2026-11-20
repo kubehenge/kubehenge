@@ -77,11 +77,15 @@ func Read(files []File, passphrase string, roots *x509.CertPool, now time.Time) 
 		}
 	}
 	if found.key == nil {
-		return nil, fmt.Errorf("no private key was found in %s", strings.Join(found.names, ", "))
+		verb := " holds"
+		if len(found.names) > 1 {
+			verb = " hold"
+		}
+		return nil, errors.New(strings.Join(found.names, ", ") + verb + " no private key")
 	}
 	leaf := found.leafIndex()
 	if leaf < 0 {
-		return nil, fmt.Errorf("the private key in %s belongs to none of the certificates in %s",
+		return nil, fmt.Errorf("%s holds a private key that belongs to none of the certificates in %s",
 			found.keyFile, strings.Join(found.names, ", "))
 	}
 	if err := checkValidity(found.certs[leaf], found.certFiles[leaf], now); err != nil {
@@ -104,7 +108,7 @@ func Read(files []File, passphrase string, roots *x509.CertPool, now time.Time) 
 	}
 	keyDER, err := x509.MarshalPKCS8PrivateKey(found.key)
 	if err != nil {
-		return nil, fmt.Errorf("the private key in %s cannot be written as PKCS#8", found.keyFile)
+		return nil, fmt.Errorf("%s holds a private key that cannot be written as PKCS#8", found.keyFile)
 	}
 	bundle.KeyPEM = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	return bundle, nil

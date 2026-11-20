@@ -787,7 +787,7 @@ func refuseCertificateFiles(w http.ResponseWriter, err error, passphrase string)
 		writeCertificateError(w, http.StatusUnprocessableEntity, "passphrase", message, nil)
 		return
 	}
-	writeCertificateError(w, http.StatusUnprocessableEntity, "unreadable", err.Error(), nil)
+	writeCertificateError(w, http.StatusUnprocessableEntity, "unreadable", err.Error()+". Send the certificate, its key and its intermediates", nil)
 }
 
 // certificateFits refuses a certificate with less than a day left or one that is not valid for the
