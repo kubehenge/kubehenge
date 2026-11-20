@@ -178,31 +178,42 @@ func newApplianceCA(old *x509.Certificate, now time.Time) (*applianceCA, error) 
 
 // signedByCA is a certificate for the names of old that the appliance's CA signed. The CA is made
 // first where there is none, or where the one there may not sign for these names or has expired.
-// The caller holds mu.
-func (c *InterfaceCertificate) signedByCA(old *x509.Certificate, now time.Time) (*certfiles.Bundle, error) {
+// undo puts the CA there before back, for a caller whose certificate was then not kept, so that the
+// CA on file still vouches for the certificate served. The caller holds mu.
+func (c *InterfaceCertificate) signedByCA(old *x509.Certificate, now time.Time) (b *certfiles.Bundle, undo func() error, err error) {
+	undo = func() error { return nil }
 	if len(old.DNSNames) == 0 && len(old.IPAddresses) == 0 {
-		return nil, errNoNames
+		return nil, undo, errNoNames
 	}
-	ca, err := c.loadCA()
+	previous, err := c.loadCA()
 	if err != nil {
-		return nil, err
+		return nil, undo, err
 	}
-	if ca != nil {
-		var b *certfiles.Bundle
-		if b, err = ca.sign(old, now); err != nil {
-			return nil, err
+	if previous != nil {
+		if b, err = previous.sign(old, now); err != nil {
+			return nil, undo, err
 		}
-		if ca.vouches(b.Leaf, now) {
-			return b, nil
+		if previous.vouches(b.Leaf, now) {
+			return b, undo, nil
 		}
 	}
-	if ca, err = newApplianceCA(old, now); err != nil {
-		return nil, err
+	ca, err := newApplianceCA(old, now)
+	if err != nil {
+		return nil, undo, err
 	}
 	if err = c.keepCA(ca); err != nil {
-		return nil, err
+		return nil, undo, err
 	}
-	return ca.sign(old, now)
+	undo = func() error {
+		if previous == nil {
+			return c.forgetCA()
+		}
+		return c.keepCA(previous)
+	}
+	if b, err = ca.sign(old, now); err != nil {
+		return nil, undo, errors.Join(err, undo())
+	}
+	return b, undo, nil
 }
 
 func (ca *applianceCA) sign(old *x509.Certificate, now time.Time) (*certfiles.Bundle, error) {
@@ -236,7 +247,7 @@ func (c *InterfaceCertificate) renewed(stored *servedCertificate, now time.Time,
 	if stored.source != certificateApplianceCA || !renewDue(stored.pair.Leaf, now) {
 		return stored
 	}
-	b, err := c.signedByCA(stored.pair.Leaf, now)
+	b, undo, err := c.signedByCA(stored.pair.Leaf, now)
 	var next *servedCertificate
 	if err == nil {
 		next, err = newServed(b, certificateApplianceCA, "")
@@ -245,7 +256,7 @@ func (c *InterfaceCertificate) renewed(stored *servedCertificate, now time.Time,
 		err = c.store(b, certificateApplianceCA, "")
 	}
 	if err != nil {
-		log.Error("the interface certificate was not signed again by the appliance's CA", "reason", err)
+		log.Error("the interface certificate was not signed again by the appliance's CA", "reason", errors.Join(err, undo()))
 		return stored
 	}
 	return next
@@ -262,7 +273,7 @@ func (s *Server) makeApplianceCACertificate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	defer c.mu.Unlock()
-	b, err := c.signedByCA(c.served().pair.Leaf, s.now())
+	b, undo, err := c.signedByCA(c.served().pair.Leaf, s.now())
 	if errors.Is(err, errNoNames) {
 		writeCertificateError(w, http.StatusUnprocessableEntity, "no-names", "The certificate being served names no DNS name or address, so the appliance's CA has nothing to sign for. Upload one", nil)
 		return
@@ -273,7 +284,7 @@ func (s *Server) makeApplianceCACertificate(w http.ResponseWriter, r *http.Reque
 	}
 	served, err := c.replace(b, certificateApplianceCA)
 	if err != nil {
-		s.changeFailed(w, r, err)
+		s.changeFailed(w, r, errors.Join(err, undo()))
 		return
 	}
 	s.changed(r, u, "interface certificate signed by the appliance's CA", served)

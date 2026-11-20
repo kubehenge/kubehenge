@@ -158,6 +158,29 @@ func TestTheAddressStaysWhenItsCertificateCannotBeKept(t *testing.T) {
 	}
 }
 
+// A change whose address file cannot be written leaves Headlamp's callback, and a CA the new name
+// needed made anew, as they were before.
+func TestAFailedAddressChangeLeavesHeadlampAndTheCA(t *testing.T) {
+	t.Parallel()
+	h, a, c := administered(t)
+	c.HeadlampPort = "8443"
+	certificateOf(t, a.do("POST", "/api/appliance/certificate/appliance-ca", ""))
+	caBefore := fileText(t, c.caPath())
+	served := c.served().pair.Leaf
+	c.files = renameFails{appliance.PublicURLFile}
+	if got := a.do("PUT", "/api/appliance/certificate/address", `{"name":"`+movedHost+`"}`); got.Code != http.StatusInternalServerError {
+		t.Fatalf("got %d %s", got.Code, got.Body)
+	}
+	c.files = nil
+	if _, err := os.Stat(filepath.Join(c.dir, appliance.HeadlampEnvFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Headlamp's callback file stayed at the new name: %v", err)
+	}
+	ca, err := c.loadCA()
+	if fileText(t, c.caPath()) != caBefore || err != nil || !ca.vouches(served, h.clock) || c.served().pair.Leaf != served {
+		t.Errorf("the CA on file changed, or no longer vouches for the certificate served: %v", err)
+	}
+}
+
 // renameFails fails putting one file in place.
 type renameFails struct{ name string }
 

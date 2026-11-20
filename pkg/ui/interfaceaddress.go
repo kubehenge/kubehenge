@@ -162,21 +162,25 @@ func (s *Server) setPublicAddress(w http.ResponseWriter, r *http.Request, u user
 	defer c.mu.Unlock()
 	before, old := c.address.Load(), s.PublicAddress()
 	next := withHost(old, host)
-	b, source, err := s.remadeFor(c, old, host)
+	b, source, undoCA, err := s.remadeFor(c, old, host)
 	if err != nil {
 		s.changeFailed(w, r, err)
 		return
 	}
-	if err = c.keepAddress(&next); err != nil {
+	// A change cut short leaves the address files, Headlamp's included, and the CA as they were.
+	failed := func(err error) {
+		if undo := errors.Join(c.keepAddress(before), undoCA()); undo != nil {
+			s.Log.ErrorContext(r.Context(), "putting the public address and its CA back", "error", undo)
+		}
 		s.changeFailed(w, r, err)
+	}
+	if err = c.keepAddress(&next); err != nil {
+		failed(err)
 		return
 	}
 	if b != nil {
 		if _, err = c.replace(b, source); err != nil {
-			if undo := c.keepAddress(before); undo != nil {
-				s.Log.ErrorContext(r.Context(), "putting the public address back", "error", undo)
-			}
-			s.changeFailed(w, r, err)
+			failed(err)
 			return
 		}
 	}
@@ -190,26 +194,27 @@ func (s *Server) setPublicAddress(w http.ResponseWriter, r *http.Request, u user
 }
 
 // remadeFor is the certificate to serve at host instead of the current one, nil when it covers host
-// already or only its owner can make another. The caller holds mu.
-func (s *Server) remadeFor(c *InterfaceCertificate, old, host string) (*certfiles.Bundle, string, error) {
+// already or only its owner can make another. undoCA puts back a CA made for it. The caller holds mu.
+func (s *Server) remadeFor(c *InterfaceCertificate, old, host string) (b *certfiles.Bundle, source string, undoCA func() error, err error) {
+	undoCA = func() error { return nil }
 	served := c.served()
 	if served.pair.Leaf.VerifyHostname(host) == nil || (c.acme != nil && c.acme.View() != nil) {
-		return nil, "", nil
+		return nil, "", undoCA, nil
 	}
 	from := ""
-	if u, err := url.Parse(old); err == nil {
+	if u, parseErr := url.Parse(old); parseErr == nil {
 		from = u.Hostname()
 	}
 	tmpl := renamed(served.pair.Leaf, from, host)
 	switch served.source {
 	case certificateSelfSigned:
-		b, err := selfSigned(tmpl, s.now())
-		return b, served.source, err
+		b, err = selfSigned(tmpl, s.now())
+		return b, served.source, undoCA, err
 	case certificateApplianceCA:
-		b, err := c.signedByCA(tmpl, s.now())
-		return b, served.source, err
+		b, undoCA, err = c.signedByCA(tmpl, s.now())
+		return b, served.source, undoCA, err
 	}
-	return nil, "", nil
+	return nil, "", undoCA, nil
 }
 
 func isRefusal(err error) bool {
