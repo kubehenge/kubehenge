@@ -18,3 +18,7 @@
 - `--cert` takes one or more files in any format, and `--key` is optional.
 - `install.sh --certificate` removes a certificate given through the interface.
 - `kubehenge login` trusts a certificate its `--ca` or the system's trust store vouches for. In the appliance it trusts the certificate the interface serves without `--ca`.
+
+### Fixed
+
+- Rancher's agent in a registered cluster runs its helm operations in the shell image Rancher runs, pinned by digest, rather than its own default named by tag.

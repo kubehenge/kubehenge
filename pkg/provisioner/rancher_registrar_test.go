@@ -213,7 +213,7 @@ func ranchersScheme(t *testing.T) *runtime.Scheme {
 	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	for _, gvk := range []schema.GroupVersionKind{provisioningClusterGVK, registrationTokenGVK} {
+	for _, gvk := range []schema.GroupVersionKind{provisioningClusterGVK, registrationTokenGVK, settingGVK} {
 		scheme.AddKnownTypeWithName(gvk, &unstructured.Unstructured{})
 		list := gvk
 		list.Kind += "List"
@@ -221,6 +221,37 @@ func ranchersScheme(t *testing.T) *runtime.Scheme {
 		metav1.AddToGroupVersion(scheme, gvk.GroupVersion())
 	}
 	return scheme
+}
+
+// pinnedShell is the shell image Rancher is set to in the fixture.
+const pinnedShell = "rancher/shell:v0.8.3@sha256:abb0804d239cae9c137347b0c1175e745ab791d60023ae619f6aa6465fb2da7c"
+
+// shellImageSetting is Rancher's shell-image setting with value set.
+func shellImageSetting(value string) *unstructured.Unstructured {
+	s := &unstructured.Unstructured{}
+	s.SetGroupVersionKind(settingGVK)
+	s.SetName("shell-image")
+	s.Object["value"] = value
+	return s
+}
+
+// agentShellImage is the shell image a cluster's agent in Rancher is given, and how often.
+func agentShellImage(t *testing.T, rc unstructured.Unstructured) (string, int) {
+	t.Helper()
+	vars, _, err := unstructured.NestedSlice(rc.Object, "spec", "agentEnvVars")
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, n := "", 0
+	for _, v := range vars {
+		if env, ok := v.(map[string]any); ok && env["name"] == shellImageEnv {
+			if value, ok := env["value"].(string); ok {
+				image = value
+			}
+			n++
+		}
+	}
+	return image, n
 }
 
 // newRancherFixture builds the fixture around web. funcs, if any, stand between the registrar and
@@ -242,6 +273,7 @@ func newRancherFixture(t *testing.T, web *clusterv1.Cluster, funcs *interceptor.
 	f.registeredKey = client.ObjectKey{Namespace: rancherWorkspace, Name: rancherName(web)}
 	workload := serveKubeAPI(t, f.workloadAPI)
 	_, f.kube = newReconciler(t, &fakeCloud{}, rancher, web, kubeconfigSecret(web, workload))
+	inRancher = append([]client.Object{shellImageSetting(pinnedShell)}, inRancher...)
 	f.ranchers = interceptor.NewClient(fake.NewClientBuilder().WithScheme(ranchersScheme(t)).WithObjects(inRancher...).Build(), *funcs)
 	f.reg = &Registrar{Client: f.kube, ClassNamespace: "kubehenge-system", Remotes: &Remotes{
 		Reader: f.kube,
@@ -411,6 +443,65 @@ func TestRegistrarRegistersOnceAndInstallsRanchersAgent(t *testing.T) {
 	}
 	if got := f.registered(t); len(got) != 1 {
 		t.Errorf("%d clusters in Rancher", len(got))
+	}
+}
+
+// The agent Rancher puts into a registered cluster runs helm operations in the shell image Rancher
+// is set to, which is pinned by digest. A change of the setting reaches clusters already
+// registered, other variables of their agents stay, and an empty setting leaves Rancher's own.
+func TestRegistrarGivesRanchersAgentTheShellImageRancherRuns(t *testing.T) {
+	t.Parallel()
+	f := newRancherFixture(t, availableNow(clusterWithRancher("web", false)), nil)
+	f.mustReconcile(t, f.web)
+	if image, n := agentShellImage(t, f.registered(t)[0]); image != pinnedShell || n != 1 {
+		t.Fatalf("registered with %d shell images, %q", n, image)
+	}
+
+	ctx := context.Background()
+	setShell := func(value string) {
+		t.Helper()
+		s := shellImageSetting("")
+		if err := f.ranchers.Get(ctx, client.ObjectKeyFromObject(s), s); err != nil {
+			t.Fatal(err)
+		}
+		s.Object["value"] = value
+		if err := f.ranchers.Update(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	proxy := map[string]any{"name": "HTTPS_PROXY", "value": "http://proxy.example.org:3128"}
+	rc := f.registered(t)[0]
+	vars, _, _ := unstructured.NestedSlice(rc.Object, "spec", "agentEnvVars")
+	if err := unstructured.SetNestedSlice(rc.Object, append([]any{proxy}, vars...), "spec", "agentEnvVars"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.ranchers.Update(ctx, &rc); err != nil {
+		t.Fatal(err)
+	}
+	const newer = "rancher/shell:v0.8.4@sha256:0f2c7d0e4d6b9a1e3c5f7a9b1d3e5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d"
+	setShell(newer)
+	if res := f.mustReconcile(t, f.web); res.RequeueAfter != registerPoll {
+		t.Errorf("after giving the new image: %+v", res)
+	}
+	given := f.registered(t)[0]
+	vars, _, _ = unstructured.NestedSlice(given.Object, "spec", "agentEnvVars")
+	if image, n := agentShellImage(t, given); image != newer || n != 1 || !slices.ContainsFunc(vars, func(v any) bool {
+		env, ok := v.(map[string]any)
+		return ok && env["name"] == "HTTPS_PROXY"
+	}) {
+		t.Errorf("after the change: %v", vars)
+	}
+	f.mustReconcile(t, f.web)
+	if again := f.registered(t)[0]; again.GetResourceVersion() != given.GetResourceVersion() {
+		t.Errorf("changed again with the same image: %v", again.Object["spec"])
+	}
+
+	setShell("")
+	f.mustReconcile(t, f.web)
+	cleared := f.registered(t)[0]
+	vars, _, _ = unstructured.NestedSlice(cleared.Object, "spec", "agentEnvVars")
+	if _, n := agentShellImage(t, cleared); n != 0 || len(vars) != 1 {
+		t.Errorf("with Rancher's own image: %v", vars)
 	}
 }
 
