@@ -1,0 +1,487 @@
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
+
+import { api } from "./api";
+import { App } from "./App";
+import { expectNoViolations } from "./axe";
+import { fakeServer, held, type Answer, type Route } from "./fake-server";
+import { InterfaceCertificate } from "./InterfaceCertificate";
+import type { InterfaceCertificate as Certificate } from "./types";
+
+const msPerDay = 86_400_000;
+const inDays = (days: number): string => new Date(Date.now() + days * msPerDay + 3_600_000).toISOString();
+const dateOf = (iso: string): string => new Date(iso).toLocaleDateString(undefined, { dateStyle: "long" });
+
+const fingerprint = (seed: string): string => Array.from({ length: 32 }, () => seed).join(":");
+
+const certificate = (over: Partial<Certificate> = {}): Certificate => ({
+  source: "uploaded",
+  subject: "CN=kubehenge.example.org",
+  dnsNames: ["kubehenge.example.org"],
+  ipAddresses: ["192.0.2.40"],
+  issuer: "CN=Example Org CA",
+  notBefore: inDays(-100),
+  notAfter: inDays(120),
+  fingerprint: fingerprint("AB"),
+  chain: ["CN=kubehenge.example.org", "CN=Example Org CA"],
+  incomplete: false,
+  selfSigned: false,
+  publicURL: "https://kubehenge.example.org",
+  publicNameResolves: true,
+  changeable: true,
+  ...over,
+});
+
+const path = "/api/appliance/certificate";
+const read = (over: Partial<Certificate> = {}): Record<string, Route> => ({
+  [`GET ${path}`]: { body: certificate(over) },
+});
+
+// sequence answers each request with the next of its answers, and the last again after them.
+function sequence(answers: Answer[]): () => Answer {
+  let n = 0;
+  return () => {
+    const answer = answers[Math.min(n, answers.length - 1)] ?? {};
+    n += 1;
+    return answer;
+  };
+}
+
+const pem = (name: string, size = 20): File => new File([new Uint8Array(size)], name);
+const signedIn = { "GET /api/session": { body: { user: "root@pam", csrf: "c1" } } };
+
+describe("interface certificate", () => {
+  it("1: sits under Administration for administrators and is refused to others", async () => {
+    const answers = {
+      "GET /api/clusters": { body: [] },
+      "GET /api/fleet/health": { body: [] },
+      "GET /api/runs": { body: [] },
+      ...read(),
+    };
+    window.history.replaceState(null, "", "/administration/interface-certificate");
+    fakeServer({
+      ...signedIn,
+      ...answers,
+      "GET /api/setup": { body: { appliance: true, ready: true, allowed: true } },
+    });
+    const { unmount } = render(<App />);
+    const views = await screen.findByRole("navigation", { name: "Administration pages" });
+    expect(within(views).getByRole("link", { name: "Interface certificate" })).toHaveAttribute("aria-current", "page");
+    await expect(screen.findByRole("heading", { name: "Interface certificate" })).resolves.toBeInTheDocument();
+    unmount();
+
+    fakeServer({
+      "GET /api/session": { body: { user: "dev@pve", csrf: "c1" } },
+      "GET /api/setup": { body: { appliance: true, ready: true, allowed: false } },
+      ...answers,
+    });
+    render(<App />);
+    await expect(screen.findByRole("heading", { name: "Administrators only" })).resolves.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Administration" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Interface certificate" })).not.toBeInTheDocument();
+  });
+
+  it("2: shows where the certificate comes from, what it covers, its end, fingerprint, chain and address", async () => {
+    fakeServer(read());
+    const user = userEvent.setup({ delay: null });
+    const c = certificate();
+    render(<InterfaceCertificate />);
+    await screen.findByText("Source");
+    expect(screen.getByText("Uploaded")).toBeInTheDocument();
+    expect(screen.getByText("kubehenge.example.org, 192.0.2.40")).toBeInTheDocument();
+    expect(screen.getByText("CN=Example Org CA", { selector: "dd" })).toBeInTheDocument();
+    expect(screen.getByText(dateOf(c.notAfter))).toBeInTheDocument();
+    expect(screen.getByText("120 days left")).toBeInTheDocument();
+    expect(screen.getByText(c.fingerprint)).toBeInTheDocument();
+    const chain = within(screen.getByRole("list"));
+    expect(chain.getAllByRole("listitem").map((li) => li.textContent)).toStrictEqual(c.chain);
+    expect(screen.getByText("https://kubehenge.example.org")).toBeInTheDocument();
+    expect(screen.getByText("Resolves")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Copy fingerprint" }));
+    await expect(navigator.clipboard.readText()).resolves.toBe(c.fingerprint);
+    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
+  });
+
+  it("3: warns in one line each of the facts that need action", async () => {
+    fakeServer(
+      read({
+        source: "installer",
+        notAfter: inDays(10),
+        incomplete: true,
+        missingIssuer: "CN=Example Root CA",
+        selfSigned: true,
+        publicNameResolves: false,
+        notServed: "the file holds no key",
+      }),
+    );
+    const { unmount } = render(<InterfaceCertificate />);
+    await expect(screen.findByText("Expires in 10 days")).resolves.toBeInTheDocument();
+    expect(screen.getByText("Chain incomplete, missing CN=Example Root CA")).toBeInTheDocument();
+    expect(screen.getByText("Self-signed, so browsers warn")).toBeInTheDocument();
+    expect(screen.getByText("kubehenge.example.org does not resolve to this appliance")).toBeInTheDocument();
+    expect(screen.getByText("Stored certificate not served, the file holds no key")).toBeInTheDocument();
+    unmount();
+
+    const over = inDays(-3);
+    fakeServer(read({ notAfter: over }));
+    render(<InterfaceCertificate />);
+    await expect(screen.findByText(`Expired on ${dateOf(over)}`)).resolves.toBeInTheDocument();
+    expect(screen.queryByText(/Chain incomplete/u)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Self-signed, so/u)).not.toBeInTheDocument();
+    expect(screen.queryByText(/does not resolve/u)).not.toBeInTheDocument();
+    expect(screen.queryByText(/not served/u)).not.toBeInTheDocument();
+  });
+
+  it("4: takes several files, lists them with sizes, removes one at a time and refuses what the server would", async () => {
+    const calls = fakeServer({ ...signedIn, ...read(), [`PUT ${path}`]: { body: certificate() } });
+    await api.session();
+    const user = userEvent.setup({ delay: null });
+    render(<InterfaceCertificate />);
+    const picker = await screen.findByLabelText("Certificate files");
+    expect(picker).toHaveAttribute("multiple");
+    expect(picker).not.toHaveAttribute("accept");
+    await user.upload(picker, [pem("site.crt", 1500), pem("site.key"), pem("chain.p7b", 2048)]);
+    const list = within(screen.getByRole("list", { name: "Chosen files" }));
+    expect(list.getAllByRole("listitem").map((li) => li.textContent)).toStrictEqual([
+      "site.crt 1.5 KiBRemove",
+      "site.key 20 BRemove",
+      "chain.p7b 2.0 KiBRemove",
+    ]);
+    await user.click(list.getByRole("button", { name: "Remove site.key" }));
+    expect(list.queryByText("site.key")).not.toBeInTheDocument();
+    expect(list.getAllByRole("listitem")).toHaveLength(2);
+
+    await user.upload(
+      picker,
+      Array.from({ length: 7 }, (_, i) => pem(`more-${i}.pem`)),
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("At most 8 files. Remove some");
+    expect(screen.getByRole("button", { name: "Replace" })).toBeDisabled();
+    await user.click(list.getByRole("button", { name: "Remove more-6.pem" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await user.click(list.getByRole("button", { name: "Remove more-5.pem" }));
+
+    await user.upload(picker, pem("big.pfx", 1024 * 1024 + 1));
+    expect(screen.getByRole("alert")).toHaveTextContent("File big.pfx is over 1 MiB. Remove it.");
+    expect(screen.getByRole("button", { name: "Replace" })).toBeDisabled();
+    await user.click(list.getByRole("button", { name: "Remove big.pfx" }));
+    await user.upload(picker, pem("edge.pfx", 1024 * 1024));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(calls.filter((c) => c.key === `PUT ${path}`)).toHaveLength(0);
+
+    await user.click(screen.getByRole("button", { name: "Replace" }));
+    await waitFor(() => expect(calls.filter((c) => c.key === `PUT ${path}`)).toHaveLength(1));
+    const put = calls.find((c) => c.key === `PUT ${path}`);
+    expect(put?.body).toStrictEqual({
+      file: ["site.crt", "chain.p7b", "more-0.pem", "more-1.pem", "more-2.pem", "more-3.pem", "more-4.pem", "edge.pfx"],
+    });
+    expect(put?.headers.get("X-Kubehenge-CSRF")).toBe("c1");
+    expect(put?.headers.get("Content-Type")).toBeNull();
+  });
+
+  it("5: asks for a passphrase on a refusal, keeps the files and shows a wrong one at that field", async () => {
+    const renewed = certificate({ fingerprint: fingerprint("CD") });
+    const calls = fakeServer({
+      ...read(),
+      [`PUT ${path}`]: sequence([
+        {
+          status: 422,
+          body: { error: "host.pfx is encrypted. Send its passphrase", code: "passphrase", requestId: "r1" },
+        },
+        {
+          status: 422,
+          body: { error: "The passphrase does not open host.pfx. Send the right one", code: "passphrase" },
+        },
+        { body: renewed },
+      ]),
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<InterfaceCertificate />);
+    await user.upload(await screen.findByLabelText("Certificate files"), pem("host.pfx"));
+    expect(screen.queryByLabelText("Passphrase")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Replace" }));
+
+    const field = await screen.findByLabelText("Passphrase");
+    expect(field).toHaveAttribute("type", "password");
+    expect(field).toHaveFocus();
+    expect(field).toHaveAccessibleDescription("host.pfx is encrypted. Send its passphrase");
+    expect(screen.getByRole("list", { name: "Chosen files" })).toHaveTextContent("host.pfx");
+
+    await user.type(field, "wrong");
+    await user.click(screen.getByRole("button", { name: "Replace" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Passphrase")).toHaveAccessibleDescription(
+        "The passphrase does not open host.pfx. Send the right one",
+      ),
+    );
+    expect(screen.getByLabelText("Passphrase")).toBeInvalid();
+
+    await user.clear(screen.getByLabelText("Passphrase"));
+    await user.type(screen.getByLabelText("Passphrase"), "right");
+    await user.click(screen.getByRole("button", { name: "Replace" }));
+    await waitFor(() => expect(screen.queryByLabelText("Passphrase")).not.toBeInTheDocument());
+    const puts = calls.filter((c) => c.key === `PUT ${path}`);
+    expect(puts.map((c) => c.body)).toStrictEqual([
+      { file: ["host.pfx"] },
+      { file: ["host.pfx"], passphrase: ["wrong"] },
+      { file: ["host.pfx"], passphrase: ["right"] },
+    ]);
+  });
+
+  it("6: shows every other refusal's sentence as it is, with the names a wrong name lists", async () => {
+    fakeServer({
+      ...read(),
+      [`PUT ${path}`]: sequence([
+        {
+          status: 422,
+          body: { error: "No private key was found in site.crt. Send the certificate and its key", code: "unreadable" },
+        },
+        {
+          status: 422,
+          body: {
+            error: "The certificate is not valid for kubehenge.example.org. Send one that covers it",
+            code: "wrong-name",
+            names: ["other.example.org", "192.0.2.41"],
+          },
+        },
+      ]),
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<InterfaceCertificate />);
+    await user.upload(await screen.findByLabelText("Certificate files"), pem("site.crt"));
+    await user.click(screen.getByRole("button", { name: "Replace" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("No private key was found in site.crt. Send the certificate and its key.");
+    expect(screen.queryByLabelText("Passphrase")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Covers:/u)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Replace" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/^The certificate is not valid for/u));
+    expect(screen.getByText("Covers: other.example.org, 192.0.2.41")).toBeInTheDocument();
+  });
+
+  it("7: shows the new certificate at once and the certificates left out", async () => {
+    const replaced = certificate({ fingerprint: fingerprint("CD"), issuer: "CN=Other CA" });
+    fakeServer({
+      ...read(),
+      [`PUT ${path}`]: { body: { ...replaced, leftOut: ["CN=Old CA", "CN=Spare CA"] } },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<InterfaceCertificate />);
+    await user.upload(await screen.findByLabelText("Certificate files"), [pem("a.pem"), pem("b.pem")]);
+    await user.click(screen.getByRole("button", { name: "Replace" }));
+    await expect(screen.findByText(replaced.fingerprint)).resolves.toBeInTheDocument();
+    expect(screen.getByText("CN=Other CA", { selector: "dd" })).toBeInTheDocument();
+    expect(screen.getByText("Left out: CN=Old CA, CN=Spare CA")).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Chosen files" })).not.toBeInTheDocument();
+  });
+
+  it("8: makes a self-signed certificate and goes back to the installer's, each after a confirmation", async () => {
+    const calls = fakeServer({
+      ...read(),
+      [`POST ${path}/self-signed`]: {
+        body: certificate({ source: "self-signed", selfSigned: true, fingerprint: fingerprint("EF") }),
+      },
+      [`DELETE ${path}`]: { body: certificate({ source: "installer", fingerprint: fingerprint("12") }) },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<InterfaceCertificate />);
+    await user.click(await screen.findByRole("radio", { name: "Self-signed" }));
+    await user.click(screen.getByRole("button", { name: "Make self-signed" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Make self-signed certificate" }));
+    expect(dialog.getByText("Browsers warn about a self-signed certificate.")).toBeInTheDocument();
+    await user.click(dialog.getByRole("button", { name: "Cancel" }));
+    expect(calls.filter((c) => c.key.startsWith("POST "))).toHaveLength(0);
+
+    await user.click(screen.getByRole("button", { name: "Make self-signed" }));
+    await user.click(
+      within(screen.getByRole("dialog", { name: "Make self-signed certificate" })).getByRole("button", {
+        name: "Make self-signed",
+      }),
+    );
+    await expect(screen.findByText(fingerprint("EF"))).resolves.toBeInTheDocument();
+    expect(screen.getAllByText("Self-signed", { selector: "dd" })).toHaveLength(1);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "Installer's" }));
+    await user.click(screen.getByRole("button", { name: "Use installer's" }));
+    const back = within(screen.getByRole("dialog", { name: "Use installer's certificate" }));
+    expect(back.getByText("The certificate made at install replaces the current one.")).toBeInTheDocument();
+    await user.click(back.getByRole("button", { name: "Use installer's" }));
+    await expect(screen.findByText(fingerprint("12"))).resolves.toBeInTheDocument();
+    expect(screen.getByText("Installer", { selector: "dd" })).toBeInTheDocument();
+    expect(calls.map((c) => c.key).filter((k) => k !== `GET ${path}`)).toStrictEqual([
+      `POST ${path}/self-signed`,
+      `DELETE ${path}`,
+    ]);
+  });
+
+  it("9: disables the actions with a reason when nothing can change, and keeps the form on busy", async () => {
+    fakeServer(read({ changeable: false }));
+    const { unmount } = render(<InterfaceCertificate />);
+    await expect(screen.findByText("No key directory, so changes cannot be kept")).resolves.toBeInTheDocument();
+    expect(screen.getByLabelText("Certificate files")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Replace" })).toBeDisabled();
+    for (const radio of screen.getAllByRole("radio")) {
+      expect(radio).toBeDisabled();
+    }
+    expect(screen.getByText("Uploaded", { selector: "dd" })).toBeInTheDocument();
+    unmount();
+
+    fakeServer({
+      ...read(),
+      [`PUT ${path}`]: {
+        status: 409,
+        body: { error: "Another change of the certificate is under way. Try again in a moment", code: "busy" },
+      },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<InterfaceCertificate />);
+    await user.upload(await screen.findByLabelText("Certificate files"), pem("site.pem"));
+    await user.click(screen.getByRole("button", { name: "Replace" }));
+    await expect(screen.findByRole("alert")).resolves.toHaveTextContent(
+      "Another change of the certificate is under way. Try again in a moment",
+    );
+    expect(screen.getByRole("list", { name: "Chosen files" })).toHaveTextContent("site.pem");
+    expect(screen.getByRole("button", { name: "Replace" })).toBeEnabled();
+  });
+
+  it("10: shows a running request on its button and makes the other actions wait", async () => {
+    const answer = held();
+    fakeServer({ ...read(), [`PUT ${path}`]: answer.route });
+    const user = userEvent.setup({ delay: null });
+    render(<InterfaceCertificate />);
+    await user.upload(await screen.findByLabelText("Certificate files"), pem("site.pem"));
+    await user.click(screen.getByRole("button", { name: "Replace" }));
+    await expect(screen.findByRole("button", { name: "Replacing…" })).resolves.toBeDisabled();
+    for (const radio of screen.getAllByRole("radio")) {
+      expect(radio).toBeDisabled();
+    }
+    expect(screen.getByLabelText("Certificate files")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove site.pem" })).toBeDisabled();
+    answer.answer({ body: certificate({ fingerprint: fingerprint("CD") }) });
+    await expect(screen.findByRole("button", { name: "Replace" })).resolves.toBeDisabled();
+    for (const radio of screen.getAllByRole("radio")) {
+      expect(radio).toBeEnabled();
+    }
+  });
+
+  it("11: links the setup page's expiry warning to the page", async () => {
+    window.history.replaceState(null, "", "/");
+    fakeServer({
+      ...signedIn,
+      "GET /api/setup": {
+        body: {
+          appliance: true,
+          ready: true,
+          allowed: true,
+          applianceVMID: 105,
+          certificateExpires: inDays(10),
+        },
+      },
+      "GET /api/clusters": { body: [] },
+      "GET /api/fleet/health": { body: [] },
+      "GET /api/runs": { body: [] },
+    });
+    render(<App />);
+    await screen.findByText(/certificate expires on/u);
+    const link = screen.getByRole("link", { name: "Interface certificate" });
+    expect(link).toHaveAttribute("href", "/administration/interface-certificate");
+    expect(link.closest("p")).toHaveTextContent(/certificate expires on/u);
+  });
+
+  it("13: shows what the demo answers as a believable certificate with nothing to warn of", async () => {
+    // The answer of `kubehenge serve --demo --demo-time 2026-10-13T09:00:00Z`.
+    const demo: Certificate = {
+      source: "installer",
+      subject: "CN=kubehenge.example.org",
+      dnsNames: ["kubehenge.example.org", "kubehenge"],
+      ipAddresses: ["192.0.2.10"],
+      issuer: "CN=Example Org Internal CA,O=Example Org",
+      notBefore: "2026-09-13T00:00:00Z",
+      notAfter: "2027-09-13T00:00:00Z",
+      fingerprint: "07:9E:79:11:74:D0:7B:8C:62:13:3C:C1:03:0A:AE:6C:75:8C:79:97:26:90:F1:57:58:D6:E4:2A:53:ED:CC:1A",
+      chain: ["CN=kubehenge.example.org", "CN=Example Org Internal CA,O=Example Org"],
+      incomplete: false,
+      selfSigned: false,
+      publicURL: "https://kubehenge.example.org",
+      publicNameResolves: true,
+      changeable: true,
+    };
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-13T09:00:00Z") });
+    fakeServer({ [`GET ${path}`]: { body: demo } });
+    render(<InterfaceCertificate />);
+    await screen.findByText("Source");
+    expect(screen.getByText("Installer", { selector: "dd" })).toBeInTheDocument();
+    expect(screen.getByText("kubehenge.example.org, kubehenge, 192.0.2.10")).toBeInTheDocument();
+    expect(screen.getByText("334 days left")).toBeInTheDocument();
+    expect(screen.getByText(demo.fingerprint)).toBeInTheDocument();
+    expect(screen.getByText("Resolves")).toBeInTheDocument();
+    expect(document.querySelector(".warning")).toBeNull();
+    expect(screen.getByLabelText("Certificate files")).toBeEnabled();
+    expect(screen.getAllByRole("radio")).toHaveLength(3);
+  });
+
+  it("12: passes the accessibility checks in each state and is reached by keyboard alone", async () => {
+    const answer = held();
+    fakeServer({
+      ...read({ notAfter: inDays(5), incomplete: true, missingIssuer: "CN=Example Root CA", notServed: "no key" }),
+      [`PUT ${path}`]: sequence([
+        { status: 422, body: { error: "host.pfx is encrypted. Send its passphrase", code: "passphrase" } },
+        {
+          status: 422,
+          body: { error: "The certificate is not valid. Send another", code: "wrong-name", names: ["a.example.org"] },
+        },
+      ]),
+      [`POST ${path}/self-signed`]: answer.route,
+    });
+    const user = userEvent.setup({ delay: null });
+    const { container } = render(<InterfaceCertificate />);
+    await screen.findByText("Source");
+    await expectNoViolations(container, "interface certificate, warnings");
+
+    // Tab order: the copy button, the radios (one stop), the file picker.
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Copy fingerprint" })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole("radio", { name: "Upload files" })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByLabelText("Certificate files")).toHaveFocus();
+    await user.upload(screen.getByLabelText("Certificate files"), pem("host.pfx"));
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Remove host.pfx" })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Replace" })).toHaveFocus();
+    await user.keyboard("{Enter}");
+    await screen.findByLabelText("Passphrase");
+    await expectNoViolations(container, "interface certificate, passphrase");
+
+    await user.keyboard("{Enter}");
+    await screen.findByText("Covers: a.example.org");
+    await expectNoViolations(container, "interface certificate, refusal");
+
+    screen.getByRole("radio", { name: "Upload files" }).focus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("radio", { name: "Self-signed" })).toBeChecked();
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Make self-signed" })).toHaveFocus();
+    await user.keyboard("{Enter}");
+    const dialog = screen.getByRole("dialog", { name: "Make self-signed certificate" });
+    await expectNoViolations(container, "interface certificate, confirmation");
+    within(dialog).getByRole("button", { name: "Cancel" }).focus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Make self-signed" })).toHaveFocus();
+
+    await user.keyboard("{Enter}");
+    within(screen.getByRole("dialog", { name: "Make self-signed certificate" }))
+      .getByRole("button", { name: "Make self-signed" })
+      .focus();
+    await user.keyboard("{Enter}");
+    await screen.findByRole("button", { name: "Making…" });
+    await expectNoViolations(container, "interface certificate, running");
+    answer.answer({ body: certificate({ source: "self-signed", selfSigned: true }) });
+    await screen.findByText("Self-signed, so browsers warn");
+  });
+});

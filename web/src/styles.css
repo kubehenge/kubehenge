@@ -1465,6 +1465,44 @@ h4.subsection {
   margin-block-start: 6px;
 }
 
+/* A certificate's chain, the certificate first. */
+.chain {
+  margin: 0;
+  padding-inline-start: 1.4em;
+}
+
+/* The files chosen to upload, each with its own Remove, under the picker's control. */
+.files {
+  display: grid;
+  gap: 6px;
+
+  margin: 0 0 12px;
+  padding: 0;
+
+  list-style: none;
+}
+
+@media (width >= 600px) {
+  .files {
+    margin-inline-start: 200px;
+  }
+}
+
+.files li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: center;
+}
+
+.file-name {
+  overflow-wrap: anywhere;
+}
+
+.file-remove {
+  margin-inline-start: auto;
+}
+
 /* On a phone the fixed label column would leave values a third of the width. */
 @media (width < 600px) {
   .summary {

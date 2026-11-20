@@ -1221,6 +1221,40 @@ export interface Job {
   lines?: number;
 }
 
+/** Where the interface's certificate came from. */
+export type InterfaceCertificateSource = "installer" | "uploaded" | "self-signed";
+
+/** The certificate the interface serves, as an administrator sees it. */
+export interface InterfaceCertificate {
+  source: InterfaceCertificateSource;
+  subject: string;
+  dnsNames?: string[];
+  ipAddresses?: string[];
+  issuer: string;
+  notBefore: string;
+  notAfter: string;
+  /** SHA-256, upper case, separated by colons. */
+  fingerprint: string;
+  /** The subject of the certificate, then of each issuer above it. */
+  chain: string[];
+  incomplete: boolean;
+  /** The issuer the chain lacks, when it is incomplete. */
+  missingIssuer?: string;
+  selfSigned: boolean;
+  publicURL?: string;
+  /** Whether the public URL's name leads to this appliance. Absent when it is not known. */
+  publicNameResolves?: boolean;
+  /** Why a stored certificate is not served, when one is not. */
+  notServed?: string;
+  /** False where the interface has nowhere to keep a change. */
+  changeable: boolean;
+}
+
+/** The answer to a replacement: the new certificate, and those in the files that its chain leaves out. */
+export interface InterfaceCertificateReplaced extends InterfaceCertificate {
+  leftOut?: string[];
+}
+
 /** The apply this appliance's state is from, and the one the management cluster is at. */
 export interface StaleState {
   local: number;

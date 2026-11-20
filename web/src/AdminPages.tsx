@@ -4,6 +4,7 @@ import { ApplianceActivity } from "./Activity";
 import type { AdminView } from "./admin-views";
 import { AppliancePage } from "./AppliancePage";
 import { SharedDNS01 } from "./Certificates";
+import { InterfaceCertificate } from "./InterfaceCertificate";
 import { ManagementBackups } from "./ManagementBackups";
 import { ManagementHealthCard } from "./ManagementHealth";
 import { Notifications } from "./Notifications";
@@ -53,6 +54,13 @@ export function AdminPage({
       return (
         <section className="panel">
           <SharedDNS01 />
+        </section>
+      );
+    }
+    case "interface-certificate": {
+      return (
+        <section className="panel">
+          <InterfaceCertificate />
         </section>
       );
     }

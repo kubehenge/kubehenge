@@ -18,6 +18,8 @@ import type {
   EtcdRestorePlan,
   FleetHealth,
   HealthEvent,
+  InterfaceCertificate,
+  InterfaceCertificateReplaced,
   FreeAddresses,
   DatacenterFirewall,
   HARules,
@@ -64,12 +66,18 @@ export class ApiError extends Error {
   readonly status: number;
   /** The id the interface gave the request, which its journal lines carry; "" when none came. */
   readonly requestId: string;
+  /** The API's code for the refusal, such as "passphrase". Empty when it gave none. */
+  readonly code: string;
+  /** What the refusal lists, such as the names a certificate covers. */
+  readonly names: string[];
 
-  constructor(status: number, message: string, requestId = "") {
+  constructor(status: number, message: string, detail: { requestId?: string; code?: string; names?: string[] } = {}) {
     super(message);
     this.name = "ApiError";
     this.status = status;
-    this.requestId = requestId;
+    this.requestId = detail.requestId ?? "";
+    this.code = detail.code ?? "";
+    this.names = detail.names ?? [];
   }
 }
 
@@ -191,15 +199,21 @@ function takePrimed(path: string): Promise<Response> | undefined {
 }
 
 // errorOf is the API's own message in a failed answer's body, or "" when the body is not its JSON
-// error, and the request's id, from the body or else the header.
-async function errorOf(res: Response): Promise<{ message: string; requestId: string }> {
-  const found = { message: "", requestId: res.headers.get("X-Request-Id") ?? "" };
+// error, and the request's id, from the body or else the header, with the refusal's code and names.
+async function errorOf(res: Response): Promise<{ message: string; requestId: string; code: string; names: string[] }> {
+  const found = { message: "", requestId: res.headers.get("X-Request-Id") ?? "", code: "", names: [] as string[] };
   try {
     const data: unknown = await res.json();
     if (typeof data === "object" && data !== null && "error" in data && typeof data.error === "string") {
       found.message = data.error;
       if ("requestId" in data && typeof data.requestId === "string" && data.requestId !== "") {
         found.requestId = data.requestId;
+      }
+      if ("code" in data && typeof data.code === "string") {
+        found.code = data.code;
+      }
+      if ("names" in data && Array.isArray(data.names)) {
+        found.names = data.names.filter((n): n is string => typeof n === "string");
       }
     }
   } catch {
@@ -217,13 +231,19 @@ export type ClusterShown = Pick<Cluster, "namespace" | "name" | "generation">;
 // What a call sends: its JSON body, and headers besides those every call has.
 interface Sent {
   body?: unknown;
+  /** A multipart body, which the browser gives its own Content-Type. */
+  form?: FormData;
   headers?: Record<string, string>;
   signal?: AbortSignal;
 }
 
 // send makes one call of the API and returns its answer when it is a success. Otherwise it throws
 // the API's own message, and a lost session returns the interface to sign-in.
-async function send(method: string, path: string, { body, headers: extra = {}, signal }: Sent = {}): Promise<Response> {
+async function send(
+  method: string,
+  path: string,
+  { body, form, headers: extra = {}, signal }: Sent = {},
+): Promise<Response> {
   const headers: Record<string, string> = { ...extra };
   if (body !== undefined) {
     headers["Content-Type"] = "application/json";
@@ -234,6 +254,8 @@ async function send(method: string, path: string, { body, headers: extra = {}, s
   const init: RequestInit = { method, headers, credentials: "same-origin" };
   if (body !== undefined) {
     init.body = JSON.stringify(body);
+  } else if (form !== undefined) {
+    init.body = form;
   }
   if (signal !== undefined) {
     init.signal = signal;
@@ -242,15 +264,15 @@ async function send(method: string, path: string, { body, headers: extra = {}, s
   noteRelease(res);
   noteDemo(res);
   if (!res.ok) {
-    const { message, requestId } = await errorOf(res);
+    const { message, requestId, code, names } = await errorOf(res);
     if (res.status === httpUnauthorised && !path.startsWith("/api/session")) {
       onSignedOut?.();
     }
     if (res.status === httpForbidden && message === csrfRefused) {
       await followSession();
-      throw new ApiError(res.status, sessionChanged, requestId);
+      throw new ApiError(res.status, sessionChanged, { requestId });
     }
-    throw new ApiError(res.status, message || res.statusText, requestId);
+    throw new ApiError(res.status, message || res.statusText, { requestId, code, names });
   }
   return res;
 }
@@ -320,6 +342,8 @@ async function followSession(): Promise<void> {
     }
   }
 }
+
+const interfaceCertificatePath = "/api/appliance/certificate";
 
 const clusterPath = (ns: string, name: string): string =>
   `/api/clusters/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`;
@@ -444,6 +468,11 @@ export interface Api {
   removeCredential: (purpose: string, cluster?: ClusterRef) => Promise<void>;
   notifications: () => Promise<NotificationSent[]>;
   testNotifications: () => Promise<NotificationSent[]>;
+  interfaceCertificate: () => Promise<InterfaceCertificate>;
+  /** replaceInterfaceCertificate sends certificate and key files in any format, and the passphrase of an encrypted one. */
+  replaceInterfaceCertificate: (files: File[], passphrase: string) => Promise<InterfaceCertificateReplaced>;
+  makeInterfaceCertificateSelfSigned: () => Promise<InterfaceCertificate>;
+  resetInterfaceCertificate: () => Promise<InterfaceCertificate>;
   credential: (name: "kubeconfig" | "talosconfig", passphrase: string) => Promise<Blob>;
   removeManagement: (passphrase: string, removeBackups: boolean) => Promise<Job>;
   takeOverManagement: (passphrase: string) => Promise<void>;
@@ -626,6 +655,19 @@ export const api: Api = {
   removeCredential: (purpose, cluster) => act("DELETE", credentialPath(purpose, cluster)),
   notifications: () => request("GET", "/api/notifications"),
   testNotifications: () => request("POST", "/api/notifications/test"),
+  interfaceCertificate: () => request("GET", interfaceCertificatePath),
+  replaceInterfaceCertificate: async (files, passphrase) => {
+    const form = new FormData();
+    for (const f of files) {
+      form.append("file", f, f.name);
+    }
+    if (passphrase !== "") {
+      form.append("passphrase", passphrase);
+    }
+    return answerOf(await send("PUT", interfaceCertificatePath, { form }));
+  },
+  makeInterfaceCertificateSelfSigned: () => request("POST", `${interfaceCertificatePath}/self-signed`),
+  resetInterfaceCertificate: () => request("DELETE", interfaceCertificatePath),
   credential: (name, passphrase) => download("POST", "/api/setup/credential", { name, passphrase }),
   removeManagement: (passphrase, removeBackups) =>
     request("POST", "/api/setup/remove", { passphrase, confirm: "remove", removeBackups }),
