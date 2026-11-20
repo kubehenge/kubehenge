@@ -32,11 +32,16 @@ REGISTRY_IMAGE=registry:3.1.2@sha256:82f6ff4a7f982960c8aa51617fea3aabc485df6e55c
 mkdir -p "${work}/vz"
 work=$(readlink -f "${work}")
 if [ "${KUBEHENGE_E2E_PVE_BUILT:-}" != 1 ]; then
-    # A failed apt-get says why only in the build's own output, which -q leaves out.
-    if ! docker build --progress=plain -t kubehenge-e2e-pve "${here}/../pve" > "${work}/pve-build.log" 2>&1; then
+    # A failed apt-get says why only in the build's own output, which -q leaves out. Debian's
+    # mirrors hand out cut-short files while they sync, so a failed build is tried again a minute
+    # later, as e2e-image.yml does.
+    for try in 1 2 3; do
+        docker build --progress=plain -t kubehenge-e2e-pve "${here}/../pve" > "${work}/pve-build.log" 2>&1 && break
         tail -n 80 "${work}/pve-build.log" >&2
-        exit 1
-    fi
+        [ "${try}" -lt 3 ] || exit 1
+        echo "building Proxmox VE's image failed (try ${try} of 3), trying again in 60 s" >&2
+        sleep 60
+    done
 fi
 if [ "${KUBEHENGE_E2E_IPV6:-}" = 1 ]; then
     docker network create --ipv6 --subnet 172.21.99.0/24 --gateway 172.21.99.1 \
