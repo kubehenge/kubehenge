@@ -55,7 +55,7 @@ export function AdminPage({
     case "certificates": {
       return (
         <section className="panel">
-          <InterfaceCertificate onChanged={onSetupChanged} />
+          <InterfaceCertificate onChanged={onSetupChanged} ctid={status.applianceVMID} />
           <SharedDNS01 />
         </section>
       );

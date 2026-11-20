@@ -390,6 +390,10 @@ pct exec <ctid> -- kubehenge appliance certificate reset
 
 `replace` takes the files [`--cert` takes](#certificate-files), with the same checks, and the certificate must be valid for the host of the public URL. `self-sign` makes a certificate for the names and addresses of the one served, valid for 824 days. `reset` serves the installer's again. Open sessions and Headlamp keep working through a change.
 
+Its Cluster CA choice gives the node command above, since the cluster CA's key stays on the node.
+
+### Where it is kept
+
 A certificate given this way is kept in `/var/lib/kubehenge`, which backups of the container hold, so a restore serves it again. `--upgrade` leaves it, and the upgrade's health check expects it. While it is served, `--upgrade` warns of its expiry 60 days ahead.
 
 `kubehenge login` in the appliance trusts the certificate served, whichever it is. Elsewhere a login trusts a certificate its `--ca` or the system's trust store vouches for. A change to one neither vouches for stops `kubehenge` commands. Their error names the new certificate's fingerprint. Run `kubehenge login` again with its CA.

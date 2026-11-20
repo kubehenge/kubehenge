@@ -423,7 +423,7 @@ describe("interface certificate", () => {
     expect(screen.getByText("Resolves")).toBeInTheDocument();
     expect(document.querySelector(".warning")).toBeNull();
     expect(screen.getByLabelText("Certificate files")).toBeEnabled();
-    expect(screen.getAllByRole("radio")).toHaveLength(3);
+    expect(screen.getAllByRole("radio")).toHaveLength(4);
   });
 
   it("12: passes the accessibility checks in each state and is reached by keyboard alone", async () => {
@@ -465,6 +465,10 @@ describe("interface certificate", () => {
     await expectNoViolations(container, "interface certificate, refusal");
 
     screen.getByRole("radio", { name: "Upload files" }).focus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("radio", { name: "Cluster CA" })).toBeChecked();
+    expect(screen.getByText(/sh install\.sh --certificate/u, { selector: "code" })).toBeInTheDocument();
+    await expectNoViolations(container, "interface certificate, cluster CA");
     await user.keyboard("{ArrowDown}");
     expect(screen.getByRole("radio", { name: "Self-signed" })).toBeChecked();
     await user.tab();
@@ -510,5 +514,22 @@ describe("interface certificate", () => {
     await user.upload(await screen.findByLabelText("Certificate files"), pem("site.pem"));
     await user.click(screen.getByRole("button", { name: "Replace" }));
     await waitFor(() => expect(screen.queryByText(/certificate expires on/u)).not.toBeInTheDocument());
+  });
+
+  it("15: gives the node's command for a certificate the cluster's CA signs, naming this appliance", async () => {
+    window.history.replaceState(null, "", "/administration/certificates");
+    const calls = fakeServer({
+      ...signedIn,
+      ...read(),
+      "GET /api/setup": { body: { appliance: true, ready: true, allowed: true, applianceVMID: 105 } },
+      "GET /api/clusters": { body: [] },
+      "GET /api/fleet/health": { body: [] },
+      "GET /api/runs": { body: [] },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("radio", { name: "Cluster CA" }));
+    expect(screen.getByText("sh install.sh --certificate --ctid 105", { selector: "code" })).toBeInTheDocument();
+    expect(calls.filter((c) => !c.key.startsWith("GET "))).toHaveLength(0);
   });
 });

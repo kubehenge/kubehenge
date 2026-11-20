@@ -172,6 +172,20 @@ interface WayProps {
   locked: boolean;
   /** run makes the change and returns what went wrong with it, if anything. */
   run: (call: () => Promise<Replaced>) => Promise<unknown>;
+  /** The appliance's container ID, for a command run on the Proxmox VE node. */
+  ctid: number | undefined;
+}
+
+/**
+ * OnNode gives the command that signs a new certificate with the Proxmox VE cluster's CA, whose key
+ * never leaves the node.
+ */
+function OnNode({ way: { ctid } }: { way: WayProps }): JSX.Element {
+  return (
+    <p>
+      Run on the Proxmox VE node: <code>sh install.sh --certificate --ctid {ctid ?? "<appliance ID>"}</code>
+    </p>
+  );
 }
 
 /** Upload takes the certificate, its key and its chain as files, in any format. */
@@ -334,11 +348,12 @@ function Confirmed({
   );
 }
 
-type WayId = "upload" | "self-signed" | "installer";
+type WayId = "upload" | "cluster-ca" | "self-signed" | "installer";
 
 // The ways to change the certificate. A further way is one more entry here.
 const ways: { id: WayId; label: string; body: (p: WayProps) => JSX.Element }[] = [
   { id: "upload", label: "Upload files", body: (p) => <Upload way={p} /> },
+  { id: "cluster-ca", label: "Cluster CA", body: (p) => <OnNode way={p} /> },
   {
     id: "self-signed",
     label: "Self-signed",
@@ -371,10 +386,17 @@ const ways: { id: WayId; label: string; body: (p: WayProps) => JSX.Element }[] =
 
 /**
  * InterfaceCertificate shows the certificate the interface serves, and changes it: files an
- * administrator gives, a new self-signed certificate, or the one the installer made. onChanged lets
- * the rest of the interface drop its warning about the certificate it replaced.
+ * administrator gives, one the cluster's CA signs on the node, a new self-signed certificate, or the
+ * one the installer made. onChanged lets the rest of the interface drop its warning about the
+ * certificate it replaced.
  */
-export function InterfaceCertificate({ onChanged }: { onChanged?: () => void }): JSX.Element {
+export function InterfaceCertificate({
+  onChanged,
+  ctid,
+}: {
+  onChanged?: () => void;
+  ctid?: number | undefined;
+}): JSX.Element {
   const { data, error, put } = usePoll(api.interfaceCertificate, pollIdle);
   const [way, setWay] = useState<WayId>("upload");
   const [running, setRunning] = useState<WayId>();
@@ -429,7 +451,7 @@ export function InterfaceCertificate({ onChanged }: { onChanged?: () => void }):
             </label>
           ))}
         </fieldset>
-        {current?.body({ waiting, running: running === current.id, locked, run: runFor(current.id) })}
+        {current?.body({ waiting, running: running === current.id, locked, run: runFor(current.id), ctid })}
       </div>
     </>
   );
