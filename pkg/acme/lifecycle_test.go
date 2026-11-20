@@ -276,7 +276,7 @@ func (s *stateRefused) write(name string, data []byte) error {
 	if name == StateFile && s.refuse.Load() {
 		return errors.New("no space left on device")
 	}
-	return s.store.write(name, data) //nolint:wrapcheck // the test's own seam
+	return s.store.write(name, data)
 }
 
 // With the progress file not written, as on a full disk, a failed order and a question for renewal

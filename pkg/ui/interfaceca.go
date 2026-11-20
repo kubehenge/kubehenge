@@ -180,8 +180,8 @@ func newApplianceCA(old *x509.Certificate, now time.Time) (*applianceCA, error) 
 // first where there is none, or where the one there may not sign for these names or has expired.
 // undo puts the CA there before back, for a caller whose certificate was then not kept, so that the
 // CA on file still vouches for the certificate served. The caller holds mu.
-func (c *InterfaceCertificate) signedByCA(old *x509.Certificate, now time.Time) (b *certfiles.Bundle, undo func() error, err error) {
-	undo = func() error { return nil }
+func (c *InterfaceCertificate) signedByCA(old *x509.Certificate, now time.Time) (*certfiles.Bundle, func() error, error) {
+	undo := func() error { return nil }
 	if len(old.DNSNames) == 0 && len(old.IPAddresses) == 0 {
 		return nil, undo, errNoNames
 	}
@@ -190,8 +190,9 @@ func (c *InterfaceCertificate) signedByCA(old *x509.Certificate, now time.Time) 
 		return nil, undo, err
 	}
 	if previous != nil {
-		if b, err = previous.sign(old, now); err != nil {
-			return nil, undo, err
+		b, signErr := previous.sign(old, now)
+		if signErr != nil {
+			return nil, undo, signErr
 		}
 		if previous.vouches(b.Leaf, now) {
 			return b, undo, nil
@@ -210,7 +211,8 @@ func (c *InterfaceCertificate) signedByCA(old *x509.Certificate, now time.Time) 
 		}
 		return c.keepCA(previous)
 	}
-	if b, err = ca.sign(old, now); err != nil {
+	b, err := ca.sign(old, now)
+	if err != nil {
 		return nil, undo, errors.Join(err, undo())
 	}
 	return b, undo, nil

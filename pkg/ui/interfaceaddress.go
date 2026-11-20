@@ -162,25 +162,18 @@ func (s *Server) setPublicAddress(w http.ResponseWriter, r *http.Request, u user
 	defer c.mu.Unlock()
 	before, old := c.address.Load(), s.PublicAddress()
 	next := withHost(old, host)
-	b, source, undoCA, err := s.remadeFor(c, old, host)
+	m, err := s.remadeFor(c, old, host)
 	if err != nil {
 		s.changeFailed(w, r, err)
 		return
 	}
-	// A change cut short leaves the address files, Headlamp's included, and the CA as they were.
-	failed := func(err error) {
-		if undo := errors.Join(c.keepAddress(before), undoCA()); undo != nil {
-			s.Log.ErrorContext(r.Context(), "putting the public address and its CA back", "error", undo)
-		}
-		s.changeFailed(w, r, err)
-	}
 	if err = c.keepAddress(&next); err != nil {
-		failed(err)
+		s.addressNotChanged(w, r, c, before, m, err)
 		return
 	}
-	if b != nil {
-		if _, err = c.replace(b, source); err != nil {
-			failed(err)
+	if m.bundle != nil {
+		if _, err = c.replace(m.bundle, m.source); err != nil {
+			s.addressNotChanged(w, r, c, before, m, err)
 			return
 		}
 	}
@@ -193,28 +186,47 @@ func (s *Server) setPublicAddress(w http.ResponseWriter, r *http.Request, u user
 	writeJSON(w, http.StatusOK, s.certificateViewOf(r.Context(), c))
 }
 
-// remadeFor is the certificate to serve at host instead of the current one, nil when it covers host
-// already or only its owner can make another. undoCA puts back a CA made for it. The caller holds mu.
-func (s *Server) remadeFor(c *InterfaceCertificate, old, host string) (b *certfiles.Bundle, source string, undoCA func() error, err error) {
-	undoCA = func() error { return nil }
+// addressNotChanged answers a change cut short, with the address files, Headlamp's included, and
+// the CA put back as they were. The caller holds mu.
+func (s *Server) addressNotChanged(w http.ResponseWriter, r *http.Request, c *InterfaceCertificate, before *string, m remade, err error) {
+	if undo := errors.Join(c.keepAddress(before), m.undoCA()); undo != nil {
+		s.Log.ErrorContext(r.Context(), "putting the public address and its CA back", "error", undo)
+	}
+	s.changeFailed(w, r, err)
+}
+
+// remade is the certificate to serve at a new address, with its source.
+type remade struct {
+	bundle *certfiles.Bundle
+	source string
+	// undoCA puts back the CA there was before one was made for the new address.
+	undoCA func() error
+}
+
+// remadeFor is the certificate to serve at host instead of the current one, none when it covers host
+// already or only its owner can make another. The caller holds mu.
+func (s *Server) remadeFor(c *InterfaceCertificate, old, host string) (remade, error) {
+	m := remade{undoCA: func() error { return nil }}
 	served := c.served()
 	if served.pair.Leaf.VerifyHostname(host) == nil || (c.acme != nil && c.acme.View() != nil) {
-		return nil, "", undoCA, nil
+		return m, nil
 	}
 	from := ""
-	if u, parseErr := url.Parse(old); parseErr == nil {
+	if u, err := url.Parse(old); err == nil {
 		from = u.Hostname()
 	}
 	tmpl := renamed(served.pair.Leaf, from, host)
+	var err error
 	switch served.source {
 	case certificateSelfSigned:
-		b, err = selfSigned(tmpl, s.now())
-		return b, served.source, undoCA, err
+		m.bundle, err = selfSigned(tmpl, s.now())
 	case certificateApplianceCA:
-		b, undoCA, err = c.signedByCA(tmpl, s.now())
-		return b, served.source, undoCA, err
+		m.bundle, m.undoCA, err = c.signedByCA(tmpl, s.now())
+	default:
+		return m, nil
 	}
-	return nil, "", undoCA, nil
+	m.source = served.source
+	return m, err
 }
 
 func isRefusal(err error) bool {
