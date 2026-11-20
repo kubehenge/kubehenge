@@ -85,14 +85,15 @@ fill_variables() {
 import sys
 
 import dnf
-import dnf.conf.parser
+from libdnf.conf import ConfigParser
 
 base = dnf.Base()
 base.conf.read()
 base.conf.substitutions.update_from_etc(base.conf.installroot, varsdir=base.conf.varsdir)
+substitutions = dict(base.conf.substitutions)
 with open(sys.argv[2], encoding="utf-8") as lines:
     for line in lines:
-        print(dnf.conf.parser.substitute(line.rstrip("\n"), base.conf.substitutions))
+        print(ConfigParser.substitute(line.rstrip("\n"), substitutions))
 EOF
 }
 
