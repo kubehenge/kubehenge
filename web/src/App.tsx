@@ -244,7 +244,7 @@ function ApplianceWarnings({
   certificate: Expiry | undefined;
   credentials: Expiry | undefined;
 }): JSX.Element {
-  const ctid = setup.applianceVMID ?? "<appliance ID>";
+  const ctid = setup.applianceVMID ?? "<container ID>";
   return (
     <>
       {setup.backup === false && !settingUp && (
