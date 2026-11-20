@@ -217,6 +217,9 @@ func TestApplianceCertificateShowsAndChangesWhatTheInterfaceServes(t *testing.T)
 		t.Errorf("a file that is not there: %v", err)
 	}
 	pfx := namedFile(t, "host.pfx", "PFX")
+	if _, err = f.run(f.args("admin@pve", "certificate", "replace", pfx, "--passphrase-file", "pass.txt")...); err == nil || err.Error() != "pass.txt does not exist. Give the path of an existing file" {
+		t.Errorf("a passphrase file that is not there: %v", err)
+	}
 	if _, err = f.run(f.args("admin@pve", "certificate", "replace", pfx)...); err == nil || !strings.Contains(err.Error(), "host.pfx is encrypted. Send its passphrase") {
 		t.Errorf("an encrypted file without its passphrase: %v", err)
 	}

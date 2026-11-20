@@ -275,3 +275,29 @@ func TestACMERepeatCommandAndRow(t *testing.T) {
 		t.Errorf("the DNS proof needs neither a port nor the address, yet: %q", c)
 	}
 }
+
+// The summary carries the ACME cautions with the name's.
+func TestACMECautionsReachTheSummary(t *testing.T) {
+	t.Parallel()
+	s := prepared(t, newHarness(t, opts{dhcp: true}), Config{Name: "kubehenge.example.org", ACME: acme.Files{Directory: "letsencrypt"}})
+	want := "Let's Encrypt checks kubehenge.example.org from the internet on port 443. Open that port to the appliance, or choose the DNS record proof"
+	if c := s.interfaceCautions(); !slices.Contains(c, want) {
+		t.Errorf("the summary's cautions %q lack %q", c, want)
+	}
+}
+
+// Saved answers for an organisation's own server reopen under Other with its address.
+func TestSavedOwnACMEServerReopensAsOther(t *testing.T) {
+	t.Parallel()
+	const dir = "https://ca.example.org/acme/directory"
+	m := &Model{S: &Session{Cfg: Config{ACME: acme.Files{Directory: dir}}}}
+	acmeFields(m)
+	if a := m.a.acme; a.server != acmeOther || a.directory != dir {
+		t.Errorf("server %q, directory %q", a.server, a.directory)
+	}
+	m.S.Cfg.ACME.Directory = acme.DirectoryLetsEncryptStaging
+	acmeFields(m)
+	if a := m.a.acme; a.server != acme.DirectoryLetsEncryptStaging {
+		t.Errorf("Let's Encrypt staging reopens as %q", a.server)
+	}
+}

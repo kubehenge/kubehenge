@@ -800,12 +800,16 @@ describe("interface certificate", () => {
       dnsCredentials: { CF_DNS_API_TOKEN: "" },
     });
     expect(screen.getByLabelText("DNS provider")).toHaveValue("cloudflare");
+    // Another server is a fresh attempt, so the last refusal goes.
+    await user.selectOptions(screen.getByLabelText("ACME server"), "letsencrypt-staging");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("19: says which name ACME proves and where, offers account binding for other servers only", async () => {
-    fakeServer({
+    const calls = fakeServer({
       ...read(),
       [`GET ${path}/acme/providers`]: { body: { providers: [], variablesListed: false } },
+      [`PUT ${path}/acme`]: { status: 202, body: certificate() },
     });
     const user = userEvent.setup({ delay: null });
     const { unmount } = render(<InterfaceCertificate />);
@@ -821,7 +825,16 @@ describe("interface certificate", () => {
     expect(screen.queryByLabelText("Key ID")).not.toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText("ACME server"), "other");
     expect(proof).toHaveAccessibleDescription("The ACME server checks kubehenge.example.org on port 80.");
-    expect(screen.getByLabelText("Key ID")).toBeInTheDocument();
+    // A key ID typed for another server is not sent to Let's Encrypt.
+    await user.type(screen.getByLabelText("Key ID"), "kid-1");
+    await user.selectOptions(screen.getByLabelText("ACME server"), "letsencrypt");
+    await user.click(screen.getByRole("button", { name: "Use ACME" }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.key === `PUT ${path}/acme`)?.body).toStrictEqual({
+        directory: "letsencrypt",
+        proof: "http-01",
+      }),
+    );
     unmount();
 
     // An IPv4 and an IPv6 address are not names ACME can prove.
