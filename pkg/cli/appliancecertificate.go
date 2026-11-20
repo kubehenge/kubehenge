@@ -54,8 +54,8 @@ func (o *applianceOptions) certificateCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "certificate",
 		Short: "Show or change the certificate the interface serves",
-		Long: `Show the certificate the interface serves. Its commands change it, with no restart, as the
-interface's certificate page does.`,
+		Long: `Show the certificate the interface serves. Its subcommands change it with no restart, as the
+certificate page does.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
@@ -78,7 +78,7 @@ func (o *applianceOptions) certificateAddressCommand() *cobra.Command {
 		Use:   "address <name>",
 		Short: "Change the DNS name or IP address users reach the interface at",
 		Long: `Change the DNS name or IP address users reach the interface at, with no restart. A self-signed
-certificate or one of the appliance's CA is made again for it, and ACME orders one. Any other
+certificate or one from the appliance's CA is made again, and ACME orders a new one. Any other
 certificate stays until one for the new name replaces it.`,
 		Example: `  kubehenge appliance certificate address kubehenge.example.org`,
 		Args:    argsSay(cobra.ExactArgs(1), "give the DNS name or IP address"),
@@ -96,9 +96,9 @@ func (o *applianceOptions) certificateApplianceCACommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "appliance-ca",
 		Short: "Serve a certificate the appliance's own CA signs for the public address",
-		Long: `Serve a certificate the appliance's own CA signs for the public address and the names the current
-one covers. The CA may sign only for these names, so trusting it trusts nothing else. Print it
-with "kubehenge appliance certificate ca".`,
+		Long: `Serve a certificate that the appliance's own CA signs for the public address and the names the
+current certificate covers. The CA signs for these only, so trusting it trusts nothing else. Print
+the CA with "kubehenge appliance certificate ca".`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
@@ -113,7 +113,7 @@ with "kubehenge appliance certificate ca".`,
 func (o *applianceOptions) certificateCACommand() *cobra.Command {
 	return &cobra.Command{
 		Use:     "ca",
-		Short:   "Print the appliance's own CA as PEM, to trust it",
+		Short:   "Print the appliance's own CA as PEM",
 		Example: `  kubehenge appliance certificate ca > kubehenge-ca.pem`,
 		Args:    noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -137,11 +137,10 @@ func (o *applianceOptions) certificateReplaceCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "replace <file>...",
 		Short: "Serve the certificate in the files given, in any format",
-		Long: `Serve the certificate in the files given, from the next connection on, with no restart. The files
-hold the certificate, its key and any intermediates, as PEM, DER, PKCS#7 or PKCS#12, in one file
-or several, in any order. An encrypted key or PKCS#12 file takes its passphrase from
---passphrase-file. The interface's checks apply: the certificate must be valid for the interface's
-public name and for at least another day.`,
+		Long: `Serve the certificate in the given files, from the next connection on, with no restart. The files
+hold the certificate, its key and any intermediates, as PEM, DER, PKCS#7 or PKCS#12, in any number
+of files and any order. --passphrase-file gives the passphrase of an encrypted key or PKCS#12 file.
+The certificate must be valid for the public address and for at least another day.`,
 		Example: `  kubehenge appliance certificate replace fullchain.pem host.key
   kubehenge appliance certificate replace host.pfx --passphrase-file ~/passphrase`,
 		Args: argsSay(cobra.MinimumNArgs(1), "give the certificate files"),
@@ -172,7 +171,7 @@ func (o *applianceOptions) certificateSelfSignCommand() *cobra.Command {
 		Use:   "self-sign",
 		Short: "Serve a new self-signed certificate for the public address",
 		Long: `Serve a new self-signed certificate for the public address and the names the current one covers.
-Browsers warn about it until they trust it.`,
+Browsers warn about it.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
@@ -244,10 +243,10 @@ func printCertificate(cmd *cobra.Command, v *certificateAnswer) error {
 	t := table(cmd)
 	row(t, "Source", v.Source)
 	row(t, "Subject", v.Subject)
-	row(t, "Names", orNone(strings.Join(slices.Concat(v.DNSNames, v.IPAddresses), ", ")))
+	row(t, "Covers", orNone(strings.Join(slices.Concat(v.DNSNames, v.IPAddresses), ", ")))
 	row(t, "Issuer", v.Issuer)
 	row(t, "Valid", v.NotBefore.UTC().Format(time.DateOnly)+" to "+v.NotAfter.UTC().Format(time.DateOnly))
-	row(t, "Fingerprint", v.Fingerprint)
+	row(t, "SHA-256 fingerprint", v.Fingerprint)
 	row(t, "Chain", strings.Join(v.Chain, " > "))
 	if v.SelfSigned {
 		row(t, "Self-signed", "yes")
@@ -264,7 +263,7 @@ func printCertificate(cmd *cobra.Command, v *certificateAnswer) error {
 		default:
 			resolves = ", does not resolve to this appliance"
 		}
-		row(t, "Public URL", v.PublicURL+resolves)
+		row(t, "Public address",v.PublicURL+resolves)
 	}
 	if v.NotServed != "" {
 		row(t, "Not served", "the stored certificate, since "+v.NotServed)

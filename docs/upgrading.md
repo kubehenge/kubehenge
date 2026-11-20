@@ -362,9 +362,9 @@ Without `--node`, the command exits 0 only when every etcd member of the managem
 
 The management VMs start first after a node boots. They carry `startup: order=1,up=90`, so the next guest waits 90 seconds for their etcd members.
 
-## The appliance's certificate
+## The interface's certificate
 
-The interface warns administrators 30 days before its certificate runs out. Renew it in the shell of the appliance's node, with the installer of the appliance's release or a newer one:
+The interface warns administrators 30 days before its certificate runs out. Renew it in the node's shell with the installer of the appliance's release or a newer one:
 
 ```sh
 sh install.sh --certificate --ctid 105
@@ -372,7 +372,7 @@ sh install.sh --certificate --ctid 105
 
 The same command makes a new certificate after the appliance's address changed. `--name kubehenge.example.org` gives the appliance a DNS name. `--cert <files>` installs a certificate of your own, as the installer's own question does.
 
-It restarts the interface and the shared Headlamp, then prints the new fingerprint. It does not restart while the management cluster is being applied or removed or a VM template is being built. Run it again once that has finished. It also removes a certificate given through the interface (below), so the installer's is served again.
+It restarts the interface and the shared Headlamp, then prints the new fingerprint. It does not restart while the management cluster is applied or removed or a VM template is built. Run it again afterwards. It also removes a certificate given through the interface (below), so the installer's is served again.
 
 `--upgrade` renews a certificate the installer made once it has less than 60 days left. It only warns about a certificate of your own.
 
@@ -384,7 +384,7 @@ Administrators change the certificate with no shell and no restart, under Admini
 - **ACME** orders one, as [below](#acme).
 - **Proxmox VE CA** gives the node command above, since that CA's key stays on the node.
 - **Appliance CA** signs one by the [appliance's own CA](#the-appliances-own-ca).
-- **Self-signed** makes one for the names and addresses of the one served and the public address, valid for 824 days.
+- **Self-signed** makes a certificate for the names and addresses of the one now served and for the public address, valid for 824 days.
 - **Installer's** serves the installer's again.
 
 #### From the command line
@@ -403,7 +403,7 @@ pct exec <ctid> -- kubehenge appliance certificate reset
 
 ### The public address
 
-The page's Change address button, or `address`, changes the DNS name or IP address people open the interface at, with no restart:
+The Change address button on the page, or `address`, changes the DNS name or IP address people open the interface at, with no restart:
 
 ```sh
 pct exec <ctid> -- kubehenge appliance certificate address kubehenge.example.org
@@ -433,7 +433,7 @@ The page's Download CA button gives the same file.
 
 ### Trusting a CA
 
-A device trusts a CA once its file is in the device's trust store. That is `kubehenge-appliance-ca.crt` from the page for the appliance's CA, or `/etc/pve/pve-root-ca.pem` from a Proxmox VE node for the Proxmox VE CA.
+A device trusts a CA once the CA's file is in its trust store. The file is `kubehenge-appliance-ca.crt` from the page for the appliance's CA, or `/etc/pve/pve-root-ca.pem` from a Proxmox VE node for the Proxmox VE CA.
 
 - **Windows:** `certutil -addstore Root kubehenge-appliance-ca.crt` in an administrator's shell.
 - **macOS:** `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain kubehenge-appliance-ca.crt`.
@@ -444,7 +444,7 @@ A device trusts a CA once its file is in the device's trust store. That is `kube
 
 ### ACME
 
-The installer's ACME choice, the certificate page's, or `kubehenge appliance certificate acme`, gets the certificate from an ACME server and renews it. That is Let's Encrypt by default, or an organisation's own server:
+The installer's ACME choice, the certificate page and `kubehenge appliance certificate acme` order the certificate from an ACME server and renew it. The server is Let's Encrypt by default, or an organisation's own:
 
 ```sh
 pct exec <ctid> -- kubehenge appliance certificate acme --proof tls-alpn-01
@@ -460,8 +460,8 @@ pct exec <ctid> -- kubehenge appliance certificate acme providers
 - The proof is `tls-alpn-01` on port 443, `http-01` on port 80 or `dns-01` through a DNS provider. The ACME server must reach the appliance on that port, and `dns-01` needs none.
 - `dns-01` takes any DNS provider in `providers`. Its credentials file holds a `NAME=value` line per variable named in [lego's provider documentation](https://go-acme.github.io/lego/dns/).
 - The HMAC key and the DNS credentials come from files, never from arguments.
-- The page shows which secrets are saved, never their values, and a field left empty keeps the saved one.
-- Saving starts the first order. The page and `kubehenge appliance certificate` show how it stands.
+- The page shows which secrets are saved but never their values. A field left empty keeps the saved one.
+- Saving starts the first order. The page and `kubehenge appliance certificate` show its state.
 - `replace`, `self-sign`, `appliance-ca`, `reset` and `install.sh --certificate` remove the setting and its secrets.
 
 #### Renewal and failures
@@ -474,27 +474,27 @@ A failed order is retried after a minute, then after twice as long each time, up
 
 A certificate given this way is kept in `/var/lib/kubehenge`, which backups of the container hold, so a restore serves it again. `--upgrade` leaves it, and the upgrade's health check expects it. While it is served, `--upgrade` warns of its expiry 60 days ahead.
 
-`kubehenge login` in the appliance trusts the certificate served, whichever it is. Elsewhere a login trusts a certificate its `--ca` or the system's trust store vouches for. A change to one neither vouches for stops `kubehenge` commands. Their error names the new certificate's fingerprint. Run `kubehenge login` again with its CA.
+What `kubehenge login` trusts is in [clusters.md](clusters.md#signing-in-and-finding-clusters). A new certificate that neither `--ca` nor the system's trust store vouches for stops `kubehenge` commands outside the appliance. The error names the new certificate's fingerprint. Run `kubehenge login` again with its CA.
 
 ### Certificate files
 
 `--cert` takes comma-separated files in any mix of PEM, DER, PKCS#7 and PKCS#12 (a `.pfx` or `.p12`). The certificate, its chain and its key may share a file or sit in several. `--key` adds a file to the list.
 
-Encrypted material needs `--cert-passphrase-file <file>`, whose first line is the passphrase. Without a terminal, the installer stops before it creates anything when that option is missing. Saved answers keep the file paths and never the passphrase.
+Encrypted files need `--cert-passphrase-file <file>`, whose first line is the passphrase. Without a terminal, the installer stops before creating anything if the option is missing. Saved answers keep the file paths, never the passphrase.
 
 #### What the installer checks
 
 - The certificate must be valid for the name, or for the fixed address where there is no name, and have more than a day left. With less than 30 days left it is taken with a caution giving the last day.
 - A chain that lacks its issuer is taken with a caution naming the issuer to add. Issuers in this node's trust store count as known.
 - Certificates in the files that the chain does not use are left out, and the installer says which.
-- Without `--cert`, the installer asks whether to make a certificate or read files. It preselects files when an outside CA signed the Proxmox VE API's certificate, since files from that CA avoid the browsers' warning.
+- Without `--cert`, the installer asks whether to make a certificate or read files. It preselects files when another CA signed the Proxmox VE API's certificate, since files from that CA avoid the browsers' warning.
 
 ### DNS check
 
-With a name, the installer looks it up on this node. It says whether the name points at the appliance, at another address or nowhere, or could not be checked. None of these stops the install. A name that did not point at the appliance gets the appliance's address beside it on the last screen.
+With a name, the installer looks it up on this node. It says whether the name points at the appliance, at another address or nowhere, or could not be checked. None of these stops the install. A name that does not point at the appliance gets the appliance's address beside it on the last screen.
 
 ### Names and addresses
 
 A renewal keeps a name given before unless `--name` gives another, or `--no-name` drops it for the appliance's address again. It keeps a name from a certificate the Proxmox VE CA signed. It keeps any other name only where this node's DNS resolves it to the appliance's address. Otherwise it drops the name and says so, unless `--name` names it. The address is the one the container's configuration gives it, or with DHCP the one the container reports.
 
-After a new name or address, it points this node's Kubernetes entry ([install.md](install.md#the-proxmox-ve-interface-entry)) at it and prints the command for the other nodes. Update the redirect URLs registered for OpenID realms (`https://<name>/api/openid/callback`) and for the shared Headlamp (`https://<name>:8443/oidc-callback`).
+After a new name or address, it points this node's Proxmox VE interface entry ([install.md](install.md#the-proxmox-ve-interface-entry)) at it and prints the command for the other nodes. Update the redirect URLs registered for identity providers (`https://<name>/api/openid/callback`) and for the shared Headlamp (`https://<name>:8443/oidc-callback`).

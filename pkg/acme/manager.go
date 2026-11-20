@@ -646,7 +646,7 @@ func (m *Manager) checkProvider(set *Setting) *RefusalError {
 	if missing := missingVariables(err.Error()); missing != "" {
 		return refuse(CodeDNSCredential, "The DNS provider %s needs %s. Add them as variables", set.DNSProvider, missing)
 	}
-	return refuse(CodeDNSCredential, "The DNS provider %s refuses its credentials: %s. Give each variable it reads", set.DNSProvider, set.scrub(err.Error()))
+	return refuse(CodeDNSCredential, "The DNS provider %s refuses its credentials: %s. Check each variable it reads", set.DNSProvider, set.scrub(err.Error()))
 }
 
 // missingVariables reads the variables a DNS provider says are missing, as "A and B, or C" for a

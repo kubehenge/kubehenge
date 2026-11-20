@@ -134,7 +134,7 @@ func (m *material) addKey(parsed crypto.PrivateKey, file string) error {
 		return nil
 	}
 	if !m.key.Equal(key) {
-		return fmt.Errorf("%s and %s hold different private keys, and a certificate has only one", m.keyFile, file)
+		return fmt.Errorf("%s and %s hold different private keys, but a certificate has one", m.keyFile, file)
 	}
 	return nil
 }
@@ -145,7 +145,7 @@ func (m *material) read(f File, passphrase string) error {
 		return fmt.Errorf("%s is empty, not a certificate or private key", f.Name)
 	}
 	if len(f.Data) > maxFileSize {
-		return fmt.Errorf("%s is larger than 1 MiB, which no certificate or key is", f.Name)
+		return fmt.Errorf("%s is larger than 1 MiB, too large for a certificate or key", f.Name)
 	}
 	if block, _ := pem.Decode(f.Data); block != nil {
 		return m.readPEM(f, passphrase)

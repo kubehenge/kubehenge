@@ -12,11 +12,11 @@
     > NAME=value lines of the provider's variables
 
     Server CA file
-    > PEM, where the server's certificate is not publicly trusted
+    > PEM, if the server's certificate is not publicly trusted
 
     Account key ID
     > where the server asks for account binding
 
     HMAC key file
-    > the key the server gave with the key ID
+    > the HMAC key the server gave you
   enter next  esc back  ctrl+c quit

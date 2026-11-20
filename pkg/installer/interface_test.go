@@ -213,12 +213,12 @@ func TestNameQuestionRoadAndPlaceholder(t *testing.T) {
 	}
 	u := ownUI(t, h, Config{}, 100, 40)
 	u.until("DNS name of the interface")
-	if !strings.Contains(u.rec.screen(), "empty opens the address DHCP gives") {
+	if !strings.Contains(u.rec.screen(), "empty: the address DHCP gives") {
 		t.Errorf("DHCP placeholder:\n%s", u.rec.screen())
 	}
 	static := ownUI(t, newHarness(t, opts{}), Config{IP: "192.0.2.10/24", Gateway: "192.0.2.1"}, 100, 40)
 	static.until("DNS name of the interface")
-	if !strings.Contains(static.rec.screen(), "empty opens https://192.0.2.10") {
+	if !strings.Contains(static.rec.screen(), "empty: https://192.0.2.10") {
 		t.Errorf("static placeholder:\n%s", static.rec.screen())
 	}
 }
@@ -414,11 +414,11 @@ func TestEndGivesTheAddressWhereTheNameDoesNotResolve(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if !strings.Contains(out, "Also at https://192.0.2.77/") {
+	if !strings.Contains(out, "Also reachable at https://192.0.2.77/") {
 		t.Errorf("the plain end lacks the address:\n%s", out)
 	}
 	good := newHarness(t, opts{dhcp: true, hosts: map[string][]string{"here.example.org": {"192.0.2.77"}}})
-	if out, err = plainOn(t, good, Config{Name: "here.example.org", PVEEntry: "no"}); err != nil || strings.Contains(out, "Also at") {
+	if out, err = plainOn(t, good, Config{Name: "here.example.org", PVEEntry: "no"}); err != nil || strings.Contains(out, "Also reachable at") {
 		t.Errorf("a name that resolves: %v\n%s", err, out)
 	}
 	u := ownUI(t, h, Config{Name: "gone.example.org"}, 100, 40)
@@ -468,12 +468,12 @@ func TestCertificateQuestionRoad(t *testing.T) {
 }
 
 // 10. A homelab node preselects the made certificate, and its note says browsers warn as they do
-// at the node's own interface.
+// for the node's own interface.
 func TestHomelabNodePreselectsTheMadeCertificate(t *testing.T) {
 	t.Parallel()
 	u := ownUI(t, newHarness(t, opts{dhcp: true}), Config{}, 100, 40)
 	u.until("Made here, signed by")
-	if screen := u.rec.screen(); !strings.Contains(screen, "Browsers warn until they trust the Proxmox VE CA, as at this") || strings.Contains(screen, "Files from") {
+	if screen := u.rec.screen(); !strings.Contains(screen, "Browsers warn until they trust the Proxmox VE CA, as for this") || strings.Contains(screen, "Files from") {
 		t.Errorf("the note on a homelab node:\n%s", screen)
 	}
 	u.enter(1)
@@ -501,7 +501,7 @@ func TestCompanyNodeNoteAndCaution(t *testing.T) {
 	u.until("Files from")
 	screen := u.rec.screen()
 	if !strings.Contains(screen, "Files from CN=Corporate") || !strings.Contains(screen, "Browsers warn until they trust the Proxmox VE CA.") || !strings.Contains(screen, "> Files of your own") ||
-		!strings.Contains(screen, "From an ACME server") {
+		!strings.Contains(screen, "ACME, such as Let's Encrypt") {
 		t.Errorf("the note:\n%s", screen)
 	}
 	u.enter(1)
@@ -908,8 +908,8 @@ func TestCertOptionsListKeyAndPassphraseFile(t *testing.T) {
 		cfg  Config
 		want string
 	}{
-		{Config{KeyFile: "k.pem"}, "--key goes with --cert"},
-		{Config{CertPassphraseFile: "p"}, "--cert-passphrase-file goes with --cert"},
+		{Config{KeyFile: "k.pem"}, "--key needs --cert"},
+		{Config{CertPassphraseFile: "p"}, "--cert-passphrase-file needs --cert"},
 		{Config{CertFile: pki.dir + "/missing.pem"}, "missing.pem does not exist"},
 		{Config{CertFile: pfx, CertPassphraseFile: pki.dir + "/nope"}, "nope does not exist"},
 	} {
@@ -1091,7 +1091,7 @@ func TestInterfaceScreens(t *testing.T) {
 			home.waitFor("Passphrase for host.pfx")
 			home.golden("passphrase")
 
-			corp := ownUI(t, newHarness(t, opts{dhcp: true, untrusted: true}), Config{Name: "gone.example.org"}, sz.w, sz.l)
+			corp := ownUI(t, newHarness(t, opts{dhcp: true, untrusted: true, names: []string{"pve1.example.org"}}), Config{Name: "gone.example.org", ProxmoxURL: "https://pve1.example.org:8006"}, sz.w, sz.l)
 			corp.until("Trust this CA")
 			corp.key('y')
 			corp.until("Files from")

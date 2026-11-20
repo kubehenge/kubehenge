@@ -120,11 +120,11 @@ describe("interface certificate", () => {
     );
     const { unmount } = render(<InterfaceCertificate />);
     await expect(screen.findByText("Expires in 10 days")).resolves.toBeInTheDocument();
-    expect(screen.getByText("Chain incomplete, missing CN=Example Root CA")).toBeInTheDocument();
+    expect(screen.getByText("Chain incomplete: missing CN=Example Root CA")).toBeInTheDocument();
     expect(screen.getByText("Self-signed, so browsers warn")).toBeInTheDocument();
     expect(screen.getByText("Browsers warn unless they trust CN=Proxmox Virtual Environment")).toBeInTheDocument();
     expect(screen.getByText("kubehenge.example.org does not resolve to this appliance")).toBeInTheDocument();
-    expect(screen.getByText("Stored certificate not served, the file holds no key")).toBeInTheDocument();
+    expect(screen.getByText("Stored certificate not served: the file holds no key")).toBeInTheDocument();
     expect(document.querySelectorAll(".warning")).toHaveLength(1);
     expect(document.querySelectorAll(".warning p")).toHaveLength(6);
     unmount();
@@ -313,7 +313,7 @@ describe("interface certificate", () => {
     await user.click(screen.getByRole("radio", { name: "Installer's" }));
     await user.click(screen.getByRole("button", { name: "Use installer's" }));
     const back = within(screen.getByRole("dialog", { name: "Use installer's certificate" }));
-    expect(back.getByText("The certificate made at install replaces the current one.")).toBeInTheDocument();
+    expect(back.getByText("The installer's certificate replaces the current one.")).toBeInTheDocument();
     await user.click(back.getByRole("button", { name: "Use installer's" }));
     await expect(screen.findByText(fingerprint("12"))).resolves.toBeInTheDocument();
     expect(screen.getByText("Installer", { selector: "dd" })).toBeInTheDocument();
@@ -352,7 +352,7 @@ describe("interface certificate", () => {
     const dialog = within(screen.getByRole("dialog", { name: "Use appliance CA" }));
     expect(
       dialog.getByText(
-        "Browsers accept the certificate once they trust the appliance CA. It signs for this appliance's names only.",
+        "Browsers accept the certificate once they trust the appliance CA, which signs only for this appliance's names and addresses.",
       ),
     ).toBeInTheDocument();
     await user.click(dialog.getByRole("button", { name: "Use appliance CA" }));
@@ -439,10 +439,10 @@ describe("interface certificate", () => {
     await user.type(field, "moved.example.org");
     expect(
       dialog.getByText(
-        "A new appliance CA signs for the new address. Devices that trusted the old one warn until they trust it.",
+        "A new appliance CA signs for the new address. Devices that trusted the old CA warn until they trust the new one.",
       ),
     ).toBeInTheDocument();
-    expect(dialog.getByText("The Proxmox VE entry keeps the old address.")).toBeInTheDocument();
+    expect(dialog.getByText("The Proxmox VE interface entry keeps the old address.")).toBeInTheDocument();
     await user.click(dialog.getByRole("button", { name: "Cancel" }));
 
     await user.click(screen.getByRole("radio", { name: "Appliance CA" }));
@@ -450,9 +450,7 @@ describe("interface certificate", () => {
     await user.click(screen.getByRole("radio", { name: "Installer's" }));
     await user.click(screen.getByRole("button", { name: "Use installer's" }));
     const confirm = within(screen.getByRole("dialog", { name: "Use installer's certificate" }));
-    expect(
-      confirm.getByText("The appliance CA and its key are deleted, so devices that trust it trust nothing here."),
-    ).toBeInTheDocument();
+    expect(confirm.getByText("The appliance CA and its key are deleted.")).toBeInTheDocument();
     expect(confirm.getByText("The ACME setting and its DNS credentials are removed.")).toBeInTheDocument();
     await user.click(confirm.getByRole("button", { name: "Cancel" }));
 
@@ -463,7 +461,7 @@ describe("interface certificate", () => {
   it("9: disables the actions with a reason when nothing can change, and keeps the form on busy", async () => {
     fakeServer(read({ changeable: false }));
     const { unmount } = render(<InterfaceCertificate />);
-    await expect(screen.findByText("No appliance directory, so changes cannot be kept")).resolves.toBeInTheDocument();
+    await expect(screen.findByText("This interface cannot keep changes")).resolves.toBeInTheDocument();
     expect(screen.getByLabelText("Certificate files")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Replace" })).toBeDisabled();
     for (const radio of screen.getAllByRole("radio")) {
@@ -714,7 +712,7 @@ describe("interface certificate", () => {
     await user.selectOptions(screen.getByLabelText("ACME server"), "other");
     await user.type(screen.getByLabelText("Directory URL"), view.directory);
     await user.type(screen.getByLabelText("Server CA"), "-----BEGIN CERTIFICATE-----");
-    await user.type(screen.getByLabelText("Contact e-mail"), "admin@example.org");
+    await user.type(screen.getByLabelText("Contact email"), "admin@example.org");
     await user.selectOptions(screen.getByLabelText("Proof"), "dns-01");
     // A name lego does not know gets no link to a page that does not exist.
     await user.type(screen.getByLabelText("DNS provider"), "rfc");

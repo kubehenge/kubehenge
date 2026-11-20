@@ -13,7 +13,7 @@ const (
 
 // madeTrust is what browsers do with the certificate the installer made, after the word "Browsers",
 // and the line break the end screen keeps the fingerprint's name whole at.
-const madeTrust = "warn until they trust the Proxmox VE CA.\nCompare the SHA-256 they show"
+const madeTrust = "warn until they trust the Proxmox VE CA.\nCompare the SHA-256 they show with the one above"
 
 // Step names, as the runner and the screens refer to them.
 const (

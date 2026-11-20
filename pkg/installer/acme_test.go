@@ -90,7 +90,7 @@ func TestACMEInstallPutsTheSettingAndEndsOnTheIssuedCertificate(t *testing.T) {
 func TestACMEOrderThatFailsOrRunsOnWarns(t *testing.T) {
 	t.Parallel()
 	for state, want := range map[string]string{
-		`{"want":"a","error":"Connection refused by 192.0.2.77:80","attempts":1}`: "kubehenge: the ACME order failed: connection refused by 192.0.2.77:80. The interface serves the certificate made here meanwhile and tries again",
+		`{"want":"a","error":"Connection refused by 192.0.2.77:80","attempts":1}`: "kubehenge: the ACME order failed: connection refused by 192.0.2.77:80. The interface serves the installer's certificate and retries. Follow it under Administration, Certificates",
 		`{"want":"a"}`: "kubehenge: the ACME order is still running. Follow it under Administration, Certificates",
 	} {
 		h := newHarness(t, opts{dhcp: true})
@@ -114,16 +114,16 @@ func TestACMEOptionsAreCheckedBeforeAnythingChanges(t *testing.T) {
 		cfg  Config
 		want string
 	}{
-		{Config{ACME: acme.Files{Directory: "letsencrypt"}}, "ACME needs the DNS name people open the interface at"},
+		{Config{ACME: acme.Files{Directory: "letsencrypt"}}, "ACME needs a DNS name for the interface"},
 		{Config{Name: "kubehenge.example.org", ACME: acme.Files{Directory: "http://ca.example.org/acme"}}, "the directory URL is not an https address"},
 		{Config{Name: "kubehenge.example.org", ACME: acme.Files{Directory: "letsencrypt", Proof: acme.ProofDNS}}, "the dns-01 proof needs a DNS provider"},
 		{Config{Name: "kubehenge.example.org", ACME: acme.Files{Directory: "letsencrypt", Proof: acme.ProofDNS, DNSProvider: "no-such-provider"}}, `no DNS provider is called "no-such-provider"`},
 		{Config{Name: "kubehenge.example.org", ACME: acme.Files{Directory: "letsencrypt", Proof: acme.ProofDNS, DNSProvider: "rfc2136", DNSCredentialsFile: creds + ".gone"}}, "reading " + creds + ".gone"},
-		{Config{Name: "kubehenge.example.org", ACME: acme.Files{Directory: "letsencrypt", Email: "nobody"}}, "e-mail address is not an address"},
+		{Config{Name: "kubehenge.example.org", ACME: acme.Files{Directory: "letsencrypt", Email: "nobody"}}, "is not an email address"},
 		{Config{Name: "kubehenge.example.org", CertFile: "/root/a.pem", ACME: acme.Files{Directory: "letsencrypt"}}, "--acme and --cert exclude each other"},
-		{Config{Name: "kubehenge.example.org", ACME: acme.Files{Email: "admin@example.org"}}, "the --acme- options go with --acme"},
-		{Config{Certificate: true, NoName: true, ACME: acme.Files{Directory: "letsencrypt"}}, "--acme needs the DNS name, which --no-name drops"},
-		{Config{Upgrade: true, ACME: acme.Files{Directory: "letsencrypt"}}, "--acme goes with an install or --certificate"},
+		{Config{Name: "kubehenge.example.org", ACME: acme.Files{Email: "admin@example.org"}}, "the --acme-* options need --acme"},
+		{Config{Certificate: true, NoName: true, ACME: acme.Files{Directory: "letsencrypt"}}, "--acme and --no-name exclude each other"},
+		{Config{Upgrade: true, ACME: acme.Files{Directory: "letsencrypt"}}, "--acme works only with an install or --certificate"},
 	} {
 		h := newHarness(t, opts{dhcp: true})
 		c.cfg.PVEEntry = "no"
@@ -205,7 +205,7 @@ func TestACMEQuestionRoad(t *testing.T) {
 	u.down(2)
 	u.enter(1)
 	u.waitFor("ACME server")
-	for _, want := range []string{"Let's Encrypt staging", "Other", "TLS on port 443", "HTTP on port 80", "A DNS record", "Contact e-mail"} {
+	for _, want := range []string{"Let's Encrypt staging", "Other", "TLS on port 443", "HTTP on port 80", "DNS record", "Contact email"} {
 		if !strings.Contains(u.rec.screen(), want) {
 			t.Errorf("the ACME form lacks %q:\n%s", want, u.rec.screen())
 		}
@@ -217,9 +217,9 @@ func TestACMEQuestionRoad(t *testing.T) {
 	u.esc()
 	u.waitFor("ACME server")
 	u.esc()
-	u.waitFor("> From an ACME server")
+	u.waitFor("> ACME, such as Let's Encrypt")
 	u.enter(1)
-	u.waitFor("> A DNS record")
+	u.waitFor("> DNS record")
 	u.enter(3)
 	u.waitFor("DNS provider")
 	u.paste("no-such-provider")
@@ -261,8 +261,8 @@ func TestACMERepeatCommandAndRow(t *testing.T) {
 	}
 	// With DHCP the name cannot point at the appliance before the install.
 	if c := s.acmeCautions(); !slices.Equal(c, []string{
-		"Let's Encrypt checks kubehenge.example.org from the internet on port 443. Let it reach the appliance there, or choose the DNS proof",
-		"ACME orders fail until kubehenge.example.org points at the address DHCP gives, shown at the end. The appliance tries again for a day",
+		"Let's Encrypt checks kubehenge.example.org from the internet on port 443. Open that port to the appliance, or choose the DNS record proof",
+		"Orders fail until kubehenge.example.org points at the address DHCP gives, which the last screen shows. The appliance retries for a day",
 	}) {
 		t.Errorf("the cautions are %q", c)
 	}

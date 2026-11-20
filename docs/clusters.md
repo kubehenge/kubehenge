@@ -2057,7 +2057,7 @@ kubehenge cluster delete web --yes
 - A new `kubehenge login` ends the password login it replaces. A command still running carries on with the new login at the same address.
 - Sign in with a Proxmox VE API token through `--token-file <file>` (or `KUBEHENGE_PROXMOX_TOKEN`), written as `<user>@<realm>!<name>=<secret>`. That login lasts as long as the token.
 - Neither the password nor the token shows in a process list.
-- `--ca <file>` names the CA of the interface's certificate where the system does not trust it. A certificate either vouches for is trusted. In the appliance the login trusts the certificate the interface serves without `--ca`.
+- `--ca <file>` names the CA of the interface's certificate where the system does not trust it. A certificate that either vouches for is trusted. In the appliance the login trusts the served certificate without `--ca`.
 - The login, with its session or token, is kept in `kubehenge/login.json` in the user's config folder (`~/.config` on Linux), readable by that user alone. `KUBEHENGE_LOGIN_FILE` names another file.
 - A cluster is found by its name. `-n` names its namespace where more than one has a cluster of that name.
 - Any HTTP client can do the same: send `Authorization: PVEAPIToken=<user>@<realm>!<name>=<secret>` to the interface's `/api/clusters`.

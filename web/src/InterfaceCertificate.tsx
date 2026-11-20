@@ -74,12 +74,12 @@ function Warnings({ c }: { c: Certificate }): JSX.Element | null {
   const lines = [
     runsOutSoon(ends) &&
       (days < 0 ? `Expired on ${dateOf(c.notAfter)}` : `Expires in ${days === 0 ? "under a day" : `${days} days`}`),
-    c.incomplete && `Chain incomplete, missing ${c.missingIssuer ?? "an issuer"}`,
+    c.incomplete && `Chain incomplete: missing ${c.missingIssuer ?? "an issuer"}`,
     c.selfSigned && "Self-signed, so browsers warn",
     filled(c.trustedBy) && `Browsers warn unless they trust ${c.trustedBy}`,
     c.publicNameResolves === false && `${hostOf(c.publicURL ?? "")} does not resolve to this appliance`,
     c.publicNameCovered === false && `Not valid for ${hostOf(c.publicURL ?? "")}, so browsers warn`,
-    filled(c.notServed) && `Stored certificate not served, ${c.notServed}`,
+    filled(c.notServed) && `Stored certificate not served: ${c.notServed}`,
   ].filter((l): l is string => typeof l === "string");
   if (lines.length === 0) {
     return null;
@@ -156,16 +156,16 @@ function addressEffects(c: Certificate, name: string): string[] {
     "appliance-ca":
       c.applianceCA === undefined || permits(c.applianceCA, name)
         ? "The appliance CA signs a certificate for the new address."
-        : "A new appliance CA signs for the new address. Devices that trusted the old one warn until they trust it.",
+        : "A new appliance CA signs for the new address. Devices that trusted the old CA warn until they trust the new one.",
     acme: "ACME orders a certificate for the new address.",
   };
   return [
     certificate[c.source] ??
       (validFor(c, name)
-        ? "The certificate stays, and covers the new address."
-        : "The certificate stays and does not cover the new address, so browsers warn until it is replaced."),
-    "Sign-in providers outside Proxmox VE need the new redirect address.",
-    "The Proxmox VE entry keeps the old address.",
+        ? "The certificate stays and covers the new address."
+        : "The certificate stays but does not cover the new address. Browsers warn until it is replaced."),
+    "Identity providers need the new redirect URL.",
+    "The Proxmox VE interface entry keeps the old address.",
   ];
 }
 
@@ -379,7 +379,7 @@ function OnNode({ way: { ctid } }: { way: WayProps }): JSX.Element {
   return (
     <>
       <p>
-        Run the install script on the Proxmox VE node: <code className="said">{command}</code>
+        Run this on the Proxmox VE node: <code className="said">{command}</code>
       </p>
       <div className="actions">
         <Copy text={command} label="Copy command" />
@@ -613,7 +613,7 @@ const ways: { id: WayId; label: string; body: (p: WayProps) => JSX.Element }[] =
         busyAction="Signing…"
         title="Use appliance CA"
         effects={[
-          "Browsers accept the certificate once they trust the appliance CA. It signs for this appliance's names only.",
+          "Browsers accept the certificate once they trust the appliance CA, which signs only for this appliance's names and addresses.",
           p.acme !== undefined && acmeRemoved,
         ]}
         call={api.signInterfaceCertificateByApplianceCA}
@@ -646,8 +646,8 @@ const ways: { id: WayId; label: string; body: (p: WayProps) => JSX.Element }[] =
         busyAction="Switching…"
         title="Use installer's certificate"
         effects={[
-          "The certificate made at install replaces the current one.",
-          p.hasCA && "The appliance CA and its key are deleted, so devices that trust it trust nothing here.",
+          "The installer's certificate replaces the current one.",
+          p.hasCA && "The appliance CA and its key are deleted.",
           p.acme !== undefined && acmeRemoved,
         ]}
         call={api.resetInterfaceCertificate}
@@ -726,7 +726,7 @@ export function InterfaceCertificate({
       {data.applianceCA !== undefined && <OwnCA ca={data.applianceCA} />}
       <div className="box fields">
         <h3>Change certificate</h3>
-        {locked && <p className="muted">No appliance directory, so changes cannot be kept</p>}
+        {locked && <p className="muted">This interface cannot keep changes</p>}
         <fieldset className="choices" disabled={waiting || locked}>
           <legend>New source</legend>
           {ways.map((w) => (

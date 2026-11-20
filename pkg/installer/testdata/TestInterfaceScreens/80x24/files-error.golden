@@ -2,7 +2,7 @@
  ▀██▀▀▀██▀   Appliance installer
   ██   ██    Network · Interface · Storage · Summary · Install · Done
 
-  wiki-cert.pem does not exist
+  wiki-cert.pem does not exist. Give the path of an existing file
 
   ┃ Certificate files
   ┃ > wiki-cert.pem

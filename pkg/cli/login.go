@@ -416,7 +416,7 @@ func (c *interfaceClient) untrusted(err error, verr *tls.CertificateVerification
 		return fmt.Errorf("reaching the interface: %w: give --ca the CA of the interface's certificate", err)
 	}
 	if verr != nil && len(verr.UnverifiedCertificates) > 0 {
-		return fmt.Errorf("reaching the interface: %w: it presents the certificate %s, which this login does not trust: run kubehenge login %s --ca %s",
+		return fmt.Errorf("reaching the interface: %w: it presents the certificate %s, which this login does not trust. Run kubehenge login %s --ca %s",
 			err, appliance.Fingerprint(verr.UnverifiedCertificates[0]), c.login.URL, caPath(c.login.CAFile))
 	}
 	return fmt.Errorf("reaching the interface: %w: run kubehenge login %s --ca %s", err, c.login.URL, caPath(c.login.CAFile))
@@ -505,7 +505,7 @@ you alone. It holds the session or the token. Set ` + loginFileEnv + ` to keep i
 	}
 	f := cmd.Flags()
 	f.StringVar(&caFile, "ca", "", "PEM file with the CA of the interface's certificate, trusted beside the system trust store. "+
-		"In the appliance it defaults to the certificate the interface serves")
+		"In the appliance, the interface's own certificate is trusted without it")
 	f.StringVar(&user, "user", "", "Proxmox VE user to sign in as, such as root@pam")
 	f.StringVar(&passwordFile, "password-file", "", "file holding the user's password, else KUBEHENGE_PASSWORD holds it")
 	f.StringVar(&tokenFile, "token-file", "", "file holding a Proxmox VE API token, else KUBEHENGE_PROXMOX_TOKEN holds it")

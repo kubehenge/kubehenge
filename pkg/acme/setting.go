@@ -184,10 +184,10 @@ func build(req *Request, old *Setting) (*Setting, *RefusalError) {
 	}
 	set := &Setting{Directory: dir, Email: strings.TrimSpace(req.Email), Proof: req.Proof, Profile: strings.TrimSpace(req.Profile)}
 	if set.Email != "" && !validEmail(set.Email) {
-		return nil, refuse(CodeEmail, "The contact e-mail address is not an address. Give one such as admin@example.org, or none")
+		return nil, refuse(CodeEmail, "The contact email is not an email address. Give one such as admin@example.org, or none")
 	}
 	if !slices.Contains([]string{ProofTLSALPN, ProofHTTP, ProofDNS}, req.Proof) {
-		return nil, refuse(CodeProof, "The proof is %s, %s or %s. Give one of these", ProofTLSALPN, ProofHTTP, ProofDNS)
+		return nil, refuse(CodeProof, "The proof must be %s, %s or %s. Give one of these", ProofTLSALPN, ProofHTTP, ProofDNS)
 	}
 	if bad = bindingOf(req, old, set); bad != nil {
 		return nil, bad

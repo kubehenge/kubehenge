@@ -277,7 +277,7 @@ func (s *Server) makeApplianceCACertificate(w http.ResponseWriter, r *http.Reque
 	defer c.mu.Unlock()
 	b, undo, err := c.signedByCA(s.namesToMake(c), s.now())
 	if errors.Is(err, errNoNames) {
-		writeCertificateError(w, http.StatusUnprocessableEntity, "no-names", "The certificate being served names no DNS name or address, so the appliance's CA has nothing to sign for. Upload one", nil)
+		writeCertificateError(w, http.StatusUnprocessableEntity, "no-names", "The served certificate has no DNS name or address, so the appliance's CA has nothing to sign for. Upload a certificate", nil)
 		return
 	}
 	if err != nil {

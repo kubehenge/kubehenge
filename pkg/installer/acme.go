@@ -45,7 +45,7 @@ func (s *Session) CheckACME() error {
 // certificate is for. With dir empty it only checks them.
 func saveACME(f *acme.Files, name, dir string) error {
 	if name == "" || net.ParseIP(name) != nil {
-		return settingErr(settingCert, "ACME needs the DNS name people open the interface at", "Give it under DNS name or with --name, or choose another certificate")
+		return settingErr(settingCert, "ACME needs a DNS name for the interface", "Enter one, give --name, or choose another certificate")
 	}
 	req, err := f.Request()
 	if err != nil {
@@ -94,10 +94,10 @@ func (s *Session) acmeCautions() []string {
 		if a.Proof == acme.ProofHTTP {
 			port = "80"
 		}
-		out = append(out, "Let's Encrypt checks "+s.Cfg.Name+" from the internet on port "+port+". Let it reach the appliance there, or choose the DNS proof")
+		out = append(out, "Let's Encrypt checks "+s.Cfg.Name+" from the internet on port "+port+". Open that port to the appliance, or choose the DNS record proof")
 	}
 	if len(s.fixedAddresses()) == 0 {
-		out = append(out, "ACME orders fail until "+s.Cfg.Name+" points at the address "+s.addressSource()+" gives, shown at the end. The appliance tries again for a day")
+		out = append(out, "Orders fail until "+s.Cfg.Name+" points at the address "+s.addressSource()+" gives, which the last screen shows. The appliance retries for a day")
 	}
 	return out
 }
@@ -131,8 +131,8 @@ func acmeFields(m *Model) []huh.Field {
 		choose("Proof", &a.proof,
 			huh.NewOption("TLS on port 443", acme.ProofTLSALPN),
 			huh.NewOption("HTTP on port 80", acme.ProofHTTP),
-			huh.NewOption("A DNS record, through your DNS provider", acme.ProofDNS)),
-		input("Contact e-mail", &a.email, "optional", nil),
+			huh.NewOption("DNS record", acme.ProofDNS)),
+		input("Contact email", &a.email, "optional", nil),
 	}
 }
 
@@ -162,9 +162,9 @@ func acmeMoreFields(m *Model) []huh.Field {
 			}),
 		}, fields...)
 		fields = append(fields,
-			input("Server CA file", &a.ca, "PEM, where the server's certificate is not publicly trusted", nil),
+			input("Server CA file", &a.ca, "PEM, if the server's certificate is not publicly trusted", nil),
 			input("Account key ID", &a.keyID, "where the server asks for account binding", nil),
-			input("HMAC key file", &a.hmac, "the key the server gave with the key ID", nil))
+			input("HMAC key file", &a.hmac, "the HMAC key the server gave you", nil))
 	}
 	return fields
 }
@@ -282,7 +282,7 @@ func acmeNote(got acmeOutcome) string {
 	case got.leaf != nil:
 		return ""
 	case got.failure != "":
-		return "the ACME order failed: " + lowerFirst(got.failure) + ". The interface serves the certificate made here meanwhile and tries again. Follow it under Administration, Certificates"
+		return "the ACME order failed: " + lowerFirst(got.failure) + ". The interface serves the installer's certificate and retries. Follow it under Administration, Certificates"
 	}
 	return "the ACME order is still running. Follow it under Administration, Certificates"
 }

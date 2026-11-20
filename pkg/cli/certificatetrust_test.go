@@ -106,7 +106,7 @@ func TestTheCLITrustsACertificateTheSavedCAOrTheSystemVouchesFor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "it presents the certificate " + appliance.Fingerprint(leaf) + ", which this login does not trust: run kubehenge login " + srv.URL + " --ca " + caFile
+	want := "it presents the certificate " + appliance.Fingerprint(leaf) + ", which this login does not trust. Run kubehenge login " + srv.URL + " --ca " + caFile
 	if _, err := runTrusting(t, f.loginFile, trust, "appliance", "upgrades"); err == nil || !strings.HasSuffix(err.Error(), want) {
 		t.Errorf("after a change to one nothing vouches for: %v", err)
 	}

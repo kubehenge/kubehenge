@@ -103,7 +103,7 @@ The interface acts in the management cluster with its own kubeconfig.`,
 	f := cmd.Flags()
 	proxmoxFlags(f, conn)
 	f.StringVar(&o.listen, "listen", ":8443", "address to serve on")
-	f.StringVar(&o.httpListen, "http-listen", "", "with --appliance-dir, an address to serve plain HTTP on, such as :80. It answers ACME's http-01 proof and sends every other request to the same path on https. Empty for none")
+	f.StringVar(&o.httpListen, "http-listen", "", "with --appliance-dir, an address to serve HTTP on, such as :80. It answers ACME's http-01 proof and redirects every other request to https. Empty for none")
 	f.StringVar(&o.certFile, "tls-cert", "", "PEM file with the interface's certificate and any intermediates, served until an administrator gives another")
 	f.StringVar(&o.keyFile, "tls-key", "", "PEM file with the certificate's private key")
 	f.StringVar(&s.WorkloadPool, "workload-pool", "kubehenge", "Proxmox VE pool the clusters' own pools nest under, as the controller's --workload-pool")
@@ -235,7 +235,7 @@ func (o *serveOptions) checkServeFlags() error {
 		return fmt.Errorf("--workload-pool: %w", err)
 	}
 	if o.httpListen != "" && o.a.Dir == "" {
-		return errors.New("--http-listen needs --appliance-dir, which keeps the certificate it serves a challenge for")
+		return errors.New("--http-listen needs --appliance-dir")
 	}
 	return nil
 }

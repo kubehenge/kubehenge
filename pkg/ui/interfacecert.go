@@ -645,7 +645,7 @@ func lockChange(w http.ResponseWriter, c *InterfaceCertificate) bool {
 // changeFailed answers a change that could not be kept. Nothing was changed.
 func (s *Server) changeFailed(w http.ResponseWriter, r *http.Request, err error) {
 	s.Log.ErrorContext(r.Context(), "interface certificate change", "error", err)
-	writeCertificateError(w, http.StatusInternalServerError, "store", "The certificate could not be kept. Check the appliance directory and try again", nil)
+	writeCertificateError(w, http.StatusInternalServerError, "store", "The certificate could not be saved. Check the appliance directory and try again", nil)
 }
 
 // changed records a change, with the user and the new fingerprint and nothing of the key.
@@ -787,7 +787,7 @@ func refuseCertificateFiles(w http.ResponseWriter, err error, passphrase string)
 		writeCertificateError(w, http.StatusUnprocessableEntity, "passphrase", message, nil)
 		return
 	}
-	writeCertificateError(w, http.StatusUnprocessableEntity, "unreadable", err.Error()+". Send the certificate, its key and its intermediates", nil)
+	writeCertificateError(w, http.StatusUnprocessableEntity, "unreadable", err.Error()+". Give the certificate, its key and any intermediates", nil)
 }
 
 // certificateFits refuses a certificate with less than a day left or one that is not valid for the
@@ -829,7 +829,7 @@ func (s *Server) makeSelfSignedCertificate(w http.ResponseWriter, r *http.Reques
 	defer c.mu.Unlock()
 	b, err := selfSigned(s.namesToMake(c), s.now())
 	if errors.Is(err, errNoNames) {
-		writeCertificateError(w, http.StatusUnprocessableEntity, "no-names", "The certificate being served names no DNS name or address, so a self-signed one has nothing to cover. Upload one", nil)
+		writeCertificateError(w, http.StatusUnprocessableEntity, "no-names", "The served certificate has no DNS name or address, so a self-signed one has nothing to cover. Upload a certificate", nil)
 		return
 	}
 	if err != nil {

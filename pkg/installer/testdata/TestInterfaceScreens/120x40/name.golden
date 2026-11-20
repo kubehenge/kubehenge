@@ -3,5 +3,5 @@
   ██   ██    Network · Interface · Storage · Summary · Install · Done
 
   ┃ DNS name of the interface
-  ┃ > empty opens the address DHCP gives
+  ┃ > empty: the address DHCP gives
   enter confirm  esc back  ctrl+c quit

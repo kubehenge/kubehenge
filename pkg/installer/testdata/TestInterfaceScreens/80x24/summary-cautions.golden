@@ -8,17 +8,17 @@
   Host name         kubehenge
   Resources         2 cores, 1 GiB memory, 512 MiB swap, 8 GiB disk, 1 GiB keys
   Storage           disk local-lvm, template local-lvm
-  Proxmox VE API    https://pve1.example.com:8006
+  Proxmox VE API    https://pve1.example.org:8006
   API CA            served, trusted by you: CN=Corporate Root
   Interface         https://gone.example.org (no DNS record)
   Certificate       made here, signed by the Proxmox VE CA
   Proxmox VE entry  no
   If it fails       you choose to keep or remove the container
   Note              gone.example.org has no DNS record.
-                    Point it at the container's address, which DHCP gives, in
+                    Point it at the appliance's address, which DHCP gives, in
                     your DNS
   Note              Browsers warn until they trust the Proxmox VE CA.
                     Files from CN=Corporate Root, which signed this node's API
-                    certificate, avoid that
+                    certificate, avoid the warning
   ┃ ← Install →
   ←→ choose  enter confirm  ctrl+c quit

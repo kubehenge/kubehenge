@@ -265,7 +265,7 @@ func WriteEnd(out io.Writer, res *Result) {
 		_, _ = fmt.Fprintf(out, "Point %s at %s in your DNS.\n", res.Name, res.Address)
 	}
 	if res.AddressURL != "" {
-		_, _ = fmt.Fprintf(out, "Also at %s\n", res.AddressURL)
+		_, _ = fmt.Fprintf(out, "Also reachable at %s\n", res.AddressURL)
 	}
 	_, _ = fmt.Fprintf(out, "Sign in with a Proxmox VE administrator to create the management cluster.\nLog: %s\n", res.LogPath)
 }

@@ -127,12 +127,12 @@ Install:
       --acme-dns-provider string           with dns-01, the DNS provider's name, such as cloudflare or rfc2136
       --acme-eab-hmac-key-file string      a file holding the HMAC key the ACME server gave with the key ID
       --acme-eab-key-id string             the key ID of the ACME server's external account binding
-      --acme-email string                  the contact e-mail address of the ACME account
+      --acme-email string                  the contact email address of the ACME account
       --acme-profile string                a certificate profile the ACME server offers, such as shortlived
       --acme-proof string                  the ACME proof: tls-alpn-01 on port 443 (default), http-01 on port 80 or dns-01
       --acme-resolver strings              with dns-01, a DNS server to check the record against, as address:port, repeatable
       --bridge string                      the bridge, Open vSwitch bridge or SDN VNet the container attaches to
-      --cert string                        serve the certificate in these files, comma-separated, in any format, instead of one signed by the Proxmox VE CA
+      --cert string                        serve the certificate in these comma-separated files, in any format, instead of one signed by the Proxmox VE CA
       --cert-passphrase-file string        a file whose first line is the passphrase of encrypted --cert and --key files
       --ctid string                        the container's ID (default the next free one)
       --dns string                         the name servers the container asks, comma-separated (default this node's)
@@ -146,12 +146,12 @@ Install:
       --key string                         the key of --cert, where it is a file of its own
       --mtu string                         the MTU of the container's network, 576 to 65535
       --name string                        a DNS name people open the interface at, put into its certificate
-      --no-pve-entry                       do not add the Kubernetes entry
+      --no-pve-entry                       do not add the Proxmox VE interface entry
       --plain                              run without the full-screen installer: ask nothing, print a line per step
       --proxmox-ca string                  the CA that signed the API's certificate, alone or in a bundle
       --proxmox-insecure                   reach the Proxmox VE API without verifying its certificate
       --proxmox-url string                 the Proxmox VE API, such as https://pve.example.org:8006
-      --pve-entry                          add the Kubernetes entry to this node's Proxmox VE interface
+      --pve-entry                          add the Proxmox VE interface entry to this node
       --release string                     install this release archive instead of downloading it
       --sha256 string                      the archive's SHA-256, with --release
       --storage string                     where the container's disks go, 9 GiB

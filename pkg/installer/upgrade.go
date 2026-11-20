@@ -603,7 +603,7 @@ func (r *Runner) upgradeCertificate(ctx context.Context, out io.Writer) error {
 		}
 	}
 	if stored != nil && stored.NotAfter.Before(soon) {
-		r.sayf(out, "kubehenge: the certificate an administrator gave the interface is valid until %s. Give the interface a new one before then",
+		r.sayf(out, "kubehenge: the certificate an administrator gave the interface is valid until %s. Replace it before then",
 			stored.NotAfter.UTC().Format(time.RFC1123))
 	}
 	return nil

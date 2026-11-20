@@ -973,10 +973,10 @@ Users sign in through the Proxmox VE API, with no second user directory. Every P
 
 #### The interface's certificate
 
-The interface and Headlamp take their certificate from one function on each handshake. A change reaches the next connection of either with no restart and signs no one out.
+The interface and Headlamp read their certificate on each handshake. A change reaches the next connection of either with no restart and signs no one out.
 
 - The installer's certificate (`--tls-cert`, `--tls-key`) is served until an administrator gives another.
-- `kubehenge login` in the appliance trusts the certificate served, read again on each command. Elsewhere it trusts what `--ca` or the system's roots vouch for.
+- `kubehenge login` in the appliance reads the certificate served again on each command. What it trusts is in [clusters.md](clusters.md#signing-in-and-finding-clusters).
 - The demo does all of it in memory.
 
 #### Where the certificate is kept
@@ -1026,7 +1026,7 @@ The appliance's ACME client is lego, run inside the interface. Its setting, prog
 - A restart carries an order on under the same order ID.
 - Renewal follows the server's renewal information (ARI), asked every 6 hours, or a third of the lifetime before expiry.
 - A failure is retried after a minute, then twice as long each time up to an hour. It stops after a day with a notification.
-- No answer, view or log line holds the HMAC key or a DNS credential. Errors are scrubbed of both.
+- No answer, view or log line holds the HMAC key or a DNS credential.
 - Any other certificate change, and `install.sh --certificate`, removes the setting and its secrets.
 
 #### Behind a reverse proxy

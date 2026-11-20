@@ -82,7 +82,7 @@ func (f *fakeInterface) certificateRoutes(mux *http.ServeMux) {
 	withACME := func(w http.ResponseWriter, r *http.Request) {
 		f.acme = append(f.acme, r.Method+" "+r.URL.Path)
 		if f.bodies[r.Method+" "+r.URL.Path]["proof"] == "dns-02" {
-			answer(w, http.StatusUnprocessableEntity, `{"error":"The proof is tls-alpn-01, http-01 or dns-01. Give one of these","code":"acme-proof"}`)
+			answer(w, http.StatusUnprocessableEntity, `{"error":"The proof must be tls-alpn-01, http-01 or dns-01. Give one of these","code":"acme-proof"}`)
 			return
 		}
 		answer(w, http.StatusAccepted, strings.TrimSuffix(view("acme", ""), "}")+`,"acme":`+fakeACME+`}`)
@@ -125,8 +125,8 @@ func TestApplianceCertificateACMESetsOrdersAndShowsTheState(t *testing.T) {
 	}
 	for _, want := range []string{
 		"ACME                  failing", "ACME proof            dns-01 through rfc2136", "ACME credentials set  RFC2136_TSIG_SECRET",
-		"ACME error            the DNS provider could not add the record (2026-11-20T09:00:00Z)", "ACME retry            2026-11-20T09:02:00Z",
-		"ACME next renewal     2026-12-20T09:00:00Z",
+		"ACME error            the DNS provider could not add the record (2026-11-20T09:00:00Z)", "ACME next try         2026-11-20T09:02:00Z",
+		"ACME renews           2026-12-20T09:00:00Z",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the output lacks %q:\n%s", want, out)
@@ -194,9 +194,9 @@ func TestApplianceCertificateShowsAndChangesWhatTheInterfaceServes(t *testing.T)
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"Source       installer", "Names        kubehenge.example.org, kubehenge, 192.0.2.40", "Valid        2026-10-12 to 2028-10-13", "Fingerprint  AB:CD",
-		"Chain        CN=kubehenge.example.org > CN=Example CA", "Public URL   https://kubehenge.example.org, does not resolve to this appliance",
-		"Not served   the stored certificate, since it is expired",
+		"Source               installer", "Covers               kubehenge.example.org, kubehenge, 192.0.2.40", "Valid                2026-10-12 to 2028-10-13", "SHA-256 fingerprint  AB:CD",
+		"Chain                CN=kubehenge.example.org > CN=Example CA", "Public address       https://kubehenge.example.org, does not resolve to this appliance",
+		"Not served           the stored certificate, since it is expired",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("show lacks %q:\n%s", want, out)
@@ -207,7 +207,7 @@ func TestApplianceCertificateShowsAndChangesWhatTheInterfaceServes(t *testing.T)
 	}
 	pem, key, secret := namedFile(t, "host.pem", "CERT"), namedFile(t, "host.key", "KEY"), writeTemp(t, "right")
 	out, err = f.run(f.args("admin@pve", "certificate", "replace", pem, key)...)
-	if err != nil || !strings.Contains(out, "Source       uploaded") || !strings.Contains(out, "Left out") || !strings.Contains(out, "CN=Unused") {
+	if err != nil || !strings.Contains(out, "Source               uploaded") || !strings.Contains(out, "Left out") || !strings.Contains(out, "CN=Unused") {
 		t.Fatalf("replace: %v\n%s", err, out)
 	}
 	if got := f.form.files[filepath.Base(pem)] + f.form.files[filepath.Base(key)]; got != "CERTKEY" || len(f.form.files) != 2 || f.form.passphrase != "" {
@@ -226,10 +226,10 @@ func TestApplianceCertificateShowsAndChangesWhatTheInterfaceServes(t *testing.T)
 	if _, err = f.run(f.args("admin@pve", "certificate", "replace", pfx, "--passphrase", "right")...); err == nil {
 		t.Error("a passphrase is taken as an argument")
 	}
-	if out, err = f.run(f.args("admin@pve", "certificate", "self-sign")...); err != nil || !strings.Contains(out, "Source       self-signed") {
+	if out, err = f.run(f.args("admin@pve", "certificate", "self-sign")...); err != nil || !strings.Contains(out, "Source               self-signed") {
 		t.Errorf("self-sign: %v\n%s", err, out)
 	}
-	if out, err = f.run(f.args("admin@pve", "certificate", "reset")...); err != nil || !strings.Contains(out, "Source       installer") {
+	if out, err = f.run(f.args("admin@pve", "certificate", "reset")...); err != nil || !strings.Contains(out, "Source               installer") {
 		t.Errorf("reset: %v\n%s", err, out)
 	}
 	if _, err = f.run(f.args("admin@pve", "certificate", "replace")...); err == nil || !strings.Contains(err.Error(), "give the certificate files") {
@@ -243,7 +243,7 @@ func TestApplianceCertificateAddressChangesThePublicAddress(t *testing.T) {
 	t.Parallel()
 	f := newFakeInterface(t)
 	out, err := f.run(f.args("admin@pve", "certificate", "address", "moved.example.org")...)
-	if err != nil || !strings.Contains(out, "Public URL   https://moved.example.org") {
+	if err != nil || !strings.Contains(out, "Public address       https://moved.example.org") {
 		t.Errorf("address: %v\n%s", err, out)
 	}
 	if _, err = f.run(f.args("admin@pve", "certificate", "address", "bank example")...); err == nil || !strings.Contains(err.Error(), `"bank example" is not a DNS name`) {
@@ -263,7 +263,7 @@ func TestApplianceCertificateSignsWithTheAppliancesCAAndPrintsIt(t *testing.T) {
 		t.Errorf("ca without one: %v", err)
 	}
 	out, err := f.run(f.args("admin@pve", "certificate", "appliance-ca")...)
-	if err != nil || !strings.Contains(out, "Source        appliance-ca") || !strings.Contains(out, "Appliance CA  EF:01, for kubehenge.example.org, 192.0.2.40") {
+	if err != nil || !strings.Contains(out, "Source               appliance-ca") || !strings.Contains(out, "Appliance CA         EF:01, for kubehenge.example.org, 192.0.2.40") {
 		t.Errorf("appliance-ca: %v\n%s", err, out)
 	}
 	if out, err = f.run(f.args("admin@pve", "certificate", "ca")...); err != nil || out != "CA PEM\n" {

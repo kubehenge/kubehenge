@@ -267,9 +267,9 @@ func (s *Session) companyCA() bool {
 // their warning.
 func (s *Session) madeNote() string {
 	if s.companyCA() {
-		return "Browsers warn until they trust the Proxmox VE CA. Files from " + s.CA.Subject + ", which signed this node's API certificate, avoid that"
+		return "Browsers warn until they trust the Proxmox VE CA. Files from " + s.CA.Subject + ", which signed this node's API certificate, avoid the warning"
 	}
-	return "Browsers warn until they trust the Proxmox VE CA, as at this node's own interface"
+	return "Browsers warn until they trust the Proxmox VE CA, as for this node's own interface"
 }
 
 // interfaceCautions are the cautions the interface questions add to the summary.
@@ -277,7 +277,7 @@ func (s *Session) interfaceCautions() []string {
 	var out []string
 	st := s.nameState()
 	fixed := strings.Join(s.fixedAddresses(), " or ")
-	target := "the container's address, which " + s.addressSource() + " gives,"
+	target := "the appliance's address, which " + s.addressSource() + " gives,"
 	if fixed != "" {
 		target = fixed
 	}
@@ -363,7 +363,7 @@ func readCertFile(path string) ([]byte, error) {
 	info, err := os.Stat(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return nil, settingErr(settingCert, path+" does not exist", "")
+		return nil, settingErr(settingCert, path+" does not exist. Give the path of an existing file", "")
 	case err != nil:
 		return nil, settingErr(settingCert, path+" cannot be read", "")
 	case info.IsDir():
@@ -503,7 +503,7 @@ const (
 	certStepChoice = iota
 	certStepFiles
 	certStepPassphrase
-	// certStepACME asks the ACME server, the proof and the e-mail address, and certStepACMEMore what
+	// certStepACME asks the ACME server, the proof and the email address, and certStepACMEMore what
 	// the DNS proof or a server of one's own needs.
 	certStepACME
 	certStepACMEMore
@@ -532,7 +532,7 @@ func nameSetting() *setting {
 			if fixed := m.S.fixedAddresses(); len(fixed) > 0 {
 				hint = "https://" + urlHost(fixed[0])
 			}
-			return []huh.Field{input("DNS name of the interface", &m.a.name, "empty opens "+hint, func(s string) error {
+			return []huh.Field{input("DNS name of the interface", &m.a.name, "empty: "+hint, func(s string) error {
 				_, err := normaliseName(s)
 				return err
 			})}
@@ -562,7 +562,7 @@ func certFields(m *Model) []huh.Field {
 		if files := m.S.Cfg.ownFiles(); len(files) > 0 {
 			m.a.certPaths = strings.Join(files, ",")
 		}
-		m.a.certInput = input("Certificate files", &m.a.certPaths, "cert.pem,key.pem", func(s string) error {
+		m.a.certInput = input("Certificate files", &m.a.certPaths, "files, comma-separated, such as cert.pem,key.pem", func(s string) error {
 			if len(splitList(s)) == 0 {
 				return errors.New("enter one or more files, comma-separated")
 			}
@@ -596,7 +596,7 @@ func certFields(m *Model) []huh.Field {
 	}
 	sel := choose("Certificate", &m.a.certChoice,
 		huh.NewOption("Made here, signed by the Proxmox VE CA", certMade), huh.NewOption("Files of your own", certFiles),
-		huh.NewOption("From an ACME server, such as Let's Encrypt", certACME))
+		huh.NewOption("ACME, such as Let's Encrypt", certACME))
 	// The note wraps over two lines, which the select's own height does not count.
 	return []huh.Field{sel.Description(m.S.madeNote()).Height(certNoteRows)}
 }

@@ -349,7 +349,9 @@ export function Acme({ view, name, waiting, running, locked, run }: AcmeProps): 
           </Field>
           <Field
             label="Server CA"
-            hint={caSaved ? "Saved, empty keeps it" : "PEM, where the server's certificate is not publicly trusted"}
+            hint={
+              caSaved ? "Saved. Leave empty to keep it" : "PEM, if the server's certificate is not publicly trusted"
+            }
           >
             {(id) => (
               <textarea
@@ -374,7 +376,10 @@ export function Acme({ view, name, waiting, running, locked, run }: AcmeProps): 
               />
             )}
           </Field>
-          <Field label="HMAC key" hint={hmacSaved ? "Saved, empty keeps it" : "Given with the key ID"}>
+          <Field
+            label="HMAC key"
+            hint={hmacSaved ? "Saved. Leave empty to keep it" : "The HMAC key the server gave you"}
+          >
             {(id) => (
               <input
                 id={id}
@@ -388,7 +393,7 @@ export function Acme({ view, name, waiting, running, locked, run }: AcmeProps): 
           </Field>
         </>
       )}
-      <Field label="Contact e-mail">
+      <Field label="Contact email">
         {(id) => (
           <input
             id={id}
@@ -474,7 +479,7 @@ export function Acme({ view, name, waiting, running, locked, run }: AcmeProps): 
           </Field>
         </>
       )}
-      <Field label="Profile" hint="Optional, offered by the server, such as shortlived">
+      <Field label="Profile" hint="Optional, such as shortlived">
         {(id) => (
           <input
             id={id}

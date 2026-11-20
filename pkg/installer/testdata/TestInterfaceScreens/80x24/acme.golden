@@ -10,8 +10,8 @@
     Proof
     > TLS on port 443
       HTTP on port 80
-      A DNS record, through your DNS provider
+      DNS record
 
-    Contact e-mail
+    Contact email
     > optional
   enter next  esc back  ctrl+c quit
