@@ -1222,7 +1222,47 @@ export interface Job {
 }
 
 /** Where the interface's certificate came from. */
-export type InterfaceCertificateSource = "installer" | "uploaded" | "self-signed";
+export type InterfaceCertificateSource = "installer" | "uploaded" | "self-signed" | "acme";
+
+/** How the ACME server checks that the appliance holds its name. */
+export type ACMEProof = "tls-alpn-01" | "http-01" | "dns-01";
+
+/** The ACME setting and how its order stands. It names which secrets are set and never holds one. */
+export interface ACMEView {
+  /** letsencrypt, letsencrypt-staging or an https address. */
+  directory: string;
+  email?: string;
+  proof: ACMEProof;
+  profile?: string;
+  externalAccountBinding?: { keyID: string; hmacKeySet: boolean };
+  directoryCASet: boolean;
+  dnsProvider?: string;
+  /** The names of the DNS provider's variables that have a value. */
+  dnsCredentialsSet: string[];
+  resolvers: string[];
+  state: "ordering" | "issued" | "failing";
+  /** Whether it stopped trying after a day of failures. */
+  givenUp: boolean;
+  error?: string;
+  errorAt?: string;
+  nextAttempt?: string;
+  lastSuccess?: string;
+  nextRenewal?: string;
+  publicName?: string;
+}
+
+/** An ACME setting to save. A secret left empty keeps the one saved for the same key ID or provider. */
+export interface ACMERequest {
+  directory: string;
+  proof: ACMEProof;
+  email?: string;
+  profile?: string;
+  directoryCA?: string;
+  externalAccountBinding?: { keyID: string; hmacKey: string };
+  dnsProvider?: string;
+  dnsCredentials?: Record<string, string>;
+  resolvers?: string[];
+}
 
 /** The certificate the interface serves, as an administrator sees it. */
 export interface InterfaceCertificate {
@@ -1248,6 +1288,8 @@ export interface InterfaceCertificate {
   notServed?: string;
   /** False where the interface has nowhere to keep a change. */
   changeable: boolean;
+  /** The ACME setting, when the certificate comes from ACME. */
+  acme?: ACMEView;
 }
 
 /** The answer to a replacement: the new certificate, and those in the files that its chain leaves out. */

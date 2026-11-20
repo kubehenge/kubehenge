@@ -2,7 +2,9 @@ import { Fragment, useEffect, useId, useRef, useState, type ChangeEvent, type JS
 
 import { ApiError, api } from "./api";
 import { daysLeft, runsOutSoon } from "./certificate-expiry";
+import { Acme } from "./InterfaceAcme";
 import type {
+  ACMEView,
   InterfaceCertificate as Certificate,
   InterfaceCertificateReplaced as Replaced,
   InterfaceCertificateSource,
@@ -18,6 +20,7 @@ const sources: Record<InterfaceCertificateSource, string> = {
   installer: "Installer",
   uploaded: "Uploaded",
   "self-signed": "Self-signed",
+  acme: "ACME",
 };
 
 const dateOf = (iso: string): string => new Date(iso).toLocaleDateString(undefined, { dateStyle: "long" });
@@ -174,6 +177,8 @@ interface WayProps {
   run: (call: () => Promise<Replaced>) => Promise<unknown>;
   /** The appliance's container ID, for a command run on the Proxmox VE node. */
   ctid: number | undefined;
+  /** The saved ACME setting, if any. */
+  acme: ACMEView | undefined;
 }
 
 /**
@@ -348,11 +353,16 @@ function Confirmed({
   );
 }
 
-type WayId = "upload" | "cluster-ca" | "self-signed" | "installer";
+type WayId = "upload" | "acme" | "cluster-ca" | "self-signed" | "installer";
 
 // The ways to change the certificate. A further way is one more entry here.
 const ways: { id: WayId; label: string; body: (p: WayProps) => JSX.Element }[] = [
   { id: "upload", label: "Upload files", body: (p) => <Upload way={p} /> },
+  {
+    id: "acme",
+    label: "ACME",
+    body: (p) => <Acme view={p.acme} waiting={p.waiting} running={p.running} locked={p.locked} run={p.run} />,
+  },
   { id: "cluster-ca", label: "Cluster CA", body: (p) => <OnNode way={p} /> },
   {
     id: "self-signed",
@@ -398,7 +408,7 @@ export function InterfaceCertificate({
   ctid?: number | undefined;
 }): JSX.Element {
   const { data, error, put } = usePoll(api.interfaceCertificate, pollIdle);
-  const [way, setWay] = useState<WayId>("upload");
+  const [chosenWay, setChosenWay] = useState<WayId>();
   const [running, setRunning] = useState<WayId>();
   const [leftOut, setLeftOut] = useState<string[]>([]);
   const name = useId();
@@ -413,6 +423,8 @@ export function InterfaceCertificate({
   }
   const locked = !data.changeable;
   const waiting = running !== undefined;
+  // A certificate from ACME opens on its setting, any other on an upload.
+  const way = chosenWay ?? (data.acme === undefined ? "upload" : "acme");
   const runFor =
     (id: WayId) =>
     async (call: () => Promise<Replaced>): Promise<unknown> => {
@@ -446,12 +458,19 @@ export function InterfaceCertificate({
           <legend>New source</legend>
           {ways.map((w) => (
             <label key={w.id} className="check">
-              <input type="radio" name={name} value={w.id} checked={way === w.id} onChange={() => setWay(w.id)} />{" "}
+              <input type="radio" name={name} value={w.id} checked={way === w.id} onChange={() => setChosenWay(w.id)} />{" "}
               {w.label}
             </label>
           ))}
         </fieldset>
-        {current?.body({ waiting, running: running === current.id, locked, run: runFor(current.id), ctid })}
+        {current?.body({
+          waiting,
+          running: running === current.id,
+          locked,
+          run: runFor(current.id),
+          ctid,
+          acme: data.acme,
+        })}
       </div>
     </>
   );

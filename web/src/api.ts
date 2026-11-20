@@ -1,5 +1,6 @@
 import { clearPollCaches, keepCache } from "./poll-cache";
 import type {
+  ACMERequest,
   Activity,
   BackupRun,
   BootLog,
@@ -473,6 +474,10 @@ export interface Api {
   replaceInterfaceCertificate: (files: File[], passphrase: string) => Promise<InterfaceCertificateReplaced>;
   makeInterfaceCertificateSelfSigned: () => Promise<InterfaceCertificate>;
   resetInterfaceCertificate: () => Promise<InterfaceCertificate>;
+  /** setInterfaceACME saves the ACME setting, which starts the first order. */
+  setInterfaceACME: (req: ACMERequest) => Promise<InterfaceCertificate>;
+  orderInterfaceACME: () => Promise<InterfaceCertificate>;
+  acmeProviders: () => Promise<{ providers: string[] }>;
   credential: (name: "kubeconfig" | "talosconfig", passphrase: string) => Promise<Blob>;
   removeManagement: (passphrase: string, removeBackups: boolean) => Promise<Job>;
   takeOverManagement: (passphrase: string) => Promise<void>;
@@ -668,6 +673,9 @@ export const api: Api = {
   },
   makeInterfaceCertificateSelfSigned: () => request("POST", `${interfaceCertificatePath}/self-signed`),
   resetInterfaceCertificate: () => request("DELETE", interfaceCertificatePath),
+  setInterfaceACME: (req) => request("PUT", `${interfaceCertificatePath}/acme`, req),
+  orderInterfaceACME: () => request("POST", `${interfaceCertificatePath}/acme/order`),
+  acmeProviders: () => request("GET", `${interfaceCertificatePath}/acme/providers`),
   credential: (name, passphrase) => download("POST", "/api/setup/credential", { name, passphrase }),
   removeManagement: (passphrase, removeBackups) =>
     request("POST", "/api/setup/remove", { passphrase, confirm: "remove", removeBackups }),

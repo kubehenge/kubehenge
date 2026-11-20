@@ -1465,6 +1465,11 @@ h4.subsection {
   margin-block-start: 6px;
 }
 
+/* The order's state reads as a heading of the ACME form, apart from its first field. */
+.summary.acme-state {
+  margin-block-end: 16px;
+}
+
 /* A certificate's chain, the certificate first. */
 .chain {
   margin: 0;

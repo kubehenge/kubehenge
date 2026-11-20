@@ -7,7 +7,7 @@ import { App } from "./App";
 import { expectNoViolations } from "./axe";
 import { fakeServer, held, type Answer, type Route } from "./fake-server";
 import { InterfaceCertificate } from "./InterfaceCertificate";
-import type { InterfaceCertificate as Certificate } from "./types";
+import type { ACMEView, InterfaceCertificate as Certificate } from "./types";
 
 const msPerDay = 86_400_000;
 const inDays = (days: number): string => new Date(Date.now() + days * msPerDay + 3_600_000).toISOString();
@@ -49,6 +49,7 @@ function sequence(answers: Answer[]): () => Answer {
 }
 
 const pem = (name: string, size = 20): File => new File([new Uint8Array(size)], name);
+const variable = (n: number): HTMLElement => screen.getByRole("group", { name: `Variable ${n}` });
 const signedIn = { "GET /api/session": { body: { user: "root@pam", csrf: "c1" } } };
 
 describe("interface certificate", () => {
@@ -423,7 +424,7 @@ describe("interface certificate", () => {
     expect(screen.getByText("Resolves")).toBeInTheDocument();
     expect(document.querySelector(".warning")).toBeNull();
     expect(screen.getByLabelText("Certificate files")).toBeEnabled();
-    expect(screen.getAllByRole("radio")).toHaveLength(4);
+    expect(screen.getAllByRole("radio")).toHaveLength(5);
   });
 
   it("12: passes the accessibility checks in each state and is reached by keyboard alone", async () => {
@@ -465,6 +466,12 @@ describe("interface certificate", () => {
     await expectNoViolations(container, "interface certificate, refusal");
 
     screen.getByRole("radio", { name: "Upload files" }).focus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("radio", { name: "ACME" })).toBeChecked();
+    await user.selectOptions(screen.getByLabelText("Proof"), "dns-01");
+    await screen.findByRole("group", { name: "Provider variables" });
+    await expectNoViolations(container, "interface certificate, ACME");
+    screen.getByRole("radio", { name: "ACME" }).focus();
     await user.keyboard("{ArrowDown}");
     expect(screen.getByRole("radio", { name: "Cluster CA" })).toBeChecked();
     expect(screen.getByText(/sh install\.sh --certificate/u, { selector: "code" })).toBeInTheDocument();
@@ -531,5 +538,115 @@ describe("interface certificate", () => {
     await user.click(await screen.findByRole("radio", { name: "Cluster CA" }));
     expect(screen.getByText("sh install.sh --certificate --ctid 105", { selector: "code" })).toBeInTheDocument();
     expect(calls.filter((c) => !c.key.startsWith("GET "))).toHaveLength(0);
+  });
+
+  it("16: sets up ACME from a private server with DNS proof, then shows its state and orders again", async () => {
+    const view: ACMEView = {
+      directory: "https://ca.example.org/acme/directory",
+      email: "admin@example.org",
+      proof: "dns-01",
+      externalAccountBinding: { keyID: "kid-1", hmacKeySet: true },
+      directoryCASet: true,
+      dnsProvider: "rfc2136",
+      dnsCredentialsSet: ["RFC2136_NAMESERVER", "RFC2136_TSIG_SECRET"],
+      resolvers: ["192.0.2.53:53"],
+      state: "ordering",
+      givenUp: false,
+    };
+    const issued = certificate({ source: "acme", acme: { ...view, state: "issued", lastSuccess: inDays(0) } });
+    const calls = fakeServer({
+      ...read(),
+      [`GET ${path}/acme/providers`]: { body: { providers: ["cloudflare", "rfc2136"], variablesListed: false } },
+      [`PUT ${path}/acme`]: { status: 202, body: certificate({ acme: view }) },
+      [`POST ${path}/acme/order`]: { status: 202, body: issued },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<InterfaceCertificate />);
+    await user.click(await screen.findByRole("radio", { name: "ACME" }));
+    await user.selectOptions(screen.getByLabelText("ACME server"), "other");
+    await user.type(screen.getByLabelText("Directory URL"), view.directory);
+    await user.type(screen.getByLabelText("Server CA"), "-----BEGIN CERTIFICATE-----");
+    await user.type(screen.getByLabelText("Contact e-mail"), "admin@example.org");
+    await user.selectOptions(screen.getByLabelText("Proof"), "dns-01");
+    await user.type(screen.getByLabelText("DNS provider"), "rfc2136");
+    expect(screen.getByRole("link", { name: "Its variables" })).toHaveAttribute(
+      "href",
+      "https://go-acme.github.io/lego/dns/rfc2136/",
+    );
+    await user.type(within(variable(1)).getByLabelText("Name"), "RFC2136_NAMESERVER");
+    await user.type(within(variable(1)).getByLabelText("Value"), "192.0.2.53");
+    await user.click(screen.getByRole("button", { name: "Add variable" }));
+    await user.type(within(variable(2)).getByLabelText("Name"), "RFC2136_TSIG_SECRET");
+    await user.type(within(variable(2)).getByLabelText("Value"), "c2VjcmV0");
+    await user.type(screen.getByLabelText("DNS resolvers"), "192.0.2.53:53, 198.51.100.53");
+    await user.click(screen.getByText("Account binding and profile"));
+    await user.type(screen.getByLabelText("Key ID"), "kid-1");
+    await user.type(screen.getByLabelText("HMAC key"), "aG1hYw");
+    await user.click(screen.getByRole("button", { name: "Use ACME" }));
+
+    await screen.findByText("Ordering");
+    expect(calls.find((c) => c.key === `PUT ${path}/acme`)?.body).toStrictEqual({
+      directory: view.directory,
+      directoryCA: "-----BEGIN CERTIFICATE-----",
+      email: "admin@example.org",
+      proof: "dns-01",
+      dnsProvider: "rfc2136",
+      dnsCredentials: { RFC2136_NAMESERVER: "192.0.2.53", RFC2136_TSIG_SECRET: "c2VjcmV0" },
+      resolvers: ["192.0.2.53:53", "198.51.100.53"],
+      externalAccountBinding: { keyID: "kid-1", hmacKey: "aG1hYw" },
+    });
+    // The secrets sent are cleared from the form, and the saved ones say so.
+    expect(screen.getByLabelText("HMAC key")).toHaveValue("");
+    expect(screen.getByLabelText("Server CA")).toHaveValue("");
+    expect(within(variable(2)).getByLabelText("Value")).toHaveValue("");
+    expect(within(variable(2)).getByLabelText("Value")).toHaveAttribute("placeholder", "Saved");
+
+    await user.click(screen.getByRole("button", { name: "Order now" }));
+    await screen.findByText("Issued");
+    expect(screen.getByText("Last issued")).toBeInTheDocument();
+    expect(calls.filter((c) => c.key === `POST ${path}/acme/order`)).toHaveLength(1);
+  });
+
+  it("17: opens on a saved ACME setting, keeps secrets left empty and shows a refusal or a stop", async () => {
+    const view: ACMEView = {
+      directory: "letsencrypt",
+      proof: "dns-01",
+      directoryCASet: false,
+      dnsProvider: "cloudflare",
+      dnsCredentialsSet: ["CF_DNS_API_TOKEN"],
+      resolvers: [],
+      state: "failing",
+      givenUp: true,
+      error: "The DNS record was not found",
+    };
+    const calls = fakeServer({
+      ...read({ source: "acme", acme: view }),
+      [`GET ${path}/acme/providers`]: { body: { providers: ["cloudflare"], variablesListed: false } },
+      [`PUT ${path}/acme`]: {
+        status: 422,
+        body: { error: "Cloudflare refused the token. Give another", code: "acme-dns-credentials" },
+      },
+    });
+    const user = userEvent.setup({ delay: null });
+    const { container } = render(<InterfaceCertificate />);
+    await expect(screen.findByRole("radio", { name: "ACME" })).resolves.toBeChecked();
+    expect(screen.getByText("ACME", { selector: "dd" })).toBeInTheDocument();
+    expect(screen.getByText("Stopped after a day")).toBeInTheDocument();
+    expect(screen.getByText("The DNS record was not found")).toBeInTheDocument();
+    expect(screen.getByLabelText("ACME server")).toHaveValue("letsencrypt");
+    expect(screen.getByLabelText("DNS provider")).toHaveValue("cloudflare");
+    expect(screen.getByLabelText("Name")).toHaveValue("CF_DNS_API_TOKEN");
+    expect(screen.getByLabelText("Value")).toHaveAttribute("placeholder", "Saved");
+    await expectNoViolations(container, "interface certificate, ACME stopped");
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await expect(screen.findByRole("alert")).resolves.toHaveTextContent("Cloudflare refused the token. Give another.");
+    expect(calls.find((c) => c.key === `PUT ${path}/acme`)?.body).toStrictEqual({
+      directory: "letsencrypt",
+      proof: "dns-01",
+      dnsProvider: "cloudflare",
+      dnsCredentials: { CF_DNS_API_TOKEN: "" },
+    });
+    expect(screen.getByLabelText("DNS provider")).toHaveValue("cloudflare");
   });
 });
