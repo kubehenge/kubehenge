@@ -385,12 +385,29 @@ pct exec <ctid> -- kubehenge appliance certificate
 pct exec <ctid> -- kubehenge appliance certificate replace fullchain.pem host.key
 pct exec <ctid> -- kubehenge appliance certificate replace host.pfx --passphrase-file /root/passphrase
 pct exec <ctid> -- kubehenge appliance certificate self-sign
+pct exec <ctid> -- kubehenge appliance certificate appliance-ca
 pct exec <ctid> -- kubehenge appliance certificate reset
 ```
 
 `replace` takes the files [`--cert` takes](#certificate-files), with the same checks, and the certificate must be valid for the host of the public URL. `self-sign` makes a certificate for the names and addresses of the one served, valid for 824 days. `reset` serves the installer's again. Open sessions and Headlamp keep working through a change.
 
 Its Cluster CA choice gives the node command above, since the cluster CA's key stays on the node.
+
+### The appliance's own CA
+
+`appliance-ca` serves a certificate signed by a CA the appliance makes for itself. Trust that CA once, and browsers accept the certificate without a warning:
+
+```sh
+pct exec <ctid> -- kubehenge appliance certificate ca > kubehenge-ca.pem
+```
+
+The page's Download CA button gives the same file.
+
+- The CA may sign only for the names and addresses of the certificate served when it was made. Trusting it trusts no other site.
+- It is valid for 10 years, and the certificate it signs for 824 days.
+- The interface signs the certificate again when it starts with under a third of its lifetime left.
+- New names outside the CA's make a new CA, which browsers must trust again.
+- `reset` and `install.sh --certificate` delete the CA.
 
 ### ACME
 
@@ -412,7 +429,7 @@ pct exec <ctid> -- kubehenge appliance certificate acme providers
 - The HMAC key and the DNS credentials come from files, never from arguments.
 - The page shows which secrets are saved, never their values, and a field left empty keeps the saved one.
 - Saving starts the first order. The page and `kubehenge appliance certificate` show how it stands.
-- `replace`, `self-sign`, `reset` and `install.sh --certificate` remove the setting and its secrets.
+- `replace`, `self-sign`, `appliance-ca`, `reset` and `install.sh --certificate` remove the setting and its secrets.
 
 #### Renewal and failures
 

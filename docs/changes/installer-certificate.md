@@ -5,6 +5,7 @@
 - Where the Proxmox VE API's certificate comes from another CA, the installer says browsers that trust it will warn about one made here, and offers your own.
 - `--cert-passphrase-file` gives the passphrase of encrypted certificate files.
 - Administrators replace the interface's certificate with files in any format, make a self-signed one, get the node command for a cluster-CA one, or go back to the installer's ([upgrading.md](upgrading.md#from-the-interface)).
+- The appliance can sign the interface's certificate with a CA of its own, held to the appliance's names and addresses. Trust that CA once and browsers stop warning ([upgrading.md](upgrading.md#the-appliances-own-ca)).
 - `kubehenge appliance certificate` does the same from the CLI. A change reaches the next connection with no restart.
 - `kubehenge appliance certificate acme` gets the certificate from Let's Encrypt or your own ACME server and renews it. Proof is on port 443, port 80 or by DNS-01 through any DNS provider ([upgrading.md](upgrading.md#acme)).
 - The certificate page sets up ACME, shows the order's state and orders again on request.

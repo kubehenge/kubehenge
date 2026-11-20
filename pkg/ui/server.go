@@ -332,6 +332,7 @@ func (s *Server) applianceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/appliance/certificate", s.signedIn(s.showCertificate))
 	mux.HandleFunc("PUT /api/appliance/certificate", s.signedIn(s.uploadCertificate))
 	mux.HandleFunc("POST /api/appliance/certificate/self-signed", s.signedIn(s.makeSelfSignedCertificate))
+	mux.HandleFunc("POST /api/appliance/certificate/appliance-ca", s.signedIn(s.makeApplianceCACertificate))
 	mux.HandleFunc("DELETE /api/appliance/certificate", s.signedIn(s.resetCertificate))
 	mux.HandleFunc("PUT /api/appliance/certificate/acme", s.signedIn(s.setACME))
 	mux.HandleFunc("POST /api/appliance/certificate/acme/order", s.signedIn(s.orderACME))

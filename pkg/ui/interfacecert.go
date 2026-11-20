@@ -90,6 +90,8 @@ type InterfaceCertificate struct {
 	// acme orders and renews the certificate when an administrator set it up. Nil when the interface
 	// has nowhere to keep ACME's setting.
 	acme *acme.Manager
+	// memCA is the appliance's CA where changes stay in memory.
+	memCA *applianceCA
 
 	// mu is held by whoever changes the certificate, so that the stored file and the certificate
 	// served are always the same one.
@@ -132,7 +134,7 @@ func (c *InterfaceCertificate) Load(now time.Time, log *slog.Logger) error {
 		stored, err := c.readStored(now)
 		switch {
 		case err == nil:
-			c.live.Store(stored)
+			c.live.Store(c.renewed(stored, now, log))
 			return nil
 		case !errors.Is(err, fs.ErrNotExist):
 			problem = err.Error()
@@ -203,7 +205,7 @@ func storedHeader(raw string) (string, string) {
 		line = strings.TrimSpace(line)
 		switch {
 		case strings.HasPrefix(line, sourceLine):
-			if s := strings.TrimPrefix(line, sourceLine); s == certificateSelfSigned || s == certificateACME {
+			if s := strings.TrimPrefix(line, sourceLine); s == certificateSelfSigned || s == certificateACME || s == certificateApplianceCA {
 				source = s
 			}
 		case strings.HasPrefix(line, orderLine):
@@ -286,7 +288,7 @@ func (osFiles) CreateTemp(dir, pattern string) (certificateFile, error) { //noli
 }
 
 func (osFiles) Rename(oldPath, newPath string) error {
-	if err := os.Rename(oldPath, newPath); err != nil { //nolint:gosec // the temporary file made beside the stored one
+	if err := os.Rename(oldPath, newPath); err != nil {
 		return fmt.Errorf("renaming a file: %w", err)
 	}
 	return nil
@@ -309,15 +311,25 @@ func (c *InterfaceCertificate) fileOps() certificateFiles { //nolint:ireturn // 
 // removeLeftovers deletes the temporary files a change cut off by a crash left, which hold a key.
 func (c *InterfaceCertificate) removeLeftovers() {
 	left, _ := filepath.Glob(c.storedPath() + ".*")
-	for _, name := range left {
+	ca, _ := filepath.Glob(filepath.Join(c.dir, appliance.InterfaceCAFile+".*"))
+	for _, name := range append(left, ca...) {
 		_ = c.fileOps().Remove(name)
 	}
 }
 
-// store writes the certificate to a temporary file beside the stored one, syncs it and renames it
-// over the stored one, so that a crash leaves the old file or the new one.
-func (c *InterfaceCertificate) store(b *certfiles.Bundle, source, order string) (err error) {
-	f, err := c.fileOps().CreateTemp(c.dir, appliance.InterfaceCertificateFile+".*")
+// store keeps the certificate in the stored file.
+func (c *InterfaceCertificate) store(b *certfiles.Bundle, source, order string) error {
+	header := sourceLine + source + "\n"
+	if order != "" {
+		header += orderLine + order + "\n"
+	}
+	return c.write(appliance.InterfaceCertificateFile, slices.Concat([]byte(header), b.KeyPEM, b.CertPEM))
+}
+
+// write puts data in a temporary file beside the file named, syncs it and renames it over that
+// file, so that a crash leaves the old file or the new one.
+func (c *InterfaceCertificate) write(name string, data []byte) (err error) {
+	f, err := c.fileOps().CreateTemp(c.dir, name+".*")
 	if err != nil {
 		return err //nolint:wrapcheck // the file operations name what failed
 	}
@@ -326,23 +338,18 @@ func (c *InterfaceCertificate) store(b *certfiles.Bundle, source, order string) 
 			_ = c.fileOps().Remove(f.Name())
 		}
 	}()
-	header := sourceLine + source + "\n"
-	if order != "" {
-		header += orderLine + order + "\n"
-	}
-	data := slices.Concat([]byte(header), b.KeyPEM, b.CertPEM)
 	if _, err = f.Write(data); err != nil {
 		_ = f.Close()
-		return fmt.Errorf("writing the certificate: %w", err)
+		return fmt.Errorf("writing %s: %w", name, err)
 	}
 	if err = f.Sync(); err != nil {
 		_ = f.Close()
-		return fmt.Errorf("syncing the certificate: %w", err)
+		return fmt.Errorf("syncing %s: %w", name, err)
 	}
 	if err = f.Close(); err != nil {
-		return fmt.Errorf("closing the certificate: %w", err)
+		return fmt.Errorf("closing %s: %w", name, err)
 	}
-	return c.fileOps().Rename(f.Name(), c.storedPath()) //nolint:wrapcheck // the file operations name what failed
+	return c.fileOps().Rename(f.Name(), filepath.Join(c.dir, name)) //nolint:wrapcheck // the file operations name what failed
 }
 
 // replace keeps b, which an administrator chose, and serves it. ACME stops with it, so that it never
@@ -387,6 +394,10 @@ func (c *InterfaceCertificate) reset(now time.Time) (*servedCertificate, error) 
 		}
 	}
 	c.live.Store(next)
+	// The installer's certificate is back in place, so a CA left would only keep a key.
+	if err = c.forgetCA(); err != nil {
+		return nil, err
+	}
 	return next, nil
 }
 
@@ -450,6 +461,8 @@ type certificateView struct {
 	Changeable bool `json:"changeable"`
 	// ACME is the ACME setting and how its order stands. Absent when ACME is not set.
 	ACME *acme.View `json:"acme,omitempty"`
+	// ApplianceCA is the appliance's own CA. Absent when it has none.
+	ApplianceCA *applianceCAView `json:"applianceCA,omitempty"`
 }
 
 // uploadView is the answer to an upload: the certificate now served, and what the files held that
@@ -482,6 +495,9 @@ func (s *Server) certificateViewOf(ctx context.Context, c *InterfaceCertificate)
 	v.PublicNameResolves = s.publicNameResolves(ctx, c)
 	if c.acme != nil {
 		v.ACME = c.acme.View()
+	}
+	if ca, err := c.loadCA(); err == nil && ca != nil {
+		v.ApplianceCA = ca.view()
 	}
 	return v
 }
@@ -792,29 +808,45 @@ var errNoNames = errors.New("the certificate names nothing")
 // selfSigned makes a self-signed certificate for the names of old, with the key type and lifetime
 // the installer's own certificates have.
 func selfSigned(old *x509.Certificate, now time.Time) (*certfiles.Bundle, error) {
+	tmpl, key, err := leafFor(old, now)
+	if err != nil {
+		return nil, err
+	}
+	return bundleOf(tmpl, tmpl, key, key)
+}
+
+// leafFor is a new key and the template of a server certificate for the names of old.
+func leafFor(old *x509.Certificate, now time.Time) (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	if len(old.DNSNames) == 0 && len(old.IPAddresses) == 0 {
-		return nil, errNoNames
+		return nil, nil, errNoNames
 	}
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, serial, err := newKeyAndSerial()
 	if err != nil {
-		return nil, fmt.Errorf("making a key: %w", err)
-	}
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), serialBits))
-	if err != nil {
-		return nil, fmt.Errorf("making a serial number: %w", err)
+		return nil, nil, err
 	}
 	cn := old.Subject.CommonName
 	if cn == "" && len(old.DNSNames) > 0 {
 		cn = old.DNSNames[0]
 	}
 	start := now.Add(-time.Hour)
-	tmpl := &x509.Certificate{
+	return &x509.Certificate{
 		SerialNumber: serial, Subject: pkix.Name{CommonName: cn},
 		NotBefore: start, NotAfter: start.AddDate(0, 0, selfSignedDays),
 		DNSNames: slices.Clone(old.DNSNames), IPAddresses: slices.Clone(old.IPAddresses),
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}, key, nil
+}
+
+func newKeyAndSerial() (*ecdsa.PrivateKey, *big.Int, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("making a key: %w", err)
 	}
-	return bundleOf(tmpl, tmpl, key, key)
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), serialBits))
+	if err != nil {
+		return nil, nil, fmt.Errorf("making a serial number: %w", err)
+	}
+	return key, serial, nil
 }
 
 // demoAddress is the address the demo's appliance has, and its certificate is for.
@@ -928,9 +960,9 @@ func bundleOf(tmpl, parent *x509.Certificate, signer, key crypto.Signer, above .
 	if err != nil {
 		return nil, fmt.Errorf("writing the key: %w", err)
 	}
-	b := &certfiles.Bundle{Leaf: leaf, Chain: append([]*x509.Certificate{leaf}, above...), KeyPEM: pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})}
+	b := &certfiles.Bundle{Leaf: leaf, Chain: append([]*x509.Certificate{leaf}, above...), KeyPEM: pem.EncodeToMemory(&pem.Block{Type: pemPrivateKey, Bytes: keyDER})}
 	for _, cert := range b.Chain {
-		b.CertPEM = append(b.CertPEM, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})...)
+		b.CertPEM = append(b.CertPEM, pem.EncodeToMemory(&pem.Block{Type: pemCertificate, Bytes: cert.Raw})...)
 	}
 	return b, nil
 }

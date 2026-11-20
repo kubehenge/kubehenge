@@ -5,11 +5,24 @@ import { daysLeft, runsOutSoon } from "./certificate-expiry";
 import { Acme } from "./InterfaceAcme";
 import type {
   ACMEView,
+  ApplianceCA,
   InterfaceCertificate as Certificate,
   InterfaceCertificateReplaced as Replaced,
   InterfaceCertificateSource,
 } from "./types";
-import { Dialog, ErrorBox, Field, Skeleton, Status, bytes, errorMessage, filled, pollIdle, usePoll } from "./ui";
+import {
+  Dialog,
+  ErrorBox,
+  Field,
+  Skeleton,
+  Status,
+  bytes,
+  errorMessage,
+  filled,
+  pollIdle,
+  saveFile,
+  usePoll,
+} from "./ui";
 
 // The server's limits of an upload.
 const maxFiles = 8;
@@ -20,6 +33,7 @@ const sources: Record<InterfaceCertificateSource, string> = {
   installer: "Installer",
   uploaded: "Uploaded",
   "self-signed": "Self-signed",
+  "appliance-ca": "Appliance CA",
   acme: "ACME",
 };
 
@@ -104,6 +118,34 @@ function Fingerprint({ value }: { value: string }): JSX.Element {
         </button>
       </div>
     </>
+  );
+}
+
+/** OwnCA is the appliance's own CA, to download and trust once. */
+function OwnCA({ ca }: { ca: ApplianceCA }): JSX.Element {
+  const heading = useId();
+  return (
+    <section className="box" aria-labelledby={heading}>
+      <h3 id={heading}>Appliance CA</h3>
+      <dl className="summary">
+        <dt>Signs for</dt>
+        <dd>{ca.permits.join(", ")}</dd>
+        <dt>Valid until</dt>
+        <dd>{dateOf(ca.notAfter)}</dd>
+        <dt>SHA-256 fingerprint</dt>
+        <dd>
+          <Fingerprint value={ca.fingerprint} />
+        </dd>
+      </dl>
+      <div className="actions">
+        <button
+          type="button"
+          onClick={() => saveFile(new Blob([ca.pem], { type: "application/x-pem-file" }), "kubehenge-appliance-ca.crt")}
+        >
+          Download CA
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -353,7 +395,7 @@ function Confirmed({
   );
 }
 
-type WayId = "upload" | "acme" | "cluster-ca" | "self-signed" | "installer";
+type WayId = "upload" | "acme" | "cluster-ca" | "appliance-ca" | "self-signed" | "installer";
 
 // The ways to change the certificate. A further way is one more entry here.
 const ways: { id: WayId; label: string; body: (p: WayProps) => JSX.Element }[] = [
@@ -364,6 +406,20 @@ const ways: { id: WayId; label: string; body: (p: WayProps) => JSX.Element }[] =
     body: (p) => <Acme view={p.acme} waiting={p.waiting} running={p.running} locked={p.locked} run={p.run} />,
   },
   { id: "cluster-ca", label: "Cluster CA", body: (p) => <OnNode way={p} /> },
+  {
+    id: "appliance-ca",
+    label: "Appliance CA",
+    body: (p) => (
+      <Confirmed
+        way={p}
+        action="Sign with appliance CA"
+        busyAction="Signing…"
+        title="Sign with appliance CA"
+        effect="Browsers accept the certificate once they trust the appliance's CA. The CA signs for this appliance's names only."
+        call={api.signInterfaceCertificateByApplianceCA}
+      />
+    ),
+  },
   {
     id: "self-signed",
     label: "Self-signed",
@@ -451,6 +507,7 @@ export function InterfaceCertificate({
         {leftOut.length > 0 && <p className="muted">Left out: {leftOut.join(", ")}</p>}
         <ErrorBox message={error} />
       </div>
+      {data.applianceCA !== undefined && <OwnCA ca={data.applianceCA} />}
       <div className="box fields">
         <h3>Change certificate</h3>
         {locked && <p className="muted">No appliance directory, so changes cannot be kept</p>}

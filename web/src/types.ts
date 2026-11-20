@@ -1222,7 +1222,16 @@ export interface Job {
 }
 
 /** Where the interface's certificate came from. */
-export type InterfaceCertificateSource = "installer" | "uploaded" | "self-signed" | "acme";
+export type InterfaceCertificateSource = "installer" | "uploaded" | "self-signed" | "appliance-ca" | "acme";
+
+/** The appliance's own CA, which administrators trust once. It may sign only for the names it permits. */
+export interface ApplianceCA {
+  subject: string;
+  fingerprint: string;
+  notAfter: string;
+  permits: string[];
+  pem: string;
+}
 
 /** How the ACME server checks that the appliance holds its name. */
 export type ACMEProof = "tls-alpn-01" | "http-01" | "dns-01";
@@ -1290,6 +1299,8 @@ export interface InterfaceCertificate {
   changeable: boolean;
   /** The ACME setting, when the certificate comes from ACME. */
   acme?: ACMEView;
+  /** The appliance's own CA, once it has one. */
+  applianceCA?: ApplianceCA;
 }
 
 /** The answer to a replacement: the new certificate, and those in the files that its chain leaves out. */

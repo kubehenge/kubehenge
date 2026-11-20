@@ -473,6 +473,8 @@ export interface Api {
   /** replaceInterfaceCertificate sends certificate and key files in any format, and the passphrase of an encrypted one. */
   replaceInterfaceCertificate: (files: File[], passphrase: string) => Promise<InterfaceCertificateReplaced>;
   makeInterfaceCertificateSelfSigned: () => Promise<InterfaceCertificate>;
+  /** signInterfaceCertificateByApplianceCA serves a certificate the appliance's own CA signs, making the CA first. */
+  signInterfaceCertificateByApplianceCA: () => Promise<InterfaceCertificate>;
   resetInterfaceCertificate: () => Promise<InterfaceCertificate>;
   /** setInterfaceACME saves the ACME setting, which starts the first order. */
   setInterfaceACME: (req: ACMERequest) => Promise<InterfaceCertificate>;
@@ -672,6 +674,7 @@ export const api: Api = {
     return answerOf(await send("PUT", interfaceCertificatePath, { form }));
   },
   makeInterfaceCertificateSelfSigned: () => request("POST", `${interfaceCertificatePath}/self-signed`),
+  signInterfaceCertificateByApplianceCA: () => request("POST", `${interfaceCertificatePath}/appliance-ca`),
   resetInterfaceCertificate: () => request("DELETE", interfaceCertificatePath),
   setInterfaceACME: (req) => request("PUT", `${interfaceCertificatePath}/acme`, req),
   orderInterfaceACME: () => request("POST", `${interfaceCertificatePath}/acme/order`),

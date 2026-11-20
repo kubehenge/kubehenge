@@ -26,6 +26,11 @@ const (
 	ACMEFilePrefix = "acme-"
 	// ACMEFilesPattern matches those files, as a shell reads it.
 	ACMEFilesPattern = "/var/lib/kubehenge/" + ACMEFilePrefix + "*"
+	// InterfaceCAFile holds the appliance's own CA, its key first, once an administrator had it sign
+	// the interface's certificate.
+	InterfaceCAFile = "interface-ca.pem"
+	// InterfaceCAPath is InterfaceCAFile in the appliance's directory.
+	InterfaceCAPath = "/var/lib/kubehenge/" + InterfaceCAFile
 	// InstallerCertificatePath is the certificate the installer made, which the interface serves
 	// while no other is stored.
 	InstallerCertificatePath = "/etc/kubehenge/tls.crt"

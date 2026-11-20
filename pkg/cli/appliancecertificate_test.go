@@ -25,9 +25,20 @@ const fakeCertificate = `{"source":"%s","subject":"CN=kubehenge.example.org","dn
 // certificateRoutes adds the routes of the interface's certificate: one that shows an installer's
 // certificate, and changes that answer with the source they would make.
 func (f *fakeInterface) certificateRoutes(mux *http.ServeMux) {
-	view := func(source, notServed string) string { return fmt.Sprintf(fakeCertificate, source, notServed) }
+	// signedIn holds mu while a handler runs.
+	view := func(source, notServed string) string {
+		v := fmt.Sprintf(fakeCertificate, source, notServed)
+		if f.ca {
+			v = strings.TrimSuffix(v, "}") + `,"applianceCA":{"fingerprint":"EF:01","permits":["kubehenge.example.org","192.0.2.40"],"pem":"CA PEM\n"}}`
+		}
+		return v
+	}
 	mux.HandleFunc("GET /api/appliance/certificate", f.admin(func(w http.ResponseWriter, _ *http.Request) {
 		answer(w, http.StatusOK, view("installer", "it is expired"))
+	}))
+	mux.HandleFunc("POST /api/appliance/certificate/appliance-ca", f.admin(func(w http.ResponseWriter, _ *http.Request) {
+		f.ca = true
+		answer(w, http.StatusOK, view("appliance-ca", ""))
 	}))
 	mux.HandleFunc("PUT /api/appliance/certificate", f.admin(func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseMultipartForm(1 << 20); err != nil {
@@ -215,6 +226,23 @@ func TestApplianceCertificateShowsAndChangesWhatTheInterfaceServes(t *testing.T)
 	}
 	if _, err = f.run(f.args("admin@pve", "certificate", "replace")...); err == nil || !strings.Contains(err.Error(), "give the certificate files") {
 		t.Errorf("replace without files: %v", err)
+	}
+}
+
+// appliance-ca has the interface sign with the appliance's own CA, and ca prints that CA to trust,
+// or says there is none yet.
+func TestApplianceCertificateSignsWithTheAppliancesCAAndPrintsIt(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	if _, err := f.run(f.args("admin@pve", "certificate", "ca")...); err == nil || !strings.Contains(err.Error(), "the appliance has no CA of its own") {
+		t.Errorf("ca without one: %v", err)
+	}
+	out, err := f.run(f.args("admin@pve", "certificate", "appliance-ca")...)
+	if err != nil || !strings.Contains(out, "Source        appliance-ca") || !strings.Contains(out, "Appliance CA  EF:01, for kubehenge.example.org, 192.0.2.40") {
+		t.Errorf("appliance-ca: %v\n%s", err, out)
+	}
+	if out, err = f.run(f.args("admin@pve", "certificate", "ca")...); err != nil || out != "CA PEM\n" {
+		t.Errorf("ca: %v %q", err, out)
 	}
 }
 

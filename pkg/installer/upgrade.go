@@ -227,8 +227,8 @@ func (r *Runner) ReplaceCertificate(ctx context.Context, out io.Writer) (*Result
 		return nil, userErr("copying the certificate into container "+c.CTID+" failed", "See "+r.LogPath)
 	}
 	// A certificate an administrator gave the interface is served before the installer's, so asking
-	// for the installer's again takes it away.
-	if _, err = r.inCT(ctx, "rm", "-f", appliance.InterfaceCertificatePath); err != nil {
+	// for the installer's again takes it away, with the CA that may have signed it.
+	if _, err = r.inCT(ctx, "rm", "-f", appliance.InterfaceCertificatePath, appliance.InterfaceCAPath); err != nil {
 		return nil, userErr("removing the stored certificate from container "+c.CTID+" failed", "See "+r.LogPath)
 	}
 	// So that ACME does not replace the certificate chosen here at its next renewal.

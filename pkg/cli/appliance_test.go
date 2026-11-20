@@ -52,6 +52,8 @@ type fakeInterface struct {
 	client string
 	// form is what the last upload of the certificate held, the files by name and the passphrase.
 	form certificateForm
+	// ca tells whether the appliance has its own CA.
+	ca bool
 	// acme is each request to the ACME routes, as method and path.
 	acme []string
 }

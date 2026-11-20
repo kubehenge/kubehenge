@@ -321,6 +321,52 @@ describe("interface certificate", () => {
     ]);
   });
 
+  it("14: signs with the appliance's CA after a confirmation and offers the CA to download", async () => {
+    const ca = {
+      subject: "O=Kubehenge,CN=Kubehenge appliance CA",
+      fingerprint: fingerprint("CA"),
+      notAfter: inDays(3650),
+      permits: ["kubehenge.example.org", "192.0.2.40"],
+      pem: "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n",
+    };
+    const calls = fakeServer({
+      ...read(),
+      [`POST ${path}/appliance-ca`]: {
+        body: certificate({ source: "appliance-ca", fingerprint: fingerprint("EF"), applianceCA: ca }),
+      },
+    });
+    const blobs: Blob[] = [];
+    const created = vi.fn<(b: Blob) => string>((b) => {
+      blobs.push(b);
+      return "blob:ca";
+    });
+    vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: created, revokeObjectURL: vi.fn<() => void>() }));
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockReturnValue();
+    const user = userEvent.setup({ delay: null });
+    render(<InterfaceCertificate />);
+    await user.click(await screen.findByRole("radio", { name: "Appliance CA" }));
+    expect(screen.queryByRole("heading", { name: "Appliance CA" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Sign with appliance CA" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Sign with appliance CA" }));
+    expect(
+      dialog.getByText(
+        "Browsers accept the certificate once they trust the appliance's CA. The CA signs for this appliance's names only.",
+      ),
+    ).toBeInTheDocument();
+    await user.click(dialog.getByRole("button", { name: "Sign with appliance CA" }));
+    await expect(screen.findByText(fingerprint("EF"))).resolves.toBeInTheDocument();
+    expect(screen.getByText("Appliance CA", { selector: "dd" })).toBeInTheDocument();
+    const box = screen.getByRole("region", { name: "Appliance CA" });
+    expect(within(box).getByText("kubehenge.example.org, 192.0.2.40")).toBeInTheDocument();
+    expect(within(box).getByText(fingerprint("CA"))).toBeInTheDocument();
+    await user.click(within(box).getByRole("button", { name: "Download CA" }));
+    expect(click).toHaveBeenCalledOnce();
+    await expect(blobs[0]?.text()).resolves.toBe(ca.pem);
+    expect(calls.map((c) => c.key).filter((k) => k !== `GET ${path}`)).toStrictEqual([`POST ${path}/appliance-ca`]);
+    click.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
   it("9: disables the actions with a reason when nothing can change, and keeps the form on busy", async () => {
     fakeServer(read({ changeable: false }));
     const { unmount } = render(<InterfaceCertificate />);
@@ -424,7 +470,7 @@ describe("interface certificate", () => {
     expect(screen.getByText("Resolves")).toBeInTheDocument();
     expect(document.querySelector(".warning")).toBeNull();
     expect(screen.getByLabelText("Certificate files")).toBeEnabled();
-    expect(screen.getAllByRole("radio")).toHaveLength(5);
+    expect(screen.getAllByRole("radio")).toHaveLength(6);
   });
 
   it("12: passes the accessibility checks in each state and is reached by keyboard alone", async () => {
@@ -476,6 +522,8 @@ describe("interface certificate", () => {
     expect(screen.getByRole("radio", { name: "Cluster CA" })).toBeChecked();
     expect(screen.getByText(/sh install\.sh --certificate/u, { selector: "code" })).toBeInTheDocument();
     await expectNoViolations(container, "interface certificate, cluster CA");
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("radio", { name: "Appliance CA" })).toBeChecked();
     await user.keyboard("{ArrowDown}");
     expect(screen.getByRole("radio", { name: "Self-signed" })).toBeChecked();
     await user.tab();
