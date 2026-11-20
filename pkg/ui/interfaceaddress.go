@@ -92,9 +92,12 @@ type addressRequest struct {
 }
 
 // addressHost is name as the host of a URL, lower case and without a final dot, and whether it is
-// a DNS name or an IP address.
+// a DNS name or an IP address. The address as the page shows it, with https:// and a final slash,
+// is taken too.
 func addressHost(name string) (string, bool) {
-	name = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".")
+	name = strings.ToLower(strings.TrimSpace(name))
+	name = strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(name, "https://"), "http://"), "/")
+	name = strings.TrimSuffix(name, ".")
 	if addr, err := netip.ParseAddr(strings.Trim(name, "[]")); err == nil {
 		return addr.Unmap().String(), addr.Zone() == ""
 	}
@@ -136,6 +139,16 @@ func renamed(old *x509.Certificate, from, to string) *x509.Certificate {
 		}
 	}
 	return next
+}
+
+// namesToMake is the certificate whose names one the appliance makes covers: the served one's, with
+// the public address first where they lack it.
+func (s *Server) namesToMake(c *InterfaceCertificate) *x509.Certificate {
+	leaf := c.served().pair.Leaf
+	if host := s.publicHost(); host != "" && leaf.VerifyHostname(host) != nil {
+		return renamed(leaf, "", host)
+	}
+	return leaf
 }
 
 // setPublicAddress changes the address users reach the interface at. A certificate the appliance

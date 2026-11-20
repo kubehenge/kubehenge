@@ -458,7 +458,10 @@ type certificateView struct {
 	Incomplete    bool     `json:"incomplete"`
 	MissingIssuer string   `json:"missingIssuer,omitempty"`
 	SelfSigned    bool     `json:"selfSigned"`
-	PublicURL     string   `json:"publicURL"`
+	// TrustedBy is the CA a browser has to trust, as the Proxmox VE cluster's or a company's, for a
+	// chain the appliance's own trust store does not vouch for. Absent for a self-signed one.
+	TrustedBy string `json:"trustedBy,omitempty"`
+	PublicURL string `json:"publicURL"`
 	// PublicNameResolves tells whether the public name leads to one of the appliance's own
 	// addresses. Absent when there is no public name or the appliance does not know its addresses.
 	PublicNameResolves *bool `json:"publicNameResolves,omitempty"`
@@ -512,6 +515,13 @@ func (s *Server) certificateViewOf(ctx context.Context, c *InterfaceCertificate)
 	for _, cert := range served.chain {
 		v.Chain = append(v.Chain, cert.Subject.String())
 	}
+	if !v.SelfSigned && !publiclyTrusted(leaf, served.chain, s.now()) {
+		top := leaf
+		if len(served.chain) > 0 {
+			top = served.chain[len(served.chain)-1]
+		}
+		v.TrustedBy = top.Issuer.String()
+	}
 	v.PublicNameResolves = s.publicNameResolves(ctx, c)
 	v.ACME = acmeView
 	if ca, err := c.loadCA(); err == nil && ca != nil {
@@ -530,25 +540,39 @@ func (s *Server) publicHost() string {
 	return u.Hostname()
 }
 
+// publiclyTrusted tells whether the system's trust store, as browsers ship one, vouches for leaf
+// through chain.
+func publiclyTrusted(leaf *x509.Certificate, chain []*x509.Certificate, now time.Time) bool {
+	intermediates := x509.NewCertPool()
+	for _, cert := range chain {
+		intermediates.AddCert(cert)
+	}
+	_, err := leaf.Verify(x509.VerifyOptions{Intermediates: intermediates, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}})
+	return err == nil
+}
+
+// publicNameResolves tells whether the public address's DNS name leads to the appliance or to a
+// trusted proxy in front of it. Nil for an IP address, which has no name to look up.
 func (s *Server) publicNameResolves(ctx context.Context, c *InterfaceCertificate) *bool {
 	host := s.publicHost()
 	if host == "" || s.OwnAddresses == nil {
 		return nil
 	}
-	own := s.OwnAddresses()
-	var found []netip.Addr
-	if addr, err := netip.ParseAddr(host); err == nil {
-		found = []netip.Addr{addr.Unmap()}
-	} else {
-		lookupCtx, cancel := context.WithTimeout(ctx, lookupTimeout)
-		defer cancel()
-		lookup := c.Lookup
-		if lookup == nil {
-			lookup = lookupHost
-		}
-		found, _ = lookup(lookupCtx, host)
+	if _, err := netip.ParseAddr(host); err == nil {
+		return nil
 	}
-	resolves := slices.ContainsFunc(found, func(a netip.Addr) bool { return slices.Contains(own, a.Unmap()) })
+	lookupCtx, cancel := context.WithTimeout(ctx, lookupTimeout)
+	defer cancel()
+	lookup := c.Lookup
+	if lookup == nil {
+		lookup = lookupHost
+	}
+	found, _ := lookup(lookupCtx, host)
+	own := s.OwnAddresses()
+	resolves := slices.ContainsFunc(found, func(a netip.Addr) bool {
+		a = a.Unmap()
+		return slices.Contains(own, a) || slices.ContainsFunc(s.TrustedProxies, func(p netip.Prefix) bool { return p.Contains(a) })
+	})
 	return &resolves
 }
 
@@ -803,7 +827,7 @@ func (s *Server) makeSelfSignedCertificate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	defer c.mu.Unlock()
-	b, err := selfSigned(c.served().pair.Leaf, s.now())
+	b, err := selfSigned(s.namesToMake(c), s.now())
 	if errors.Is(err, errNoNames) {
 		writeCertificateError(w, http.StatusUnprocessableEntity, "no-names", "The certificate being served names no DNS name or address, so a self-signed one has nothing to cover. Upload one", nil)
 		return

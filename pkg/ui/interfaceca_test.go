@@ -95,7 +95,7 @@ func TestNewNamesMakeANewApplianceCA(t *testing.T) {
 	moved := issueCertificate(t, h.clock.Add(-time.Hour), h.clock.AddDate(1, 0, 0), []string{"moved.example.org"}, "198.51.100.7")
 	c.live.Store(&servedCertificate{pair: tlsPair(t, moved), source: certificateUploaded})
 	v := certificateOf(t, a.do("POST", "/api/appliance/certificate/appliance-ca", ""))
-	if second := caOf(t, v.ApplianceCA); second.Equal(first) || strings.Join(v.ApplianceCA.Permits, ",") != "moved.example.org,198.51.100.7" {
+	if second := caOf(t, v.ApplianceCA); second.Equal(first) || strings.Join(v.ApplianceCA.Permits, ",") != certificateHost+",moved.example.org,198.51.100.7" {
 		t.Errorf("the CA after a move permits %v", v.ApplianceCA.Permits)
 	}
 }

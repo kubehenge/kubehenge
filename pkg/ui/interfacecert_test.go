@@ -504,7 +504,7 @@ func TestAStoredCertificateSurvivesARestart(t *testing.T) {
 // Administrators see what is served, who it is for and whether the public name leads here.
 func TestAdministratorsSeeTheServedCertificate(t *testing.T) {
 	t.Parallel()
-	_, a, c := administered(t)
+	h, a, c := administered(t)
 	v := certificateOf(t, a.do("GET", "/api/appliance/certificate", ""))
 	leaf := c.served().pair.Leaf
 	if v.Source != "installer" || v.Fingerprint != appliance.Fingerprint(leaf) || !v.SelfSigned || !v.Changeable || v.PublicURL != "https://"+certificateHost ||
@@ -520,6 +520,16 @@ func TestAdministratorsSeeTheServedCertificate(t *testing.T) {
 	}
 	if v = certificateOf(t, a.do("GET", "/api/appliance/certificate", "")); v.PublicNameResolves == nil || *v.PublicNameResolves {
 		t.Errorf("a public name leading elsewhere says it resolves: %v", v.PublicNameResolves)
+	}
+	// A trusted proxy in front of the appliance is where the name should lead.
+	h.server.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("192.0.2.96/30")}
+	if v = certificateOf(t, a.do("GET", "/api/appliance/certificate", "")); v.PublicNameResolves == nil || !*v.PublicNameResolves {
+		t.Errorf("a public name leading to the proxy says it does not resolve: %v", v.PublicNameResolves)
+	}
+	// An address has no name to look up.
+	moveTo(t, a, "198.51.100.7")
+	if v = certificateOf(t, a.do("GET", "/api/appliance/certificate", "")); v.PublicNameResolves != nil {
+		t.Errorf("an IP address is looked up: %v", *v.PublicNameResolves)
 	}
 }
 
@@ -663,7 +673,8 @@ func TestASelfSignedCertificateCoversTheNamesOfTheServedOne(t *testing.T) {
 	if _, ok := leaf.PublicKey.(*ecdsa.PublicKey); !ok || leaf.KeyUsage != x509.KeyUsageDigitalSignature || len(leaf.ExtKeyUsage) != 1 || leaf.ExtKeyUsage[0] != x509.ExtKeyUsageServerAuth {
 		t.Errorf("key %T usage %v %v", leaf.PublicKey, leaf.KeyUsage, leaf.ExtKeyUsage)
 	}
-	// A certificate that names nothing leaves nothing to cover.
+	// A certificate that names nothing, with no public address, leaves nothing to cover.
+	h.server.PublicURL = ""
 	nameless := issueCertificate(t, h.clock.Add(-time.Hour), h.clock.AddDate(1, 0, 0), nil)
 	c.live.Store(&servedCertificate{pair: tlsPair(t, nameless), source: certificateInstaller})
 	refusal(t, a.do("POST", "/api/appliance/certificate/self-signed", ""), http.StatusUnprocessableEntity, "no-names")

@@ -30,10 +30,14 @@ export function passphraseShort(passphrase: string): boolean {
   return [...passphrase].length < minPassphrase;
 }
 
+// A refusal of what the user sent (4xx) is theirs to fix, so only the appliance's own faults carry
+// a reference to quote.
+const firstServerError = 500;
+
 // errorMessage is what a caught value says, for showing it, with the id of the request that failed,
 // which ErrorBox shows as its reference.
 export function errorMessage(err: unknown): string {
-  if (err instanceof ApiError && err.requestId !== "") {
+  if (err instanceof ApiError && err.requestId !== "" && err.status >= firstServerError) {
     return `${err.message}${referenceMark}${err.requestId}`;
   }
   return err instanceof Error ? err.message : String(err);

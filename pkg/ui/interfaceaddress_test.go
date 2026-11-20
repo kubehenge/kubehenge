@@ -84,6 +84,10 @@ func TestTheAddressMovesTheAppliancesCACertificateWithIt(t *testing.T) {
 	if _, err := c.served().pair.Leaf.Verify(x509.VerifyOptions{Roots: roots, DNSName: movedHost, CurrentTime: h.clock}); err != nil || v.Source != certificateApplianceCA {
 		t.Errorf("%s from %s: %v", movedHost, v.Source, err)
 	}
+	// Browsers have to trust the CA, which the page names.
+	if v.TrustedBy != ca.Subject.String() || v.SelfSigned {
+		t.Errorf("trusted by %q, want %q", v.TrustedBy, ca.Subject.String())
+	}
 }
 
 // With ACME set, the new name gets a certificate ordered for it.
@@ -125,13 +129,14 @@ func TestTheAddressTakesNamesAndAddressesOnly(t *testing.T) {
 		{"2001:db8::40", "https://[2001:db8::40]:8006"},
 		{"[2001:DB8::41]", "https://[2001:db8::41]:8006"},
 		{" kubehenge-2 ", "https://kubehenge-2:8006"},
+		{"https://kubehenge-3/", "https://kubehenge-3:8006"},
 		{movedHost, "https://moved.example.org:8006"},
 	} {
 		if v := moveTo(t, a, tc[0]); v.PublicURL != tc[1] {
 			t.Errorf("%q: %s, want %s", tc[0], v.PublicURL, tc[1])
 		}
 	}
-	for _, name := range []string{"", "bank example", "*.example.org", "fe80::1%eth0", "https://moved.example.org", "a_b.example.org"} {
+	for _, name := range []string{"", "bank example", "*.example.org", "fe80::1%eth0", "https://moved.example.org/path", "https://moved.example.org:8443", "a_b.example.org"} {
 		refusal(t, a.do("PUT", "/api/appliance/certificate/address", `{"name":"`+name+`"}`), http.StatusUnprocessableEntity, "bad-address")
 	}
 	if got := h.server.PublicAddress(); got != "https://moved.example.org:8006" || c.address.Load() == nil {
@@ -155,6 +160,22 @@ func TestTheAddressStaysWhenItsCertificateCannotBeKept(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(c.dir, appliance.PublicURLFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the address file stayed: %v", err)
+	}
+}
+
+// A certificate the appliance makes after the address moved covers the new address, and the names
+// the one served covered.
+func TestACertificateMadeLaterCoversThePublicAddress(t *testing.T) {
+	t.Parallel()
+	for _, path := range []string{"/api/appliance/certificate/self-signed", "/api/appliance/certificate/appliance-ca"} {
+		_, a, c := administered(t)
+		before := c.served().pair.Leaf
+		moveTo(t, a, movedHost)
+		v := certificateOf(t, a.do("POST", path, ""))
+		leaf := c.served().pair.Leaf
+		if v.PublicNameCovered == nil || !*v.PublicNameCovered || leaf.VerifyHostname(certificateHost) != nil || len(leaf.IPAddresses) != len(before.IPAddresses) {
+			t.Errorf("%s: covers %v %v", path, leaf.DNSNames, leaf.IPAddresses)
+		}
 	}
 }
 
