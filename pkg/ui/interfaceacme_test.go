@@ -293,6 +293,37 @@ func TestARestartKeepsTheACMECertificateAndItsOrder(t *testing.T) {
 	}
 }
 
+// An ACME certificate that ran out while the appliance was off is not served at the next start. The
+// setting stays, and a new certificate is ordered and served.
+func TestAnACMECertificateThatRanOutWhileOffIsOrderedAgain(t *testing.T) {
+	t.Parallel()
+	r := administeredWithACME(t)
+	a, c, m := r.a, r.c, r.m
+	acmeView(t, a.do("PUT", "/api/appliance/certificate/acme", stagingRequest), http.StatusAccepted)
+	waitFor(t, "the ACME certificate", func() bool { return servedSource(c) == acme.SourceACME && m.View().State == "issued" })
+	later := c.served().pair.Leaf.NotAfter.Add(time.Hour)
+	restarted := NewInterfaceCertificate(c.dir, c.certFile, c.keyFile)
+	restarted.Roots, restarted.Lookup = c.Roots, c.Lookup
+	if err := restarted.Load(later, nil); err != nil {
+		t.Fatal(err)
+	}
+	next := acme.New(c.dir)
+	next.Name, next.HTTPListening, next.ARI = m.Name, true, m.ARI
+	next.Now = func() time.Time { return later }
+	next.Obtain = func(_ context.Context, _ *acme.Setting, name string, _ *x509.Certificate) ([]byte, []byte, error) {
+		b := issueCertificate(t, later.Add(-time.Hour), later.AddDate(0, 0, 90), []string{name}, certificateAddress.String())
+		return b.CertPEM, b.KeyPEM, nil
+	}
+	restarted.UseACME(next)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { next.Run(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+	waitFor(t, "a new ACME certificate", func() bool {
+		return next.View() != nil && servedSource(restarted) == acme.SourceACME && restarted.served().pair.Leaf.NotAfter.After(later)
+	})
+}
+
 // An interface that gave up shows a notification, once, until the setting is saved again.
 func TestGivingUpOnACMEShowsOneNotification(t *testing.T) {
 	t.Parallel()

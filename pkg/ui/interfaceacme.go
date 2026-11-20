@@ -25,7 +25,10 @@ func (c *InterfaceCertificate) UseACME(m *acme.Manager) {
 	c.acme = m
 	m.Served = func() acme.Served {
 		served := c.served()
-		if served == nil {
+		// The stored certificate, as one from ACME that ran out while the appliance was off, could
+		// not be served. Nothing usable is served, so the manager orders rather than taking the
+		// installer's stand-in for an administrator's choice.
+		if served == nil || served.notServed != "" {
 			return acme.Served{}
 		}
 		return acme.Served{Leaf: served.pair.Leaf, Source: served.source, Order: served.order}
