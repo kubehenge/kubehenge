@@ -944,6 +944,12 @@ button.go {
   }
 }
 
+/* What a change does besides, one sentence a line. */
+.effects {
+  margin: 0;
+  padding-inline-start: 1.2em;
+}
+
 /* Text only screen readers read, for what the page shows by colour or icon alone. */
 .visually-hidden {
   position: absolute;

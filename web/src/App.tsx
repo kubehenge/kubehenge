@@ -257,7 +257,7 @@ function ApplianceWarnings({
         <p className="warning" role="alert">
           Appliance address moved from {setup.addressMoved.from.join(", ")} to{" "}
           {setup.addressMoved.to.join(", ") || "none"}. Renew the certificate on the Proxmox VE node:{" "}
-          <code>sh install.sh --certificate --ctid {ctid}</code>
+          <code className="said">sh install.sh --certificate --ctid {ctid}</code>
         </p>
       )}
       {setup.diskFull && (
@@ -274,7 +274,7 @@ function ApplianceWarnings({
           {certificate.expired ? "Appliance certificate expired on " : "Appliance certificate expires on "}
           {certificate.expires.toLocaleDateString(undefined, { dateStyle: "long" })}. Replace it under{" "}
           <Link to="/administration/certificates">Certificates</Link>, or renew it on the Proxmox VE node:{" "}
-          <code>sh install.sh --certificate --ctid {ctid}</code>
+          <code className="said">sh install.sh --certificate --ctid {ctid}</code>
         </p>
       )}
       {credentials && (

@@ -115,16 +115,18 @@ describe("interface certificate", () => {
         selfSigned: true,
         publicNameResolves: false,
         notServed: "the file holds no key",
+        trustedBy: "CN=Proxmox Virtual Environment",
       }),
     );
     const { unmount } = render(<InterfaceCertificate />);
     await expect(screen.findByText("Expires in 10 days")).resolves.toBeInTheDocument();
     expect(screen.getByText("Chain incomplete, missing CN=Example Root CA")).toBeInTheDocument();
     expect(screen.getByText("Self-signed, so browsers warn")).toBeInTheDocument();
+    expect(screen.getByText("Browsers warn unless they trust CN=Proxmox Virtual Environment")).toBeInTheDocument();
     expect(screen.getByText("kubehenge.example.org does not resolve to this appliance")).toBeInTheDocument();
     expect(screen.getByText("Stored certificate not served, the file holds no key")).toBeInTheDocument();
     expect(document.querySelectorAll(".warning")).toHaveLength(1);
-    expect(document.querySelectorAll(".warning p")).toHaveLength(5);
+    expect(document.querySelectorAll(".warning p")).toHaveLength(6);
     unmount();
 
     const over = inDays(-3);
@@ -350,7 +352,7 @@ describe("interface certificate", () => {
     const dialog = within(screen.getByRole("dialog", { name: "Use appliance CA" }));
     expect(
       dialog.getByText(
-        "Browsers accept the certificate once they trust the appliance's CA. The CA signs for this appliance's names only.",
+        "Browsers accept the certificate once they trust the appliance CA. It signs for this appliance's names only.",
       ),
     ).toBeInTheDocument();
     await user.click(dialog.getByRole("button", { name: "Use appliance CA" }));
@@ -400,6 +402,62 @@ describe("interface certificate", () => {
       { name: "bank example" },
       { name: "moved.example.org" },
     ]);
+  });
+
+  it("18: says what a change of address or certificate does besides, and which source is in use", async () => {
+    fakeServer(
+      read({
+        source: "appliance-ca",
+        applianceCA: {
+          subject: "CN=Kubehenge appliance CA",
+          fingerprint: fingerprint("CD"),
+          notAfter: inDays(3000),
+          permits: ["kubehenge.example.org", "192.0.2.40"],
+          pem: "-----BEGIN CERTIFICATE-----\n",
+        },
+        acme: {
+          directory: "https://acme-v02.api.letsencrypt.org/directory",
+          proof: "http-01",
+          directoryCASet: false,
+          dnsCredentialsSet: [],
+          resolvers: [],
+          state: "failing",
+          givenUp: false,
+        },
+      }),
+    );
+    const user = userEvent.setup({ delay: null });
+    render(<InterfaceCertificate ctid={105} />);
+    await user.click(await screen.findByRole("button", { name: "Change address" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Change public address" }));
+    const field = dialog.getByRole("textbox", { name: "Name or address" });
+    expect(dialog.queryByRole("list")).not.toBeInTheDocument();
+    await user.clear(field);
+    await user.type(field, "https://a.kubehenge.example.org/");
+    expect(dialog.getByText("The appliance CA signs a certificate for the new address.")).toBeInTheDocument();
+    await user.clear(field);
+    await user.type(field, "moved.example.org");
+    expect(
+      dialog.getByText(
+        "A new appliance CA signs for the new address. Devices that trusted the old one warn until they trust it.",
+      ),
+    ).toBeInTheDocument();
+    expect(dialog.getByText("The Proxmox VE entry keeps the old address.")).toBeInTheDocument();
+    await user.click(dialog.getByRole("button", { name: "Cancel" }));
+
+    await user.click(screen.getByRole("radio", { name: "Appliance CA" }));
+    expect(screen.getByRole("button", { name: "In use" })).toBeDisabled();
+    await user.click(screen.getByRole("radio", { name: "Installer's" }));
+    await user.click(screen.getByRole("button", { name: "Use installer's" }));
+    const confirm = within(screen.getByRole("dialog", { name: "Use installer's certificate" }));
+    expect(
+      confirm.getByText("The appliance CA and its key are deleted, so devices that trust it trust nothing here."),
+    ).toBeInTheDocument();
+    expect(confirm.getByText("The ACME setting and its DNS credentials are removed.")).toBeInTheDocument();
+    await user.click(confirm.getByRole("button", { name: "Cancel" }));
+
+    await user.click(screen.getByRole("radio", { name: "Proxmox VE CA" }));
+    expect(screen.getByRole("button", { name: "Copy command" })).toBeInTheDocument();
   });
 
   it("9: disables the actions with a reason when nothing can change, and keeps the form on busy", async () => {
@@ -526,16 +584,21 @@ describe("interface certificate", () => {
     await screen.findByText("Source");
     await expectNoViolations(container, "interface certificate, warnings");
 
-    // Tab order: the copy button, the address change, the radios (one stop), the file picker.
+    // Tab order: the copy button, the link to the public address, the address change, the radios
+    // (one stop), the file picker's button.
     await user.tab();
     expect(screen.getByRole("button", { name: "Copy fingerprint" })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole("link", { name: "Open" })).toHaveFocus();
     await user.tab();
     expect(screen.getByRole("button", { name: "Change address" })).toHaveFocus();
     await user.tab();
     expect(screen.getByRole("radio", { name: "Upload files" })).toHaveFocus();
     await user.tab();
-    expect(screen.getByLabelText("Certificate files")).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Choose files" })).toHaveFocus();
     await user.upload(screen.getByLabelText("Certificate files"), pem("host.pfx"));
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Add files" })).toHaveFocus();
     await user.tab();
     expect(screen.getByRole("button", { name: "Remove host.pfx" })).toHaveFocus();
     await user.tab();
@@ -556,7 +619,7 @@ describe("interface certificate", () => {
     await expectNoViolations(container, "interface certificate, ACME");
     screen.getByRole("radio", { name: "ACME" }).focus();
     await user.keyboard("{ArrowDown}");
-    expect(screen.getByRole("radio", { name: "Cluster CA" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Proxmox VE CA" })).toBeChecked();
     expect(screen.getByText(/sh install\.sh --certificate/u, { selector: "code" })).toBeInTheDocument();
     await expectNoViolations(container, "interface certificate, cluster CA");
     await user.keyboard("{ArrowDown}");
@@ -620,7 +683,7 @@ describe("interface certificate", () => {
     });
     const user = userEvent.setup({ delay: null });
     render(<App />);
-    await user.click(await screen.findByRole("radio", { name: "Cluster CA" }));
+    await user.click(await screen.findByRole("radio", { name: "Proxmox VE CA" }));
     expect(screen.getByText("sh install.sh --certificate --ctid 105", { selector: "code" })).toBeInTheDocument();
     expect(calls.filter((c) => !c.key.startsWith("GET "))).toHaveLength(0);
   });

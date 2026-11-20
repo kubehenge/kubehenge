@@ -1290,6 +1290,8 @@ export interface InterfaceCertificate {
   /** The issuer the chain lacks, when it is incomplete. */
   missingIssuer?: string;
   selfSigned: boolean;
+  /** The CA a browser has to trust, for a chain no public CA vouches for. */
+  trustedBy?: string;
   publicURL?: string;
   /** Whether the public URL's name leads to this appliance. Absent when it is not known. */
   publicNameResolves?: boolean;

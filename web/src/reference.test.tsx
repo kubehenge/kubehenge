@@ -53,7 +53,9 @@ describe("error references", () => {
   });
 
   it("shows no reference under a refusal of what the user sent", async () => {
-    render(<ErrorBox message={await failure({ error: "not a DNS name", requestId: "0a1b2c" }, {}, httpUnprocessable)} />);
+    render(
+      <ErrorBox message={await failure({ error: "not a DNS name", requestId: "0a1b2c" }, {}, httpUnprocessable)} />,
+    );
     const box = screen.getByRole("alert");
     expect(box).toHaveTextContent("Not a DNS name.");
     expect(box).not.toHaveTextContent("Reference");

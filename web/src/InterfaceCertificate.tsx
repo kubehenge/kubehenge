@@ -69,6 +69,7 @@ function Warnings({ c }: { c: Certificate }): JSX.Element | null {
       (days < 0 ? `Expired on ${dateOf(c.notAfter)}` : `Expires in ${days === 0 ? "under a day" : `${days} days`}`),
     c.incomplete && `Chain incomplete, missing ${c.missingIssuer ?? "an issuer"}`,
     c.selfSigned && "Self-signed, so browsers warn",
+    filled(c.trustedBy) && `Browsers warn unless they trust ${c.trustedBy}`,
     c.publicNameResolves === false && `${hostOf(c.publicURL ?? "")} does not resolve to this appliance`,
     c.publicNameCovered === false && `Not valid for ${hostOf(c.publicURL ?? "")}, so browsers warn`,
     filled(c.notServed) && `Stored certificate not served, ${c.notServed}`,
@@ -85,13 +86,27 @@ function Warnings({ c }: { c: Certificate }): JSX.Element | null {
   );
 }
 
-/** Fingerprint shows a certificate's SHA-256, which a click copies. */
-function Fingerprint({ value }: { value: string }): JSX.Element {
+/** Copy puts text on the clipboard. */
+function Copy({ text, label }: { text: string; label: string }): JSX.Element {
   const [copied, setCopied] = useState(false);
   const copy = async (): Promise<void> => {
-    await navigator.clipboard.writeText(value);
+    await navigator.clipboard.writeText(text);
     setCopied(true);
   };
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        void copy();
+      }}
+    >
+      {copied ? "Copied" : label}
+    </button>
+  );
+}
+
+/** Fingerprint shows a certificate's SHA-256, which a click copies. */
+function Fingerprint({ value }: { value: string }): JSX.Element {
   return (
     <>
       <span className="key fingerprint">
@@ -109,31 +124,67 @@ function Fingerprint({ value }: { value: string }): JSX.Element {
         ))}
       </span>
       <div>
-        <button
-          type="button"
-          onClick={() => {
-            void copy();
-          }}
-        >
-          {copied ? "Copied" : "Copy fingerprint"}
-        </button>
+        <Copy text={value} label="Copy fingerprint" />
       </div>
     </>
   );
 }
 
+/** validFor tells whether a certificate is valid for a name or address, a wildcard covering one label. */
+function validFor(c: Certificate, name: string): boolean {
+  return [...(c.dnsNames ?? []), ...(c.ipAddresses ?? [])].some(
+    (n) => n === name || (n.startsWith("*.") && name.slice(name.indexOf(".")) === n.slice(1)),
+  );
+}
+
+/** permits tells whether the appliance CA may sign for a name or address, as its name constraints read. */
+function permits(ca: ApplianceCA, name: string): boolean {
+  return ca.permits.some((p) => p === name || name.endsWith(`.${p}`));
+}
+
+/** addressEffects are what changing the public address to name does besides. */
+function addressEffects(c: Certificate, name: string): string[] {
+  const certificate: Partial<Record<InterfaceCertificateSource, string>> = {
+    "self-signed": "The self-signed certificate is made again for the new address.",
+    "appliance-ca":
+      c.applianceCA === undefined || permits(c.applianceCA, name)
+        ? "The appliance CA signs a certificate for the new address."
+        : "A new appliance CA signs for the new address. Devices that trusted the old one warn until they trust it.",
+    acme: "ACME orders a certificate for the new address.",
+  };
+  return [
+    certificate[c.source] ??
+      (validFor(c, name)
+        ? "The certificate stays, and covers the new address."
+        : "The certificate stays and does not cover the new address, so browsers warn until it is replaced."),
+    "Sign-in providers outside Proxmox VE need the new redirect address.",
+    "The Proxmox VE entry keeps the old address.",
+  ];
+}
+
+/** typedAddress is a typed name or address as the server takes it, also when pasted as a URL. */
+const typedAddress = (typed: string): string =>
+  typed
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//u, "")
+    .replace(/\/$/u, "")
+    .replace(/\.$/u, "")
+    .replace(/^\[(?<v6>.*)\]$/u, "$<v6>");
+
 /** ChangeAddress sets the name or address users reach the interface at. */
 function ChangeAddress({
-  current,
+  c,
   disabled,
   running,
   run,
 }: {
-  current: string;
+  c: Certificate;
   disabled: boolean;
   running: boolean;
   run: (call: () => Promise<Replaced>) => Promise<unknown>;
 }): JSX.Element {
+  const current = typedAddress(hostOf(c.publicURL ?? ""));
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(current);
   const [error, setError] = useState<string>();
@@ -190,7 +241,13 @@ function ChangeAddress({
               />
             )}
           </Field>
-          <p>Self-signed, appliance CA and ACME certificates follow the new name.</p>
+          {typedAddress(name) !== "" && typedAddress(name) !== current && (
+            <ul className="effects">
+              {addressEffects(c, typedAddress(name)).map((e) => (
+                <li key={e}>{e}</li>
+              ))}
+            </ul>
+          )}
         </Dialog>
       )}
     </>
@@ -257,7 +314,7 @@ function Facts({ c, changeAddress }: { c: Certificate; changeAddress: ReactNode 
         <>
           <dt>Public address</dt>
           <dd>
-            {c.publicURL}{" "}
+            {c.publicURL} {window.location.hostname !== hostOf(c.publicURL ?? "") && <a href={c.publicURL}>Open</a>}{" "}
             {c.publicNameResolves !== undefined && (
               <Status
                 state={c.publicNameResolves ? "ok" : "warning"}
@@ -298,6 +355,10 @@ interface WayProps {
   ctid: number | undefined;
   /** The saved ACME setting, if any. */
   acme: ACMEView | undefined;
+  /** Where the certificate served came from. */
+  source: InterfaceCertificateSource;
+  /** Whether the appliance has a CA of its own. */
+  hasCA: boolean;
 }
 
 /**
@@ -305,10 +366,16 @@ interface WayProps {
  * never leaves the node.
  */
 function OnNode({ way: { ctid } }: { way: WayProps }): JSX.Element {
+  const command = `sh install.sh --certificate --ctid ${ctid ?? "<container ID>"}`;
   return (
-    <p>
-      Run on the Proxmox VE node: <code>sh install.sh --certificate --ctid {ctid ?? "<appliance ID>"}</code>
-    </p>
+    <>
+      <p>
+        Run the install script on the Proxmox VE node: <code className="said">{command}</code>
+      </p>
+      <div className="actions">
+        <Copy text={command} label="Copy command" />
+      </div>
+    </>
   );
 }
 
@@ -323,6 +390,7 @@ function Upload({ way: { waiting, running, locked, run } }: { way: WayProps }): 
   const [names, setNames] = useState<string[]>([]);
   const problem = filesProblem(files);
   const passphraseInput = useRef<HTMLInputElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (asked) {
       passphraseInput.current?.focus();
@@ -360,7 +428,24 @@ function Upload({ way: { waiting, running, locked, run } }: { way: WayProps }): 
       }}
     >
       <Field label="Certificate files" hint="Certificate, key and chain, in any format">
-        {(id) => <input id={id} type="file" multiple disabled={waiting || locked} onChange={choose} />}
+        {(id) => (
+          <div>
+            <input
+              id={id}
+              ref={picker}
+              className="visually-hidden"
+              // The button opens the picker, so the input is no stop of its own.
+              tabIndex={-1}
+              type="file"
+              multiple
+              disabled={waiting || locked}
+              onChange={choose}
+            />
+            <button type="button" disabled={waiting || locked} onClick={() => picker.current?.click()}>
+              {files.length === 0 ? "Choose files" : "Add files"}
+            </button>
+          </div>
+        )}
       </Field>
       {files.length > 0 && (
         <ul className="files" aria-label="Chosen files">
@@ -415,20 +500,31 @@ function Upload({ way: { waiting, running, locked, run } }: { way: WayProps }): 
  * the change does.
  */
 function Confirmed({
-  way: { waiting, running, locked, run },
+  way: { waiting, running, locked, run, source },
+  of,
   action,
   busyAction,
   title,
-  effect,
+  effects,
   call,
 }: {
   way: WayProps;
+  /** The source the change gives, which needs no change while it is served. */
+  of: InterfaceCertificateSource;
   action: string;
   busyAction: string;
   title: string;
-  effect: string;
+  /** What the change does, one sentence each. False leaves a sentence out. */
+  effects: (string | false)[];
   call: () => Promise<Replaced>;
 }): JSX.Element {
+  const inUse = source === of;
+  let label = action;
+  if (running) {
+    label = busyAction;
+  } else if (inUse) {
+    label = "In use";
+  }
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string>();
   const go = async (): Promise<void> => {
@@ -442,8 +538,13 @@ function Confirmed({
     <>
       <ErrorBox message={error} />
       <div className="actions">
-        <button type="button" className="primary" disabled={waiting || locked} onClick={() => setConfirming(true)}>
-          {running ? busyAction : action}
+        <button
+          type="button"
+          className="primary"
+          disabled={waiting || locked || inUse}
+          onClick={() => setConfirming(true)}
+        >
+          {label}
         </button>
       </div>
       {confirming && (
@@ -465,7 +566,11 @@ function Confirmed({
             </>
           }
         >
-          <p>{effect}</p>
+          {effects
+            .filter((e): e is string => e !== false)
+            .map((e) => (
+              <p key={e}>{e}</p>
+            ))}
         </Dialog>
       )}
     </>
@@ -473,6 +578,9 @@ function Confirmed({
 }
 
 type WayId = "upload" | "acme" | "cluster-ca" | "appliance-ca" | "self-signed" | "installer";
+
+// What choosing another certificate does to a saved ACME setting.
+const acmeRemoved = "The ACME setting and its DNS credentials are removed.";
 
 // The ways to change the certificate. A further way is one more entry here.
 const ways: { id: WayId; label: string; body: (p: WayProps) => JSX.Element }[] = [
@@ -482,17 +590,21 @@ const ways: { id: WayId; label: string; body: (p: WayProps) => JSX.Element }[] =
     label: "ACME",
     body: (p) => <Acme view={p.acme} waiting={p.waiting} running={p.running} locked={p.locked} run={p.run} />,
   },
-  { id: "cluster-ca", label: "Cluster CA", body: (p) => <OnNode way={p} /> },
+  { id: "cluster-ca", label: "Proxmox VE CA", body: (p) => <OnNode way={p} /> },
   {
     id: "appliance-ca",
     label: "Appliance CA",
     body: (p) => (
       <Confirmed
         way={p}
+        of="appliance-ca"
         action="Use appliance CA"
         busyAction="Signing…"
         title="Use appliance CA"
-        effect="Browsers accept the certificate once they trust the appliance's CA. The CA signs for this appliance's names only."
+        effects={[
+          "Browsers accept the certificate once they trust the appliance CA. It signs for this appliance's names only.",
+          p.acme !== undefined && acmeRemoved,
+        ]}
         call={api.signInterfaceCertificateByApplianceCA}
       />
     ),
@@ -503,10 +615,11 @@ const ways: { id: WayId; label: string; body: (p: WayProps) => JSX.Element }[] =
     body: (p) => (
       <Confirmed
         way={p}
+        of="self-signed"
         action="Make self-signed"
         busyAction="Making…"
         title="Make self-signed certificate"
-        effect="Browsers warn about a self-signed certificate."
+        effects={["Browsers warn about a self-signed certificate.", p.acme !== undefined && acmeRemoved]}
         call={api.makeInterfaceCertificateSelfSigned}
       />
     ),
@@ -517,10 +630,15 @@ const ways: { id: WayId; label: string; body: (p: WayProps) => JSX.Element }[] =
     body: (p) => (
       <Confirmed
         way={p}
+        of="installer"
         action="Use installer's"
         busyAction="Switching…"
         title="Use installer's certificate"
-        effect="The certificate made at install replaces the current one."
+        effects={[
+          "The certificate made at install replaces the current one.",
+          p.hasCA && "The appliance CA and its key are deleted, so devices that trust it trust nothing here.",
+          p.acme !== undefined && acmeRemoved,
+        ]}
         call={api.resetInterfaceCertificate}
       />
     ),
@@ -584,7 +702,7 @@ export function InterfaceCertificate({
           c={data}
           changeAddress={
             <ChangeAddress
-              current={hostOf(data.publicURL ?? "")}
+              c={data}
               disabled={waiting || locked}
               running={running === "address"}
               run={runFor("address")}
@@ -614,6 +732,8 @@ export function InterfaceCertificate({
           run: runFor(current.id),
           ctid,
           acme: data.acme,
+          source: data.source,
+          hasCA: data.applianceCA !== undefined,
         })}
       </div>
     </>
