@@ -497,11 +497,11 @@ func TestDisablingRemovesTheSettingAndItsSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	snap := b.m.Disable()
-	if left := acmeFiles(t, dir); len(left) != 0 || b.m.View() != nil {
+	if left := acmeFiles(t, b.m, dir); len(left) != 0 || b.m.View() != nil {
 		t.Errorf("the directory keeps %v and the view is %v", left, b.m.View())
 	}
 	snap.Restore()
-	if left := acmeFiles(t, dir); len(left) != 3 {
+	if left := acmeFiles(t, b.m, dir); len(left) != 3 {
 		t.Errorf("a restore left %v", left)
 	}
 	// An administrator's own certificate after ACME's ends it without a request.
@@ -509,14 +509,18 @@ func TestDisablingRemovesTheSettingAndItsSecrets(t *testing.T) {
 	b.serving.Source = "uploaded"
 	b.mu.Unlock()
 	b.m.poke()
-	until(t, "the setting to be removed", func() bool { return len(acmeFiles(t, dir)) == 0 })
+	until(t, "the setting to be removed", func() bool { return len(acmeFiles(t, b.m, dir)) == 0 })
 	if b.orders() != 1 {
 		t.Errorf("%d orders", b.orders())
 	}
 }
 
-func acmeFiles(t *testing.T, dir string) []string {
+// acmeFiles lists the manager's files between its writes, which it makes under its lock, so a
+// write's temporary file never shows.
+func acmeFiles(t *testing.T, m *Manager, dir string) []string {
 	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
