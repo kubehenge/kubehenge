@@ -34,8 +34,8 @@ Then [create clusters](clusters.md).
 Kubehenge gives every node of every cluster a static address, with no DHCP server needed. Each cluster, the management cluster too, is IPv4, IPv6 or dual-stack. IPv6 and dual-stack are unsupported until an end-to-end test passes on them ([clusters.md](clusters.md#ipv6-and-dual-stack)).
 
 - **The appliance** takes an IPv4 address, an IPv6 address or both on a bridge, each by DHCP or static (`--ip`, `--ip6`). IPv6 also takes one from the router's advertisements (`--ip6 auto`).
-  - Its certificate and the redirect URLs registered with identity providers contain it. Give it an address that does not change (a static `--ip` or a DHCP reservation), or a DNS name with `--name`.
-  - After a change, [renew the certificate](upgrading.md#the-appliances-certificate).
+  - Its certificate and the redirect URLs registered with identity providers contain it. Give it a static `--ip`, a DHCP reservation or a `--name`.
+  - After a change, [renew the certificate](upgrading.md#the-interfaces-certificate).
 - **The Proxmox VE API** is reached on port 8006, at a name or address its certificate is valid for ([below](#the-proxmox-ve-api)). The appliance, the management cluster's nodes and every cluster's nodes must reach it.
 
 #### Addresses for the management cluster
@@ -119,8 +119,15 @@ An address is checked against the node's neighbour table, then with an ARP probe
 | `--gateway6 <address>` | none | The default IPv6 gateway, with a static `--ip6`. It may be link-local, such as `fe80::1`. |
 | `--dns <address>,...` | this node's name servers | The name servers the container asks, such as `192.0.2.53,192.0.2.54`. Required where the node's `/etc/resolv.conf` names only loopback addresses, which the container cannot reach. |
 | `--hostname <name>` | `kubehenge` | The container's host name, also written into its certificate. |
-| `--name <DNS name>` | none | A DNS name, such as `kubehenge.example.org`, that people reach the appliance by instead of its address. It goes into the certificate and into the redirect URLs for identity providers. Point it at the appliance's address in your DNS. |
-| `--cert <file> --key <file>` | a certificate signed by the Proxmox VE cluster's CA | Serves a certificate of your own instead, such as one from your organisation's CA. It must be valid for `--name` (or the address, without one) and its key must match. |
+| `--name <DNS name>` | asked | A DNS name, such as `kubehenge.example.org`, people open the interface at. It goes into the certificate and the redirect URLs for identity providers. |
+| `--cert <files>` | asked | Serves the certificate in these comma-separated files, in any format, instead of one signed by the cluster's CA ([details](upgrading.md#the-interfaces-certificate)). |
+| `--key <file>` | | The key of `--cert`, where it is a file of its own. |
+| `--cert-passphrase-file <file>` | | The passphrase of encrypted `--cert` files, on its first line. |
+| `--acme <server>` | | Gets the certificate from an ACME server: `letsencrypt`, `letsencrypt-staging` or a directory's https address ([details](upgrading.md#acme)). Needs `--name`. Not with `--cert`. |
+| `--acme-proof <proof>` | `tls-alpn-01` | `tls-alpn-01` on port 443, `http-01` on port 80, or `dns-01` through a DNS provider. |
+| `--acme-email <address>` | none | The ACME account's contact address. |
+| `--acme-dns-provider <name>`, `--acme-dns-credentials-file <file>`, `--acme-resolver <address>` | | The DNS provider of `dns-01`, its `NAME=value` credentials and the name servers that check the record. |
+| `--acme-directory-ca-file <file>`, `--acme-eab-key-id <id>`, `--acme-eab-hmac-key-file <file>`, `--acme-profile <name>` | | For an ACME server of your own: the CA of its certificate, its account binding and a certificate profile. |
 | `--proxmox-url <URL>` | chosen from the API's certificate ([below](#the-proxmox-ve-api)) | The Proxmox VE API as the appliance and the clusters' VMs reach it, such as `https://pve.example.org:8006`. The API's certificate must be valid for it. The installer stops unless the appliance gets an answer there. |
 | `--proxmox-ca <file>` | found by the installer ([below](#the-ca)) | The CA that signed the API's certificate, such as your organisation's where it replaced Proxmox VE's own. The file may be a whole trust store, and the appliance gets only the certificates the API's rests on. The installer stops before it creates anything unless this CA signed the API's certificate for the URL. |
 | `--proxmox-insecure` | off | Nothing checks the Proxmox VE API's certificate. That covers OpenTofu, Cluster API, Kubehenge's controller, the template builds and every cluster's cloud controller manager and CSI plugin. The Administration page shows that it is on. Not with `--proxmox-ca`. |
@@ -132,18 +139,21 @@ An address is checked against the node's neighbour table, then with an ARP probe
 | `--yes` | off | Skips the summary confirmation and accepts an address outside the network's subnet. |
 | `--dry-run` | off | Prints what would be installed and changes nothing. |
 | `--keep-failed` | off | Keeps a failed install's container for inspection. |
-| `--pve-entry` or `--no-pve-entry` | asked | Whether to add a Kubernetes entry to this node's Proxmox VE interface ([below](#the-proxmox-ve-interface-entry)). Run without a terminal, it leaves the entry out. |
+| `--pve-entry` or `--no-pve-entry` | asked | Whether to add the Proxmox VE interface entry to this node ([below](#the-proxmox-ve-interface-entry)). Run without a terminal, it leaves the entry out. |
 | `--upgrade --ctid <id>` | | Upgrades an installed appliance instead ([upgrading.md](upgrading.md#from-the-proxmox-ve-shell)). |
-| `--certificate --ctid <id>` | | Replaces an installed appliance's certificate instead ([details](upgrading.md#the-appliances-certificate)). |
+| `--certificate --ctid <id>` | | Replaces the interface's certificate of an installed appliance instead ([details](upgrading.md#the-interfaces-certificate)). |
 
 ### What it does
 
 The installer checks the node, asks everything before it changes anything, creates the container and sets it up ([the steps](architecture.md#what-the-installer-does)). It then prints the address and the certificate's fingerprint:
 
 ```text
-Kubehenge is running in container 105: https://192.0.2.40/
+Kubehenge is running in container 105: https://kubehenge.example.org/
 Certificate SHA-256 fingerprint: …
 Valid until: …
+Browsers warn until they trust the Proxmox VE CA. Compare the SHA-256 they show with the one above.
+Point kubehenge.example.org at 192.0.2.40 in your DNS.
+Also at https://192.0.2.40/
 Sign in with a Proxmox VE administrator to create the management cluster.
 Log: /var/log/kubehenge-install-20261119-134128-2706524411.log
 ```
@@ -215,7 +225,7 @@ After every package run, an apt hook puts back an entry that a `pve-manager` upd
 
 ![The sign-in form: user name, password and realm](images/sign-in.png)
 
-Open the address the installer printed. The Proxmox VE cluster's CA signed the certificate, so a browser that trusts Proxmox VE's certificates trusts it. Otherwise, compare the fingerprint the browser shows with the one the installer printed.
+Open the address the installer printed. Browsers warn about the certificate the installer made until they [trust the Proxmox VE CA](upgrading.md#trusting-a-ca). Until then, compare the fingerprint the browser shows with the one the installer printed. A certificate from Let's Encrypt or another CA that browsers trust needs neither.
 
 Sign in with a Proxmox VE account of any realm: Proxmox VE, PAM, LDAP, Active Directory or OpenID. There is no second user directory. Every user sees and changes only what their Proxmox VE privileges allow ([clusters.md](clusters.md#who-may-do-what)).
 
@@ -265,7 +275,7 @@ The same privileges open Administration later, in seven pages:
 - **Notifications**, the [targets that are told](install-settings.md#notifications).
 - **Activity**, [who did what](architecture.md#activity).
 
-They also bring the warnings about the [backup](install-settings.md#back-up-the-appliance) and the [certificate](upgrading.md#the-appliances-certificate).
+They also bring the warnings about the [backup](install-settings.md#back-up-the-appliance) and the [certificate](upgrading.md#the-interfaces-certificate).
 
 ### The settings
 

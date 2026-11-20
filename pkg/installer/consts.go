@@ -11,6 +11,10 @@ const (
 	optStatic = "static"
 )
 
+// madeTrust is what browsers do with the certificate the installer made, after the word "Browsers",
+// and the line break the end screen keeps the fingerprint's name whole at.
+const madeTrust = "warn until they trust the Proxmox VE CA.\nCompare the SHA-256 they show with the one above"
+
 // Step names, as the runner and the screens refer to them.
 const (
 	stepStartName       = "start"
@@ -85,6 +89,7 @@ const (
 	maxFormWidth    = 76
 	listChrome      = 12 // the rows a list's header, title and footer take
 	minListRows     = 4
+	certNoteRows    = 6 // a title, a note of two lines and the three choices
 	vlanMax         = 4094
 	ctidMin         = 100
 	ctidMax         = 999999999

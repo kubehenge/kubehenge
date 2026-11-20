@@ -4,6 +4,7 @@ import { ApplianceActivity } from "./Activity";
 import type { AdminView } from "./admin-views";
 import { AppliancePage } from "./AppliancePage";
 import { SharedDNS01 } from "./Certificates";
+import { InterfaceCertificate } from "./InterfaceCertificate";
 import { ManagementBackups } from "./ManagementBackups";
 import { ManagementHealthCard } from "./ManagementHealth";
 import { Notifications } from "./Notifications";
@@ -18,11 +19,13 @@ export function AdminPage({
   status,
   running,
   reload,
+  onSetupChanged,
 }: {
   view: AdminView;
   status: SetupStatus;
   running: boolean;
   reload: () => Promise<void>;
+  onSetupChanged: () => void;
 }): JSX.Element {
   switch (view) {
     case "appliance": {
@@ -52,6 +55,7 @@ export function AdminPage({
     case "certificates": {
       return (
         <section className="panel">
+          <InterfaceCertificate onChanged={onSetupChanged} ctid={status.applianceVMID} />
           <SharedDNS01 />
         </section>
       );

@@ -50,6 +50,12 @@ type fakeInterface struct {
 	setups   int
 	// client is the client a password sign-in said it came from.
 	client string
+	// form is what the last upload of the certificate held, the files by name and the passphrase.
+	form certificateForm
+	// ca tells whether the appliance has its own CA.
+	ca bool
+	// acme is each request to the ACME routes, as method and path.
+	acme []string
 }
 
 func newFakeInterface(t *testing.T) *fakeInterface {
@@ -175,6 +181,7 @@ func newFakeInterface(t *testing.T) *fakeInterface {
 		}
 		answer(w, http.StatusAccepted, `{}`)
 	}))
+	f.certificateRoutes(mux)
 	f.srv = httptest.NewTLSServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f
@@ -230,12 +237,12 @@ func (f *fakeInterface) signedIn(next http.HandlerFunc) http.HandlerFunc {
 		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		// A form of files is the handler's to read.
 		var body map[string]any
-		if json.NewDecoder(r.Body).Decode(&body) == nil {
-			f.bodies[r.Method+" "+r.URL.Path] = body
-		} else {
-			f.bodies[r.Method+" "+r.URL.Path] = map[string]any{}
+		if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/") || json.NewDecoder(r.Body).Decode(&body) != nil {
+			body = map[string]any{}
 		}
+		f.bodies[r.Method+" "+r.URL.Path] = body
 		next(w, r)
 	}
 }

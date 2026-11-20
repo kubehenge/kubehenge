@@ -1,6 +1,6 @@
  ▄▄▄▄▄▄▄▄▄   Kubehenge
  ▀██▀▀▀██▀   Appliance installer
-  ██   ██    Network · Storage · Summary · Install · Done
+  ██   ██    Network · Interface · Storage · Summary · Install · Done
 
   ✓ OpenTofu            OpenTofu 1.0.0, checksum verified
   * Container template  ▌▌▌▌▌▌▌▌▌▌░░░░░░░░░  50%

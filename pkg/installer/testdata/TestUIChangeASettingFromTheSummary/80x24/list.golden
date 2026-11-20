@@ -1,6 +1,6 @@
  ▄▄▄▄▄▄▄▄▄   Kubehenge
  ▀██▀▀▀██▀   Appliance installer
-  ██   ██    Network · Storage · Summary · Install · Done
+  ██   ██    Network · Interface · Storage · Summary · Install · Done
 
   ┃ /
   ┃ > IP version         IPv4 only
@@ -12,6 +12,6 @@
   ┃   Container ID       100
   ┃   Host name          kubehenge
   ┃   DNS name           none
-  ┃   Certificate        made by the appliance
+  ┃   Certificate        made here, signed by the Proxmox VE CA
   ┃   Proxmox VE API     https://pve1.example.com:8006
   ↑↓ choose  / filter  enter change  esc back  ctrl+c quit

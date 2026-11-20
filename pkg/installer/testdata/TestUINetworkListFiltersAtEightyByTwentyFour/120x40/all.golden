@@ -1,6 +1,6 @@
  ▄▄▄▄▄▄▄▄▄   Kubehenge
  ▀██▀▀▀██▀   Appliance installer
-  ██   ██    Network · Storage · Summary · Install · Done
+  ██   ██    Network · Interface · Storage · Summary · Install · Done
 
   ┃ Network
   ┃ > vmbr0, bridge, subnet 192.0.2.0/24 (this node)

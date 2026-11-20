@@ -139,7 +139,8 @@ func TestRestoreKeepsWhatStillFits(t *testing.T) {
 func TestSavedAnswersRoundTripWithoutSecrets(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "state", "answers.json")
-	cfg := Config{CTID: "105", IP: "192.0.2.40/24", Gateway: "192.0.2.1", CertFile: "/root/c.pem", KeyFile: "/root/secret.key", Name: "kubehenge.example.org"}
+	cfg := Config{CTID: "105", IP: "192.0.2.40/24", Gateway: "192.0.2.1", CertFile: "/root/c.pem", KeyFile: "/root/secret.key", Name: "kubehenge.example.org", //nolint:gosec // test data.
+		CertPassphraseFile: "/root/pass.txt", passphrase: "hunter2"}
 	if err := saveAnswers(path, &cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -147,8 +148,8 @@ func TestSavedAnswersRoundTripWithoutSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "secret.key") || strings.Contains(string(data), "c.pem") {
-		t.Errorf("the file names the certificate or its key: %s", data)
+	if strings.Contains(string(data), "hunter2") || strings.Contains(string(data), "pass.txt") {
+		t.Errorf("the file holds the passphrase or its file: %s", data)
 	}
 	got := loadAnswers(path)
 	if got == nil || got.IP != "192.0.2.40/24" || got.CTID != "105" || got.Name != "kubehenge.example.org" {

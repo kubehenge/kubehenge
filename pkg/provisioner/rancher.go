@@ -78,7 +78,12 @@ func kubernetesMinor(version string) (int, bool) {
 var (
 	provisioningClusterGVK = schema.GroupVersionKind{Group: "provisioning.cattle.io", Version: "v1", Kind: "Cluster"}
 	registrationTokenGVK   = schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "ClusterRegistrationToken"}
+	settingGVK             = schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "Setting"}
 )
+
+// shellImageEnv names the image Rancher's agent in a cluster runs its helm operations in. Without
+// it the agent takes its built-in image, named by tag alone.
+const shellImageEnv = "CATTLE_SHELL_IMAGE"
 
 const (
 	// rancherWorkspace is where Rancher keeps the clusters it manages through Fleet.
@@ -338,6 +343,17 @@ func (r *Registrar) register(ctx context.Context, rs *rancherSide, cluster *clus
 	if owner := rc.GetAnnotations()[rancherClusterAnnotation]; owner != cluster.Namespace+"/"+cluster.Name {
 		return ctrl.Result{}, fmt.Errorf("cluster %s in Rancher stands for %q, not this cluster", key, owner)
 	}
+	changed, err := rs.withShellImage(ctx, rc)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if changed {
+		if err := rs.client.Update(ctx, rc); err != nil {
+			return ctrl.Result{}, fmt.Errorf("giving cluster %s in Rancher the shell image: %w", key, err)
+		}
+		log.Info("gave Rancher's agent the shell image Rancher runs")
+		return ctrl.Result{RequeueAfter: registerPoll}, nil
+	}
 	if ready, _, _ := unstructured.NestedBool(rc.Object, "status", "ready"); ready {
 		return ctrl.Result{RequeueAfter: resync}, nil
 	}
@@ -381,6 +397,9 @@ func (rs *rancherSide) create(ctx context.Context, key client.ObjectKey, cluster
 	rc.SetName(key.Name)
 	rc.SetAnnotations(map[string]string{rancherClusterAnnotation: cluster.Namespace + "/" + cluster.Name})
 	rc.Object["spec"] = rancherClusterSpec()
+	if _, err := rs.withShellImage(ctx, rc); err != nil {
+		return ctrl.Result{}, err
+	}
 	if err := rs.client.Create(ctx, rc); err != nil {
 		return ctrl.Result{}, fmt.Errorf("creating cluster %s in Rancher: %w", key, err)
 	}
@@ -400,6 +419,43 @@ func rancherClusterSpec() map[string]any {
 		"fleetAgentDeploymentCustomization":   agent(),
 		"webhookDeploymentCustomization":      agent(),
 	}
+}
+
+// withShellImage gives a cluster's agent in Rancher the shell image Rancher itself is set to, which
+// Kubehenge pins by digest, and tells whether that changed rc. An empty setting leaves the agent
+// its built-in image, as Rancher's own.
+func (rs *rancherSide) withShellImage(ctx context.Context, rc *unstructured.Unstructured) (bool, error) {
+	setting := &unstructured.Unstructured{}
+	setting.SetGroupVersionKind(settingGVK)
+	if err := rs.client.Get(ctx, client.ObjectKey{Name: "shell-image"}, setting); err != nil {
+		return false, fmt.Errorf("reading Rancher's shell-image setting: %w", err)
+	}
+	image, _, _ := unstructured.NestedString(setting.Object, "value")
+	vars, _, err := unstructured.NestedSlice(rc.Object, "spec", "agentEnvVars")
+	if err != nil {
+		return false, fmt.Errorf("reading the agent's environment in Rancher: %w", err)
+	}
+	kept := make([]any, 0, len(vars)+1)
+	current := ""
+	for _, v := range vars {
+		if env, ok := v.(map[string]any); ok && env["name"] == shellImageEnv {
+			if value, ok := env["value"].(string); ok {
+				current = value
+			}
+			continue
+		}
+		kept = append(kept, v)
+	}
+	if current == image {
+		return false, nil
+	}
+	if image != "" {
+		kept = append(kept, map[string]any{"name": shellImageEnv, "value": image})
+	}
+	if err := unstructured.SetNestedSlice(rc.Object, kept, "spec", "agentEnvVars"); err != nil {
+		return false, fmt.Errorf("setting the agent's environment in Rancher: %w", err)
+	}
+	return true, nil
 }
 
 // agentManifest fetches the manifest of Rancher's agent for a cluster, nil until Rancher has made

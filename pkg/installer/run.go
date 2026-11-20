@@ -2,6 +2,7 @@ package installer
 
 import (
 	"archive/tar"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"crypto/tls"
@@ -55,15 +56,20 @@ func (e *NoAddressError) Error() string { return e.UserError.Error() }
 
 // Result is what the end screen shows.
 type Result struct {
-	CTID        string
-	URL         string
-	Address     string
-	Name        string
+	CTID    string
+	URL     string
+	Address string
+	Name    string
+	// AddressURL is the appliance's address as a URL, set where the DNS name does not lead to it yet.
+	AddressURL  string
 	Fingerprint string
 	ValidUntil  time.Time
-	Version     string
-	Warnings    []string
-	LogPath     string
+	// MadeHere tells that the certificate served is the one the installer made, which browsers
+	// warn about until they trust the Proxmox VE CA.
+	MadeHere bool
+	Version  string
+	Warnings []string
+	LogPath  string
 }
 
 // TemplatePin names a container template, its checksum and where it is downloaded from.
@@ -112,8 +118,10 @@ type Runner struct {
 	templateSHA string
 	templateURL string
 	cert        *Certificate
-	version     string
-	warnings    []string
+	// acmeLeaf is the certificate the first ACME order issued, nil while the one made here is served.
+	acmeLeaf *x509.Certificate
+	version  string
+	warnings []string
 }
 
 const keyDir = "/var/lib/kubehenge-keys"
@@ -137,8 +145,11 @@ func (r *Runner) Steps() []StepInfo {
 		{stepCertificateName, "Certificate"},
 		{stepInstallName, "Install software"},
 		{"service", "Start Kubehenge"},
-		{stepUpdatesName, "Security updates"},
 	}
+	if r.S.Cfg.ACME.Directory != "" {
+		list = append(list, StepInfo{stepACMEName, "ACME certificate"})
+	}
+	list = append(list, StepInfo{stepUpdatesName, "Security updates"})
 	if r.S.Cfg.PVEEntry == optYes {
 		list = append(list, StepInfo{stepEntryName, "Proxmox VE entry"})
 	}
@@ -159,7 +170,7 @@ func (r *Runner) Run(ctx context.Context) (*Result, error) {
 	do := map[string]func(context.Context) error{
 		"tofu": r.stepTofu, "template": r.stepTemplate, "create": r.stepCreate, "start": r.stepStart,
 		"address": r.stepAddress, "network": r.stepNetwork, "certificate": r.stepCertificate,
-		"install": r.stepInstall, "service": r.stepService, stepUpdatesName: r.stepUpdates, stepEntryName: r.stepEntry,
+		"install": r.stepInstall, "service": r.stepService, stepACMEName: r.stepACME, stepUpdatesName: r.stepUpdates, stepEntryName: r.stepEntry,
 	}
 	if err := r.unpackRelease(); err != nil {
 		return nil, err
@@ -183,11 +194,27 @@ func (r *Runner) Run(ctx context.Context) (*Result, error) {
 		}
 	}
 	public := r.public()
-	return &Result{
+	res := &Result{
 		CTID: r.S.Cfg.CTID, URL: "https://" + urlHost(public) + "/", Address: r.address, Name: r.S.Cfg.Name,
-		Fingerprint: r.cert.Fingerprint, ValidUntil: r.cert.NotAfter, Version: r.version,
+		Fingerprint: r.cert.Fingerprint, ValidUntil: r.cert.NotAfter, MadeHere: r.S.Cfg.CertFile == "", Version: r.version,
 		Warnings: r.warnings, LogPath: r.LogPath,
-	}, nil
+	}
+	if r.acmeLeaf != nil {
+		res.Fingerprint, res.ValidUntil, res.MadeHere = fingerprint(r.acmeLeaf), r.acmeLeaf.NotAfter, false
+	}
+	if res.Name != "" && !nameResolves(ctx, r.S.Node.LookupHost, res.Name, r.address, r.address6) {
+		res.AddressURL = "https://" + urlHost(cmp.Or(r.address, r.address6)) + "/"
+	}
+	return res, nil
+}
+
+// nameResolves reports whether the DNS name leads to the appliance now.
+func nameResolves(ctx context.Context, lookup func(context.Context, string) ([]string, error), name string, own ...string) bool {
+	if lookup == nil {
+		return false
+	}
+	addrs, err := lookup(ctx, name)
+	return err == nil && anyOf(addrs, own)
 }
 
 func urlHost(h string) string {
@@ -885,15 +912,11 @@ func (r *Runner) stepCertificate(_ context.Context) error {
 	c := &r.S.Cfg
 	public := r.public()
 	if c.CertFile != "" {
-		certPEM, err := os.ReadFile(c.CertFile)
+		b, err := r.S.Node.readOwn(c, r.Now())
 		if err != nil {
-			return fmt.Errorf("read file: %w", err)
+			return plainCertErr(err)
 		}
-		keyPEM, err := os.ReadFile(c.KeyFile)
-		if err != nil {
-			return fmt.Errorf("read file: %w", err)
-		}
-		if r.cert, err = OwnCertificate(certPEM, keyPEM, c.CertFile, c.KeyFile, public, r.Now()); err != nil {
+		if r.cert, err = OwnCertificate(b, public, r.Now()); err != nil {
 			return err
 		}
 		r.finish("certificate", "yours, valid for "+public)
@@ -925,7 +948,7 @@ func (r *Runner) push(ctx context.Context, local, remote, perms string) error {
 
 func (r *Runner) pushData(ctx context.Context, name string, data []byte, remote, perms string) error {
 	local := filepath.Join(r.Work, name)
-	if err := os.WriteFile(local, data, permFile); err != nil { //nolint:gosec // the path is in the installer's own work directory.
+	if err := os.WriteFile(local, data, permFile); err != nil {
 		return fmt.Errorf("write file: %w", err)
 	}
 	return r.push(ctx, local, remote, perms)

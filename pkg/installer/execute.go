@@ -97,6 +97,9 @@ func (m *Model) ended(err error, streams ioStreams) error {
 		return fmt.Errorf("run: %w", err)
 	}
 	if m.DryRun() {
+		for _, c := range m.S.AllCautions() {
+			_, _ = fmt.Fprintln(streams.out, "kubehenge: "+c)
+		}
 		_, _ = fmt.Fprint(streams.out, dryRunHeading+m.S.PlanText(true))
 		return nil
 	}

@@ -2490,16 +2490,18 @@ if [ -n "${addons}" ]; then
             done
         }
         until_true 900 "every Kyverno Deployment ready" kyverno_ready
-        # kyverno_refuses: the policy refuses the pod. Until then, seen holds why not, which a timeout
-        # names: the policy's state while the pod is admitted, or the answer of another refusal.
+        # kyverno_refuses: a Kyverno policy refuses the pod. The pod breaks several of them, and the
+        # API server answers with whichever webhook's denial came first, so any of them counts.
+        # Until then, seen holds why not, which a timeout names: the policy's state while the pod is
+        # admitted, or the answer of another refusal.
         kyverno_refuses() {
             # shellcheck disable=SC2310 # admitted is a retry until the policies are in place.
             out=$(privileged_pod e2e-privileged) && {
-                seen="admitted, the policy: $(wl get clusterpolicy disallow-privileged-containers --no-headers -o wide 2>&1)"
+                seen="admitted, the policy: $(wl get validatingpolicies.policies.kyverno.io disallow-privileged-containers --no-headers -o wide 2>&1)"
                 return 1
             }
             case ${out} in
-                *disallow-privileged-containers*) ;;
+                *'.kyverno.svc'*'" denied the request: Policy '*) ;;
                 *)
                     seen=${out}
                     return 1

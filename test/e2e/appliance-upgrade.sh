@@ -180,7 +180,16 @@ step "remove the appliance"
 pct config "${ctid}" | grep -qx 'protection: 1' || fail "the upgrade left the appliance unprotected"
 pct stop "${ctid}"
 pct set "${ctid}" --protection 0
-pct destroy "${ctid}" --purge
+# Once a destroy found the protection on again, with nothing in the API or the tasks to set it.
+# These tell a lift that never took from one undone afterwards.
+if ! pct config "${ctid}" | grep -qx 'protection: 0'; then
+    pct pending "${ctid}" >&2 || true
+    fail "pct set left the protection on"
+fi
+if ! pct destroy "${ctid}" --purge; then
+    pct pending "${ctid}" >&2 || true
+    fail "the protection came back after pct set lifted it"
+fi
 
 step "Proxmox VE as it was"
 inventory > "${work}/after"

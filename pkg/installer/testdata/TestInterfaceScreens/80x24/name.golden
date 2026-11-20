@@ -1,0 +1,7 @@
+ ▄▄▄▄▄▄▄▄▄   Kubehenge
+ ▀██▀▀▀██▀   Appliance installer
+  ██   ██    Network · Interface · Storage · Summary · Install · Done
+
+  ┃ DNS name of the interface
+  ┃ > empty: the address DHCP gives
+  enter confirm  esc back  ctrl+c quit

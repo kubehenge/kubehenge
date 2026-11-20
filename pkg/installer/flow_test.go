@@ -36,6 +36,9 @@ func TestPlainDHCPRoad(t *testing.T) {
 	if !strings.Contains(out, "Kubehenge is running in container 100: https://192.0.2.77/") {
 		t.Fatalf("no end line:\n%s", out)
 	}
+	if !strings.Contains(out, "Browsers warn until they trust the Proxmox VE CA. Compare the SHA-256 they show with the one above.") {
+		t.Errorf("the end does not say browsers warn about the certificate made here:\n%s", out)
+	}
 	if create := h.exec.last("pct create"); !strings.Contains(create, "ip=dhcp") {
 		t.Fatalf("container not created with DHCP: %s", create)
 	}

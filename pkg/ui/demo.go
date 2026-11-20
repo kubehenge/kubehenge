@@ -62,14 +62,15 @@ var errDemo = errors.New("the demo changes nothing")
 
 // SetUpDemo makes s the demo: the interface over a sample fleet held in memory. Every client the
 // handlers use is a fake, so nothing reaches a Proxmox VE host, a management cluster or a workload
-// cluster, and changes are refused. clock is the demo's time, which its sample data is dated
+// cluster, and changes are refused, except those of the interface's certificate, which stay in
+// memory. clock is the demo's time, which its sample data is dated
 // against. The appliance it sets up keeps its settings in a folder that cleanup removes.
-func SetUpDemo(s *Server, clock func() time.Time) (func(), error) {
-	return demoFrom(s, clock, demoFleetJSON)
+func SetUpDemo(ctx context.Context, s *Server, clock func() time.Time) (func(), error) {
+	return demoFrom(ctx, s, clock, demoFleetJSON)
 }
 
 // demoFrom is SetUpDemo over the fleet raw holds, in the form of demo-fleet.json.
-func demoFrom(s *Server, clock func() time.Time, raw []byte) (func(), error) {
+func demoFrom(ctx context.Context, s *Server, clock func() time.Time, raw []byte) (func(), error) {
 	if s.Appliance != nil || s.Headlamp != nil || s.Upgrades != nil {
 		return nil, errors.New("the demo runs without the appliance, Headlamp or upgrades")
 	}
@@ -77,10 +78,19 @@ func demoFrom(s *Server, clock func() time.Time, raw []byte) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("the demo's appliance: %w", err)
 	}
-	cleanup := func() { _ = os.RemoveAll(dir) }
+	ctx, stop := context.WithCancel(ctx)
+	var running sync.WaitGroup
+	cleanup := func() {
+		stop()
+		running.Wait()
+		_ = os.RemoveAll(dir)
+	}
 	if err := fillDemo(s, clock, dir, raw); err != nil {
 		cleanup()
 		return nil, err
+	}
+	if s.Certificate != nil && s.Certificate.acme != nil {
+		running.Go(func() { s.Certificate.acme.Run(ctx) })
 	}
 	return cleanup, nil
 }
@@ -90,6 +100,7 @@ func fillDemo(s *Server, clock func() time.Time, dir string, raw []byte) error {
 	if err != nil {
 		return err
 	}
+	fleet.clock = clock
 	scheme, mapper, err := demoScheme()
 	if err != nil {
 		return err
@@ -133,6 +144,9 @@ func fillDemo(s *Server, clock func() time.Time, dir string, raw []byte) error {
 	s.ProxmoxURL, s.WorkloadPool, s.ClassNamespace, s.Namespace = "", demoPool, demoClassNamespace, demoNamespace
 	if s.SessionMaxAge == 0 {
 		s.SessionMaxAge = demoSessionMaxAge
+	}
+	if err = s.fillDemoCertificate(clock()); err != nil {
+		return err
 	}
 	s.demo = &demoState{hosts: fleet.data.ProxmoxNodes}
 	s.clock = clock
@@ -216,7 +230,7 @@ type demoState struct {
 	hosts []string
 }
 
-// demoGuard marks every answer as the demo's, signs in whoever opens it, and refuses every change.
+// demoGuard marks every answer as the demo's, signs in whoever opens it, and refuses every change but the certificate's.
 // Reads that are sent as POSTs pass: free addresses, a change's plan and a dry run of a creation.
 func (s *Server) demoGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -230,6 +244,11 @@ func (s *Server) demoGuard(next http.Handler) http.Handler {
 			}
 		}
 		if r.Method == http.MethodGet || r.Method == http.MethodHead || demoRead(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// The certificate is the one thing the demo lets a visitor change, in memory.
+		if strings.HasPrefix(r.URL.Path, "/api/appliance/certificate") {
 			next.ServeHTTP(w, r)
 			return
 		}

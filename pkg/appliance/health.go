@@ -5,12 +5,10 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -30,6 +28,10 @@ const (
 type ServiceCheck struct {
 	// CertFile is the certificate the interface serves, which the check trusts and nothing else.
 	CertFile string
+	// StoredFile is the certificate an administrator gave the interface after the install. The
+	// interface serves it in place of CertFile's whenever it reads cleanly, so the check expects it
+	// then.
+	StoredFile string
 	// Address is where the interface listens, host and port.
 	Address string
 	Wait    time.Duration
@@ -40,12 +42,7 @@ type ServiceCheck struct {
 
 // Healthy is the check.
 func (c *ServiceCheck) Healthy(ctx context.Context) error {
-	client, base, err := c.Client()
-	if err != nil {
-		return err
-	}
-	url := base + "/api/health"
-	err = c.untilAnswers(ctx, client, url)
+	err := c.untilAnswers(ctx)
 	if err != nil {
 		return err
 	}
@@ -69,7 +66,7 @@ func (c *ServiceCheck) Healthy(ctx context.Context) error {
 	if after != before {
 		return fmt.Errorf("the interface stopped and was restarted %d times within %s of starting", after-before, c.Settle)
 	}
-	return answers(ctx, client, url)
+	return c.untilAnswers(ctx)
 }
 
 // Client accepts only the served certificate itself, so the check holds for one Proxmox VE's CA signed,
@@ -80,17 +77,9 @@ func (c *ServiceCheck) Client() (*http.Client, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("the interface's address: %w", err)
 	}
-	raw, err := os.ReadFile(c.CertFile)
+	leaf, file, err := c.expected()
 	if err != nil {
-		return nil, "", fmt.Errorf("the interface's certificate: %w", err)
-	}
-	block, _ := pem.Decode(raw)
-	if block == nil {
-		return nil, "", fmt.Errorf("the interface's certificate %s holds no PEM", c.CertFile)
-	}
-	leaf, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, "", fmt.Errorf("the interface's certificate: %w", err)
+		return nil, "", err
 	}
 	var name string
 	switch {
@@ -111,7 +100,7 @@ func (c *ServiceCheck) Client() (*http.Client, string, error) {
 		Time: func() time.Time { return leaf.NotBefore },
 		VerifyConnection: func(cs tls.ConnectionState) error {
 			if len(cs.PeerCertificates) == 0 || !bytes.Equal(cs.PeerCertificates[0].Raw, leaf.Raw) {
-				return fmt.Errorf("%s serves a certificate other than %s", c.Address, c.CertFile)
+				return fmt.Errorf("%s serves a certificate other than %s", c.Address, file)
 			}
 			return nil
 		},
@@ -126,17 +115,30 @@ func (c *ServiceCheck) Client() (*http.Client, string, error) {
 	return &http.Client{Transport: transport, Timeout: healthRequest}, "https://" + net.JoinHostPort(name, port), nil
 }
 
-func (c *ServiceCheck) untilAnswers(ctx context.Context, client *http.Client, url string) error {
+// expected is the certificate the interface should serve, and the file it came from.
+func (c *ServiceCheck) expected() (*x509.Certificate, string, error) {
+	return ServedCertificate(c.CertFile, c.StoredFile, time.Now())
+}
+
+// untilAnswers asks until the interface answers, each time on the certificate on disk then, since
+// ACME may deliver one while the check runs.
+func (c *ServiceCheck) untilAnswers(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, c.Wait)
 	defer cancel()
 	var last error
 	for {
-		err := answers(ctx, client, url)
+		client, base, err := c.Client()
+		if err != nil {
+			return err
+		}
+		err = answers(ctx, client, base+"/api/health")
+		client.CloseIdleConnections()
 		if err == nil {
 			return nil
 		}
 		if verr := (*tls.CertificateVerificationError)(nil); errors.As(err, &verr) {
-			err = fmt.Errorf("%s serves a certificate other than %s", c.Address, c.CertFile)
+			_, file, _ := c.expected()
+			err = fmt.Errorf("%s serves a certificate other than %s", c.Address, file)
 		}
 		// A request the deadline cut off says less than the answer before it.
 		if last == nil || ctx.Err() == nil {

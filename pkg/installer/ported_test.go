@@ -13,9 +13,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kubehenge/kubehenge/pkg/certfiles"
 )
 
 func TestIPValidators(t *testing.T) {
@@ -254,16 +257,23 @@ func TestOwnCertificate(t *testing.T) {
 	now := time.Now()
 	cert, _ := h.node.MakeCertificate("kubehenge", []string{"192.0.2.40"}, "", now)
 	other, _ := h.node.MakeCertificate("kubehenge", []string{"192.0.2.41"}, "", now)
-	if _, err := OwnCertificate(cert.CertPEM, cert.KeyPEM, "c.pem", "k.pem", "192.0.2.40", now); err != nil {
+	read := func(c, k *Certificate) (*certfiles.Bundle, error) {
+		return certfiles.Read([]certfiles.File{{Name: "c.pem", Data: c.CertPEM}, {Name: "k.pem", Data: k.KeyPEM}}, "", nil, now)
+	}
+	bundle, err := read(cert, cert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = OwnCertificate(bundle, "192.0.2.40", now); err != nil {
 		t.Errorf("a matching pair: %v", err)
 	}
-	if _, err := OwnCertificate(cert.CertPEM, other.KeyPEM, "c.pem", "k.pem", "192.0.2.40", now); err == nil || !strings.Contains(err.Error(), "is not the key of c.pem") {
-		t.Errorf("a key of another certificate: %v", err)
+	if _, err = read(cert, other); err == nil {
+		t.Error("a key of another certificate was read")
 	}
-	if _, err := OwnCertificate(cert.CertPEM, cert.KeyPEM, "c.pem", "k.pem", "192.0.2.99", now); err == nil || !strings.Contains(err.Error(), "is not valid for 192.0.2.99") {
+	if _, err = OwnCertificate(bundle, "192.0.2.99", now); err == nil || !strings.Contains(err.Error(), "is not valid for 192.0.2.99") {
 		t.Errorf("another host: %v", err)
 	}
-	if _, err := OwnCertificate(cert.CertPEM, cert.KeyPEM, "c.pem", "k.pem", "192.0.2.40", now.Add(900*24*time.Hour)); err == nil {
+	if _, err = OwnCertificate(bundle, "192.0.2.40", now.Add(900*24*time.Hour)); err == nil {
 		t.Error("an expired certificate")
 	}
 }
@@ -653,5 +663,50 @@ func TestReplaceCertificate(t *testing.T) {
 	h.exec.fail("pct exec 100 -- flock", exitBusy)
 	if _, err = r.ReplaceCertificate(ctx, out); err == nil || !strings.Contains(err.Error(), "the interface is busy") {
 		t.Errorf("a busy interface: %v", err)
+	}
+}
+
+// The installer's certificate is the one served unless an administrator gave the interface another,
+// which is kept in the appliance's directory. Replacing the installer's certificate takes that one,
+// and the appliance's CA that may have signed it, away before the interface restarts.
+func TestReplaceCertificateForgetsTheOneAnAdministratorGave(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const remove = "pct exec 100 -- rm -f /var/lib/kubehenge/interface-certificate.pem /var/lib/kubehenge/interface-ca.pem /var/lib/kubehenge/public-url /var/lib/kubehenge/headlamp.env"
+	h, r, out := upgradeHarness(t)
+	h.exec.on("pct config 100", "hostname: kubehenge\ntags: kubehenge\nnet0: name=eth0,bridge=vmbr0,ip=192.0.2.40/24\n")
+	r.S.Cfg.Upgrade, r.S.Cfg.Certificate, r.S.Cfg.Name = false, true, "kubehenge.example.org"
+	if _, err := r.ReplaceCertificate(ctx, out); err != nil {
+		t.Fatal(err)
+	}
+	removed, restarted := slices.Index(h.exec.calls, remove), slices.IndexFunc(h.exec.calls, func(c string) bool { return strings.HasPrefix(c, "pct exec 100 -- flock") })
+	if h.exec.count(remove) != 1 || removed > restarted {
+		t.Errorf("the stored certificate is removed once, before the restart: %v", h.exec.calls)
+	}
+	h.exec.failWith(remove, "no such file system")
+	if _, err := r.ReplaceCertificate(ctx, out); err == nil || !strings.Contains(err.Error(), "removing the stored certificate") {
+		t.Errorf("a stored certificate that cannot be removed: %v", err)
+	}
+}
+
+// An ACME setting would order a certificate over the one the installer replaces, so it goes too,
+// before the interface restarts, and a setting that cannot be removed stops the replacement.
+func TestReplaceCertificateRemovesTheACMESetting(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const remove = "pct exec 100 -- sh -c rm -f /var/lib/kubehenge/acme-*"
+	h, r, out := upgradeHarness(t)
+	h.exec.on("pct config 100", "hostname: kubehenge\ntags: kubehenge\nnet0: name=eth0,bridge=vmbr0,ip=192.0.2.40/24\n")
+	r.S.Cfg.Upgrade, r.S.Cfg.Certificate, r.S.Cfg.Name = false, true, "kubehenge.example.org"
+	if _, err := r.ReplaceCertificate(ctx, out); err != nil {
+		t.Fatal(err)
+	}
+	removed, restarted := slices.Index(h.exec.calls, remove), slices.IndexFunc(h.exec.calls, func(c string) bool { return strings.HasPrefix(c, "pct exec 100 -- flock") })
+	if h.exec.count(remove) != 1 || removed > restarted {
+		t.Errorf("the ACME setting is removed once, before the restart: %v", h.exec.calls)
+	}
+	h.exec.failWith(remove, "no such file system")
+	if _, err := r.ReplaceCertificate(ctx, out); err == nil || !strings.Contains(err.Error(), "removing the ACME setting") {
+		t.Errorf("an ACME setting that cannot be removed: %v", err)
 	}
 }

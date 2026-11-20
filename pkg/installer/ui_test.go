@@ -386,7 +386,7 @@ func TestUIAddressInUseReturnsToTheAddress(t *testing.T) {
 	u.enter(4)
 	u.waitFor("IPv4 address and prefix")
 	h.take("192.0.2.254")
-	u.enter(2)
+	u.enter(4)
 	u.waitFor("is in use on")
 	u.golden("in-use")
 	if !strings.Contains(u.rec.screen(), "IPv4 address and prefix") || strings.Contains(u.rec.screen(), "IP version") {

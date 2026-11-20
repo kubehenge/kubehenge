@@ -656,7 +656,7 @@ func TestARenewedCertificateKeepsTheLogin(t *testing.T) {
 		t.Fatal(err)
 	}
 	cert = signedBy(t, nil, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
-	if _, err := f.run("appliance", "upgrades"); err == nil || !strings.HasSuffix(err.Error(), "run kubehenge login "+srv.URL+" --ca "+tlsCrt) {
+	if _, err := f.run("appliance", "upgrades"); err == nil || !strings.HasSuffix(err.Error(), "Run kubehenge login "+srv.URL+" --ca "+tlsCrt) {
 		t.Errorf("appliance upgrades through a certificate no longer trusted: %v", err)
 	}
 }

@@ -1221,6 +1221,97 @@ export interface Job {
   lines?: number;
 }
 
+/** Where the interface's certificate came from. */
+export type InterfaceCertificateSource = "installer" | "uploaded" | "self-signed" | "appliance-ca" | "acme";
+
+/** The appliance's own CA, which administrators trust once. It may sign only for the names it permits. */
+export interface ApplianceCA {
+  subject: string;
+  fingerprint: string;
+  notAfter: string;
+  permits: string[];
+  pem: string;
+}
+
+/** How the ACME server checks that the appliance holds its name. */
+export type ACMEProof = "tls-alpn-01" | "http-01" | "dns-01";
+
+/** The ACME setting and how its order stands. It names which secrets are set and never holds one. */
+export interface ACMEView {
+  /** letsencrypt, letsencrypt-staging or an https address. */
+  directory: string;
+  email?: string;
+  proof: ACMEProof;
+  profile?: string;
+  externalAccountBinding?: { keyID: string; hmacKeySet: boolean };
+  directoryCASet: boolean;
+  dnsProvider?: string;
+  /** The names of the DNS provider's variables that have a value. */
+  dnsCredentialsSet: string[];
+  resolvers: string[];
+  state: "ordering" | "issued" | "failing";
+  /** Whether it stopped trying after a day of failures. */
+  givenUp: boolean;
+  error?: string;
+  errorAt?: string;
+  nextAttempt?: string;
+  lastSuccess?: string;
+  nextRenewal?: string;
+  publicName?: string;
+}
+
+/** An ACME setting to save. A secret left empty keeps the one saved for the same key ID or provider. */
+export interface ACMERequest {
+  directory: string;
+  proof: ACMEProof;
+  email?: string;
+  profile?: string;
+  directoryCA?: string;
+  externalAccountBinding?: { keyID: string; hmacKey: string };
+  dnsProvider?: string;
+  dnsCredentials?: Record<string, string>;
+  resolvers?: string[];
+}
+
+/** The certificate the interface serves, as an administrator sees it. */
+export interface InterfaceCertificate {
+  source: InterfaceCertificateSource;
+  subject: string;
+  dnsNames?: string[];
+  ipAddresses?: string[];
+  issuer: string;
+  notBefore: string;
+  notAfter: string;
+  /** SHA-256, upper case, separated by colons. */
+  fingerprint: string;
+  /** The subject of the certificate, then of each issuer above it. */
+  chain: string[];
+  incomplete: boolean;
+  /** The issuer the chain lacks, when it is incomplete. */
+  missingIssuer?: string;
+  selfSigned: boolean;
+  /** The CA a browser has to trust, for a chain no public CA vouches for. */
+  trustedBy?: string;
+  publicURL?: string;
+  /** Whether the public URL's name leads to this appliance. Absent when it is not known. */
+  publicNameResolves?: boolean;
+  /** Whether the certificate is valid for the public URL's name or address. */
+  publicNameCovered?: boolean;
+  /** Why a stored certificate is not served, when one is not. */
+  notServed?: string;
+  /** False where the interface has nowhere to keep a change. */
+  changeable: boolean;
+  /** The ACME setting, when the certificate comes from ACME. */
+  acme?: ACMEView;
+  /** The appliance's own CA, once it has one. */
+  applianceCA?: ApplianceCA;
+}
+
+/** The answer to a replacement: the new certificate, and those in the files that its chain leaves out. */
+export interface InterfaceCertificateReplaced extends InterfaceCertificate {
+  leftOut?: string[];
+}
+
 /** The apply this appliance's state is from, and the one the management cluster is at. */
 export interface StaleState {
   local: number;

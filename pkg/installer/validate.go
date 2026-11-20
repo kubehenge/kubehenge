@@ -149,8 +149,20 @@ func (c *Config) generalChecks() []optionCheck {
 		{c.NoTrustedProxy && !c.Upgrade, "--no-trusted-proxy goes with --upgrade", ""},
 		{c.NoName && (!c.Certificate || c.Name != ""), "--no-name goes with --certificate and without --name", ""},
 		{c.Hostname != "" && !hostnameRE.MatchString(c.Hostname), "--hostname is a host name such as kubehenge", ""},
-		{(c.CertFile != "") != (c.KeyFile != ""), "--cert and --key name a readable PEM certificate and its key", ""},
+		{c.CertFile == "" && c.KeyFile != "", "--key needs --cert", ""},
+		{c.CertFile == "" && c.CertPassphraseFile != "", "--cert-passphrase-file needs --cert", ""},
+		{c.ACME.Directory != "" && c.CertFile != "", "--acme and --cert exclude each other", ""},
+		{c.ACME.Directory != "" && c.Upgrade, "--acme works only with an install or --certificate", ""},
+		{c.ACME.Directory != "" && c.NoName, "--acme and --no-name exclude each other", ""},
+		{c.ACME.Directory == "" && c.acmeDetails(), "the --acme-* options need --acme", ""},
 	}
+}
+
+// acmeDetails reports whether any option that refines --acme is given.
+func (c *Config) acmeDetails() bool {
+	a := c.ACME
+	return a.Email != "" || a.Proof != "" || a.DirectoryCAFile != "" || a.KeyID != "" || a.HMACKeyFile != "" ||
+		a.Profile != "" || a.DNSProvider != "" || a.DNSCredentialsFile != "" || len(a.Resolvers) > 0
 }
 
 // pairErrors checks each static address against its gateway, and says what is wrong or nothing.

@@ -326,6 +326,27 @@ func TestTheSleeperStillSleepsWhenZonesFail(t *testing.T) {
 	}
 }
 
+// A tick already due when the Sleeper is stopped does nothing. Either of the two may win the
+// Sleeper's select, so the stop is tried until a wrong pick is all but certain to show.
+func TestTheSleeperStopsWithItsContext(t *testing.T) {
+	t.Parallel()
+	for range 20 {
+		ctx, cancel := context.WithCancel(t.Context())
+		reads := 0
+		v := &Volume{Kube: fake.NewClientset(awake(t, unzoned(t))...), VMs: func(context.Context, string) (*VMIndex, error) {
+			reads++
+			cancel()
+			time.Sleep(5 * time.Millisecond)
+			return nil, errors.New("no route to host")
+		}}
+		err := (&Sleeper{Volume: v, Every: time.Millisecond}).Start(ctx)
+		cancel()
+		if err != nil || reads != 1 {
+			t.Fatalf("stopped after %d reads: %v", reads, err)
+		}
+	}
+}
+
 // A controller that may not read the zones Secret, or a storage chart that makes none, has no node
 // to label, and the Sleeper says nothing of it.
 func TestTheSleeperSaysNothingWhereItMayNotLabel(t *testing.T) {

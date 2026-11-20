@@ -944,6 +944,12 @@ button.go {
   }
 }
 
+/* What a change does besides, one sentence a line. */
+.effects {
+  margin: 0;
+  padding-inline-start: 1.2em;
+}
+
 /* Text only screen readers read, for what the page shows by colour or icon alone. */
 .visually-hidden {
   position: absolute;
@@ -1463,6 +1469,49 @@ h4.subsection {
 
 .summary + .summary {
   margin-block-start: 6px;
+}
+
+/* The order's state reads as a heading of the ACME form, apart from its first field. */
+.summary.acme-state {
+  margin-block-end: 16px;
+}
+
+/* A certificate's chain, the certificate first. */
+.chain {
+  margin: 0;
+  padding-inline-start: 1.4em;
+}
+
+/* The files chosen to upload, each with its own Remove, under the picker's control. */
+.files {
+  display: grid;
+  gap: 6px;
+
+  margin: 0 0 12px;
+  padding: 0;
+
+  list-style: none;
+}
+
+@media (width >= 600px) {
+  .files {
+    margin-inline-start: 200px;
+  }
+}
+
+.files li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: center;
+}
+
+.file-name {
+  overflow-wrap: anywhere;
+}
+
+.file-remove {
+  margin-inline-start: auto;
 }
 
 /* On a phone the fixed label column would leave values a third of the width. */
@@ -2828,6 +2877,16 @@ fieldset.choices legend {
   background: color-mix(in srgb, var(--warning) 8%, var(--surface));
 }
 
+/* Several warnings about one thing share a box, a line each. */
+.warning-lines {
+  display: grid;
+  gap: 4px;
+}
+
+.warning-lines p {
+  margin: 0;
+}
+
 /* What to act on before the rest of the page, such as a stalled roll or deletion: its own callout,
    in the colour of how bad it is, with the way out inside it. */
 .callout {
@@ -3177,6 +3236,12 @@ details.advanced > summary {
   font-family: var(--mono);
   font-size: 12px;
   word-break: break-all;
+}
+
+/* A fingerprint breaks between its pairs, never inside one. */
+.key.fingerprint {
+  display: block;
+  word-break: normal;
 }
 
 .log {

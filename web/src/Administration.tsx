@@ -16,9 +16,9 @@ const runningWhat: Partial<Record<NonNullable<Job["kind"]>, string>> = {
 
 // Administration is the appliance's own pages for those who may set it up: the management cluster's
 // settings and removal, Kubehenge's upgrades and repair access, the management cluster's etcd
-// backups, VM templates, and the DNS-01 credential for every cluster. One poll of the setup status
+// backups, VM templates, the interface's certificate and the DNS-01 credential for every cluster. One poll of the setup status
 // serves them all, so they agree on whether a run is going on.
-export function Administration({ view, onGone }: { view: AdminView; onGone: () => void }): JSX.Element {
+export function Administration({ view, onSetupChanged }: { view: AdminView; onSetupChanged: () => void }): JSX.Element {
   const {
     data: status,
     error,
@@ -29,9 +29,9 @@ export function Administration({ view, onGone }: { view: AdminView; onGone: () =
     status !== undefined && !status.ready && status.job?.kind === "remove" && status.job.state === "succeeded";
   useEffect(() => {
     if (gone) {
-      onGone();
+      onSetupChanged();
     }
-  }, [gone, onGone]);
+  }, [gone, onSetupChanged]);
 
   if (!status) {
     return (
@@ -67,7 +67,7 @@ export function Administration({ view, onGone }: { view: AdminView; onGone: () =
         </p>
       )}
       <div className="object-view">
-        <AdminPage view={view} status={status} running={running} reload={reload} />
+        <AdminPage view={view} status={status} running={running} reload={reload} onSetupChanged={onSetupChanged} />
       </div>
     </section>
   );

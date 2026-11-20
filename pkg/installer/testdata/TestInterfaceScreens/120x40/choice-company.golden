@@ -1,0 +1,11 @@
+ ▄▄▄▄▄▄▄▄▄   Kubehenge
+ ▀██▀▀▀██▀   Appliance installer
+  ██   ██    Network · Interface · Storage · Summary · Install · Done
+
+  ┃ Certificate
+  ┃ Browsers warn until they trust the Proxmox VE CA. Files from CN=Corporate
+  ┃ Root, which signed this node's API certificate, avoid the warning
+  ┃   Made here, signed by the Proxmox VE CA
+  ┃ > Files of your own
+  ┃   ACME, such as Let's Encrypt
+  ↑↓ choose  enter confirm  esc back  ctrl+c quit

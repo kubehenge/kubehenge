@@ -167,7 +167,7 @@ func checkHelmRepository(raw []byte) error {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return errors.New("malformed request")
 	}
-	if u, err := url.Parse(req.URL); err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
+	if u, err := url.Parse(req.URL); err != nil || u.Scheme != schemeHTTPS || u.Host == "" || u.User != nil {
 		return errors.New("use an HTTPS repository address without credentials")
 	}
 	if req.Insecure != nil && *req.Insecure {

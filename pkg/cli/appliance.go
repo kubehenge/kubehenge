@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -59,11 +60,11 @@ Run it in the appliance. Every command except health reaches the interface as th
 "kubehenge login" signed in. The user's privileges and the interface's checks apply as on its pages.
 
 Sign in first, in the appliance with
-"kubehenge login https://127.0.0.1 --ca /etc/kubehenge/tls.crt --user root@pam --password-file <file>".`,
+"kubehenge login https://127.0.0.1 --user root@pam --password-file <file>".`,
 	}
 	cmd.AddCommand(o.healthCommand(), o.upgradesCommand(), o.upgradeCommand(), o.etcdBackupsCommand(), o.notificationsCommand(),
 		o.activityCommand(), o.takeOverCommand(), o.readyForRebootCommand(), o.exportCommand(), o.importCommand(),
-		o.settingsCommand())
+		o.settingsCommand(), o.certificateCommand())
 	return cmd
 }
 
@@ -121,7 +122,8 @@ func (o *applianceOptions) healthCommand() *cobra.Command {
 			return o.check.Healthy(cmd.Context())
 		},
 	}
-	cmd.Flags().StringVar(&o.check.CertFile, "cert", "/etc/kubehenge/tls.crt", "certificate the interface must present")
+	cmd.Flags().StringVar(&o.check.CertFile, "cert", appliance.InstallerCertificatePath, "certificate the interface must present")
+	cmd.Flags().StringVar(&o.check.StoredFile, "stored-cert", appliance.InterfaceCertificatePath, "certificate an administrator gave the interface, which it must present instead while the file reads cleanly")
 	cmd.Flags().StringVar(&o.check.Address, "address", "127.0.0.1:443", "where the interface listens")
 	cmd.Flags().DurationVar(&o.check.Wait, "wait", healthWait, "how long the interface has to answer")
 	cmd.Flags().DurationVar(&o.check.Settle, "settle", healthSettle, "how long the interface must stay up after it answers")
@@ -569,11 +571,27 @@ func secretFrom(file, env string) (string, error) {
 	if file == "" {
 		return os.Getenv(env), nil
 	}
-	raw, err := os.ReadFile(file) //nolint:gosec // the file the person running the command named
+	raw, err := readNamedFile(file)
 	if err != nil {
-		return "", fmt.Errorf("reading %s: %w", file, err)
+		return "", err
 	}
 	return string(trimNewline(raw)), nil
+}
+
+// readNamedFile reads a file the person running the command named. Its error names the file once,
+// where the system's own names it twice.
+func readNamedFile(path string) ([]byte, error) {
+	raw, err := os.ReadFile(path) //nolint:gosec // the file the person running the command named
+	var pathErr *fs.PathError
+	switch {
+	case err == nil:
+		return raw, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, fmt.Errorf("%s does not exist. Give the path of an existing file", path)
+	case errors.As(err, &pathErr):
+		return nil, fmt.Errorf("reading %s: %w", path, pathErr.Err)
+	}
+	return nil, fmt.Errorf("reading %s: %w", path, err)
 }
 
 func pause(ctx context.Context) error {

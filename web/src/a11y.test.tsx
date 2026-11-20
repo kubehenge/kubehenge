@@ -954,6 +954,30 @@ const oops = { status: 500, body: { error: "Disk on fire. Try again." } };
 const failing = (key: string): Record<string, Route> => ({ [key]: oops });
 const shown = text(/Disk on fire/u);
 
+const days = (n: number): string => new Date(Date.now() + n * 86_400_000 + 3_600_000).toISOString();
+const interfaceCertificate = (over: Record<string, unknown> = {}): Record<string, Route> => ({
+  "GET /api/appliance/certificate": {
+    body: {
+      source: "uploaded",
+      subject: "CN=kubehenge.example.org",
+      dnsNames: ["kubehenge.example.org"],
+      ipAddresses: ["192.0.2.40"],
+      issuer: "CN=Example Org CA",
+      notBefore: days(-100),
+      notAfter: days(120),
+      fingerprint: Array.from({ length: 32 }, () => "AB").join(":"),
+      chain: ["CN=kubehenge.example.org", "CN=Example Org CA"],
+      incomplete: false,
+      selfSigned: false,
+      publicURL: "https://kubehenge.example.org",
+      publicNameResolves: true,
+      changeable: true,
+      ...over,
+    },
+  },
+});
+const certificatePath = "/administration/certificates";
+
 const cases: Case[] = [
   {
     name: "keyboard shortcuts and palette",
@@ -1136,7 +1160,7 @@ const cases: Case[] = [
   {
     name: "error: certificates",
     path: "/administration/certificates",
-    routes: { ...admin, ...failing("GET /api/credentials/dns01") },
+    routes: { ...admin, ...interfaceCertificate(), ...failing("GET /api/credentials/dns01") },
     ready: shown,
   },
   {
@@ -1175,9 +1199,104 @@ const cases: Case[] = [
   { name: "appliance, failed upgrade", path: "/administration/appliance", routes: richAdmin, ready: loaded },
   { name: "backups, snapshots", path: "/administration/backups", routes: richAdmin, ready: loaded },
   { name: "templates, built", path: "/administration/templates", routes: richAdmin, ready: loaded },
-  { name: "certificates, token stored", path: "/administration/certificates", routes: richAdmin, ready: loaded },
+  {
+    name: "certificates, token stored",
+    path: "/administration/certificates",
+    routes: { ...richAdmin, ...interfaceCertificate() },
+    ready: loaded,
+  },
   { name: "notifications, sent", path: "/administration/notifications", routes: richAdmin, ready: loaded },
   { name: "activity, entries", path: "/administration/activity", routes: richAdmin, ready: loaded },
+  {
+    name: "interface certificate, uploaded",
+    path: certificatePath,
+    routes: { ...admin, ...interfaceCertificate() },
+    ready: loaded,
+  },
+  {
+    name: "interface certificate, every warning",
+    path: certificatePath,
+    routes: {
+      ...admin,
+      ...interfaceCertificate({
+        source: "installer",
+        notAfter: days(10),
+        incomplete: true,
+        missingIssuer: "CN=Example Root CA",
+        selfSigned: true,
+        publicNameResolves: false,
+        notServed: "the file holds no key",
+      }),
+    },
+    ready: loaded,
+  },
+  {
+    name: "interface certificate, expired",
+    path: certificatePath,
+    routes: { ...admin, ...interfaceCertificate({ notAfter: days(-3) }) },
+    ready: loaded,
+  },
+  {
+    name: "interface certificate, cannot change",
+    path: certificatePath,
+    routes: { ...admin, ...interfaceCertificate({ changeable: false }) },
+    ready: loaded,
+  },
+  {
+    name: "interface certificate, files and refusals",
+    path: certificatePath,
+    routes: {
+      ...admin,
+      ...interfaceCertificate(),
+      "PUT /api/appliance/certificate": {
+        status: 422,
+        body: { error: "host.pfx is encrypted. Send its passphrase", code: "passphrase" },
+      },
+    },
+    ready: loaded,
+    walk: async (check, user) => {
+      await user.upload(await screen.findByLabelText("Certificate files"), [
+        new File(["x"], "host.pfx"),
+        new File(["x"], "chain.pem"),
+      ]);
+      await check("chosen files");
+      await user.click(screen.getByRole("button", { name: "Replace" }));
+      await screen.findByLabelText("Passphrase");
+      await check("passphrase asked");
+    },
+  },
+  {
+    name: "interface certificate, confirmations",
+    path: certificatePath,
+    routes: { ...admin, ...interfaceCertificate() },
+    ready: loaded,
+    walk: async (check, user) => {
+      await user.click(await screen.findByRole("radio", { name: "Self-signed" }));
+      await user.click(screen.getByRole("button", { name: "Make self-signed" }));
+      await screen.findByRole("dialog", { name: "Make self-signed certificate" });
+      await check("self-signed confirmation");
+      await user.click(
+        within(screen.getByRole("dialog", { name: "Make self-signed certificate" })).getByRole("button", {
+          name: "Cancel",
+        }),
+      );
+      await user.click(screen.getByRole("radio", { name: "Installer's" }));
+      await user.click(screen.getByRole("button", { name: "Use installer's" }));
+      await screen.findByRole("dialog", { name: "Use installer's certificate" });
+      await check("installer's confirmation");
+      await user.click(
+        within(screen.getByRole("dialog", { name: "Use installer's certificate" })).getByRole("button", {
+          name: "Cancel",
+        }),
+      );
+    },
+  },
+  {
+    name: "error: interface certificate",
+    path: certificatePath,
+    routes: { ...admin, ...failing("GET /api/appliance/certificate") },
+    ready: shown,
+  },
   {
     name: "administrators only",
     path: "/administration",
@@ -1234,7 +1353,12 @@ const cases: Case[] = [
   { name: "administration, appliance", path: "/administration/appliance", routes: admin, ready: loaded },
   { name: "administration, backups", path: "/administration/backups", routes: admin, ready: loaded },
   { name: "administration, templates", path: "/administration/templates", routes: admin, ready: loaded },
-  { name: "administration, certificates", path: "/administration/certificates", routes: admin, ready: loaded },
+  {
+    name: "administration, certificates",
+    path: "/administration/certificates",
+    routes: { ...admin, ...interfaceCertificate() },
+    ready: loaded,
+  },
   { name: "administration, notifications", path: "/administration/notifications", routes: admin, ready: loaded },
   { name: "administration, activity", path: "/administration/activity", routes: admin, ready: loaded },
   {
@@ -1402,6 +1526,8 @@ const dialogsExpected = [
   /^Build template$/u,
   /^Delete template /u,
   /^Remove Kubehenge$/u,
+  /^Make self-signed certificate$/u,
+  /^Use installer's certificate$/u,
   /^Review plan$/u,
   /^Keyboard shortcuts$/u,
   /^Go to or run$/u,

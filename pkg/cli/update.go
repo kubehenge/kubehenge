@@ -44,10 +44,16 @@ func releaseIndexDefault() string {
 	return DefaultIndex
 }
 
-func newUpdateCommand() *cobra.Command {
-	check := appliance.ServiceCheck{
-		CertFile: "/etc/kubehenge/tls.crt", Address: "127.0.0.1:443", Wait: healthWait, Settle: healthSettle,
+// updateCheck is the health check an upgrade must pass. It expects the certificate the interface
+// serves, which is the stored one while that reads cleanly.
+func updateCheck() *appliance.ServiceCheck {
+	return &appliance.ServiceCheck{
+		CertFile: appliance.InstallerCertificatePath, StoredFile: appliance.InterfaceCertificatePath, Address: "127.0.0.1:443", Wait: healthWait, Settle: healthSettle,
 	}
+}
+
+func newUpdateCommand() *cobra.Command {
+	check := updateCheck()
 	u := appliance.Updater{
 		Root: "/", Restart: appliance.RestartService, Reload: appliance.ReloadUnits, Healthy: check.Healthy,
 		Current: release.Version, Keys: release.PublicKeys(),

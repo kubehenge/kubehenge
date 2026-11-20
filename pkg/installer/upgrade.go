@@ -8,12 +8,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/kubehenge/kubehenge/pkg/appliance"
+	"github.com/kubehenge/kubehenge/pkg/certfiles"
 )
 
 //go:embed upgrade.sh
@@ -89,6 +93,21 @@ func (r *Runner) currentCertificate(ctx context.Context) *x509.Certificate {
 	return c
 }
 
+// storedCertificate is the certificate an administrator gave the interface, nil when there is none
+// or it is outside its validity, since the interface then serves the installer's. Only the file's
+// certificates are read, never its key, because every command's output goes to the log.
+func (r *Runner) storedCertificate(ctx context.Context) *x509.Certificate {
+	out, err := r.inCT(ctx, "sed", "-n", "/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p", appliance.InterfaceCertificatePath)
+	if err != nil {
+		return nil
+	}
+	c, err := parseCertFile([]byte(out))
+	if err != nil || r.Now().Before(c.NotBefore) || r.Now().After(c.NotAfter) {
+		return nil
+	}
+	return c
+}
+
 // signedHere reports whether this cluster's CA signed the certificate.
 func (r *Runner) signedHere(c *x509.Certificate) bool {
 	data, err := r.S.Node.readFile(clusterCA)
@@ -107,10 +126,14 @@ func (r *Runner) madeHere(c *x509.Certificate) bool {
 var hostLabelRE = regexp.MustCompile(`^[0-9A-Za-z.-]+$`)
 
 // publicName returns the DNS name an installed appliance is reached by, empty when it is its
-// address. A certificate this cluster's CA signed carries the name the administrator gave on this
-// node, beside the host name. A name from anywhere else comes from inside the container, whose root
-// can write any, so it is taken only where this node's DNS resolves it to the appliance's address.
+// address. The address an administrator set on the certificate page comes first. Then a
+// certificate this cluster's CA signed carries the name the administrator gave on this node, beside
+// the host name. A name from inside the container, whose root can write any, is taken only where
+// this node's DNS resolves it to the appliance's address.
 func (r *Runner) publicName(ctx context.Context, c *x509.Certificate, address string, out io.Writer) string {
+	if set, err := r.inCT(ctx, "cat", appliance.PublicURLPath); err == nil && strings.TrimSpace(set) != "" {
+		return r.resolvedName(ctx, hostOfURL(strings.TrimSpace(set)), address, out)
+	}
 	if c != nil && r.signedHere(c) {
 		dns, _ := certNames(c)
 		if len(dns) > 1 {
@@ -118,7 +141,21 @@ func (r *Runner) publicName(ctx context.Context, c *x509.Certificate, address st
 		}
 		return ""
 	}
-	host := strings.TrimPrefix(r.envValue(ctx, "KUBEHENGE_PUBLIC_URL"), "https://")
+	return r.resolvedName(ctx, hostOfURL(r.envValue(ctx, "KUBEHENGE_PUBLIC_URL")), address, out)
+}
+
+// hostOfURL is the host of an address such as https://kubehenge.example.org, empty when it reads as
+// none.
+func hostOfURL(s string) string {
+	u, err := url.Parse(s)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
+// resolvedName is host where it is a DNS name this node's DNS resolves to address, else empty.
+func (r *Runner) resolvedName(ctx context.Context, host, address string, out io.Writer) string {
 	if host == "" || strings.HasPrefix(host, "[") || dottedRE.MatchString(host) || !hostLabelRE.MatchString(host) {
 		return ""
 	}
@@ -193,12 +230,11 @@ func (r *Runner) ReplaceCertificate(ctx context.Context, out io.Writer) (*Result
 	var cert *Certificate
 	var err error
 	if c.CertFile != "" {
-		certPEM, rerr := os.ReadFile(c.CertFile)
-		keyPEM, kerr := os.ReadFile(c.KeyFile)
-		if rerr != nil || kerr != nil {
-			return nil, userErr("--cert and --key name a readable PEM certificate and its key", "")
+		var b *certfiles.Bundle
+		if b, err = r.S.Node.readOwn(c, r.Now()); err != nil {
+			return nil, plainCertErr(err)
 		}
-		cert, err = OwnCertificate(certPEM, keyPEM, c.CertFile, c.KeyFile, public, r.Now())
+		cert, err = OwnCertificate(b, public, r.Now())
 	} else {
 		cert, err = r.S.Node.MakeCertificate(r.hostnameOf(ctx), addrs, name, r.Now())
 	}
@@ -208,6 +244,21 @@ func (r *Runner) ReplaceCertificate(ctx context.Context, out io.Writer) (*Result
 	r.sayf(out, "ok   Certificate for %s", public)
 	if err = r.installCertificate(ctx, cert, public); err != nil {
 		return nil, userErr("copying the certificate into container "+c.CTID+" failed", "See "+r.LogPath)
+	}
+	// A certificate an administrator gave the interface is served before the installer's, so asking
+	// for the installer's again takes it away, with the CA that may have signed it. The address set
+	// on the page is in the appliance's environment from now on.
+	if _, err = r.inCT(ctx, "rm", "-f", appliance.InterfaceCertificatePath, appliance.InterfaceCAPath, appliance.PublicURLPath, appliance.HeadlampEnvPath); err != nil {
+		return nil, userErr("removing the stored certificate from container "+c.CTID+" failed", "See "+r.LogPath)
+	}
+	// So that ACME does not replace the certificate chosen here at its next renewal.
+	if _, err = r.inCT(ctx, "sh", "-c", "rm -f "+appliance.ACMEFilesPattern); err != nil {
+		return nil, userErr("removing the ACME setting from container "+c.CTID+" failed", "See "+r.LogPath)
+	}
+	if c.ACME.Directory != "" {
+		if err = r.putACME(ctx, name); err != nil {
+			return nil, err
+		}
 	}
 	// Not while the management cluster is applied or removed: the restart would cut the run off.
 	_, err = r.inCT(ctx, "flock", "-n", "-E", "75", "/var/lib/kubehenge", "sh", "-c", "systemctl restart kubehenge.service && systemctl stop kubehenge-headlamp.service")
@@ -219,7 +270,27 @@ func (r *Runner) ReplaceCertificate(ctx context.Context, out io.Writer) (*Result
 		return nil, userErr("restarting the interface failed", "See: pct exec "+c.CTID+" -- journalctl -u kubehenge")
 	}
 	r.updateEntry(ctx, "https://"+urlHost(public), out)
-	return &Result{CTID: c.CTID, URL: "https://" + urlHost(public) + "/", Fingerprint: cert.Fingerprint, ValidUntil: cert.NotAfter, LogPath: r.LogPath}, nil
+	res := &Result{CTID: c.CTID, URL: "https://" + urlHost(public) + "/", Fingerprint: cert.Fingerprint, ValidUntil: cert.NotAfter, LogPath: r.LogPath}
+	if c.ACME.Directory == "" {
+		return res, nil
+	}
+	return r.acmeReplaced(ctx, res, out)
+}
+
+// acmeReplaced waits for the first ACME order after a replacement and reports its certificate, or
+// why the one made here is still served.
+func (r *Runner) acmeReplaced(ctx context.Context, res *Result, out io.Writer) (*Result, error) {
+	got, err := r.awaitACME(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if got.leaf == nil {
+		r.sayf(out, "kubehenge: %s", acmeNote(got))
+		return res, nil
+	}
+	r.sayf(out, "ok   Certificate from %s", acmeServer(r.S.Cfg.ACME.Directory))
+	res.Fingerprint, res.ValidUntil = fingerprint(got.leaf), got.leaf.NotAfter
+	return res, nil
 }
 
 func (r *Runner) initDefaults() {
@@ -245,7 +316,7 @@ func (r *Runner) hostnameOf(ctx context.Context) string {
 }
 
 // updateEntry points this node's Kubernetes entry at the appliance's address when it leads elsewhere.
-func (r *Runner) updateEntry(ctx context.Context, url string, out io.Writer) {
+func (r *Runner) updateEntry(ctx context.Context, address string, out io.Writer) {
 	conf, err := r.S.Node.readFile("/etc/kubehenge-pve-entry.conf")
 	if err != nil {
 		return
@@ -259,14 +330,14 @@ func (r *Runner) updateEntry(ctx context.Context, url string, out io.Writer) {
 			current = v
 		}
 	}
-	if current == url {
+	if current == address {
 		return
 	}
-	if _, err := r.Exec.Run(ctx, "/usr/local/sbin/kubehenge-pve-entry", "--url", url); err != nil {
+	if _, err := r.Exec.Run(ctx, "/usr/local/sbin/kubehenge-pve-entry", "--url", address); err != nil {
 		r.sayf(out, "kubehenge: the entry still leads to %s. See %s", current, r.LogPath)
 		return
 	}
-	r.sayf(out, "On every other node with the entry, run: kubehenge-pve-entry --url %s", url)
+	r.sayf(out, "On every other node with the entry, run: kubehenge-pve-entry --url %s", address)
 }
 
 // stageSoftware pushes the binaries, the module and the service units into the container beside
@@ -339,12 +410,8 @@ func (r *Runner) Upgrade(ctx context.Context, out io.Writer) (*Result, error) {
 			return nil, err
 		}
 	}
-	// A certificate the installer made is renewed once it has less than 60 days left. The restart
-	// below puts it into use.
-	if current := r.currentCertificate(ctx); current != nil && current.NotAfter.Before(r.Now().Add(certRenewBefore)) {
-		if err = r.renewCertificate(ctx, current, out); err != nil {
-			return nil, err
-		}
+	if err = r.upgradeCertificate(ctx, out); err != nil {
+		return nil, err
 	}
 	r.sayf(out, "== starting Kubehenge %s, and checking that it serves", r.version)
 	proxies := strings.Join(c.TrustedProxies, ",")
@@ -520,6 +587,24 @@ func (r *Runner) ensureKeyVolume(ctx context.Context, out io.Writer) error {
 	}
 	if _, err := r.pct(ctx, "set", c.CTID, fmt.Sprintf("--mp%d", free), storage+":1,mp="+keyDir+",backup=0"); err != nil {
 		return userErr("adding the key volume to container "+c.CTID+" failed", "See "+r.LogPath)
+	}
+	return nil
+}
+
+// upgradeCertificate renews a certificate the installer made once it has less than 60 days left,
+// also while the interface serves another, since a reset goes back to it. The upgrade's restart
+// puts it into use. An expiry warning is about the certificate served.
+func (r *Runner) upgradeCertificate(ctx context.Context, out io.Writer) error {
+	soon := r.Now().Add(certRenewBefore)
+	current, stored := r.currentCertificate(ctx), r.storedCertificate(ctx)
+	if current != nil && current.NotAfter.Before(soon) && (stored == nil || r.madeHere(current)) {
+		if err := r.renewCertificate(ctx, current, out); err != nil {
+			return err
+		}
+	}
+	if stored != nil && stored.NotAfter.Before(soon) {
+		r.sayf(out, "kubehenge: the certificate an administrator gave the interface is valid until %s. Replace it before then",
+			stored.NotAfter.UTC().Format(time.RFC1123))
 	}
 	return nil
 }

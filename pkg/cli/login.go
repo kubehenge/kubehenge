@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/kubehenge/kubehenge/pkg/appliance"
 )
 
 const (
@@ -156,31 +158,78 @@ func openInterface(ctx context.Context) (*interfaceClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newInterfaceClient(l)
+	return newInterfaceClient(ctx, l)
 }
 
-func newInterfaceClient(l *login) (*interfaceClient, error) {
+// interfaceTrust is what the CLI trusts the interface's certificate by, beside a login's CA.
+type interfaceTrust struct {
+	// systemRoots vouch for a certificate with or without the login's CA, so that a change to one
+	// from a public or company CA needs no new login.
+	systemRoots func() (*x509.CertPool, error)
+	// installerCert is the appliance's own certificate. A login made with it as its CA, as one in
+	// the appliance is by default, trusts the certificate the interface serves instead: storedCert
+	// while that reads cleanly.
+	installerCert, storedCert string
+}
+
+// trustKey carries an interfaceTrust in a context, for a test that cannot use the system's.
+type trustKey struct{}
+
+func trustIn(ctx context.Context) interfaceTrust {
+	if t, ok := ctx.Value(trustKey{}).(interfaceTrust); ok {
+		return t
+	}
+	return interfaceTrust{systemRoots: x509.SystemCertPool, installerCert: appliance.InstallerCertificatePath, storedCert: appliance.InterfaceCertificatePath}
+}
+
+// caOf reads a login's CA file again, so that a certificate renewed or changed in place is trusted.
+func (t interfaceTrust) caOf(file string) (string, error) {
+	if file != t.installerCert {
+		raw, err := os.ReadFile(file) //nolint:gosec // the file the login was made with
+		if err != nil {
+			return "", fmt.Errorf("reading the login's CA: %w", err)
+		}
+		return string(raw), nil
+	}
+	leaf, _, err := appliance.ServedCertificate(t.installerCert, t.storedCert, time.Now())
+	if err != nil {
+		return "", err //nolint:wrapcheck // the error names the file
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leaf.Raw})), nil
+}
+
+func isFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
+}
+
+func newInterfaceClient(ctx context.Context, l *login) (*interfaceClient, error) {
 	defaults, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
 		return nil, errors.New("http.DefaultTransport has been replaced by one that cannot be cloned")
 	}
 	transport := defaults.Clone()
+	trust := trustIn(ctx)
 	if l.CAFile != "" {
-		if raw, err := os.ReadFile(l.CAFile); err == nil {
-			l.CA = string(raw)
+		if ca, err := trust.caOf(l.CAFile); err == nil {
+			l.CA = ca
 		}
 	}
+	// A system whose roots do not read gives nil, which leaves Go to find them itself.
+	roots, _ := trust.systemRoots()
 	if l.CA != "" {
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM([]byte(l.CA)) {
+		if roots == nil {
+			roots = x509.NewCertPool()
+		}
+		if !roots.AppendCertsFromPEM([]byte(l.CA)) {
 			name := l.CAFile
 			if name == "" {
 				name = "the login's CA"
 			}
 			return nil, fmt.Errorf("%s holds no PEM certificate", name)
 		}
-		transport.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12, ServerName: servedName(l.CA)}
 	}
+	transport.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12, ServerName: servedName(l.CA)}
 	return &interfaceClient{login: l, http: &http.Client{Transport: transport, Timeout: interfaceTimeout}}, nil
 }
 
@@ -290,21 +339,33 @@ func (c *interfaceClient) adoptLoginOnFile(ctx context.Context) bool {
 	return true
 }
 
+// formBody is a request body that is already encoded, as an upload of files is, in place of the
+// JSON a body is otherwise sent as.
+type formBody struct {
+	contentType string
+	data        []byte
+}
+
 func (c *interfaceClient) send(ctx context.Context, method, path string, body any) (*http.Response, error) {
 	var payload io.Reader = http.NoBody
-	if body != nil {
+	contentType := ""
+	switch b := body.(type) {
+	case nil:
+	case formBody:
+		payload, contentType = bytes.NewReader(b.data), b.contentType
+	default:
 		raw, err := json.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("encoding the request: %w", err)
 		}
-		payload = bytes.NewReader(raw)
+		payload, contentType = bytes.NewReader(raw), "application/json"
 	}
 	req, err := http.NewRequestWithContext(ctx, method, strings.TrimSuffix(c.login.URL, "/")+path, payload)
 	if err != nil {
 		return nil, fmt.Errorf("the interface's address: %w", err)
 	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	// A password sign-in that says it is the CLI's lasts longer than a browser's and outlives a
 	// restart of the interface.
@@ -319,11 +380,8 @@ func (c *interfaceClient) send(ctx context.Context, method, path string, body an
 		req.Header.Set(csrfHeader, c.login.CSRF)
 	}
 	res, err := c.http.Do(req)
-	if _, refused := errors.AsType[*tls.CertificateVerificationError](err); refused || errors.Is(err, errOtherCertificate) {
-		if c.signingIn {
-			return nil, fmt.Errorf("reaching the interface: %w: give --ca the CA of the interface's certificate", err)
-		}
-		return nil, fmt.Errorf("reaching the interface: %w: run kubehenge login %s --ca %s", err, c.login.URL, caPath(c.login.CAFile))
+	if verr, refused := errors.AsType[*tls.CertificateVerificationError](err); refused || errors.Is(err, errOtherCertificate) {
+		return nil, c.untrusted(err, verr)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reaching the interface: %w", err)
@@ -349,6 +407,19 @@ func (c *interfaceClient) send(ctx context.Context, method, path string, body an
 		return nil, errors.New(e.Error)
 	}
 	return nil, fmt.Errorf("the interface answered %s", res.Status)
+}
+
+// untrusted says how to reach an interface whose certificate the login does not trust. verr, when
+// the handshake gives one, names the certificate presented.
+func (c *interfaceClient) untrusted(err error, verr *tls.CertificateVerificationError) error {
+	if c.signingIn {
+		return fmt.Errorf("reaching the interface: %w: give --ca the CA of the interface's certificate", err)
+	}
+	if verr != nil && len(verr.UnverifiedCertificates) > 0 {
+		return fmt.Errorf("reaching the interface: %w: it presents the certificate %s, which this login does not trust. Run kubehenge login %s --ca %s",
+			err, appliance.Fingerprint(verr.UnverifiedCertificates[0]), c.login.URL, caPath(c.login.CAFile))
+	}
+	return fmt.Errorf("reaching the interface: %w: run kubehenge login %s --ca %s", err, c.login.URL, caPath(c.login.CAFile))
 }
 
 // call sends a request with body as JSON and returns the answer, decoded into out when given.
@@ -396,6 +467,12 @@ you alone. It holds the session or the token. Set ` + loginFileEnv + ` to keep i
 		Args: argsSay(cobra.ExactArgs(1), "give the interface's address"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			l := &login{URL: interfaceURL(args[0])}
+			// In the appliance the login trusts the certificate the interface serves, whichever it is.
+			if caFile == "" {
+				if installer := trustIn(cmd.Context()).installerCert; isFile(installer) {
+					caFile = installer
+				}
+			}
 			if caFile != "" {
 				pem, err := os.ReadFile(caFile) //nolint:gosec // the file the user named
 				if err != nil {
@@ -427,7 +504,8 @@ you alone. It holds the session or the token. Set ` + loginFileEnv + ` to keep i
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&caFile, "ca", "", "PEM file with the CA of the interface's certificate, else the system trust store")
+	f.StringVar(&caFile, "ca", "", "PEM file with the CA of the interface's certificate, trusted beside the system trust store. "+
+		"In the appliance, the interface's own certificate is trusted without it")
 	f.StringVar(&user, "user", "", "Proxmox VE user to sign in as, such as root@pam")
 	f.StringVar(&passwordFile, "password-file", "", "file holding the user's password, else KUBEHENGE_PASSWORD holds it")
 	f.StringVar(&tokenFile, "token-file", "", "file holding a Proxmox VE API token, else KUBEHENGE_PROXMOX_TOKEN holds it")
@@ -454,7 +532,7 @@ func signInTo(ctx context.Context, l *login, user, passwordFile, tokenFile, totp
 	if user == "" && tokenFile == "" && os.Getenv("KUBEHENGE_PROXMOX_TOKEN") == "" {
 		return errors.New("give --user, or a token in --token-file or KUBEHENGE_PROXMOX_TOKEN")
 	}
-	c, err := newInterfaceClient(l)
+	c, err := newInterfaceClient(ctx, l)
 	if err != nil {
 		return err
 	}
@@ -520,7 +598,7 @@ func endSession(ctx context.Context, l *login) error {
 	if l == nil || l.Cookie == "" {
 		return nil
 	}
-	c, err := newInterfaceClient(l)
+	c, err := newInterfaceClient(ctx, l)
 	if err != nil {
 		return err
 	}

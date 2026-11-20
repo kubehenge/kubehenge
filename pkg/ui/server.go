@@ -122,16 +122,13 @@ type Server struct {
 	// another ID or a clone.
 	ApplianceVMID int
 	ApplianceMACs []string
-	// CertificateExpires is when the certificate the interface serves runs out. Zero when not
-	// known. It is read at start, as the certificate is.
-	CertificateExpires time.Time
-	// CertificateIPs and CertificateNames are the addresses and DNS names the certificate is for.
-	// OwnAddresses gives the addresses the machine has now. Together they tell administrators
-	// when the appliance's address moved away from its certificate's. Nil OwnAddresses tells
-	// nothing.
-	CertificateIPs   []netip.Addr
-	CertificateNames []string
-	OwnAddresses     func() []netip.Addr
+	// Certificate is the certificate the interface and Headlamp serve, which administrators change
+	// from the interface. Nil serves none and tells nothing of one.
+	Certificate *InterfaceCertificate
+	// OwnAddresses gives the addresses the machine has now. With the certificate's addresses it
+	// tells administrators when the appliance's address moved away from its certificate's. Nil
+	// tells nothing.
+	OwnAddresses func() []netip.Addr
 	// DiskUse gives the bytes taken and free on the appliance's disk, for telling administrators
 	// to grow it before an upgrade or an apply runs out of room. Nil tells nothing.
 	DiskUse func() (used, free uint64, err error)
@@ -332,6 +329,15 @@ func (s *Server) applianceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/setup/remove", s.signedIn(s.remove))
 	mux.HandleFunc("POST /api/setup/take-over", s.signedIn(s.takeOver))
 	mux.HandleFunc("GET /api/setup/health", s.signedIn(s.managementHealth))
+	mux.HandleFunc("GET /api/appliance/certificate", s.signedIn(s.showCertificate))
+	mux.HandleFunc("PUT /api/appliance/certificate", s.signedIn(s.uploadCertificate))
+	mux.HandleFunc("POST /api/appliance/certificate/self-signed", s.signedIn(s.makeSelfSignedCertificate))
+	mux.HandleFunc("POST /api/appliance/certificate/appliance-ca", s.signedIn(s.makeApplianceCACertificate))
+	mux.HandleFunc("PUT /api/appliance/certificate/address", s.signedIn(s.setPublicAddress))
+	mux.HandleFunc("DELETE /api/appliance/certificate", s.signedIn(s.resetCertificate))
+	mux.HandleFunc("PUT /api/appliance/certificate/acme", s.signedIn(s.setACME))
+	mux.HandleFunc("POST /api/appliance/certificate/acme/order", s.signedIn(s.orderACME))
+	mux.HandleFunc("GET /api/appliance/certificate/acme/providers", s.signedIn(s.acmeProviders))
 	mux.HandleFunc("GET /api/appliance/reboot-ready", s.signedIn(s.rebootReady))
 	mux.HandleFunc("GET /api/appliance/upgrades", s.signedIn(s.upgradesStatus))
 	mux.HandleFunc("POST /api/appliance/upgrades", s.signedIn(s.upgrade))

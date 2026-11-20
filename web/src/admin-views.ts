@@ -4,7 +4,11 @@ export const adminViews = [
   { path: "appliance", label: "Appliance", words: "appliance upgrades repair credentials" },
   { path: "backups", label: "Backups", words: "backups etcd snapshots restore management" },
   { path: "templates", label: "Templates", words: "templates vm build refresh" },
-  { path: "certificates", label: "Certificates", words: "certificates dns-01 token" },
+  {
+    path: "certificates",
+    label: "Certificates",
+    words: "certificates interface tls https upload replace self-signed fingerprint expires dns-01 token",
+  },
   { path: "notifications", label: "Notifications", words: "notifications alerts webhook ntfy email smtp" },
   { path: "activity", label: "Activity", words: "activity audit sign-ins who events" },
 ] as const;

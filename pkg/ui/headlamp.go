@@ -318,8 +318,8 @@ type headlampUserKey struct{}
 // interfaceURL is where a browser without a session signs in: the interface on the host name the
 // browser used, which names nothing the browser did not already reach.
 func (s *Server) interfaceURL(r *http.Request) string {
-	if s.PublicURL != "" {
-		return strings.TrimSuffix(s.PublicURL, "/") + "/"
+	if public := s.PublicAddress(); public != "" {
+		return strings.TrimSuffix(public, "/") + "/"
 	}
 	host := r.Host
 	if h, _, err := net.SplitHostPort(host); err == nil {
@@ -336,7 +336,7 @@ func (s *Server) interfaceURL(r *http.Request) string {
 	if p := s.Headlamp.InterfacePort; p != 0 && p != 443 {
 		host += ":" + strconv.Itoa(p)
 	}
-	return (&url.URL{Scheme: "https", Host: host, Path: "/"}).String()
+	return (&url.URL{Scheme: schemeHTTPS, Host: host, Path: "/"}).String()
 }
 
 var hostName = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)

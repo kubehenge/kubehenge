@@ -6,10 +6,11 @@ import { fakeServer } from "./fake-server";
 import { ErrorBox, errorMessage } from "./ui";
 
 const httpBadGateway = 502;
+const httpUnprocessable = 422;
 
 // failure is what an error box is given for a failed call whose answer has body and headers.
-async function failure(body: unknown, headers: Record<string, string> = {}): Promise<string> {
-  fakeServer({ "GET /api/clusters": { status: httpBadGateway, body } }, headers);
+async function failure(body: unknown, headers: Record<string, string> = {}, status = httpBadGateway): Promise<string> {
+  fakeServer({ "GET /api/clusters": { status, body } }, headers);
   try {
     await api.clusters();
   } catch (err) {
@@ -49,6 +50,15 @@ describe("error references", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Wrong code, a locked factor or a cluster without quorum. A recovery key unlocks a locked factor.",
     );
+  });
+
+  it("shows no reference under a refusal of what the user sent", async () => {
+    render(
+      <ErrorBox message={await failure({ error: "not a DNS name", requestId: "0a1b2c" }, {}, httpUnprocessable)} />,
+    );
+    const box = screen.getByRole("alert");
+    expect(box).toHaveTextContent("Not a DNS name.");
+    expect(box).not.toHaveTextContent("Reference");
   });
 
   it("shows no reference without an id", async () => {

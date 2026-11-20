@@ -971,6 +971,64 @@ Users sign in through the Proxmox VE API, with no second user directory. Every P
 - A round starts every minute, or once the round before it has ended. A round waits ten seconds for an answer, for eight sessions at a time.
 - After a restart a kept session works while its ticket is valid. If the sessions file cannot be read, every kept session is dropped and its user runs `kubehenge login` again.
 
+#### The interface's certificate
+
+The interface and Headlamp read their certificate on each handshake. A change reaches the next connection of either with no restart and signs no one out.
+
+- The installer's certificate (`--tls-cert`, `--tls-key`) is served until an administrator gives another.
+- `kubehenge login` in the appliance reads the certificate served again on each command. What it trusts is in [clusters.md](clusters.md#signing-in-and-finding-clusters).
+- The demo does all of it in memory.
+
+#### Where the certificate is kept
+
+- An administrator's certificate is kept in `interface-certificate.pem` in the appliance directory (`--appliance-dir`), mode 0600. It is written whole to a temporary file, synced and renamed over the old one.
+- At a start, the stored file is served when it reads cleanly (a key and certificate that pair, with time left). Otherwise the installer's is served, with the reason logged and shown.
+- The appliance directory is on the container's root disk, which its backups hold. A restore serves the certificate the administrator gave.
+- `install.sh --certificate` removes the stored file. `--upgrade` leaves it, warns of its expiry, and the updater's health check expects it.
+- The appliance's export leaves the certificate out, since a new appliance gets its own from the installer.
+
+#### Changing the certificate
+
+Administrators only (`Sys.Modify` on `/`) read and change it, under `/api/appliance/certificate`. `kubehenge appliance certificate` has a subcommand for each call.
+
+- `GET` shows it, and `DELETE` serves the installer's again.
+- `PUT` replaces it with uploaded files: `multipart/form-data`, up to 8 files of 1 MiB, in any format, with an optional `passphrase` field.
+- `POST …/self-signed` and `POST …/appliance-ca` make one for the names and addresses of the one served and the public address.
+- `PUT …/address` changes the public address, kept in `public-url` beside the certificate.
+- `PUT …/acme` keeps the ACME setting, and `POST …/acme/order` orders at once.
+- The appliance's CA is kept in `interface-ca.pem`. Its name constraints permit only the names and addresses it was made for, so a public address outside them makes a new CA.
+
+#### Refusals and the activity log
+
+- An upload is refused with a `code` and a sentence when it is unreadable, needs a passphrase, ends within a day, or misses the public address. A refusal changes nothing.
+- One change runs at a time, and a second gets `busy`.
+- Each change is in the activity log with its user and the new fingerprint. No answer or log line holds a key or a passphrase.
+
+#### ACME
+
+The appliance's ACME client is lego, run inside the interface. Its setting, progress and account key are `acme-*` files in the appliance directory, mode 0600.
+
+| Call | Does |
+| --- | --- |
+| `PUT /api/appliance/certificate/acme` | saves the setting and starts the first order |
+| `POST /api/appliance/certificate/acme/order` | orders again now |
+| `GET /api/appliance/certificate/acme/providers` | lists the DNS providers |
+| `GET /api/appliance/certificate` | carries the state under `acme` |
+
+- Refusals have a `code`, as uploads do.
+- The interface's listener answers tls-alpn-01. It offers `acme-tls/1` only while a challenge is pending for the name asked.
+- `--http-listen` (port 80) answers http-01 and sends every other request to https.
+- dns-01 builds the named lego provider with its credentials in the environment for that moment only. The `exec` provider is refused.
+
+#### ACME orders
+
+- One order runs at a time and gives up after 30 minutes. Its result is served only while its setting is still the one saved.
+- A restart carries an order on under the same order ID.
+- Renewal follows the server's renewal information (ARI), asked every 6 hours, or a third of the lifetime before expiry.
+- A failure is retried after a minute, then twice as long each time up to an hour. It stops after a day with a notification.
+- No answer, view or log line holds the HMAC key or a DNS credential.
+- Any other certificate change, and `install.sh --certificate`, removes the setting and its secrets.
+
 #### Behind a reverse proxy
 
 The interface needs a host name of its own, never a path such as `https://tools.example.org/kubehenge/`, because its pages and API use absolute paths.

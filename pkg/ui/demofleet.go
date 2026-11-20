@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -209,8 +210,11 @@ type demoActivityLine struct {
 // demoFleet is everything the demo serves: the management cluster's objects, each workload
 // cluster's own API, the Proxmox VE guests and the activity.
 type demoFleet struct {
-	data      demoData
+	data demoData
+	// now is when the fleet was made, which its histories are dated against. clock is the demo's
+	// clock as it runs on, which live readings such as node clocks follow. It may be nil.
 	now       time.Time
+	clock     func() time.Time
 	objects   []client.Object
 	workloads map[string]*Workload
 	// members are each cluster pool's guests, by pool.
@@ -960,6 +964,7 @@ func demoAddOn(d *demoCluster, name string, a demoAddOnData, created time.Time) 
 // workload is a cluster's own API, as its identities see it.
 func (f *demoFleet) workload(d *demoCluster, machines []*clusterv1.Machine) *Workload {
 	objects := make([]runtime.Object, 0, 4*len(machines))
+	leased := make([]string, 0, len(machines))
 	var pool provisioner.NodeSettings
 	if d.WorkerNodes != nil {
 		_ = json.Unmarshal(d.WorkerNodes, &pool) // checked in demo-fleet.json by the tests
@@ -976,7 +981,8 @@ func (f *demoFleet) workload(d *demoCluster, machines []*clusterv1.Machine) *Wor
 			}
 			setPoolNodes(node, pool, drift)
 		}
-		objects = append(objects, node, demoLease(node.Name, f.now))
+		objects = append(objects, node)
+		leased = append(leased, node.Name)
 		for j, app := range []string{"api", "frontend", "cache"} {
 			if isControlPlane(m) && j > 0 {
 				break
@@ -995,7 +1001,7 @@ func (f *demoFleet) workload(d *demoCluster, machines []*clusterv1.Machine) *Wor
 	}
 	objects = append(objects, demoThinWebhook()...)
 	return &Workload{
-		Kube:    kubefake.NewClientset(objects...),
+		Kube:    f.renewingLeases(kubefake.NewClientset(objects...), leased),
 		Metrics: demoDeprecatedAPIs,
 		Dynamic: dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), demoVeleroKinds, f.velero(d)...),
 		Readyz: func(context.Context) (string, error) {
@@ -1003,6 +1009,19 @@ func (f *demoFleet) workload(d *demoCluster, machines []*clusterv1.Machine) *Wor
 		},
 		Alerts: func(context.Context) ([]byte, error) { return []byte(alerts), nil },
 	}
+}
+
+// renewingLeases has kube list a lease for each node named, renewed just now by the demo's clock, as
+// a ready node renews its lease every ten seconds.
+func (f *demoFleet) renewingLeases(kube *kubefake.Clientset, nodes []string) *kubefake.Clientset {
+	kube.PrependReactor("list", "leases", func(k8stesting.Action) (bool, runtime.Object, error) {
+		list := &coordinationv1.LeaseList{}
+		for _, name := range nodes {
+			list.Items = append(list.Items, *demoLease(name, f.current()))
+		}
+		return true, list, nil
+	})
+	return kube
 }
 
 // crashing adds a pod that restarts again and again on a worker, its warning, and the alert
@@ -1245,9 +1264,17 @@ func (f *demoFleet) skewedNode() string {
 // NodeTime is the node's clock, which the demo has the second node run a minute and a half ahead.
 func (a *demoAccounts) NodeTime(_ context.Context, _ *pve.Ticket, node string) (time.Time, error) {
 	if node == a.fleet.skewedNode() {
-		return a.fleet.now.Add(95 * time.Second), nil
+		return a.fleet.current().Add(95 * time.Second), nil
 	}
-	return a.fleet.now, nil
+	return a.fleet.current(), nil
+}
+
+// current is the demo's clock now, or the fleet's time without one.
+func (f *demoFleet) current() time.Time {
+	if f.clock == nil {
+		return f.now
+	}
+	return f.clock().UTC()
 }
 
 func (*demoAccounts) AccessNames(context.Context, *pve.Ticket) (pve.Names, error) {

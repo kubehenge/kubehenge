@@ -1,0 +1,22 @@
+ ▄▄▄▄▄▄▄▄▄   Kubehenge
+ ▀██▀▀▀██▀   Appliance installer
+  ██   ██    Network · Interface · Storage · Summary · Install · Done
+
+  ┃ Directory URL
+  ┃ > https://ca.example.org/acme/directory
+
+    DNS provider
+    > its name, such as cloudflare or rfc2136
+
+    DNS credentials file
+    > NAME=value lines of the provider's variables
+
+    Server CA file
+    > PEM, if the server's certificate is not publicly trusted
+
+    Account key ID
+    > where the server asks for account binding
+
+    HMAC key file
+    > the HMAC key the server gave you
+  enter next  esc back  ctrl+c quit

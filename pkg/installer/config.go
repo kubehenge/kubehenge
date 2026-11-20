@@ -9,6 +9,8 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/pflag"
+
+	"github.com/kubehenge/kubehenge/pkg/acme"
 )
 
 // Mode is what a run does.
@@ -30,16 +32,23 @@ type Config struct {
 	VLAN            string
 	MTU             string
 	// IP is dhcp, none or an address with its prefix. Empty means not decided yet.
-	IP             string
-	Gateway        string
-	IP6            string
-	Gateway6       string
-	DNS            string
-	Hostname       string
-	Name           string
-	NoName         bool
-	CertFile       string
-	KeyFile        string
+	IP       string
+	Gateway  string
+	IP6      string
+	Gateway6 string
+	DNS      string
+	Hostname string
+	Name     string
+	NoName   bool
+	// CertFile is the comma-separated files of the administrator's certificate, in any format, and
+	// KeyFile the key's file where it is a file of its own.
+	CertFile string
+	KeyFile  string
+	// CertPassphraseFile is the file whose first line is the passphrase of encrypted files.
+	CertPassphraseFile string
+	// ACME has the interface order its certificate from an ACME server once it runs. Its Directory
+	// is empty when the certificate comes from elsewhere.
+	ACME           acme.Files
 	ProxmoxURL     string
 	ProxmoxCA      string
 	Insecure       bool
@@ -66,6 +75,9 @@ type Config struct {
 	// TrustServedCA is the user's yes to the CA the API serves.
 	TrustServedCA bool
 
+	// passphrase is what the user typed for encrypted files. It lives in memory only: no answers
+	// file, repeat command, log or error holds it.
+	passphrase    string
 	pveEntryFlags [2]*bool
 }
 
@@ -98,10 +110,21 @@ func BindFlags(f *pflag.FlagSet, c *Config) {
 	f.StringVar(&c.Gateway6, "gateway6", "", "the default IPv6 gateway, with a static --ip6")
 	f.StringVar(&c.DNS, "dns", "", "the name servers the container asks, comma-separated (default this node's)")
 	f.StringVar(&c.Hostname, "hostname", "", "the container's host name, also in its certificate (default "+DefaultHostname+")")
-	f.StringVar(&c.Name, "name", "", "a DNS name people reach the appliance by, put into its certificate")
+	f.StringVar(&c.Name, "name", "", "a DNS name people open the interface at, put into its certificate")
 	f.BoolVar(&c.NoName, "no-name", false, "with --certificate, drop the name the certificate was given")
-	f.StringVar(&c.CertFile, "cert", "", "serve this certificate instead of one signed by this cluster's CA")
-	f.StringVar(&c.KeyFile, "key", "", "the key of --cert")
+	f.StringVar(&c.CertFile, "cert", "", "serve the certificate in these comma-separated files, in any format, instead of one signed by the Proxmox VE CA")
+	f.StringVar(&c.KeyFile, "key", "", "the key of --cert, where it is a file of its own")
+	f.StringVar(&c.CertPassphraseFile, "cert-passphrase-file", "", "a file whose first line is the passphrase of encrypted --cert and --key files")
+	f.StringVar(&c.ACME.Directory, "acme", "", "order the certificate for --name from an ACME server: letsencrypt, letsencrypt-staging or its directory's https address")
+	f.StringVar(&c.ACME.Email, "acme-email", "", "the contact email address of the ACME account")
+	f.StringVar(&c.ACME.Proof, "acme-proof", "", "the ACME proof: tls-alpn-01 on port 443 (default), http-01 on port 80 or dns-01")
+	f.StringVar(&c.ACME.DirectoryCAFile, "acme-directory-ca-file", "", "a PEM file with the CA of the ACME server's own certificate")
+	f.StringVar(&c.ACME.KeyID, "acme-eab-key-id", "", "the key ID of the ACME server's external account binding")
+	f.StringVar(&c.ACME.HMACKeyFile, "acme-eab-hmac-key-file", "", "a file holding the HMAC key the ACME server gave with the key ID")
+	f.StringVar(&c.ACME.Profile, "acme-profile", "", "a certificate profile the ACME server offers, such as shortlived")
+	f.StringVar(&c.ACME.DNSProvider, "acme-dns-provider", "", "with dns-01, the DNS provider's name, such as cloudflare or rfc2136")
+	f.StringVar(&c.ACME.DNSCredentialsFile, "acme-dns-credentials-file", "", "with dns-01, a file of NAME=value lines with the variables the DNS provider reads")
+	f.StringSliceVar(&c.ACME.Resolvers, "acme-resolver", nil, "with dns-01, a DNS server to check the record against, as address:port, repeatable")
 	f.StringVar(&c.ProxmoxURL, "proxmox-url", "", "the Proxmox VE API, such as https://pve.example.org:8006")
 	f.StringVar(&c.ProxmoxCA, "proxmox-ca", "", "the CA that signed the API's certificate, alone or in a bundle")
 	f.BoolVar(&c.Insecure, "proxmox-insecure", false, "reach the Proxmox VE API without verifying its certificate")
@@ -110,8 +133,8 @@ func BindFlags(f *pflag.FlagSet, c *Config) {
 	f.StringVar(&c.Release, "release", "", "install this release archive instead of downloading it")
 	f.StringVar(&c.ReleaseSHA, "sha256", "", "the archive's SHA-256, with --release")
 	f.StringVar(&c.Tofu, "tofu", "", "install OpenTofu from this release archive instead of downloading it")
-	pveEntry := f.Bool("pve-entry", false, "add the Kubernetes entry to this node's Proxmox VE interface")
-	noPVEEntry := f.Bool("no-pve-entry", false, "do not add the Kubernetes entry")
+	pveEntry := f.Bool("pve-entry", false, "add the Proxmox VE interface entry to this node")
+	noPVEEntry := f.Bool("no-pve-entry", false, "do not add the Proxmox VE interface entry")
 	f.BoolVar(&c.Upgrade, "upgrade", false, "upgrade the appliance in container --ctid")
 	f.BoolVar(&c.Certificate, "certificate", false, "replace the certificate of the appliance in container --ctid")
 	f.BoolVar(&c.Plain, "plain", false, "run without the full-screen installer: ask nothing, print a line per step")
@@ -188,7 +211,7 @@ func (c *Config) Normalise() error {
 	case no != nil && *no:
 		c.PVEEntry = "no"
 	}
-	c.Name = strings.TrimSpace(c.Name)
+	c.Name = strings.ToLower(strings.TrimSpace(c.Name))
 	return nil
 }
 
@@ -196,7 +219,7 @@ func (c *Config) Normalise() error {
 const repeatBase = "sh install.sh"
 
 // RepeatCommand is the install.sh command that runs an install again with this one's answers.
-// The options hold no secret: a certificate's key is named by its file.
+// The options hold no secret: a certificate's key and its passphrase are named by their files.
 func (c *Config) RepeatCommand() string {
 	args := []string{repeatBase}
 	add := func(name, value string) {
@@ -221,6 +244,20 @@ func (c *Config) RepeatCommand() string {
 	add("--name", c.Name)
 	add("--cert", c.CertFile)
 	add("--key", c.KeyFile)
+	add("--cert-passphrase-file", c.CertPassphraseFile)
+	a := &c.ACME
+	add("--acme", a.Directory)
+	add("--acme-email", a.Email)
+	add("--acme-proof", a.Proof)
+	add("--acme-directory-ca-file", a.DirectoryCAFile)
+	add("--acme-eab-key-id", a.KeyID)
+	add("--acme-eab-hmac-key-file", a.HMACKeyFile)
+	add("--acme-profile", a.Profile)
+	add("--acme-dns-provider", a.DNSProvider)
+	add("--acme-dns-credentials-file", a.DNSCredentialsFile)
+	for _, r := range a.Resolvers {
+		add("--acme-resolver", r)
+	}
 	add("--proxmox-url", c.ProxmoxURL)
 	add("--proxmox-ca", c.ProxmoxCA)
 	for _, p := range c.TrustedProxies {

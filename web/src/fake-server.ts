@@ -35,6 +35,21 @@ function pathOf(input: RequestInfo | URL): string {
   return input instanceof URL ? `${input.pathname}${input.search}` : input.url;
 }
 
+// bodyOf is what a request carried: JSON as it is, and a multipart form as each field's values, a
+// file by its name.
+function bodyOf(body: BodyInit | null | undefined): unknown {
+  if (typeof body === "string") {
+    return JSON.parse(body);
+  }
+  if (body instanceof FormData) {
+    const fields = new Set(body.keys());
+    return Object.fromEntries(
+      [...fields].map((k) => [k, body.getAll(k).map((v) => (typeof v === "string" ? v : v.name))]),
+    );
+  }
+  return undefined;
+}
+
 const answerOf = async (route: Route, body: unknown): Promise<Answer> =>
   typeof route === "function" ? route(body) : route;
 
@@ -109,7 +124,7 @@ export function fakeServer(routes: Record<string, Route>, headers: Record<string
   const calls: Call[] = [];
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init = {}) => {
     const key = `${init.method ?? "GET"} ${pathOf(input)}`;
-    const body: unknown = typeof init.body === "string" ? JSON.parse(init.body) : undefined;
+    const body = bodyOf(init.body);
     calls.push({ key, body, headers: new Headers(init.headers) });
     const plan = planPath.exec(key)?.groups?.["path"];
     const planned = routes[key] === undefined && plan !== undefined ? await planOf(routes, plan, body) : undefined;

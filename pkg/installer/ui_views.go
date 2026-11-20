@@ -258,7 +258,7 @@ func (m *Model) summaryAt(level int) string {
 	for _, r := range m.S.Rows(!m.S.Cfg.KeepFailed) {
 		b.WriteString(m.row(r.Label, r.Value))
 	}
-	for _, n := range m.S.Cautions {
+	for _, n := range m.S.AllCautions() {
 		b.WriteString(m.rowIn(noteWidth, "Note", causeThenFix(n)))
 	}
 	b.WriteString(sep)
@@ -279,7 +279,7 @@ func caText(ca *CAChoice, c *Config) string {
 	case CAInsecure:
 		return "not checked"
 	case CACluster:
-		return "this cluster's CA"
+		return "the Proxmox VE CA"
 	case CASystem:
 		return "trust store: " + ca.Subject
 	case CAServed:
@@ -355,8 +355,14 @@ func (m *Model) endView() string {
 	b.WriteString(m.row("Container", r.CTID+", version "+r.Version))
 	b.WriteString(m.row("Certificate", "valid until "+r.ValidUntil.UTC().Format(time.DateOnly)))
 	b.WriteString(m.row(crypto.SHA256.String(), fingerprintLines(r.Fingerprint)))
+	if r.MadeHere {
+		b.WriteString(m.row("Browsers", madeTrust))
+	}
 	if r.Name != "" {
 		b.WriteString(m.row("Next", "point "+r.Name+" at "+r.Address))
+	}
+	if r.AddressURL != "" {
+		b.WriteString(m.row("Also at", accentS.Underline(true).Render(r.AddressURL)))
 	}
 	b.WriteString(m.row("Log", r.LogPath))
 	for _, w := range r.Warnings {

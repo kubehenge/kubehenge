@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -140,5 +141,39 @@ func TestServiceCheckPassesOnAnExpiredCertificate(t *testing.T) {
 	}
 	if err := c.Healthy(context.Background()); err != nil {
 		t.Errorf("the interface's own expired certificate: %v", err)
+	}
+}
+
+// A certificate ACME delivers while the check settles is the interface's own, so the upgrade stays.
+func TestServiceCheckTakesACertificateDeliveredMeanwhile(t *testing.T) {
+	t.Parallel()
+	installer, first, renewed := issueFor127(t, 11), issueFor127(t, 12), issueFor127(t, 13)
+	var serving atomic.Pointer[tls.Certificate]
+	serving.Store(&first.pair)
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	// StartTLS would add a certificate of its own, served in place of GetCertificate's to a client
+	// that asks by address.
+	srv.Listener = tls.NewListener(srv.Listener, &tls.Config{
+		MinVersion: tls.VersionTLS12, GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return serving.Load(), nil },
+	})
+	srv.Start()
+	t.Cleanup(srv.Close)
+	stored := writeFile(t, InterfaceCertificateFile, []byte("# source: acme\n# order: a\n"), first.key, first.cert)
+	var asked atomic.Int32
+	c := &ServiceCheck{
+		CertFile: writeFile(t, "tls.crt", installer.cert), StoredFile: stored, Address: srv.Listener.Addr().String(),
+		Wait: 5 * time.Second, Settle: 10 * time.Millisecond,
+		Restarts: func(context.Context) (int, error) {
+			if asked.Add(1) == 1 {
+				if err := os.WriteFile(stored, slices.Concat([]byte("# source: acme\n# order: b\n"), renewed.key, renewed.cert), 0o600); err != nil {
+					return 0, err
+				}
+				serving.Store(&renewed.pair)
+			}
+			return 0, nil
+		},
+	}
+	if err := c.Healthy(t.Context()); err != nil {
+		t.Errorf("a certificate delivered while the check settled: %v", err)
 	}
 }

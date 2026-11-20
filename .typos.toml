@@ -17,6 +17,8 @@ extend-ignore-re = [
   "(?Rm)^.*(#|//|<!--)\\s*spellchecker:disable-line.*$",
   # Where the line cannot carry a comment of its own, the one above it says so.
   "(?m)^\\s*(#|//)\\s*spellchecker:disable-next-line\\s*\\r?\\n.*$",
+  # A Go pseudo-version ends on a commit's hash, which can spell a word.
+  "\\b\\d{14}-[0-9a-f]{12}\\b",
   # HTTP's Authorization header.
   "\\bAuthorization(:| header|\"|`)",
   # Kubernetes' authorization API groups and the kube-apiserver flag named after them.
