@@ -418,9 +418,10 @@ func TestAnExpiredInstallerCertificateIsStillServed(t *testing.T) {
 func TestAStartRemovesWhatACutOffChangeLeft(t *testing.T) {
 	t.Parallel()
 	h, _, c := administered(t)
-	left := filepath.Join(c.dir, appliance.InterfaceCertificateFile+".123456")
-	if err := os.WriteFile(left, []byte("key"), 0o600); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{appliance.InterfaceCertificateFile, appliance.InterfaceCAFile, appliance.PublicURLFile, appliance.HeadlampEnvFile} {
+		if err := os.WriteFile(filepath.Join(c.dir, name+".123456"), []byte("key"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := c.Load(h.clock, nil); err != nil {
 		t.Fatal(err)

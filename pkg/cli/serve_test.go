@@ -268,6 +268,28 @@ func TestServeGivesBothListenersTheCertificateOfOneHolder(t *testing.T) {
 	}
 }
 
+// An address set on the certificate page before a restart is the name ACME orders for, and the page
+// learns Headlamp's port for the callback it writes.
+func TestServeTakesTheAddressSetOnThePage(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "public-url"), []byte("https://moved.example.org\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	o, _ := serveOptionsIn(t, dir)
+	o.s.PublicURL = "https://kubehenge.example.org"
+	o.headlampListen = "127.0.0.1:8443"
+	if err := o.loadCertificate(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if m := o.s.Certificate.ACME(); m == nil || m.PublicName() != "moved.example.org" {
+		t.Errorf("ACME orders for %v", m)
+	}
+	if o.s.Certificate.HeadlampPort != "8443" {
+		t.Errorf("Headlamp's port is %q", o.s.Certificate.HeadlampPort)
+	}
+}
+
 // In the appliance the interface listens on port 80 beside its own port, for ACME's http-01 proof,
 // and sends everything else to https. The manager that orders the certificate knows it listens.
 func TestServeListensOnPlainHTTPForACMEAndRedirects(t *testing.T) {

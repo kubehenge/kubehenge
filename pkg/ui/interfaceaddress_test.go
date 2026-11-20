@@ -4,9 +4,11 @@ import (
 	"crypto/x509"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,6 +50,17 @@ func TestTheAddressMovesASelfSignedCertificateWithIt(t *testing.T) {
 	}
 	if got := fileText(t, filepath.Join(c.dir, appliance.HeadlampEnvFile)); got != "HEADLAMP_CONFIG_OIDC_CALLBACK_URL=https://"+movedHost+":8443/oidc-callback\n" {
 		t.Errorf("Headlamp's file holds %q", got)
+	}
+	if got, ok := h.server.redirectURL(); !ok || got != "https://"+movedHost+"/api/openid/callback" {
+		t.Errorf("identity providers return to %s", got)
+	}
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+certificateHost+"/api/openid/start", http.NoBody)
+	if got := h.server.interfaceURL(req); got != "https://"+movedHost+"/" {
+		t.Errorf("Headlamp sends browsers to %s", got)
+	}
+	rec := httptest.NewRecorder()
+	if !h.server.atPublicURL(rec, req) || !strings.HasPrefix(rec.Header().Get("Location"), "https://"+movedHost+"/api/openid/start?") {
+		t.Errorf("a sign-in at the old name goes to %q", rec.Header().Get("Location"))
 	}
 	next := restartedAt(t, c, h.clock.Add(time.Hour))
 	if got := next.address.Load(); got == nil || *got != "https://"+movedHost {
