@@ -124,6 +124,7 @@ EOF
 cat > "${bin}/python3" << EOF
 #!/bin/sh
 if [ "\${2:-}" = fill ]; then
+    [ -z "\${FILL_FAILS:-}" ] || exit 1
     sed 's/\\\$basearch/x86_64/g' "\$3"
     exit
 fi
@@ -364,6 +365,16 @@ stale_case appstream "${own_folder}" behind
 stale_run
 lacks "a mirror's variables are filled in before its revision is read" "${root}/stale/appstream" "${site}/behind/"
 has "and the list's entries keep their variables" "${root}/said" "dropping ${site}/behind/AppStream/\$basearch/os/"
+
+# dnf failing to fill in the variables is a fault of the build, never of a mirror, so the step stops
+# rather than keep mirrors that may be behind.
+stale_case appstream "${own_folder}" behind same
+export FILL_FAILS=1
+# shellcheck disable=SC2310 # the failure is what is checked.
+if stale_run; then stopped=no; else stopped=yes; fi
+unset FILL_FAILS
+expect "dnf failing to fill in the variables stops the build" yes "${stopped}"
+has "and says so" "${root}/said" "appstream: dnf did not fill in the mirrors' variables"
 
 if [ "${failures}" -ne 0 ]; then
     echo "el-mirrors: ${failures} of $((passes + failures)) checks failed"

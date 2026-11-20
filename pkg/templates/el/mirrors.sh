@@ -116,9 +116,11 @@ drop_stale_mirrors() {
             echo "${id}: ${folder} gives no revision, keeping its mirrors" >&2
             continue
         fi
+        # Filling the variables reads nothing over the network, so a failure is this script's or
+        # dnf's, and the build stops on it rather than read mirrors that may be behind.
         if ! fill_variables "${list}" > "${list}.filled"; then
-            echo "${id}: dnf did not fill in the mirrors' variables, keeping them" >&2
-            continue
+            echo "${id}: dnf did not fill in the mirrors' variables" >&2
+            return 1
         fi
         : > "${list}.kept"
         while IFS= read -r entry && IFS= read -r filled <&3; do
