@@ -1,0 +1,15 @@
+ ▄▄▄▄▄▄▄▄▄   Kubehenge
+ ▀██▀▀▀██▀   Appliance installer
+  ██   ██    Network · Interface · Storage · Summary · Install · Done
+
+  ┃ ACME server
+  ┃ > letsencrypt
+
+    Proof
+    > TLS on port 443
+      HTTP on port 80
+      A DNS record, through your DNS provider
+
+    Contact e-mail
+    > optional
+  enter next  esc back  ctrl+c quit

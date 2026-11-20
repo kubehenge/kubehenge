@@ -16,11 +16,12 @@ import (
 // can remove them with one pattern.
 const (
 	settingFile = appliance.ACMEFilePrefix + "setting.json"
-	stateFile   = appliance.ACMEFilePrefix + "state.json"
+	// StateFile holds the State, which has no secret, so the installer reads it to follow an order.
+	StateFile   = appliance.ACMEFilePrefix + "state.json"
 	accountFile = appliance.ACMEFilePrefix + "account.json"
 )
 
-var files = []string{settingFile, stateFile, accountFile}
+var files = []string{settingFile, StateFile, accountFile}
 
 // store keeps the files. The setting and the account hold secrets, so each is written with mode
 // 0600 and replaced whole.

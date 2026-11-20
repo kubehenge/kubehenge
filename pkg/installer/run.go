@@ -115,8 +115,10 @@ type Runner struct {
 	templateSHA string
 	templateURL string
 	cert        *Certificate
-	version     string
-	warnings    []string
+	// acmeLeaf is the certificate the first ACME order issued, nil while the one made here is served.
+	acmeLeaf *x509.Certificate
+	version  string
+	warnings []string
 }
 
 const keyDir = "/var/lib/kubehenge-keys"
@@ -140,8 +142,11 @@ func (r *Runner) Steps() []StepInfo {
 		{stepCertificateName, "Certificate"},
 		{stepInstallName, "Install software"},
 		{"service", "Start Kubehenge"},
-		{stepUpdatesName, "Security updates"},
 	}
+	if r.S.Cfg.ACME.Directory != "" {
+		list = append(list, StepInfo{stepACMEName, "ACME certificate"})
+	}
+	list = append(list, StepInfo{stepUpdatesName, "Security updates"})
 	if r.S.Cfg.PVEEntry == optYes {
 		list = append(list, StepInfo{stepEntryName, "Proxmox VE entry"})
 	}
@@ -162,7 +167,7 @@ func (r *Runner) Run(ctx context.Context) (*Result, error) {
 	do := map[string]func(context.Context) error{
 		"tofu": r.stepTofu, "template": r.stepTemplate, "create": r.stepCreate, "start": r.stepStart,
 		"address": r.stepAddress, "network": r.stepNetwork, "certificate": r.stepCertificate,
-		"install": r.stepInstall, "service": r.stepService, stepUpdatesName: r.stepUpdates, stepEntryName: r.stepEntry,
+		"install": r.stepInstall, "service": r.stepService, stepACMEName: r.stepACME, stepUpdatesName: r.stepUpdates, stepEntryName: r.stepEntry,
 	}
 	if err := r.unpackRelease(); err != nil {
 		return nil, err
@@ -190,6 +195,9 @@ func (r *Runner) Run(ctx context.Context) (*Result, error) {
 		CTID: r.S.Cfg.CTID, URL: "https://" + urlHost(public) + "/", Address: r.address, Name: r.S.Cfg.Name,
 		Fingerprint: r.cert.Fingerprint, ValidUntil: r.cert.NotAfter, Version: r.version,
 		Warnings: r.warnings, LogPath: r.LogPath,
+	}
+	if r.acmeLeaf != nil {
+		res.Fingerprint, res.ValidUntil = fingerprint(r.acmeLeaf), r.acmeLeaf.NotAfter
 	}
 	if res.Name != "" && !nameResolves(ctx, r.S.Node.LookupHost, res.Name, r.address, r.address6) {
 		res.AddressURL = "https://" + urlHost(cmp.Or(r.address, r.address6)) + "/"

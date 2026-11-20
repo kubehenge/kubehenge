@@ -123,6 +123,11 @@ An address is checked against the node's neighbour table, then with an ARP probe
 | `--cert <files>` | asked | Serves the certificate in these comma-separated files, in any format, instead of one signed by the cluster's CA ([details](upgrading.md#the-appliances-certificate)). |
 | `--key <file>` | | The key of `--cert`, where it is a file of its own. |
 | `--cert-passphrase-file <file>` | | The passphrase of encrypted `--cert` files, on its first line. |
+| `--acme <server>` | | Gets the certificate from an ACME server once the appliance runs: `letsencrypt`, `letsencrypt-staging` or a directory's https address ([details](upgrading.md#acme)). Needs `--name`. Not with `--cert`. |
+| `--acme-proof <proof>` | `tls-alpn-01` | `tls-alpn-01` on port 443, `http-01` on port 80, or `dns-01` through a DNS provider. |
+| `--acme-email <address>` | none | The ACME account's contact address. |
+| `--acme-dns-provider <name>`, `--acme-dns-credentials-file <file>`, `--acme-resolver <address>` | | The DNS provider of `dns-01`, its `NAME=value` credentials and the name servers that check the record. |
+| `--acme-directory-ca-file <file>`, `--acme-eab-key-id <id>`, `--acme-eab-hmac-key-file <file>`, `--acme-profile <name>` | | For an ACME server of your own: the CA of its certificate, its account binding and a certificate profile. |
 | `--proxmox-url <URL>` | chosen from the API's certificate ([below](#the-proxmox-ve-api)) | The Proxmox VE API as the appliance and the clusters' VMs reach it, such as `https://pve.example.org:8006`. The API's certificate must be valid for it. The installer stops unless the appliance gets an answer there. |
 | `--proxmox-ca <file>` | found by the installer ([below](#the-ca)) | The CA that signed the API's certificate, such as your organisation's where it replaced Proxmox VE's own. The file may be a whole trust store, and the appliance gets only the certificates the API's rests on. The installer stops before it creates anything unless this CA signed the API's certificate for the URL. |
 | `--proxmox-insecure` | off | Nothing checks the Proxmox VE API's certificate. That covers OpenTofu, Cluster API, Kubehenge's controller, the template builds and every cluster's cloud controller manager and CSI plugin. The Administration page shows that it is on. Not with `--proxmox-ca`. |

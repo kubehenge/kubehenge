@@ -151,7 +151,18 @@ func (c *Config) generalChecks() []optionCheck {
 		{c.Hostname != "" && !hostnameRE.MatchString(c.Hostname), "--hostname is a host name such as kubehenge", ""},
 		{c.CertFile == "" && c.KeyFile != "", "--key goes with --cert, which names the certificate files", ""},
 		{c.CertFile == "" && c.CertPassphraseFile != "", "--cert-passphrase-file goes with --cert", ""},
+		{c.ACME.Directory != "" && c.CertFile != "", "--acme and --cert exclude each other", ""},
+		{c.ACME.Directory != "" && c.Upgrade, "--acme goes with an install or --certificate", ""},
+		{c.ACME.Directory != "" && c.NoName, "--acme needs the DNS name, which --no-name drops", ""},
+		{c.ACME.Directory == "" && c.acmeDetails(), "the --acme- options go with --acme, which names the ACME server", ""},
 	}
+}
+
+// acmeDetails reports whether any option that refines --acme is given.
+func (c *Config) acmeDetails() bool {
+	a := c.ACME
+	return a.Email != "" || a.Proof != "" || a.DirectoryCAFile != "" || a.KeyID != "" || a.HMACKeyFile != "" ||
+		a.Profile != "" || a.DNSProvider != "" || a.DNSCredentialsFile != "" || len(a.Resolvers) > 0
 }
 
 // pairErrors checks each static address against its gateway, and says what is wrong or nothing.

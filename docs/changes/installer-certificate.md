@@ -8,6 +8,7 @@
 - `kubehenge appliance certificate` does the same from the CLI. A change reaches the next connection with no restart.
 - `kubehenge appliance certificate acme` gets the certificate from Let's Encrypt or your own ACME server and renews it. Proof is on port 443, port 80 or by DNS-01 through any DNS provider ([upgrading.md](upgrading.md#acme)).
 - The certificate page sets up ACME, shows the order's state and orders again on request.
+- The installer offers ACME as a third certificate choice, and `--acme` gives it without questions. The install ends on the certificate the first order issued, or says why it is still running or failed.
 - The appliance listens on port 80 for ACME's http-01 proof and sends every other request to https.
 
 ### Changed

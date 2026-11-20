@@ -7,4 +7,5 @@
   ┃ trust it warn about one made here
   ┃   Made here, signed by this cluster's CA
   ┃ > Files of your own
+  ┃   From an ACME server, such as Let's Encrypt
   ↑↓ choose  enter confirm  esc back  ctrl+c quit

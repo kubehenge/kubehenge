@@ -200,6 +200,9 @@ func plainChecks(ctx context.Context, s *Session) error {
 		return err
 	}
 	s.CheckName(ctx)
+	if err := s.CheckACME(); err != nil {
+		return err
+	}
 	return plainCertErr(s.CheckCertificate())
 }
 

@@ -1,0 +1,19 @@
+ ▄▄▄▄▄▄▄▄▄   Kubehenge
+ ▀██▀▀▀██▀   Appliance installer
+  ██   ██    Network · Interface · Storage · Summary · Install · Done
+
+  ┃ DNS provider
+  ┃ > cloudflare, rfc2136 or another lego provider
+
+    DNS credentials file
+    > NAME=value lines of the provider's variables
+
+    Server CA file
+    > PEM, where the server's certificate is not publicly trusted
+
+    Account key ID
+    > where the server asks for account binding
+
+    HMAC key file
+    > with the key ID
+  enter next  esc back  ctrl+c quit

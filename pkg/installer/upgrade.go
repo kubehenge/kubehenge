@@ -235,6 +235,11 @@ func (r *Runner) ReplaceCertificate(ctx context.Context, out io.Writer) (*Result
 	if _, err = r.inCT(ctx, "sh", "-c", "rm -f "+appliance.ACMEFilesPattern); err != nil {
 		return nil, userErr("removing the ACME setting from container "+c.CTID+" failed", "See "+r.LogPath)
 	}
+	if c.ACME.Directory != "" {
+		if err = r.putACME(ctx, name); err != nil {
+			return nil, err
+		}
+	}
 	// Not while the management cluster is applied or removed: the restart would cut the run off.
 	_, err = r.inCT(ctx, "flock", "-n", "-E", "75", "/var/lib/kubehenge", "sh", "-c", "systemctl restart kubehenge.service && systemctl stop kubehenge-headlamp.service")
 	var ce *CmdError
@@ -245,7 +250,27 @@ func (r *Runner) ReplaceCertificate(ctx context.Context, out io.Writer) (*Result
 		return nil, userErr("restarting the interface failed", "See: pct exec "+c.CTID+" -- journalctl -u kubehenge")
 	}
 	r.updateEntry(ctx, "https://"+urlHost(public), out)
-	return &Result{CTID: c.CTID, URL: "https://" + urlHost(public) + "/", Fingerprint: cert.Fingerprint, ValidUntil: cert.NotAfter, LogPath: r.LogPath}, nil
+	res := &Result{CTID: c.CTID, URL: "https://" + urlHost(public) + "/", Fingerprint: cert.Fingerprint, ValidUntil: cert.NotAfter, LogPath: r.LogPath}
+	if c.ACME.Directory == "" {
+		return res, nil
+	}
+	return r.acmeReplaced(ctx, res, out)
+}
+
+// acmeReplaced waits for the first ACME order after a replacement and reports its certificate, or
+// why the one made here is still served.
+func (r *Runner) acmeReplaced(ctx context.Context, res *Result, out io.Writer) (*Result, error) {
+	got, err := r.awaitACME(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if got.leaf == nil {
+		r.sayf(out, "kubehenge: %s", acmeNote(got))
+		return res, nil
+	}
+	r.sayf(out, "ok   Certificate from %s", acmeServer(r.S.Cfg.ACME.Directory))
+	res.Fingerprint, res.ValidUntil = fingerprint(got.leaf), got.leaf.NotAfter
+	return res, nil
 }
 
 func (r *Runner) initDefaults() {

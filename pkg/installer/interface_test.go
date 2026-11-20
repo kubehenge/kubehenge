@@ -22,6 +22,7 @@ import (
 	"github.com/smallstep/pkcs7"
 	pkcs12 "software.sslmate.com/src/go-pkcs12"
 
+	"github.com/kubehenge/kubehenge/pkg/acme"
 	"github.com/kubehenge/kubehenge/pkg/certfiles"
 )
 
@@ -499,14 +500,15 @@ func TestCompanyNodeNoteAndCaution(t *testing.T) {
 	u.key('y')
 	u.until("API certificate comes from")
 	screen := u.rec.screen()
-	if !strings.Contains(screen, "Corporate Root") || !strings.Contains(screen, "warn about one made here") || !strings.Contains(screen, "> Files of your own") {
+	if !strings.Contains(screen, "Corporate Root") || !strings.Contains(screen, "warn about one made here") || !strings.Contains(screen, "> Files of your own") ||
+		!strings.Contains(screen, "From an ACME server") {
 		t.Errorf("the note:\n%s", screen)
 	}
 	u.enter(1)
 	u.waitFor("Certificate files")
 	u.esc()
 	u.waitFor("API certificate comes from")
-	u.down(1)
+	u.up(1)
 	u.enter(1)
 	u.until("If it fails")
 	screen = u.rec.screen()
@@ -1094,10 +1096,26 @@ func TestInterfaceScreens(t *testing.T) {
 			corp.key('y')
 			corp.until("API certificate comes from")
 			corp.golden("choice-company")
-			corp.down(1)
+			corp.up(1)
 			corp.enter(1)
 			corp.until("If it fails")
 			corp.golden("summary-cautions")
+
+			own := ownUI(t, newHarness(t, opts{dhcp: true}), Config{Name: "kubehenge.example.org"}, sz.w, sz.l)
+			own.until("Made here, signed by")
+			own.down(2)
+			own.enter(1)
+			own.waitFor("ACME server")
+			own.golden("acme")
+			for range len(acme.DirectoryLetsEncrypt) {
+				own.press(tea.KeyPressMsg{Code: tea.KeyBackspace})
+			}
+			own.paste("https://ca.example.org/acme/directory")
+			own.enter(1)
+			own.down(2)
+			own.enter(2)
+			own.waitFor("HMAC key file")
+			own.golden("acme-more")
 		})
 	}
 }

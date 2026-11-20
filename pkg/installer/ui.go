@@ -98,8 +98,9 @@ type answers struct {
 	// certInput is the open files input, and completed the value its suggestions were made for.
 	certInput *huh.Input
 	completed string
-	// certStep is the step of the certificate question: the choice, its files or a passphrase.
+	// certStep is the step of the certificate question: the choice, its files, a passphrase or ACME.
 	certStep                          int
+	acme                              acmeAnswers
 	storage, templateStorage, apiHost string
 	apiURL, apiCA                     string
 	trust, pve, outside, apiCheck     bool
@@ -494,7 +495,7 @@ func (m *Model) back() tea.Cmd {
 		m.a.apiTyped = false
 		return m.open(settingAPI)
 	case m.stage == stAsk && m.asking == settingCert && m.a.certStep > certStepChoice:
-		m.a.certStep--
+		m.a.certStep = certStepBack[m.a.certStep]
 		return m.open(settingCert)
 	case len(m.trail) > 1:
 		prev := m.trail[len(m.trail)-2]
@@ -529,6 +530,9 @@ func (m *Model) checkAll() error {
 		return err
 	}
 	m.S.CheckName(m.ctx)
+	if m.S.Cfg.ACME.Directory != "" {
+		return m.S.CheckACME()
+	}
 	if m.S.Cfg.CertFile == "" {
 		return nil
 	}
@@ -722,7 +726,7 @@ func (m *Model) initFromOptions() {
 	m.given[settingVLAN] = s.VLANGiven
 	m.given[settingDNS] = c.DNS != ""
 	m.given[settingName] = c.Name != "" || c.NoName
-	m.given[settingCert] = c.CertFile != ""
+	m.given[settingCert] = c.CertFile != "" || c.ACME.Directory != ""
 }
 
 func modeOf(ip string) string {

@@ -394,7 +394,7 @@ Its Cluster CA choice gives the node command above, since the cluster CA's key s
 
 ### ACME
 
-The certificate page's ACME choice, or `kubehenge appliance certificate acme`, gets the certificate from an ACME server and renews it. That is Let's Encrypt by default, or an organisation's own server:
+The installer's ACME choice, the certificate page's, or `kubehenge appliance certificate acme`, gets the certificate from an ACME server and renews it. That is Let's Encrypt by default, or an organisation's own server:
 
 ```sh
 pct exec <ctid> -- kubehenge appliance certificate acme --proof tls-alpn-01
@@ -409,7 +409,8 @@ pct exec <ctid> -- kubehenge appliance certificate acme providers
 - The certificate is for the host of the public URL, which must be a DNS name.
 - The proof is `tls-alpn-01` on port 443, `http-01` on port 80 or `dns-01` through a DNS provider. The ACME server must reach the appliance on that port, and `dns-01` needs none.
 - `dns-01` takes any DNS provider in `providers`. Its credentials file holds a `NAME=value` line per variable named in [lego's provider documentation](https://go-acme.github.io/lego/dns/).
-- The HMAC key and the DNS credentials come from files, never from arguments. The page shows which are saved and never their values. A field left empty keeps the saved one.
+- The HMAC key and the DNS credentials come from files, never from arguments.
+- The page shows which secrets are saved, never their values, and a field left empty keeps the saved one.
 - Saving starts the first order. The page and `kubehenge appliance certificate` show how it stands.
 - `replace`, `self-sign`, `reset` and `install.sh --certificate` remove the setting and its secrets.
 

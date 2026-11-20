@@ -1,6 +1,7 @@
 package installer
 
 import (
+	"cmp"
 	"context"
 	"crypto/x509"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 
+	"github.com/kubehenge/kubehenge/pkg/acme"
 	"github.com/kubehenge/kubehenge/pkg/certfiles"
 )
 
@@ -216,6 +218,9 @@ func (s *Session) interfaceText() string {
 
 // certText is the Certificate row.
 func (s *Session) certText() string {
+	if a := s.Cfg.ACME; a.Directory != "" {
+		return "from " + acmeServer(a.Directory) + " by ACME, " + cmp.Or(a.Proof, acme.ProofTLSALPN)
+	}
 	if s.Cfg.CertFile == "" {
 		return "made here, signed by this cluster's CA"
 	}
@@ -279,8 +284,11 @@ func (s *Session) interfaceCautions() []string {
 		out = append(out, fmt.Sprintf("%s resolves to %s, not %s. Point it at %s in your DNS", s.Cfg.Name, strings.Join(st.Found, ", "), fixed, fixed))
 	case NameUnchecked, NameMatches, NameUnknown:
 	}
-	if s.Cfg.CertFile == "" && s.companyCA() {
+	if s.Cfg.CertFile == "" && s.Cfg.ACME.Directory == "" && s.companyCA() {
 		out = append(out, companyCAFact(s.CA.Subject)+". Give your own under Certificate")
+	}
+	if c := s.acmeCaution(); c != "" {
+		out = append(out, c)
 	}
 	if b := s.Own; s.Cfg.CertFile != "" && b != nil && b.Leaf != nil {
 		if end := b.Leaf.NotAfter; end.Before(s.clock().Add(certMonth)) {
@@ -493,11 +501,21 @@ const (
 	certStepChoice = iota
 	certStepFiles
 	certStepPassphrase
+	// certStepACME asks the ACME server, the proof and the e-mail address, and certStepACMEMore what
+	// the DNS proof or a server of one's own needs.
+	certStepACME
+	certStepACMEMore
 )
+
+// certStepBack is the step Esc goes back to from each step after the choice.
+var certStepBack = map[int]int{
+	certStepFiles: certStepChoice, certStepPassphrase: certStepFiles, certStepACME: certStepChoice, certStepACMEMore: certStepACME,
+}
 
 const (
 	certMade  = "made"
 	certFiles = "files"
+	certACME  = "acme"
 )
 
 func nameSetting() *setting {
@@ -558,10 +576,16 @@ func certFields(m *Model) []huh.Field {
 			}
 			return nil
 		}).EchoMode(huh.EchoModePassword)}
+	case certStepACME:
+		return acmeFields(m)
+	case certStepACMEMore:
+		return acmeMoreFields(m)
 	}
 	switch {
 	case m.S.Cfg.CertFile != "":
 		m.a.certChoice = certFiles
+	case m.S.Cfg.ACME.Directory != "":
+		m.a.certChoice = certACME
 	case m.a.certChoice != certMade:
 		m.a.certChoice = certMade
 		if m.S.companyCA() {
@@ -569,7 +593,8 @@ func certFields(m *Model) []huh.Field {
 		}
 	}
 	sel := choose("Certificate", &m.a.certChoice,
-		huh.NewOption("Made here, signed by this cluster's CA", certMade), huh.NewOption("Files of your own", certFiles))
+		huh.NewOption("Made here, signed by this cluster's CA", certMade), huh.NewOption("Files of your own", certFiles),
+		huh.NewOption("From an ACME server, such as Let's Encrypt", certACME))
 	if m.S.companyCA() {
 		// The note wraps over two lines, which the select's own height does not count.
 		sel = sel.Description(companyCAFact(m.S.CA.Subject)).Height(certNoteRows)
@@ -587,13 +612,24 @@ func certApply(m *Model) tea.Cmd {
 		c.passphrase = ""
 	case certStepPassphrase:
 		c.passphrase, m.a.passphrase = m.a.passphrase, ""
+	case certStepACME, certStepACMEMore:
+		return acmeApply(m)
 	default:
+		if m.a.certChoice != certACME {
+			c.ACME = acme.Files{}
+		}
 		if m.a.certChoice != certFiles {
 			c.CertFile, c.KeyFile, c.passphrase = "", "", ""
 			m.S.Own = nil
+		}
+		switch m.a.certChoice {
+		case certFiles:
+			m.a.certStep = certStepFiles
+		case certACME:
+			m.a.certStep = certStepACME
+		default:
 			return nil
 		}
-		m.a.certStep = certStepFiles
 		return m.askCertAgain()
 	}
 	err := m.S.CheckCertificate()

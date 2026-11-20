@@ -9,6 +9,8 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/pflag"
+
+	"github.com/kubehenge/kubehenge/pkg/acme"
 )
 
 // Mode is what a run does.
@@ -44,14 +46,17 @@ type Config struct {
 	KeyFile  string
 	// CertPassphraseFile is the file whose first line is the passphrase of encrypted files.
 	CertPassphraseFile string
-	ProxmoxURL         string
-	ProxmoxCA          string
-	Insecure           bool
-	TrustedProxies     []string
-	NoTrustedProxy     bool
-	Release            string
-	ReleaseSHA         string
-	Tofu               string
+	// ACME has the interface order its certificate from an ACME server once it runs. Its Directory
+	// is empty when the certificate comes from elsewhere.
+	ACME           acme.Files
+	ProxmoxURL     string
+	ProxmoxCA      string
+	Insecure       bool
+	TrustedProxies []string
+	NoTrustedProxy bool
+	Release        string
+	ReleaseSHA     string
+	Tofu           string
 	// PVEEntry is yes, no or empty for not decided.
 	PVEEntry    string
 	Upgrade     bool
@@ -110,6 +115,16 @@ func BindFlags(f *pflag.FlagSet, c *Config) {
 	f.StringVar(&c.CertFile, "cert", "", "serve the certificate in these files, comma-separated, in any format, instead of one signed by this cluster's CA")
 	f.StringVar(&c.KeyFile, "key", "", "the key of --cert, where it is a file of its own")
 	f.StringVar(&c.CertPassphraseFile, "cert-passphrase-file", "", "a file whose first line is the passphrase of encrypted --cert and --key files")
+	f.StringVar(&c.ACME.Directory, "acme", "", "order the certificate for --name from an ACME server: letsencrypt, letsencrypt-staging or its directory's https address")
+	f.StringVar(&c.ACME.Email, "acme-email", "", "the contact e-mail address of the ACME account")
+	f.StringVar(&c.ACME.Proof, "acme-proof", "", "the ACME proof: tls-alpn-01 on port 443 (default), http-01 on port 80 or dns-01")
+	f.StringVar(&c.ACME.DirectoryCAFile, "acme-directory-ca-file", "", "a PEM file with the CA of the ACME server's own certificate")
+	f.StringVar(&c.ACME.KeyID, "acme-eab-key-id", "", "the key ID of the ACME server's external account binding")
+	f.StringVar(&c.ACME.HMACKeyFile, "acme-eab-hmac-key-file", "", "a file holding the external account binding's HMAC key")
+	f.StringVar(&c.ACME.Profile, "acme-profile", "", "a certificate profile the ACME server offers, such as shortlived")
+	f.StringVar(&c.ACME.DNSProvider, "acme-dns-provider", "", "with dns-01, the DNS provider, as lego names it, such as cloudflare or rfc2136")
+	f.StringVar(&c.ACME.DNSCredentialsFile, "acme-dns-credentials-file", "", "with dns-01, a file of NAME=value lines with the variables the DNS provider reads")
+	f.StringSliceVar(&c.ACME.Resolvers, "acme-resolver", nil, "with dns-01, a DNS server to check the record against, as address:port, repeatable")
 	f.StringVar(&c.ProxmoxURL, "proxmox-url", "", "the Proxmox VE API, such as https://pve.example.org:8006")
 	f.StringVar(&c.ProxmoxCA, "proxmox-ca", "", "the CA that signed the API's certificate, alone or in a bundle")
 	f.BoolVar(&c.Insecure, "proxmox-insecure", false, "reach the Proxmox VE API without verifying its certificate")
@@ -230,6 +245,19 @@ func (c *Config) RepeatCommand() string {
 	add("--cert", c.CertFile)
 	add("--key", c.KeyFile)
 	add("--cert-passphrase-file", c.CertPassphraseFile)
+	a := &c.ACME
+	add("--acme", a.Directory)
+	add("--acme-email", a.Email)
+	add("--acme-proof", a.Proof)
+	add("--acme-directory-ca-file", a.DirectoryCAFile)
+	add("--acme-eab-key-id", a.KeyID)
+	add("--acme-eab-hmac-key-file", a.HMACKeyFile)
+	add("--acme-profile", a.Profile)
+	add("--acme-dns-provider", a.DNSProvider)
+	add("--acme-dns-credentials-file", a.DNSCredentialsFile)
+	for _, r := range a.Resolvers {
+		add("--acme-resolver", r)
+	}
 	add("--proxmox-url", c.ProxmoxURL)
 	add("--proxmox-ca", c.ProxmoxCA)
 	for _, p := range c.TrustedProxies {

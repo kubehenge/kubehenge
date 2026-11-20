@@ -585,7 +585,7 @@ func (m *Manager) load() (*Setting, *State, error) {
 		return nil, nil, fmt.Errorf("reading the ACME setting: %w", err)
 	}
 	st := &State{}
-	switch raw, err = m.store.read(stateFile); {
+	switch raw, err = m.store.read(StateFile); {
 	case errors.Is(err, fs.ErrNotExist):
 	case err != nil:
 		return nil, nil, err
@@ -602,7 +602,7 @@ func (m *Manager) saveState(st *State) error {
 	if err != nil {
 		return fmt.Errorf("encoding the ACME progress: %w", err)
 	}
-	return m.store.write(stateFile, raw)
+	return m.store.write(StateFile, raw)
 }
 
 // stopOrderLocked ends the order under way, if any. The order's result is then not delivered.
