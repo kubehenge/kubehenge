@@ -15,6 +15,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -263,6 +264,60 @@ func TestFailedOrdersBackOffAndGiveUpAfterADay(t *testing.T) {
 }
 
 func first(a, _ []byte) []byte { return a }
+
+// stateRefused is a store that cannot write the progress file while refuse is set, as on a full disk.
+type stateRefused struct {
+	store
+
+	refuse atomic.Bool
+}
+
+func (s *stateRefused) write(name string, data []byte) error {
+	if name == StateFile && s.refuse.Load() {
+		return errors.New("no space left on device")
+	}
+	return s.store.write(name, data) //nolint:wrapcheck // the test's own seam
+}
+
+// With the progress file not written, as on a full disk, a failed order and a question for renewal
+// information each wait the back-off. The files alone would make them due again at once.
+func TestProgressThatCannotBeKeptStillBacksOff(t *testing.T) {
+	t.Parallel()
+	b := newBench(t, t.TempDir())
+	full := &stateRefused{store: b.m.store}
+	b.m.store = full
+	b.obtain = func(int) error { return errors.New("the server is down") }
+	if _, err := b.m.Save(httpRequest()); err != nil {
+		t.Fatal(err)
+	}
+	full.refuse.Store(true)
+	runUntilCleanup(t, b.m)
+	for i, want := range []time.Duration{time.Minute, 2 * time.Minute} {
+		w := b.clock.next(t)
+		if w.d != want || b.orders() != i+1 {
+			t.Fatalf("after %d orders the wait is %v, want %d orders and %v", b.orders(), w.d, i+1, want)
+		}
+		b.clock.elapse(w)
+	}
+
+	a := newBench(t, t.TempDir())
+	asked := atomic.Int32{}
+	a.ari = func(*x509.Certificate) (time.Time, error) {
+		asked.Add(1)
+		return a.clock.Now().Add(10 * 24 * time.Hour), nil
+	}
+	full = &stateRefused{store: a.m.store}
+	a.m.store = full
+	runUntilCleanup(t, a.m)
+	a.issueFirst(t, a.m)
+	w := a.clock.next(t)
+	full.refuse.Store(true)
+	before := asked.Load()
+	a.clock.elapse(w)
+	if w = a.clock.next(t); w.d != time.Minute || asked.Load() != before+1 {
+		t.Errorf("renewal information was asked %d times, then the wait is %v, want once and a minute", asked.Load()-before, w.d)
+	}
+}
 
 func equalDurations(a, b []time.Duration) bool {
 	for i := range b {

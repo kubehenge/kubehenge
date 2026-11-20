@@ -76,6 +76,10 @@ type Manager struct {
 	cancel   context.CancelFunc
 	ordering bool
 	wake     chan struct{}
+	// unsaved counts the progress writes that failed in a row. Until heldUntil nothing is asked or
+	// ordered, since the files do not show the last attempt and would make it due again at once.
+	unsaved   int
+	heldUntil time.Time
 }
 
 // New makes a manager that keeps its files in dir, or in memory when dir is empty.
@@ -314,6 +318,12 @@ func (m *Manager) decide(ctx context.Context) (time.Time, time.Time, bool) {
 	var recheck time.Time
 	if st.NextAttempt.IsZero() && st.Want == "" && served.Leaf != nil && served.Source == SourceACME && !st.ARIChecked.IsZero() {
 		recheck = st.ARIChecked.Add(ariEvery)
+	}
+	if m.heldUntil.After(now) {
+		askARI, recheck = false, m.heldUntil
+		if due.Before(m.heldUntil) {
+			due = m.heldUntil
+		}
 	}
 	m.mu.Unlock()
 	if askARI && due.After(now) {
@@ -602,7 +612,13 @@ func (m *Manager) saveState(st *State) error {
 	if err != nil {
 		return fmt.Errorf("encoding the ACME progress: %w", err)
 	}
-	return m.store.write(StateFile, raw)
+	if err = m.store.write(StateFile, raw); err != nil {
+		m.unsaved++
+		m.heldUntil = m.now().Add(backoff(m.unsaved))
+		return err
+	}
+	m.unsaved, m.heldUntil = 0, time.Time{}
+	return nil
 }
 
 // stopOrderLocked ends the order under way, if any. The order's result is then not delivered.
