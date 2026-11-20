@@ -641,10 +641,34 @@ func (m *Manager) checkProvider(set *Setting) *RefusalError {
 	case err == nil:
 		return nil
 	case errors.Is(err, ErrUnknownProvider):
-		return refuse(CodeDNSProvider, "%s is not a DNS provider the ACME client knows. Choose one from the list of providers. The list names no variables, so each provider's documentation says which credentials it reads", set.DNSProvider)
-	default:
-		return refuse(CodeDNSCredential, "The DNS provider %s refuses its credentials: %s. Give each variable it reads", set.DNSProvider, set.scrub(err.Error()))
+		return refuse(CodeDNSProvider, "No DNS provider is called %q. Choose one from the list of providers", set.DNSProvider)
 	}
+	if missing := missingVariables(err.Error()); missing != "" {
+		return refuse(CodeDNSCredential, "The DNS provider %s needs %s. Add them as variables", set.DNSProvider, missing)
+	}
+	return refuse(CodeDNSCredential, "The DNS provider %s refuses its credentials: %s. Give each variable it reads", set.DNSProvider, set.scrub(err.Error()))
+}
+
+// missingVariables reads the variables a DNS provider says are missing, as "A and B, or C" for a
+// provider that takes either set. It is empty when the error names none.
+func missingVariables(msg string) string {
+	const marker = "some credentials information are missing: "
+	parts := strings.Split(msg, marker)
+	var sets []string
+	for _, part := range parts[1:] {
+		list, _, _ := strings.Cut(part, " ")
+		if list = strings.TrimSpace(list); list == "" {
+			continue
+		}
+		names := strings.Split(list, ",")
+		last := len(names) - 1
+		set := names[last]
+		if last > 0 {
+			set = strings.Join(names[:last], ", ") + " and " + set
+		}
+		sets = append(sets, set)
+	}
+	return strings.Join(sets, ", or ")
 }
 
 // idBytes is the length of an order's or a setting's random id.

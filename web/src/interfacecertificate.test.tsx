@@ -727,7 +727,9 @@ describe("interface certificate", () => {
     await user.type(within(variable(2)).getByLabelText("Name"), "RFC2136_TSIG_SECRET");
     await user.type(within(variable(2)).getByLabelText("Value"), "c2VjcmV0");
     await user.type(screen.getByLabelText("DNS resolvers"), "192.0.2.53:53, 198.51.100.53");
-    await user.click(screen.getByText("Account binding and profile"));
+    expect(screen.getByLabelText("Proof")).toHaveAccessibleDescription(
+      "The ACME server checks a TXT record at _acme-challenge.kubehenge.example.org.",
+    );
     await user.type(screen.getByLabelText("Key ID"), "kid-1");
     await user.type(screen.getByLabelText("HMAC key"), "aG1hYw");
     await user.click(screen.getByRole("button", { name: "Use ACME" }));
@@ -757,7 +759,8 @@ describe("interface certificate", () => {
 
   it("17: opens on a saved ACME setting, keeps secrets left empty and shows a refusal or a stop", async () => {
     const view: ACMEView = {
-      directory: "letsencrypt",
+      // The server keeps Let's Encrypt's address for the name it was given.
+      directory: "https://acme-v02.api.letsencrypt.org/directory",
       proof: "dns-01",
       directoryCASet: false,
       dnsProvider: "cloudflare",
@@ -796,5 +799,39 @@ describe("interface certificate", () => {
       dnsCredentials: { CF_DNS_API_TOKEN: "" },
     });
     expect(screen.getByLabelText("DNS provider")).toHaveValue("cloudflare");
+  });
+
+  it("19: says which name ACME proves and where, offers account binding for other servers only", async () => {
+    fakeServer({
+      ...read(),
+      [`GET ${path}/acme/providers`]: { body: { providers: [], variablesListed: false } },
+    });
+    const user = userEvent.setup({ delay: null });
+    const { unmount } = render(<InterfaceCertificate />);
+    await user.click(await screen.findByRole("radio", { name: "ACME" }));
+    const proof = screen.getByLabelText("Proof");
+    expect(proof).toHaveAccessibleDescription(
+      "Let's Encrypt checks kubehenge.example.org from the internet on port 443.",
+    );
+    await user.selectOptions(proof, "http-01");
+    expect(proof).toHaveAccessibleDescription(
+      "Let's Encrypt checks kubehenge.example.org from the internet on port 80.",
+    );
+    expect(screen.queryByLabelText("Key ID")).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("ACME server"), "other");
+    expect(proof).toHaveAccessibleDescription("The ACME server checks kubehenge.example.org on port 80.");
+    expect(screen.getByLabelText("Key ID")).toBeInTheDocument();
+    unmount();
+
+    // An IPv4 and an IPv6 address are not names ACME can prove.
+    fakeServer(read({ publicURL: "https://192.0.2.10" }));
+    const { unmount: v4done } = render(<InterfaceCertificate />);
+    await user.click(await screen.findByRole("radio", { name: "ACME" }));
+    expect(screen.getByLabelText("Proof")).toHaveAccessibleDescription("ACME needs a DNS name as the public address.");
+    v4done();
+    fakeServer(read({ publicURL: "https://[2001:db8::10]:8443" }));
+    render(<InterfaceCertificate />);
+    await user.click(await screen.findByRole("radio", { name: "ACME" }));
+    expect(screen.getByLabelText("Proof")).toHaveAccessibleDescription("ACME needs a DNS name as the public address.");
   });
 });

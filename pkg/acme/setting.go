@@ -125,7 +125,7 @@ func directoryURL(name string) (string, *RefusalError) {
 	}
 	u, err := url.Parse(name)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
-		return "", refuse(CodeDirectory, "The ACME directory is %s, %s or an https address. Give one of these", DirectoryLetsEncrypt, DirectoryLetsEncryptStaging)
+		return "", refuse(CodeDirectory, "The directory URL is not an https address. Give one such as https://ca.example.org/acme/directory, or %s or %s", DirectoryLetsEncrypt, DirectoryLetsEncryptStaging)
 	}
 	return u.String(), nil
 }

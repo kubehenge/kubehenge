@@ -172,18 +172,28 @@ func stringify(t *testing.T, v *View) string {
 	return string(raw)
 }
 
-// A provider the registry does not know is refused with its name, and a known provider missing a
-// credential is refused with the provider's own words.
+// A provider the registry does not know is refused with its name. A known provider missing a
+// credential is refused with the variables it needs, or with its own words where it names none
+// the way lego's providers do.
 func TestUnknownDNSProviderIsRefused(t *testing.T) {
 	t.Parallel()
 	m := newManager(t, t.TempDir())
 	_, err := m.Save(&Request{Directory: DirectoryLetsEncrypt, Proof: ProofDNS, DNSProvider: "nosuchprovider"})
-	if refusalCode(t, err) != CodeDNSProvider || !strings.Contains(err.Error(), "nosuchprovider") || !strings.Contains(err.Error(), "names no variables") {
+	if refusalCode(t, err) != CodeDNSProvider || err.Error() != `No DNS provider is called "nosuchprovider". Choose one from the list of providers` {
 		t.Errorf("an unknown provider gives %v", err)
 	}
 	_, err = m.Save(&Request{Directory: DirectoryLetsEncrypt, Proof: ProofDNS, DNSProvider: "fake"})
 	if refusalCode(t, err) != CodeDNSCredential || !strings.Contains(err.Error(), "FAKE_TOKEN") {
 		t.Errorf("a missing credential gives %v", err)
+	}
+	lego := newManager(t, t.TempDir())
+	lego.NewProvider = legoProvider
+	_, err = lego.Save(&Request{Directory: DirectoryLetsEncrypt, Proof: ProofDNS, DNSProvider: "cloudflare"})
+	if want := "The DNS provider cloudflare needs CLOUDFLARE_EMAIL and CLOUDFLARE_API_KEY, or CLOUDFLARE_DNS_API_TOKEN and CLOUDFLARE_ZONE_API_TOKEN. Add them as variables"; refusalCode(t, err) != CodeDNSCredential || err.Error() != want {
+		t.Errorf("cloudflare without credentials gives %v, want %s", err, want)
+	}
+	if got := missingVariables("x: some credentials information are missing: A,B,C"); got != "A, B and C" {
+		t.Errorf("three variables read %q", got)
 	}
 	_, err = m.Save(&Request{Directory: DirectoryLetsEncrypt, Proof: ProofDNS, DNSProvider: "fake", DNSCredentials: map[string]string{"bad name": "x"}})
 	if refusalCode(t, err) != CodeDNSCredential {

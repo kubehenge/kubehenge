@@ -60,6 +60,13 @@ function hostOf(url: string): string {
   }
 }
 
+/** dnsNameOf is the host of a URL when it is a DNS name, and undefined for an IP address. */
+function dnsNameOf(url: string | undefined): string | undefined {
+  const host = hostOf(url ?? "");
+  // An IPv6 host has colons, and an IPv4 one no letters, as no top-level domain is all digits.
+  return host.includes(":") || !/[a-z]/iu.test(host) ? undefined : host;
+}
+
 /** Warnings are the facts about a certificate that an administrator has to act on, one line each. */
 function Warnings({ c }: { c: Certificate }): JSX.Element | null {
   const ends = new Date(c.notAfter);
@@ -359,6 +366,8 @@ interface WayProps {
   source: InterfaceCertificateSource;
   /** Whether the appliance has a CA of its own. */
   hasCA: boolean;
+  /** The public address's DNS name, undefined for an IP address. */
+  name: string | undefined;
 }
 
 /**
@@ -588,7 +597,9 @@ const ways: { id: WayId; label: string; body: (p: WayProps) => JSX.Element }[] =
   {
     id: "acme",
     label: "ACME",
-    body: (p) => <Acme view={p.acme} waiting={p.waiting} running={p.running} locked={p.locked} run={p.run} />,
+    body: (p) => (
+      <Acme view={p.acme} name={p.name} waiting={p.waiting} running={p.running} locked={p.locked} run={p.run} />
+    ),
   },
   { id: "cluster-ca", label: "Proxmox VE CA", body: (p) => <OnNode way={p} /> },
   {
@@ -734,6 +745,7 @@ export function InterfaceCertificate({
           acme: data.acme,
           source: data.source,
           hasCA: data.applianceCA !== undefined,
+          name: dnsNameOf(data.publicURL),
         })}
       </div>
     </>

@@ -82,8 +82,32 @@ interface Form {
 
 const emptyCredential: Credential = { name: "", value: "" };
 
+// The directories the server keeps for Let's Encrypt's names.
+const letsEncryptURLs: Record<string, string> = {
+  [letsEncrypt]: letsEncrypt,
+  "https://acme-v02.api.letsencrypt.org/directory": letsEncrypt,
+  [staging]: staging,
+  "https://acme-staging-v02.api.letsencrypt.org/directory": staging,
+};
+
 function serverOf(dir: string): { server: string; url: string } {
-  return dir === letsEncrypt || dir === staging ? { server: dir, url: "" } : { server: otherServer, url: dir };
+  const named = letsEncryptURLs[dir];
+  return named === undefined ? { server: otherServer, url: dir } : { server: named, url: "" };
+}
+
+/** proofNote says who checks the name, and where. */
+function proofNote(server: string, proof: ACMEProof, name: string | undefined): string {
+  if (name === undefined) {
+    return "ACME needs a DNS name as the public address.";
+  }
+  const who = server === otherServer ? "The ACME server" : "Let's Encrypt";
+  const where = server === otherServer ? "" : " from the internet";
+  const what: Record<ACMEProof, string> = {
+    "tls-alpn-01": `${name}${where} on port 443`,
+    "http-01": `${name}${where} on port 80`,
+    "dns-01": `a TXT record at _acme-challenge.${name}`,
+  };
+  return `${who} checks ${what[proof]}.`;
 }
 
 function formOf(v: ACMEView | undefined): Form {
@@ -129,7 +153,7 @@ function requestOf(f: Form): ACMERequest {
   if (f.server === otherServer) {
     set("directoryCA", f.ca);
   }
-  if (f.keyID.trim() !== "") {
+  if (f.server === otherServer && f.keyID.trim() !== "") {
     req.externalAccountBinding = { keyID: f.keyID.trim(), hmacKey: f.hmacKey.trim() };
   }
   if (f.proof === "dns-01") {
@@ -231,6 +255,8 @@ function useProviders(wanted: boolean): string[] {
 /** What the page gives the ACME way. */
 interface AcmeProps {
   view: ACMEView | undefined;
+  /** The DNS name the certificate is for, undefined while the public address is an IP address. */
+  name: string | undefined;
   waiting: boolean;
   running: boolean;
   locked: boolean;
@@ -241,7 +267,7 @@ interface AcmeProps {
  * Acme gets the certificate from Let's Encrypt or another ACME server, proved on port 443, port 80 or
  * by a DNS record, and orders it again on request.
  */
-export function Acme({ view, waiting, running, locked, run }: AcmeProps): JSX.Element {
+export function Acme({ view, name, waiting, running, locked, run }: AcmeProps): JSX.Element {
   const [f, setF] = useState<Form>(() => formOf(view));
   const [error, setError] = useState<string>();
   const [ordering, setOrdering] = useState(false);
@@ -292,7 +318,15 @@ export function Acme({ view, waiting, running, locked, run }: AcmeProps): JSX.El
       {view !== undefined && <AcmeState v={view} />}
       <Field label="ACME server">
         {(id) => (
-          <select id={id} value={f.server} disabled={off} onChange={(e) => edit({ server: e.target.value })}>
+          <select
+            id={id}
+            value={f.server}
+            disabled={off}
+            onChange={(e) => {
+              setError(undefined);
+              edit({ server: e.target.value });
+            }}
+          >
             <option value={letsEncrypt}>Let&apos;s Encrypt</option>
             <option value={staging}>Let&apos;s Encrypt staging</option>
             <option value={otherServer}>Other</option>
@@ -313,7 +347,10 @@ export function Acme({ view, waiting, running, locked, run }: AcmeProps): JSX.El
               />
             )}
           </Field>
-          <Field label="Server CA" hint={caSaved ? "Saved, empty keeps it" : "PEM, when browsers distrust the server"}>
+          <Field
+            label="Server CA"
+            hint={caSaved ? "Saved, empty keeps it" : "PEM, where the server's certificate is not publicly trusted"}
+          >
             {(id) => (
               <textarea
                 id={id}
@@ -322,6 +359,30 @@ export function Acme({ view, waiting, running, locked, run }: AcmeProps): JSX.El
                 disabled={off}
                 spellCheck={false}
                 onChange={(e) => edit({ ca: e.target.value })}
+              />
+            )}
+          </Field>
+          <Field label="Key ID" hint="Where the server asks for account binding">
+            {(id) => (
+              <input
+                id={id}
+                value={f.keyID}
+                disabled={off}
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(e) => edit({ keyID: e.target.value })}
+              />
+            )}
+          </Field>
+          <Field label="HMAC key" hint={hmacSaved ? "Saved, empty keeps it" : "Given with the key ID"}>
+            {(id) => (
+              <input
+                id={id}
+                type="password"
+                value={f.hmacKey}
+                disabled={off}
+                autoComplete="off"
+                onChange={(e) => edit({ hmacKey: e.target.value })}
               />
             )}
           </Field>
@@ -339,7 +400,7 @@ export function Acme({ view, waiting, running, locked, run }: AcmeProps): JSX.El
           />
         )}
       </Field>
-      <Field label="Proof">
+      <Field label="Proof" hint={proofNote(f.server, f.proof, name)}>
         {(id) => (
           <select
             id={id}
@@ -413,44 +474,17 @@ export function Acme({ view, waiting, running, locked, run }: AcmeProps): JSX.El
           </Field>
         </>
       )}
-      <details className="detail">
-        <summary>Account binding and profile</summary>
-        <Field label="Key ID">
-          {(id) => (
-            <input
-              id={id}
-              value={f.keyID}
-              disabled={off}
-              autoComplete="off"
-              spellCheck={false}
-              onChange={(e) => edit({ keyID: e.target.value })}
-            />
-          )}
-        </Field>
-        <Field label="HMAC key" hint={hmacSaved ? "Saved, empty keeps it" : undefined}>
-          {(id) => (
-            <input
-              id={id}
-              type="password"
-              value={f.hmacKey}
-              disabled={off}
-              autoComplete="off"
-              onChange={(e) => edit({ hmacKey: e.target.value })}
-            />
-          )}
-        </Field>
-        <Field label="Profile" hint="Offered by the server, such as shortlived">
-          {(id) => (
-            <input
-              id={id}
-              value={f.profile}
-              disabled={off}
-              spellCheck={false}
-              onChange={(e) => edit({ profile: e.target.value })}
-            />
-          )}
-        </Field>
-      </details>
+      <Field label="Profile" hint="Optional, offered by the server, such as shortlived">
+        {(id) => (
+          <input
+            id={id}
+            value={f.profile}
+            disabled={off}
+            spellCheck={false}
+            onChange={(e) => edit({ profile: e.target.value })}
+          />
+        )}
+      </Field>
       <ErrorBox message={error} />
       <div className="actions">
         <button type="submit" className="primary" disabled={off}>

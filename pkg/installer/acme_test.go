@@ -115,9 +115,9 @@ func TestACMEOptionsAreCheckedBeforeAnythingChanges(t *testing.T) {
 		want string
 	}{
 		{Config{ACME: acme.Files{Directory: "letsencrypt"}}, "ACME needs the DNS name people open the interface at"},
-		{Config{Name: "kubehenge.example.org", ACME: acme.Files{Directory: "http://ca.example.org/acme"}}, "the ACME directory is letsencrypt, letsencrypt-staging or an https address"},
+		{Config{Name: "kubehenge.example.org", ACME: acme.Files{Directory: "http://ca.example.org/acme"}}, "the directory URL is not an https address"},
 		{Config{Name: "kubehenge.example.org", ACME: acme.Files{Directory: "letsencrypt", Proof: acme.ProofDNS}}, "the dns-01 proof needs a DNS provider"},
-		{Config{Name: "kubehenge.example.org", ACME: acme.Files{Directory: "letsencrypt", Proof: acme.ProofDNS, DNSProvider: "no-such-provider"}}, "no-such-provider is not a DNS provider"},
+		{Config{Name: "kubehenge.example.org", ACME: acme.Files{Directory: "letsencrypt", Proof: acme.ProofDNS, DNSProvider: "no-such-provider"}}, `no DNS provider is called "no-such-provider"`},
 		{Config{Name: "kubehenge.example.org", ACME: acme.Files{Directory: "letsencrypt", Proof: acme.ProofDNS, DNSProvider: "rfc2136", DNSCredentialsFile: creds + ".gone"}}, "reading " + creds + ".gone"},
 		{Config{Name: "kubehenge.example.org", ACME: acme.Files{Directory: "letsencrypt", Email: "nobody"}}, "e-mail address is not an address"},
 		{Config{Name: "kubehenge.example.org", CertFile: "/root/a.pem", ACME: acme.Files{Directory: "letsencrypt"}}, "--acme and --cert exclude each other"},
@@ -224,7 +224,7 @@ func TestACMEQuestionRoad(t *testing.T) {
 	u.waitFor("DNS provider")
 	u.paste("no-such-provider")
 	u.enter(2)
-	u.waitFor("No-such-provider is not a DNS provider")
+	u.waitFor(`No DNS provider is called "no-such-provider"`)
 	u.esc()
 	u.waitFor("ACME server")
 	u.enter(1)

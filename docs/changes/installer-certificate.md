@@ -7,6 +7,7 @@
 - The appliance can sign the interface's certificate with a CA of its own, held to the appliance's names and addresses ([upgrading.md](upgrading.md#the-appliances-own-ca)).
 - Administrators change the interface's public address on the certificate page or with `kubehenge appliance certificate address`. Certificates the appliance made follow the new name ([upgrading.md](upgrading.md#the-public-address)).
 - The certificate page and `kubehenge appliance certificate acme` get the certificate from Let's Encrypt or your own ACME server and renew it. Proof is on port 443, port 80 or by DNS-01 ([upgrading.md](upgrading.md#acme)).
+- A DNS provider missing its credentials is refused with the variables it needs, such as `CLOUDFLARE_DNS_API_TOKEN`.
 - The installer offers ACME as a third certificate choice, or `--acme` without questions. The install ends on the certificate the first order issued, or says why it is still running or failed.
 - The appliance listens on port 80 for ACME's http-01 proof. It sends every other request there to https.
 
