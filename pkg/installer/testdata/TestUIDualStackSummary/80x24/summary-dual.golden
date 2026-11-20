@@ -12,9 +12,9 @@
   Resources         2 cores, 1 GiB memory, 512 MiB swap, 8 GiB disk, 1 GiB keys
   Storage           disk local-lvm, template local-lvm
   Proxmox VE API    https://pve1.example.com:8006
-  API CA            this cluster's CA
+  API CA            the Proxmox VE CA
   Interface         https://192.0.2.254
-  Certificate       made here, signed by this cluster's CA
+  Certificate       made here, signed by the Proxmox VE CA
   Proxmox VE entry  no
   If it fails       you choose to keep or remove the container
 

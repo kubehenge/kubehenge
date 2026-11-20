@@ -1,21 +1,18 @@
 ### Added
 
 - The installer asks the DNS name people open the interface at and checks it in DNS. The summary shows the address and says when the name has no record or points elsewhere.
-- The installer asks which certificate the interface serves. Your own may be PEM, DER, PFX or P7B files, one or several, encrypted or not, with the chain put in order ([upgrading.md](upgrading.md#the-appliances-certificate)).
-- The Proxmox VE API's certificate may come from another CA. The installer then says that browsers trusting that CA warn about one made here, and offers your own.
-- `--cert-passphrase-file` gives the passphrase of encrypted certificate files.
-- Administrators swap the interface's certificate for files, a self-signed one or the installer's, or get the node command for a cluster-CA one ([upgrading.md](upgrading.md#from-the-interface)).
-- The appliance can sign the interface's certificate with a CA of its own, held to the appliance's names and addresses. Trust that CA once and browsers stop warning ([upgrading.md](upgrading.md#the-appliances-own-ca)).
-- `kubehenge appliance certificate` does the same from the CLI. A change reaches the next connection with no restart.
+- The installer asks which certificate the interface serves. Your own may be PEM, DER, PFX or P7B files, one or several, encrypted (`--cert-passphrase-file`) or not ([upgrading.md](upgrading.md#the-appliances-certificate)).
+- The installer says that browsers warn about the certificate it makes until they trust the Proxmox VE CA. Where another CA signed the node's API certificate, it offers your own files first.
+- Administrators swap the interface's certificate on its page or with `kubehenge appliance certificate`, with no restart ([upgrading.md](upgrading.md#from-the-interface)).
+- The appliance can sign the interface's certificate with a CA of its own, held to the appliance's names and addresses ([upgrading.md](upgrading.md#the-appliances-own-ca)).
 - Administrators change the interface's public address on the certificate page or with `kubehenge appliance certificate address`. Certificates the appliance made follow the new name ([upgrading.md](upgrading.md#the-public-address)).
-- `kubehenge appliance certificate acme` gets the certificate from Let's Encrypt or your own ACME server and renews it. Proof is on port 443, port 80 or by DNS-01 through any DNS provider ([upgrading.md](upgrading.md#acme)).
-- The certificate page sets up ACME, shows the order's state and orders again on request.
-- The installer offers ACME as a third certificate choice, and `--acme` gives it without questions. The install ends on the certificate the first order issued, or says why it is still running or failed.
-- The appliance listens on port 80 for ACME's http-01 proof and sends every other request to https.
+- The certificate page and `kubehenge appliance certificate acme` get the certificate from Let's Encrypt or your own ACME server and renew it. Proof is on port 443, port 80 or by DNS-01 ([upgrading.md](upgrading.md#acme)).
+- The installer offers ACME as a third certificate choice, or `--acme` without questions. The install ends on the certificate the first order issued, or says why it is still running or failed.
+- The appliance listens on port 80 for ACME's http-01 proof. It sends every other request there to https.
 
 ### Changed
 
-- `--cert` takes one or more files in any format, and `--key` is optional.
+- `--cert` takes one or more files in any format. `--key` is optional.
 - `install.sh --certificate` removes a certificate given through the interface.
 - `kubehenge login` trusts a certificate its `--ca` or the system's trust store vouches for. In the appliance it trusts the certificate the interface serves without `--ca`.
 

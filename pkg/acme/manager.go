@@ -100,10 +100,10 @@ func New(dir string) *Manager {
 func (m *Manager) Save(req *Request) (*View, error) {
 	name := m.PublicName()
 	if name == "" {
-		return nil, refuse(CodeNoPublicName, "ACME needs the appliance's public DNS name. Start the interface with --public-url set to an https address with a DNS name")
+		return nil, refuse(CodeNoPublicName, "ACME needs a DNS name as the public address. Change the address to one")
 	}
 	if req.Proof == ProofHTTP && !m.HTTPListening {
-		return nil, refuse(CodeNoHTTP, "The %s proof needs the interface to listen on port 80. Start it with --http-listen :80", ProofHTTP)
+		return nil, refuse(CodeNoHTTP, "The %s proof needs port 80, where this interface does not listen. Choose another proof", ProofHTTP)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()

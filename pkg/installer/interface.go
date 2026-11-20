@@ -222,7 +222,7 @@ func (s *Session) certText() string {
 		return "from " + acmeServer(a.Directory) + " by ACME, " + cmp.Or(a.Proof, acme.ProofTLSALPN)
 	}
 	if s.Cfg.CertFile == "" {
-		return "made here, signed by this cluster's CA"
+		return "made here, signed by the Proxmox VE CA"
 	}
 	if s.Own == nil || s.Own.Leaf == nil {
 		return "files of your own"
@@ -263,9 +263,13 @@ func (s *Session) companyCA() bool {
 	return false
 }
 
-// companyCAFact is the sentence a note and a caution share.
-func companyCAFact(subject string) string {
-	return "This node's API certificate comes from " + subject + ", so browsers that trust it warn about one made here"
+// madeNote says when browsers accept a certificate made here, and on a company node what avoids
+// their warning.
+func (s *Session) madeNote() string {
+	if s.companyCA() {
+		return "Browsers warn until they trust the Proxmox VE CA. Files from " + s.CA.Subject + ", which signed this node's API certificate, avoid that"
+	}
+	return "Browsers warn until they trust the Proxmox VE CA, as at this node's own interface"
 }
 
 // interfaceCautions are the cautions the interface questions add to the summary.
@@ -285,11 +289,9 @@ func (s *Session) interfaceCautions() []string {
 	case NameUnchecked, NameMatches, NameUnknown:
 	}
 	if s.Cfg.CertFile == "" && s.Cfg.ACME.Directory == "" && s.companyCA() {
-		out = append(out, companyCAFact(s.CA.Subject)+". Give your own under Certificate")
+		out = append(out, s.madeNote())
 	}
-	if c := s.acmeCaution(); c != "" {
-		out = append(out, c)
-	}
+	out = append(out, s.acmeCautions()...)
 	if b := s.Own; s.Cfg.CertFile != "" && b != nil && b.Leaf != nil {
 		if end := b.Leaf.NotAfter; end.Before(s.clock().Add(certMonth)) {
 			out = append(out, "The certificate ends on "+end.UTC().Format(time.DateOnly)+". Renew it before then")
@@ -593,13 +595,10 @@ func certFields(m *Model) []huh.Field {
 		}
 	}
 	sel := choose("Certificate", &m.a.certChoice,
-		huh.NewOption("Made here, signed by this cluster's CA", certMade), huh.NewOption("Files of your own", certFiles),
+		huh.NewOption("Made here, signed by the Proxmox VE CA", certMade), huh.NewOption("Files of your own", certFiles),
 		huh.NewOption("From an ACME server, such as Let's Encrypt", certACME))
-	if m.S.companyCA() {
-		// The note wraps over two lines, which the select's own height does not count.
-		sel = sel.Description(companyCAFact(m.S.CA.Subject)).Height(certNoteRows)
-	}
-	return []huh.Field{sel}
+	// The note wraps over two lines, which the select's own height does not count.
+	return []huh.Field{sel.Description(m.S.madeNote()).Height(certNoteRows)}
 }
 
 // certApply takes the answer of the step the certificate question is at. It goes to the next step,

@@ -279,7 +279,7 @@ func caText(ca *CAChoice, c *Config) string {
 	case CAInsecure:
 		return "not checked"
 	case CACluster:
-		return "this cluster's CA"
+		return "the Proxmox VE CA"
 	case CASystem:
 		return "trust store: " + ca.Subject
 	case CAServed:
@@ -355,6 +355,9 @@ func (m *Model) endView() string {
 	b.WriteString(m.row("Container", r.CTID+", version "+r.Version))
 	b.WriteString(m.row("Certificate", "valid until "+r.ValidUntil.UTC().Format(time.DateOnly)))
 	b.WriteString(m.row(crypto.SHA256.String(), fingerprintLines(r.Fingerprint)))
+	if r.MadeHere {
+		b.WriteString(m.row("Browsers", madeTrust))
+	}
 	if r.Name != "" {
 		b.WriteString(m.row("Next", "point "+r.Name+" at "+r.Address))
 	}

@@ -258,6 +258,9 @@ func WriteEnd(out io.Writer, res *Result) {
 	}
 	_, _ = fmt.Fprintf(out, "\nKubehenge is running in container %s: %s\n", res.CTID, res.URL)
 	_, _ = fmt.Fprintf(out, "Certificate SHA-256 fingerprint: %s\nValid until: %s\n", res.Fingerprint, res.ValidUntil.UTC().Format(time.RFC1123))
+	if res.MadeHere {
+		_, _ = fmt.Fprintf(out, "Browsers %s.\n", strings.ReplaceAll(madeTrust, "\n", " "))
+	}
 	if res.Name != "" {
 		_, _ = fmt.Fprintf(out, "Point %s at %s in your DNS.\n", res.Name, res.Address)
 	}

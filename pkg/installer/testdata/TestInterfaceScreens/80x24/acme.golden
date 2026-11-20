@@ -3,7 +3,9 @@
   ██   ██    Network · Interface · Storage · Summary · Install · Done
 
   ┃ ACME server
-  ┃ > letsencrypt
+  ┃ > Let's Encrypt
+  ┃   Let's Encrypt staging
+  ┃   Other
 
     Proof
     > TLS on port 443

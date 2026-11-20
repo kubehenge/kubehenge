@@ -124,15 +124,15 @@ Install:
       --acme string                        order the certificate for --name from an ACME server: letsencrypt, letsencrypt-staging or its directory's https address
       --acme-directory-ca-file string      a PEM file with the CA of the ACME server's own certificate
       --acme-dns-credentials-file string   with dns-01, a file of NAME=value lines with the variables the DNS provider reads
-      --acme-dns-provider string           with dns-01, the DNS provider, as lego names it, such as cloudflare or rfc2136
-      --acme-eab-hmac-key-file string      a file holding the external account binding's HMAC key
+      --acme-dns-provider string           with dns-01, the DNS provider's name, such as cloudflare or rfc2136
+      --acme-eab-hmac-key-file string      a file holding the HMAC key the ACME server gave with the key ID
       --acme-eab-key-id string             the key ID of the ACME server's external account binding
       --acme-email string                  the contact e-mail address of the ACME account
       --acme-profile string                a certificate profile the ACME server offers, such as shortlived
       --acme-proof string                  the ACME proof: tls-alpn-01 on port 443 (default), http-01 on port 80 or dns-01
       --acme-resolver strings              with dns-01, a DNS server to check the record against, as address:port, repeatable
       --bridge string                      the bridge, Open vSwitch bridge or SDN VNet the container attaches to
-      --cert string                        serve the certificate in these files, comma-separated, in any format, instead of one signed by this cluster's CA
+      --cert string                        serve the certificate in these files, comma-separated, in any format, instead of one signed by the Proxmox VE CA
       --cert-passphrase-file string        a file whose first line is the passphrase of encrypted --cert and --key files
       --ctid string                        the container's ID (default the next free one)
       --dns string                         the name servers the container asks, comma-separated (default this node's)

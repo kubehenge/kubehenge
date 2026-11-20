@@ -81,22 +81,33 @@ func acmeServer(directory string) string {
 	return directory
 }
 
-// acmeCaution says where Let's Encrypt checks the name, which is the internet.
-func (s *Session) acmeCaution() string {
+// acmeCautions say where Let's Encrypt checks the name, which is the internet, and that a name
+// pointing at an address DHCP gives cannot be checked before the install.
+func (s *Session) acmeCautions() []string {
 	a := s.Cfg.ACME
-	if a.Directory != acme.DirectoryLetsEncrypt && a.Directory != acme.DirectoryLetsEncryptStaging || a.Proof == acme.ProofDNS {
-		return ""
+	if a.Directory == "" || a.Proof == acme.ProofDNS {
+		return nil
 	}
-	port := "443"
-	if a.Proof == acme.ProofHTTP {
-		port = "80"
+	var out []string
+	if !ownServer(a.Directory) {
+		port := "443"
+		if a.Proof == acme.ProofHTTP {
+			port = "80"
+		}
+		out = append(out, "Let's Encrypt checks "+s.Cfg.Name+" from the internet on port "+port+". Let it reach the appliance there, or choose the DNS proof")
 	}
-	return "Let's Encrypt checks " + s.Cfg.Name + " from the internet on port " + port + ". Let it reach the appliance there, or choose the DNS proof"
+	if len(s.fixedAddresses()) == 0 {
+		out = append(out, "ACME orders fail until "+s.Cfg.Name+" points at the address "+s.addressSource()+" gives, shown at the end. The appliance tries again for a day")
+	}
+	return out
 }
+
+// acmeOther is the ACME server choice that asks for a directory's address.
+const acmeOther = "other"
 
 // acmeAnswers are the answers of the ACME steps until they are taken.
 type acmeAnswers struct {
-	server, proof, email, provider, credentials, ca, keyID, hmac string
+	server, directory, proof, email, provider, credentials, ca, keyID, hmac string
 }
 
 // ownServer reports whether a directory is a server other than Let's Encrypt's, which may need its
@@ -109,13 +120,14 @@ func ownServer(directory string) bool {
 func acmeFields(m *Model) []huh.Field {
 	a, f := &m.a.acme, m.S.Cfg.ACME
 	a.server, a.proof, a.email = cmp.Or(f.Directory, acme.DirectoryLetsEncrypt), cmp.Or(f.Proof, acme.ProofTLSALPN), f.Email
+	if ownServer(a.server) {
+		a.server, a.directory = acmeOther, f.Directory
+	}
 	return []huh.Field{
-		input("ACME server", &a.server, "letsencrypt or the directory's https address", func(s string) error {
-			if strings.TrimSpace(s) == "" {
-				return errors.New("enter letsencrypt or the directory's https address")
-			}
-			return nil
-		}),
+		choose("ACME server", &a.server,
+			huh.NewOption("Let's Encrypt", acme.DirectoryLetsEncrypt),
+			huh.NewOption("Let's Encrypt staging", acme.DirectoryLetsEncryptStaging),
+			huh.NewOption("Other", acmeOther)),
 		choose("Proof", &a.proof,
 			huh.NewOption("TLS on port 443", acme.ProofTLSALPN),
 			huh.NewOption("HTTP on port 80", acme.ProofHTTP),
@@ -131,7 +143,7 @@ func acmeMoreFields(m *Model) []huh.Field {
 	if f.Proof == acme.ProofDNS {
 		a.provider, a.credentials = f.DNSProvider, f.DNSCredentialsFile
 		fields = append(fields,
-			input("DNS provider", &a.provider, "cloudflare, rfc2136 or another lego provider", func(s string) error {
+			input("DNS provider", &a.provider, "its name, such as cloudflare or rfc2136", func(s string) error {
 				if strings.TrimSpace(s) == "" {
 					return errors.New("enter the DNS provider's name")
 				}
@@ -140,11 +152,19 @@ func acmeMoreFields(m *Model) []huh.Field {
 			input("DNS credentials file", &a.credentials, "NAME=value lines of the provider's variables", nil))
 	}
 	if ownServer(f.Directory) {
-		a.ca, a.keyID, a.hmac = f.DirectoryCAFile, f.KeyID, f.HMACKeyFile
+		a.directory, a.ca, a.keyID, a.hmac = f.Directory, f.DirectoryCAFile, f.KeyID, f.HMACKeyFile
+		fields = append([]huh.Field{
+			input("Directory URL", &a.directory, "the https address of the server's directory", func(s string) error {
+				if strings.TrimSpace(s) == "" {
+					return errors.New("enter the directory's https address")
+				}
+				return nil
+			}),
+		}, fields...)
 		fields = append(fields,
 			input("Server CA file", &a.ca, "PEM, where the server's certificate is not publicly trusted", nil),
 			input("Account key ID", &a.keyID, "where the server asks for account binding", nil),
-			input("HMAC key file", &a.hmac, "with the key ID", nil))
+			input("HMAC key file", &a.hmac, "the key the server gave with the key ID", nil))
 	}
 	return fields
 }
@@ -172,7 +192,11 @@ func acmeApply(m *Model) tea.Cmd {
 // takeFirst copies the first form's answers and clears what no longer applies. It reports whether
 // the second form has questions left.
 func (a *acmeAnswers) takeFirst(f *acme.Files) bool {
-	f.Directory, f.Proof, f.Email = strings.TrimSpace(a.server), a.proof, strings.TrimSpace(a.email)
+	f.Directory, f.Proof, f.Email = a.server, a.proof, strings.TrimSpace(a.email)
+	if a.server == acmeOther {
+		// The second form asks the directory's address.
+		f.Directory = strings.TrimSpace(a.directory)
+	}
 	if f.Proof != acme.ProofDNS {
 		f.DNSProvider, f.DNSCredentialsFile, f.Resolvers = "", "", nil
 	}
@@ -188,6 +212,7 @@ func (a *acmeAnswers) takeMore(f *acme.Files) {
 		f.DNSProvider, f.DNSCredentialsFile = strings.TrimSpace(a.provider), strings.TrimSpace(a.credentials)
 	}
 	if ownServer(f.Directory) {
+		f.Directory = strings.TrimSpace(a.directory)
 		f.DirectoryCAFile, f.KeyID, f.HMACKeyFile = strings.TrimSpace(a.ca), strings.TrimSpace(a.keyID), strings.TrimSpace(a.hmac)
 	}
 }

@@ -14,14 +14,13 @@
   Proxmox VE API    https://pve1.example.com:8006
   API CA            served, trusted by you: CN=Corporate Root
   Interface         https://gone.example.org (no DNS record)
-  Certificate       made here, signed by this cluster's CA
+  Certificate       made here, signed by the Proxmox VE CA
   Proxmox VE entry  no
   If it fails       you choose to keep or remove the container
   Note              gone.example.org has no DNS record.
                     Point it at the container's address, which DHCP gives, in your DNS
-  Note              This node's API certificate comes from CN=Corporate Root, so browsers that trust it warn about one
-                    made here.
-                    Give your own under Certificate
+  Note              Browsers warn until they trust the Proxmox VE CA.
+                    Files from CN=Corporate Root, which signed this node's API certificate, avoid that
 
   ┃ ← Install →
   ←→ choose  enter confirm  ctrl+c quit

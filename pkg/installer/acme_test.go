@@ -73,6 +73,9 @@ func TestACMEInstallPutsTheSettingAndEndsOnTheIssuedCertificate(t *testing.T) {
 			t.Errorf("the output lacks %q:\n%s", want, out)
 		}
 	}
+	if strings.Contains(out, "Browsers warn") {
+		t.Errorf("an ACME certificate is said to be warned about:\n%s", out)
+	}
 	steps := h.runner(h.session(cfg), nil).Steps()
 	ids := make([]string, 0, len(steps))
 	for _, s := range steps {
@@ -202,7 +205,7 @@ func TestACMEQuestionRoad(t *testing.T) {
 	u.down(2)
 	u.enter(1)
 	u.waitFor("ACME server")
-	for _, want := range []string{"letsencrypt", "TLS on port 443", "HTTP on port 80", "A DNS record", "Contact e-mail"} {
+	for _, want := range []string{"Let's Encrypt staging", "Other", "TLS on port 443", "HTTP on port 80", "A DNS record", "Contact e-mail"} {
 		if !strings.Contains(u.rec.screen(), want) {
 			t.Errorf("the ACME form lacks %q:\n%s", want, u.rec.screen())
 		}
@@ -256,11 +259,19 @@ func TestACMERepeatCommandAndRow(t *testing.T) {
 	if row := s.certText(); row != "from Let's Encrypt by ACME, tls-alpn-01" {
 		t.Errorf("the row is %q", row)
 	}
-	if c := s.acmeCaution(); c != "Let's Encrypt checks kubehenge.example.org from the internet on port 443. Let it reach the appliance there, or choose the DNS proof" {
-		t.Errorf("the caution is %q", c)
+	// With DHCP the name cannot point at the appliance before the install.
+	if c := s.acmeCautions(); !slices.Equal(c, []string{
+		"Let's Encrypt checks kubehenge.example.org from the internet on port 443. Let it reach the appliance there, or choose the DNS proof",
+		"ACME orders fail until kubehenge.example.org points at the address DHCP gives, shown at the end. The appliance tries again for a day",
+	}) {
+		t.Errorf("the cautions are %q", c)
 	}
-	s.Cfg.ACME.Proof = acme.ProofDNS
-	if c := s.acmeCaution(); c != "" {
-		t.Errorf("the DNS proof needs no port, yet: %q", c)
+	s.Cfg.IP, s.Cfg.ACME.Directory, s.Cfg.ACME.Proof = "192.0.2.40/24", "https://ca.example.org/acme/directory", acme.ProofHTTP
+	if c := s.acmeCautions(); len(c) != 0 {
+		t.Errorf("a private server and a fixed address need no caution, yet: %q", c)
+	}
+	s.Cfg.IP, s.Cfg.ACME.Proof = optDHCP, acme.ProofDNS
+	if c := s.acmeCautions(); len(c) != 0 {
+		t.Errorf("the DNS proof needs neither a port nor the address, yet: %q", c)
 	}
 }

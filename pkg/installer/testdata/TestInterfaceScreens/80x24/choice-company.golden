@@ -3,9 +3,9 @@
   ██   ██    Network · Interface · Storage · Summary · Install · Done
 
   ┃ Certificate
-  ┃ This node's API certificate comes from CN=Corporate Root, so browsers that
-  ┃ trust it warn about one made here
-  ┃   Made here, signed by this cluster's CA
+  ┃ Browsers warn until they trust the Proxmox VE CA. Files from CN=Corporate
+  ┃ Root, which signed this node's API certificate, avoid that
+  ┃   Made here, signed by the Proxmox VE CA
   ┃ > Files of your own
   ┃   From an ACME server, such as Let's Encrypt
   ↑↓ choose  enter confirm  esc back  ctrl+c quit

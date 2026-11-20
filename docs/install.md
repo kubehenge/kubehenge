@@ -148,9 +148,12 @@ An address is checked against the node's neighbour table, then with an ARP probe
 The installer checks the node, asks everything before it changes anything, creates the container and sets it up ([the steps](architecture.md#what-the-installer-does)). It then prints the address and the certificate's fingerprint:
 
 ```text
-Kubehenge is running in container 105: https://192.0.2.40/
+Kubehenge is running in container 105: https://kubehenge.example.org/
 Certificate SHA-256 fingerprint: …
 Valid until: …
+Browsers warn until they trust the Proxmox VE CA. Compare the SHA-256 they show.
+Point kubehenge.example.org at 192.0.2.40 in your DNS.
+Also at https://192.0.2.40/
 Sign in with a Proxmox VE administrator to create the management cluster.
 Log: /var/log/kubehenge-install-20261119-134128-2706524411.log
 ```
@@ -222,7 +225,7 @@ After every package run, an apt hook puts back an entry that a `pve-manager` upd
 
 ![The sign-in form: user name, password and realm](images/sign-in.png)
 
-Open the address the installer printed. The Proxmox VE cluster's CA signed the certificate, so a browser that trusts Proxmox VE's certificates trusts it. Otherwise, compare the fingerprint the browser shows with the one the installer printed.
+Open the address the installer printed. Browsers warn about the certificate the installer made until they [trust the Proxmox VE CA](upgrading.md#trusting-a-ca). Until then, compare the fingerprint the browser shows with the one the installer printed. A certificate from Let's Encrypt or a CA browsers already trust needs neither.
 
 Sign in with a Proxmox VE account of any realm: Proxmox VE, PAM, LDAP, Active Directory or OpenID. There is no second user directory. Every user sees and changes only what their Proxmox VE privileges allow ([clusters.md](clusters.md#who-may-do-what)).
 

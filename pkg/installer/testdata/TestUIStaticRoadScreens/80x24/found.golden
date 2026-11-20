@@ -6,7 +6,7 @@
   Networks          1, this node uses vmbr0
   Storage           local-lvm, the only one for container disks
   Proxmox VE API    https://pve1.example.com:8006
-  API CA            this cluster's CA
+  API CA            the Proxmox VE CA
   Note              the API's certificate also covers 192.0.2.10
 
   enter continue  ctrl+c quit

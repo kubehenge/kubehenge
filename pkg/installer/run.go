@@ -64,9 +64,12 @@ type Result struct {
 	AddressURL  string
 	Fingerprint string
 	ValidUntil  time.Time
-	Version     string
-	Warnings    []string
-	LogPath     string
+	// MadeHere tells that the certificate served is the one the installer made, which browsers
+	// warn about until they trust the Proxmox VE CA.
+	MadeHere bool
+	Version  string
+	Warnings []string
+	LogPath  string
 }
 
 // TemplatePin names a container template, its checksum and where it is downloaded from.
@@ -193,11 +196,11 @@ func (r *Runner) Run(ctx context.Context) (*Result, error) {
 	public := r.public()
 	res := &Result{
 		CTID: r.S.Cfg.CTID, URL: "https://" + urlHost(public) + "/", Address: r.address, Name: r.S.Cfg.Name,
-		Fingerprint: r.cert.Fingerprint, ValidUntil: r.cert.NotAfter, Version: r.version,
+		Fingerprint: r.cert.Fingerprint, ValidUntil: r.cert.NotAfter, MadeHere: r.S.Cfg.CertFile == "", Version: r.version,
 		Warnings: r.warnings, LogPath: r.LogPath,
 	}
 	if r.acmeLeaf != nil {
-		res.Fingerprint, res.ValidUntil = fingerprint(r.acmeLeaf), r.acmeLeaf.NotAfter
+		res.Fingerprint, res.ValidUntil, res.MadeHere = fingerprint(r.acmeLeaf), r.acmeLeaf.NotAfter, false
 	}
 	if res.Name != "" && !nameResolves(ctx, r.S.Node.LookupHost, res.Name, r.address, r.address6) {
 		res.AddressURL = "https://" + urlHost(cmp.Or(r.address, r.address6)) + "/"

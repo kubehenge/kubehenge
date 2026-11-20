@@ -12,7 +12,7 @@
   ┃   Container ID       100
   ┃   Host name          kubehenge
   ┃   DNS name           none
-  ┃   Certificate        made here, signed by this cluster's CA
+  ┃   Certificate        made here, signed by the Proxmox VE CA
   ┃   Proxmox VE API     https://pve1.example.com:8006
   ┃   Trusted proxies    none
   ┃   Proxmox VE entry   no

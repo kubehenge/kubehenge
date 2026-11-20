@@ -22,7 +22,6 @@ import (
 	"github.com/smallstep/pkcs7"
 	pkcs12 "software.sslmate.com/src/go-pkcs12"
 
-	"github.com/kubehenge/kubehenge/pkg/acme"
 	"github.com/kubehenge/kubehenge/pkg/certfiles"
 )
 
@@ -426,8 +425,8 @@ func TestEndGivesTheAddressWhereTheNameDoesNotResolve(t *testing.T) {
 	u.until("If it fails")
 	u.enter(1)
 	u.waitFor("Kubehenge is running")
-	if screen := u.rec.screen(); !strings.Contains(screen, "Also at") || !strings.Contains(screen, "https://192.0.2.77/") {
-		t.Errorf("the end screen lacks the address:\n%s", screen)
+	if screen := u.rec.screen(); !strings.Contains(screen, "Also at") || !strings.Contains(screen, "https://192.0.2.77/") || !strings.Contains(screen, "warn until they trust the Proxmox VE CA") {
+		t.Errorf("the end screen lacks the address or what browsers do:\n%s", screen)
 	}
 }
 
@@ -461,24 +460,25 @@ func TestCertificateQuestionRoad(t *testing.T) {
 	}
 	u := ownUI(t, h, Config{}, 100, 40)
 	u.until("Made here, signed by")
-	for _, want := range []string{"Made here, signed by this cluster's CA", "Files of your own"} {
+	for _, want := range []string{"Made here, signed by the Proxmox VE CA", "Files of your own"} {
 		if !strings.Contains(u.rec.screen(), want) {
 			t.Errorf("the choice lacks %q:\n%s", want, u.rec.screen())
 		}
 	}
 }
 
-// 10. A homelab node preselects the made certificate and shows no note.
+// 10. A homelab node preselects the made certificate, and its note says browsers warn as they do
+// at the node's own interface.
 func TestHomelabNodePreselectsTheMadeCertificate(t *testing.T) {
 	t.Parallel()
 	u := ownUI(t, newHarness(t, opts{dhcp: true}), Config{}, 100, 40)
 	u.until("Made here, signed by")
-	if screen := u.rec.screen(); strings.Contains(screen, "API certificate comes from") {
-		t.Errorf("a note on a homelab node:\n%s", screen)
+	if screen := u.rec.screen(); !strings.Contains(screen, "Browsers warn until they trust the Proxmox VE CA, as at this") || strings.Contains(screen, "Files from") {
+		t.Errorf("the note on a homelab node:\n%s", screen)
 	}
 	u.enter(1)
 	u.until("If it fails")
-	if !strings.Contains(u.rec.screen(), "made here, signed by this cluster's CA") || strings.Contains(u.rec.screen(), "Note ") {
+	if !strings.Contains(u.rec.screen(), "made here, signed by the Proxmox VE CA") || strings.Contains(u.rec.screen(), "Note ") {
 		t.Errorf("the made certificate is not the default:\n%s", u.rec.screen())
 	}
 	for _, kind := range []CAKind{CACluster, CAInsecure} {
@@ -491,28 +491,28 @@ func TestHomelabNodePreselectsTheMadeCertificate(t *testing.T) {
 	}
 }
 
-// 11. A company node says where its API certificate comes from, preselects files, and cautions on
-// the made certificate.
+// 11. A company node names the CA whose files avoid the browsers' warning, preselects files, and
+// cautions on the made certificate.
 func TestCompanyNodeNoteAndCaution(t *testing.T) {
 	t.Parallel()
 	u := ownUI(t, newHarness(t, opts{dhcp: true, untrusted: true}), Config{}, 100, 40)
 	u.until("Trust this CA")
 	u.key('y')
-	u.until("API certificate comes from")
+	u.until("Files from")
 	screen := u.rec.screen()
-	if !strings.Contains(screen, "Corporate Root") || !strings.Contains(screen, "warn about one made here") || !strings.Contains(screen, "> Files of your own") ||
+	if !strings.Contains(screen, "Files from CN=Corporate") || !strings.Contains(screen, "Browsers warn until they trust the Proxmox VE CA.") || !strings.Contains(screen, "> Files of your own") ||
 		!strings.Contains(screen, "From an ACME server") {
 		t.Errorf("the note:\n%s", screen)
 	}
 	u.enter(1)
 	u.waitFor("Certificate files")
 	u.esc()
-	u.waitFor("API certificate comes from")
+	u.waitFor("Files from")
 	u.up(1)
 	u.enter(1)
 	u.until("If it fails")
 	screen = u.rec.screen()
-	if !strings.Contains(screen, "Give your own under Certificate") || !strings.Contains(screen, "Corporate Root") {
+	if !strings.Contains(screen, "Files from") || !strings.Contains(screen, "Corporate Root") {
 		t.Errorf("the caution after choosing the made certificate:\n%s", screen)
 	}
 	for _, kind := range []CAKind{CASystem, CAServed, CAGiven} {
@@ -821,7 +821,7 @@ func TestCertificateRow(t *testing.T) {
 		}
 		return ""
 	}
-	if got := row(ownSession(t, h, Config{})); got != "made here, signed by this cluster's CA" {
+	if got := row(ownSession(t, h, Config{})); got != "made here, signed by the Proxmox VE CA" {
 		t.Errorf("the made certificate: %q", got)
 	}
 	c, k := pki.pair(t, "r", corpName)
@@ -944,8 +944,8 @@ func TestYesDryRunAndPlainTakeTheDefaults(t *testing.T) {
 		t.Fatalf("%v\n%s", err, &out)
 	}
 	for _, want := range []string{
-		"Interface", "https://gone.example.org (no DNS record)", "Certificate", "made here, signed by this cluster's CA",
-		"kubehenge: gone.example.org has no DNS record.", "kubehenge: This node's API certificate comes from CN=Corporate Root",
+		"Interface", "https://gone.example.org (no DNS record)", "Certificate", "made here, signed by the Proxmox VE CA",
+		"kubehenge: gone.example.org has no DNS record.", "kubehenge: Browsers warn until they trust the Proxmox VE CA. Files from CN=Corporate Root",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the dry run lacks %q:\n%s", want, &out)
@@ -1094,7 +1094,7 @@ func TestInterfaceScreens(t *testing.T) {
 			corp := ownUI(t, newHarness(t, opts{dhcp: true, untrusted: true}), Config{Name: "gone.example.org"}, sz.w, sz.l)
 			corp.until("Trust this CA")
 			corp.key('y')
-			corp.until("API certificate comes from")
+			corp.until("Files from")
 			corp.golden("choice-company")
 			corp.up(1)
 			corp.enter(1)
@@ -1107,13 +1107,12 @@ func TestInterfaceScreens(t *testing.T) {
 			own.enter(1)
 			own.waitFor("ACME server")
 			own.golden("acme")
-			for range len(acme.DirectoryLetsEncrypt) {
-				own.press(tea.KeyPressMsg{Code: tea.KeyBackspace})
-			}
-			own.paste("https://ca.example.org/acme/directory")
+			own.down(2)
 			own.enter(1)
 			own.down(2)
 			own.enter(2)
+			own.waitFor("Directory URL")
+			own.paste("https://ca.example.org/acme/directory")
 			own.waitFor("HMAC key file")
 			own.golden("acme-more")
 		})
