@@ -271,8 +271,6 @@ has "dnf's other variables stay" "${pinned}/rocky.repo" '/epel/$releasever_major
 # A minor release its own server no longer holds comes from the vault. One still there, or a server
 # that does not answer, leaves the repository on its mirrors.
 repomd vault AppStream "${good}"
-# The server answers a folder's address without its slash with a redirect.
-mkdir -p "${www}/moved/repodata/repomd.xml"
 vaulted=${root}/vaulted
 mkdir "${vaulted}"
 printf '%s\n' "baseos ${site}/one/BaseOS/x86_64/os/ ${site}/vault/BaseOS/x86_64/os/" \
