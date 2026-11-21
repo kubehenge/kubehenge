@@ -6,7 +6,7 @@
 
 # The images the tests run their own pods from.
 # renovate: datasource=docker depName=registry.k8s.io/e2e-test-images/agnhost
-agnhost=registry.k8s.io/e2e-test-images/agnhost:2.66.1@sha256:6e2eef87d0dc77e070a7549bc5fdfa290c0fefe3359eb33c2ad1eda692fe66a4
+agnhost=registry.k8s.io/e2e-test-images/agnhost:2.67.0@sha256:dfdb3dcb0e7e6194b4df12ba3cfdd2ac77ec6260e9f966546ecee7ec2ce0b068
 # renovate: datasource=docker depName=registry.k8s.io/pause
 pause_image=registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
 # The Git server the GitOps engines sync from, rootless as Pod Security's restricted level needs.
