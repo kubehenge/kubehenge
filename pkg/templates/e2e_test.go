@@ -137,7 +137,10 @@ func TestTemplatesEndToEnd(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			vmid, err := b.Create(ctx, &tmpl)
+			// Built as the CLI, the interface and the controller build, through Retry, which waits
+			// out a publisher's server that stops answering for a few minutes.
+			retry := Retry{Log: b.Log}
+			vmid, err := retry.Do(ctx, tmpl.Name, func(ctx context.Context) (int, error) { return b.Create(ctx, &tmpl) })
 			if err != nil {
 				t.Fatal(err)
 			}
