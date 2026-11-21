@@ -108,6 +108,10 @@ func TestIntegrationGatewayAPI(t *testing.T) { //nolint:paralleltest // starts a
 			}
 			return false
 		}
+		// The CRD of the try before is still being deleted, so the policy let this one past as well.
+		if apierrors.IsAlreadyExists(created) {
+			return false
+		}
 		if !strings.Contains(created.Error(), "prohibited") {
 			t.Fatalf("an older CRD: %v", created)
 		}
