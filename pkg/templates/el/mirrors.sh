@@ -99,10 +99,11 @@ EOF
 
 # drop_stale_mirrors <folders> <lists>: a mirror one sync behind serves older packages than the
 # build before it, which the kernel check then keeps out of the builds clusters move to. So each
-# list in <lists> keeps only the mirrors whose repomd.xml is as new as the repository's folder on
-# its own server (its line in el/vault). Rocky Linux's metalinks do this already and have no list.
-# A list use_vault set, a folder that gives no revision and a mirror that does not answer stay as
-# they are. A list left empty becomes the own server's folder. The step takes about a minute at most.
+# list in <lists> loses the mirrors whose repomd.xml is older than the repository's folder on its
+# own server (its line in el/vault). Rocky Linux has no list: its metalinks say which repomd.xml a
+# mirror may serve (use_metalinks). A list use_vault set, a folder that gives no revision and a
+# mirror that does not answer stay as they are. A list left empty becomes the own server's folder.
+# The step takes about a minute, after which the mirrors not yet asked stay.
 drop_stale_mirrors() {
     now=$(date +%s)
     deadline=$((now + 60))
