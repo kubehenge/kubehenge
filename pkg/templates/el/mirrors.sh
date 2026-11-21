@@ -70,11 +70,11 @@ EOF
     done < "$1/.repositories"
 }
 
-# repomd_revision <folder>: the revision in the folder's repomd.xml, empty where the folder does not
-# answer in a few seconds or names none. dnf moves past a mirror that does not answer, so the caller
-# keeps it.
+# repomd_revision <folder>: the revision in the folder's repomd.xml, read through a redirect as dnf
+# reads it, empty where the folder does not answer in a few seconds or names none. dnf moves past a
+# mirror that does not answer, so the caller keeps it.
 repomd_revision() {
-    curl -fsS --connect-timeout 3 --max-time 8 "$1repodata/repomd.xml" 2> /dev/null |
+    curl -fsSL --connect-timeout 3 --max-time 8 "$1repodata/repomd.xml" 2> /dev/null |
         sed -n 's|.*<revision>\([0-9][0-9]*\)</revision>.*|\1|p' | head -n 1
 }
 

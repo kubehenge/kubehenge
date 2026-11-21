@@ -114,7 +114,8 @@ func (c *InterfaceCertificate) keepCA(ca *applianceCA) error {
 	return c.write(appliance.InterfaceCAFile, slices.Concat(pem.EncodeToMemory(&pem.Block{Type: pemPrivateKey, Bytes: keyDER}), ca.pem))
 }
 
-// readIn reads a file of dir, which no name can lead out of.
+// readIn reads a file of dir through a root on it, which refuses a name or a link that leads out
+// of dir.
 func readIn(dir, name string) ([]byte, error) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {

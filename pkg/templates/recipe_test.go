@@ -741,6 +741,20 @@ func TestAVaultedMinorComposesFromTheVault(t *testing.T) {
 	}
 }
 
+// A mirror behind its own server leaves the lists once they are fetched, before a repository reads one.
+func TestTheBuildDropsMirrorsThatAreBehind(t *testing.T) {
+	t.Parallel()
+	content, err := recipeFiles.ReadFile("el/build.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(content)
+	fetch, stale := strings.Index(script, "\nfetch_mirrors "), strings.Index(script, "\ndrop_stale_mirrors el/vault ")
+	if point := strings.Index(script, "\npoint_at_mirrors "); fetch < 0 || stale < fetch || stale > point {
+		t.Error("el/build.sh does not drop the mirrors that are behind between fetching the lists and pointing the repositories at them")
+	}
+}
+
 // cloud-init's NetworkManager renderer, EL's, brings up no network for a route to "default".
 func TestNetworkConfigRoutesByPrefix(t *testing.T) {
 	t.Parallel()

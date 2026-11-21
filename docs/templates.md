@@ -84,7 +84,7 @@ The image comes from the publisher's mirror (`repo.almalinux.org`, `dl.rockylinu
 
 Every package a build installs comes from the image's minor release, such as 10.2. A newer minor release reaches templates only with a Kubehenge release that pins its image. Once the publisher moves the minor release to its vault, the build reads every repository of the node OS there. kubeadm's containerd comes from the same minor release's EPEL folder. On Rocky Linux it comes from EPEL's archive once EPEL moves the folder there.
 
-Some AlmaLinux mirrors are one sync behind the publisher's own server. A build drops each mirror whose `repomd.xml` is older than that server's. The check takes up to a minute, and a mirror that has not answered by then stays. When every mirror is older, the build reads the publisher's server.
+Some AlmaLinux mirrors are one sync behind the publisher's own server. A build drops each mirror whose `repomd.xml` is older than that server's. The check takes about a minute, and a mirror that has not answered by then stays. When every mirror is older, the build reads the publisher's server.
 
 On Rocky Linux the mirror service names the `repomd.xml` files it accepts, and a build refuses a mirror that serves another.
 

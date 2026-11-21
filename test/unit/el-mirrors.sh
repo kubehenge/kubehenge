@@ -83,7 +83,28 @@ printf '# the nearest mirrors\n%s/one/AppStream/$basearch/os/\n%s/two/AppStream/
     > "${www}/mirrorlist/appstream"
 printf '%s/one/BaseOS/$basearch/os/\n%s/two/BaseOS/$basearch/os/' "${site}" "${site}" > "${www}/mirrorlist/baseos"
 
-python3 -m http.server --bind 127.0.0.1 --directory "${www}" "${port}" > /dev/null 2>&1 &
+# The server sends a request for the mirror "moved" on to the mirror "behind", as a mirror that
+# moved does.
+cat > "${root}/server.py" << 'EOF'
+import functools
+import http.server
+import sys
+
+
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path.startswith("/moved/"):
+            self.send_response(301)
+            self.send_header("Location", self.path.replace("/moved/", "/behind/", 1))
+            self.end_headers()
+            return
+        super().do_GET()
+
+
+handler = functools.partial(Handler, directory=sys.argv[1])
+http.server.ThreadingHTTPServer(("127.0.0.1", int(sys.argv[2])), handler).serve_forever()
+EOF
+python3 "${root}/server.py" "${www}" "${port}" > /dev/null 2>&1 &
 server=$!
 for _ in $(seq 1 50); do
     curl -fsS -o /dev/null "${site}/mirrorlist/baseos" 2> /dev/null && break
@@ -132,7 +153,16 @@ cat > /dev/null
 printf 'appstream %s\nbaseos %s\n' '${site}/mirrorlist/appstream' '${site}/mirrorlist/baseos'
 EOF
 printf '#!/bin/sh\necho "$1" >> "%s/slept"\n' "${root}" > "${bin}/sleep"
-chmod +x "${bin}/python3" "${bin}/sleep"
+# The clock, which a case sets by writing ${root}/clock: each read of it then gives 25 s more.
+clock=$(command -v date)
+cat > "${bin}/date" << EOF
+#!/bin/sh
+[ -f "${root}/clock" ] || exec "${clock}" "\$@"
+read -r now < "${root}/clock"
+echo "\$((now + 25))" > "${root}/clock"
+echo "\${now}"
+EOF
+chmod +x "${bin}/python3" "${bin}/sleep" "${bin}/date"
 PATH=${bin}:${PATH}
 
 # dnf_reads <repositories>: each enabled repository's repomd.xml from the first mirror of its list,
@@ -375,6 +405,21 @@ if stale_run; then stopped=no; else stopped=yes; fi
 unset FILL_FAILS
 expect "dnf failing to fill in the variables stops the build" yes "${stopped}"
 has "and says so" "${root}/said" "appstream: dnf did not fill in the mirrors' variables"
+
+# dnf follows a mirror's redirect, so the step judges what the redirect leads to.
+stale_case appstream "${own_folder}" moved same
+stale_run
+holds "a mirror that redirects to one behind is dropped" "${root}/stale/appstream" "${site}/same/AppStream/\$basearch/os/"
+
+# The step's minute ends before the third mirror here, at 25 s a read, so the last two stay unasked.
+revision late 150
+revision later 160
+stale_case appstream "${own_folder}" behind older late later
+echo 0 > "${root}/clock"
+stale_run
+rm "${root}/clock"
+holds "the mirrors not asked within the minute stay" "${root}/stale/appstream" "${site}/late/AppStream/\$basearch/os/
+${site}/later/AppStream/\$basearch/os/"
 
 if [ "${failures}" -ne 0 ]; then
     echo "el-mirrors: ${failures} of $((passes + failures)) checks failed"
