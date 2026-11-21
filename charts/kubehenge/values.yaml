@@ -253,7 +253,7 @@ templateRefresh:
 # kube-vip, which holds each cluster's API address on its control planes and, where it is the
 # cluster's load balancer, its Services' addresses.
 # renovate: datasource=docker depName=ghcr.io/kube-vip/kube-vip
-kubeVip: ghcr.io/kube-vip/kube-vip:v1.3.1@sha256:1962f9daf226503f7e6b107f595cb28b7917fd2d0113957075e19a3e5a6c1e33
+kubeVip: ghcr.io/kube-vip/kube-vip:v1.3.2@sha256:50b25c001fe19628a932b42ec6f8ec31bb65a5e1811a723a57ceddbc5cd5aade
 
 # The management cluster's API as workload clusters reach it, such as https://192.0.2.10:6443; the
 # management cluster's module sets it. Without it, no cluster's autoscaler can run inside the
@@ -293,7 +293,7 @@ autoscaler:
 # The proxy on k3s control planes through which Cluster API reaches each node's etcd; the k3s
 # provider would otherwise pull it by tag alone.
 # renovate: datasource=docker depName=docker.io/alpine/socat
-etcdProxy: docker.io/alpine/socat:1.8.1.3@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
+etcdProxy: docker.io/alpine/socat:1.8.1.3@sha256:5aa280c6fc5bee94dbd2bbdf2a58d30f50396eaa110be84b03636945b157ae68
 
 # Installed into clusters: the Proxmox VE cloud controller manager and CSI plugin into every one,
 # the CNI chosen for a cluster whose distribution has none of its own (kubeadm), and the add-ons a
@@ -377,7 +377,7 @@ addons:
   monitoring:
     repository: https://prometheus-community.github.io/helm-charts
     chart: kube-prometheus-stack
-    version: 93.4.0@sha256:2ff4547dbe30aa7f6c7ef9fb49e35dfef43a36486cd8e463cd43cdda93914b24
+    version: 93.6.1@sha256:6e2a81882b4883858470952b0a02366aac906dc253bf1057360f82526597fde4
     # In front of the metrics etcd, kube-proxy and node-exporter serve without authentication.
     # renovate: datasource=docker depName=ghcr.io/kube-rbac-proxy/kube-rbac-proxy
     kubeRBACProxy: ghcr.io/kube-rbac-proxy/kube-rbac-proxy:v0.23.1@sha256:f723251bdd90a806b5331b6e9f9287cc2832d3dd9f9479378cdbbddb9856724f
@@ -463,13 +463,13 @@ addons:
         image:
           # The whole reference: the chart adds -distroless to a tag of its own.
           # renovate: datasource=docker depName=quay.io/prometheus/node-exporter
-          tag: quay.io/prometheus/node-exporter:v1.12.1-distroless@sha256:8c9bac11973b94b59be88d6e11fee4429aa743c8846cdc75d65b18db33f6a106
+          tag: quay.io/prometheus/node-exporter:v1.13.1-distroless@sha256:dbc46b5381ae47c5634a6ad16d7b4862191979b0ba4f4cfbdee85e5aa2fcd1e3
   # Loki, which keeps the logs of clusters that switch logs on, and Grafana Alloy, which collects
   # them.
   loki:
     repository: https://grafana-community.github.io/helm-charts
     chart: loki
-    version: 21.3.1@sha256:bda99d06d9243444a82b0a41ac76df512e304f0e238bb9d723d88fc2b12773f0
+    version: 21.4.3@sha256:a773890d1fe0f21a46d9604745806ef48fcf190277482e30477c68b62c0c00f3
     values:
       loki:
         image:
@@ -777,7 +777,7 @@ addons:
     values:
       image:
         # renovate: datasource=docker depName=docker.io/library/traefik
-        tag: v3.7.19@sha256:aa942a00bce033c909bf1f7e861d93761be4b31a035f10d2410d33e38a8f41cf
+        tag: v3.7.19@sha256:a6c0194dda77bcb804824580f36fa7edc56e315b1acfe933366c8b52844a78a4
   # The load balancers a cluster chooses from for its Services of type LoadBalancer: MetalLB, or
   # kube-vip with its cloud provider, which hands out the addresses. kube-vip runs the image above.
   metallb:
@@ -820,12 +820,12 @@ addons:
   argocd:
     repository: https://argoproj.github.io/argo-helm
     chart: argo-cd
-    version: 10.18.1@sha256:7074b586eea52a6c6ddf9e0331117b08d8f47ca92a65bf9d0b5f1044f5ed5fba
+    version: 10.18.2@sha256:6900d104854a18c733616a56853012eb9a136f2256a9d35de73cda03689a59d1
     values:
       global:
         image:
           # renovate: datasource=docker depName=quay.io/argoproj/argocd
-          tag: v3.6.1@sha256:296e3d74f449b2ce45265613fcb68c18ed7366488360c8ea32f5f2a93d2e5c54
+          tag: v3.6.2@sha256:bbcc3b6e79c5963439bdc5170f6e20a52365b41878133fac5ce8d6810d2641dc
       redis:
         image:
           # The same image as the chart's ECR Public copy, whose anonymous data quota per address
@@ -837,11 +837,11 @@ addons:
     repository: oci://ghcr.io/controlplaneio-fluxcd/charts
     chart: flux-operator
     # renovate: datasource=docker depName=ghcr.io/controlplaneio-fluxcd/charts/flux-operator
-    version: 0.62.1@sha256:1135514a01cc11e206f5ff0b568ac30d9defd675022b7a9da88d4a3474fbdf13
+    version: 0.63.0@sha256:62c547ad36803ebc2d679d0b50c1e1ad965cfec6352f27720907361e411891d2
     values:
       image:
         # renovate: datasource=docker depName=ghcr.io/controlplaneio-fluxcd/flux-operator
-        tag: v0.62.1@sha256:1d09a3f96524d0895fb11e8072d84a3dd029cecdec0f869efa371be6b001469c
+        tag: v0.63.0@sha256:82a6a83711fcfb00af55b23684a5c5fbfbde36cf3a233b4b81b4d45180f99cb0
     # The Flux release the operator installs from the manifests inside its image above, which pin
     # every Flux image by digest. It moves with the operator: each operator release carries the
     # newest Flux.
