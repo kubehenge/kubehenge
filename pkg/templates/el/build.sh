@@ -34,6 +34,7 @@ mkdir -p "${mirrors}"
 use_metalinks /etc/yum.repos.d
 use_vault el/vault "${mirrors}"
 fetch_mirrors "${mirrors}"
+drop_stale_mirrors el/vault "${mirrors}"
 point_at_mirrors /etc/yum.repos.d "${mirrors}"
 
 # Talos has no node image to compose: Sidero's pinned imager writes its disk (talos.sh).

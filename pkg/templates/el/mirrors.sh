@@ -70,6 +70,80 @@ EOF
     done < "$1/.repositories"
 }
 
+# repomd_revision <folder>: the revision in the folder's repomd.xml, read through a redirect as dnf
+# reads it, empty where the folder does not answer in a few seconds or names none. dnf moves past a
+# mirror that does not answer, so the caller keeps it.
+repomd_revision() {
+    curl -fsSL --connect-timeout 3 --max-time 8 "$1repodata/repomd.xml" 2> /dev/null |
+        sed -n 's|.*<revision>\([0-9][0-9]*\)</revision>.*|\1|p' | head -n 1
+}
+
+# fill_variables <list>: each line of the mirror list with dnf's variables filled in, as dnf fills
+# them, one line out for each line in.
+fill_variables() {
+    python3 - fill "$1" << 'EOF'
+import sys
+
+import dnf
+from libdnf.conf import ConfigParser
+
+base = dnf.Base()
+base.conf.read()
+base.conf.substitutions.update_from_etc(base.conf.installroot, varsdir=base.conf.varsdir)
+substitutions = dict(base.conf.substitutions)
+with open(sys.argv[2], encoding="utf-8") as lines:
+    for line in lines:
+        print(ConfigParser.substitute(line.rstrip("\n"), substitutions))
+EOF
+}
+
+# drop_stale_mirrors <folders> <lists>: a mirror one sync behind serves older packages than the
+# build before it, which the kernel check then keeps out of the builds clusters move to. So each
+# list in <lists> loses the mirrors whose repomd.xml is older than the repository's folder on its
+# own server (its line in el/vault). Rocky Linux has no list: its metalinks say which repomd.xml a
+# mirror may serve (use_metalinks). A list use_vault set, a folder that gives no revision and a
+# mirror that does not answer stay as they are. A list left empty becomes the own server's folder.
+# The step takes about a minute, after which the mirrors not yet asked stay.
+drop_stale_mirrors() {
+    now=$(date +%s)
+    deadline=$((now + 60))
+    while read -r id folder vault; do
+        list=$2/${id}
+        [ -s "${list}" ] || continue
+        read -r first < "${list}"
+        [ "${first}" != "${vault}" ] || continue
+        own=$(repomd_revision "${folder}")
+        if [ -z "${own}" ]; then
+            echo "${id}: ${folder} gives no revision, keeping its mirrors" >&2
+            continue
+        fi
+        # Filling the variables reads nothing over the network, so a failure is this script's or
+        # dnf's, and the build stops on it rather than read mirrors that may be behind.
+        if ! fill_variables "${list}" > "${list}.filled"; then
+            echo "${id}: dnf did not fill in the mirrors' variables" >&2
+            return 1
+        fi
+        : > "${list}.kept"
+        while IFS= read -r entry && IFS= read -r filled <&3; do
+            theirs=''
+            now=$(date +%s)
+            [ "${now}" -ge "${deadline}" ] || theirs=$(repomd_revision "${filled}")
+            if [ -n "${theirs}" ] && [ "${theirs}" -lt "${own}" ]; then
+                echo "${id}: dropping ${entry}, its revision ${theirs} is behind ${own}" >&2
+            else
+                printf '%s\n' "${entry}" >> "${list}.kept"
+            fi
+        done < "${list}" 3< "${list}.filled"
+        if [ -s "${list}.kept" ]; then
+            mv "${list}.kept" "${list}"
+        else
+            echo "${id}: every mirror is behind ${folder}, reading it alone" >&2
+            printf '%s\n' "${folder}" > "${list}"
+        fi
+        rm -f "${list}.filled" "${list}.kept"
+    done < "$1"
+}
+
 # point_at_mirrors <repositories> <lists>: each repository with a list in <lists> reads it there,
 # in place of its mirror list, metalink or folder.
 point_at_mirrors() {

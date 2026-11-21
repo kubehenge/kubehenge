@@ -72,7 +72,7 @@ func (c *InterfaceCertificate) loadCA() (*applianceCA, error) {
 	if c.memory {
 		return c.memCA, nil
 	}
-	raw, err := os.ReadFile(c.caPath()) //nolint:gosec // --appliance-dir and a constant name, nothing from the request
+	raw, err := readIn(c.dir, appliance.InterfaceCAFile)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil //nolint:nilnil // no CA is no error
 	}
@@ -112,6 +112,21 @@ func (c *InterfaceCertificate) keepCA(ca *applianceCA) error {
 		return fmt.Errorf("writing the CA's key: %w", err)
 	}
 	return c.write(appliance.InterfaceCAFile, slices.Concat(pem.EncodeToMemory(&pem.Block{Type: pemPrivateKey, Bytes: keyDER}), ca.pem))
+}
+
+// readIn reads a file of dir through a root on it, which refuses a name or a link that leads out
+// of dir.
+func readIn(dir, name string) ([]byte, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, fmt.Errorf("opening %s: %w", dir, err)
+	}
+	defer func() { _ = root.Close() }()
+	raw, err := root.ReadFile(name)
+	if err != nil {
+		return nil, fmt.Errorf("in %s: %w", dir, err)
+	}
+	return raw, nil
 }
 
 func (c *InterfaceCertificate) caPath() string {
