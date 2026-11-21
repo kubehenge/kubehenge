@@ -55,6 +55,8 @@ What each release changed is in the [changelog](changelog.md).
   - backups, metrics and logs from every cluster
   - Argo CD for every cluster
   - security scanning
-- Plugins: signed extensions the appliance downloads on demand, from an index of official and outside plugins. Add-ons, cluster types and appliance features become plugins that update without a Kubehenge release. A plugin can add another dashboard instead of Headlamp.
+- Signed plugins that the appliance downloads on demand, from an index of official and third-party plugins.
+  - Add-ons, cluster types and appliance features become plugins that update without a Kubehenge release.
+  - A plugin can replace Headlamp with another dashboard.
 
 Driven by what users ask for, such as clusters across several Proxmox VE clusters and more add-ons. OKD clusters may follow once Cluster API's OpenShift Assisted providers support ClusterClass and work with the Proxmox VE provider.

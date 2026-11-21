@@ -8,10 +8,10 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ### Highlights
 
-- **The installer asks the interface's address and certificate.** Give it a DNS name and checks follow. Then pick the Proxmox VE CA's certificate, your own files in any common format, or ACME.
-- **ACME from Let's Encrypt or your own server**, proved on port 443, port 80 or by DNS record, and renewed by the appliance.
-- **The certificate stays changeable afterwards**, on the interface's certificate page or with `kubehenge appliance certificate`, with no restart.
-- **Template builds hold up while AlmaLinux syncs.** They skip mirrors that are behind and find a moved base image in the vault.
+- **The installer asks for the interface's DNS name and certificate.** It checks the name in DNS and offers a certificate signed by the Proxmox VE CA, your own files or ACME.
+- **The appliance orders and renews certificates by ACME.** It asks Let's Encrypt or your own ACME server and proves the name on port 443, port 80 or by DNS record.
+- **The interface's certificate and address change with no restart.** Use the certificate page or `kubehenge appliance certificate`.
+- **AlmaLinux template builds skip mirrors that are behind.** They also find their image in the vault once the mirror drops it.
 
 ### Added
 
@@ -35,8 +35,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 ### Fixed
 
 - Rancher's agent in a registered cluster runs its Helm operations in the shell image Rancher pins, not a default named by tag alone.
-- A template build finds its pinned AlmaLinux or Rocky Linux image in the vault once the mirror lists only newer builds.
-- AlmaLinux node OS builds skip mirrors that are one sync behind the publisher's own server, so a build no longer installs an older kernel than the build before it.
+- A template build finds its pinned AlmaLinux image in the vault once the mirror's checksum file lists only newer builds.
+- AlmaLinux template builds skip mirrors that are behind the publisher's own server. Such a mirror gave a build an older kernel than the build before it.
 
 ## [0.5.4] - 2026-11-19
 

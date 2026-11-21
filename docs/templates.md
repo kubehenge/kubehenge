@@ -80,9 +80,13 @@ Each Kubehenge release makes templates from one build of each node OS's cloud im
 
 The image comes from the publisher's mirror (`repo.almalinux.org`, `dl.rockylinux.org`). Once a newer minor release of the node OS replaces it there, it comes from the publisher's vault (`vault.almalinux.org`, `dl.rockylinux.org`).
 
+### Where packages come from
+
 Every package a build installs comes from the image's minor release, such as 10.2. A newer minor release reaches templates only with a Kubehenge release that pins its image. Once the publisher moves the minor release to its vault, the build reads every repository of the node OS there. kubeadm's containerd comes from the same minor release's EPEL folder. On Rocky Linux it comes from EPEL's archive once EPEL moves the folder there.
 
-Some of AlmaLinux's mirrors lag a sync behind. A build reads only those whose `repomd.xml` is as new as the publisher's own server's. This adds up to a minute to a build. When every mirror lags, the build reads the publisher's server.
+Some AlmaLinux mirrors are one sync behind the publisher's own server. A build drops each mirror whose `repomd.xml` is older than that server's. The check takes up to a minute, and a mirror that has not answered by then stays. When every mirror is older, the build reads the publisher's server.
+
+On Rocky Linux the mirror service names the `repomd.xml` files it accepts, and a build refuses a mirror that serves another.
 
 ### Package checks
 
@@ -133,7 +137,7 @@ Talos templates have no builds. Talos nodes take their updates by upgrading Talo
 
 ### Kernel check
 
-A build records its kernel and a hash of its packages in the template's description when it ends. The refresh compares each build with the previous one of its line. An older kernel means the mirror was one sync behind. AlmaLinux builds drop every mirror whose repository index is older than the one on the publisher's own server, so this happens only when that server is behind. Rocky Linux's metalinks ensure the same.
+A build records its kernel and a hash of its packages in the template's description when it ends. The refresh compares each build with the previous one of its line. An older kernel means the mirror was one sync behind ([where packages come from](#where-packages-come-from)).
 
 Such a build is kept out of the builds clusters move to. The Administration page marks it "Older than the previous build". The controller asks for another build an hour later, up to 3 times. After the third, the build stays out until a newer one arrives. A build from before this check is never older.
 

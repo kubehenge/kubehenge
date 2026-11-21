@@ -59,7 +59,7 @@ The interface writes a request that `kubehenge-update`, a service running as roo
 curl -fsSLO https://github.com/kubehenge/kubehenge/releases/latest/download/install.sh && sh install.sh --upgrade --ctid <ctid>
 ```
 
-- It checks every download against the checksums it carries, as when installing ([install.md](install.md#install-the-appliance)). `--release <file> --sha256 <hex>` installs a local archive instead.
+- It checks every download against the checksums it carries, as when installing ([install.md](install.md#downloads-and-checksums)). `--release <file> --sha256 <hex>` installs a local archive instead.
 - It refuses a container that is not Kubehenge's appliance (tagged `kubehenge`) and a release older than the installed one. The same release may be installed again.
 - It keeps the appliance's state, settings and certificate. It also keeps a newer OpenTofu that the appliance's own upgrades brought.
 - It stops, changing nothing, while the management cluster is applied or removed, a VM template is built, or the appliance is upgraded.
@@ -487,7 +487,7 @@ Encrypted files need `--cert-passphrase-file <file>`, whose first line is the pa
 - The certificate must be valid for the name, or for the fixed address where there is no name, and have more than a day left. With less than 30 days left it is taken with a caution giving the last day.
 - A chain that lacks its issuer is taken with a caution naming the issuer to add. Issuers in this node's trust store count as known.
 - Certificates in the files that the chain does not use are left out, and the installer says which.
-- Without `--cert`, the installer asks whether to make a certificate or read files. It preselects files when another CA signed the Proxmox VE API's certificate, since files from that CA avoid the browsers' warning.
+- Without `--cert` or `--acme`, the installer asks whether to make a certificate, read files or order one by ACME. It preselects files when another CA signed the Proxmox VE API's certificate, since files from that CA avoid the browsers' warning.
 
 ### DNS check
 

@@ -13,7 +13,9 @@ Then [create clusters](clusters.md).
 
 ### Proxmox VE
 
-- **Proxmox VE 9 on x86-64.** The installer refuses any other release. Kubehenge has no build for other architectures. A Proxmox VE cluster that runs two major versions at once needs [care](upgrading.md#upgrading-proxmox-ve).
+- **Proxmox VE 9 on x86-64.** The installer refuses any other release.
+  - Kubehenge has no build for other architectures.
+  - A Proxmox VE cluster that runs two major versions at once needs [care](upgrading.md#upgrading-proxmox-ve).
 - **Root in the shell of one node** to run the installer.
 - **An administrator** to set up the management cluster, a user with the Administrator role on `/` ([what it needs](#who-may-set-it-up)).
 
@@ -42,7 +44,7 @@ Kubehenge gives every node of every cluster a static address, with no DHCP serve
 
 - **The management cluster** needs one free address per node (one, or three or five for high availability) and one for its Kubernetes API's virtual IP. All are in one subnet on one bridge, with a gateway and DNS servers.
   - Its VMs can run on several Proxmox VE nodes. Each of those needs that bridge, in the same layer-2 network.
-  - The bridge can be an SDN VNet. Cluster API's token gets `SDN.Use` (its network role) on `/sdn/zones/<zone>/<vnet>`, or on `/sdn/zones/localnetwork/<bridge>` for a node's bridge.
+  - The bridge can be an SDN VNet. Cluster API's token ([what it may do](architecture.md#what-cluster-apis-token-may-do)) gets `SDN.Use` (its network role) on `/sdn/zones/<zone>/<vnet>`, or on `/sdn/zones/localnetwork/<bridge>` for a node's bridge.
   - The appliance reaches its nodes on ports 50000 (Talos API) and 6443 (Kubernetes API).
 
 #### Addresses for clusters
@@ -86,29 +88,61 @@ The same with a static address:
 sh install.sh --ip 192.0.2.40/24 --gateway 192.0.2.1
 ```
 
-On a terminal, the installer is a full-screen guide. It says what it found on the node, and any answers restored from an unfinished run (never a secret). Then it asks the network first:
+On a terminal, the installer is a full-screen guide. It says what it found on the node, and any answers restored from an unfinished run (never a secret).
+
+### What it asks
+
+First the network:
 
 1. The IP version: IPv4, IPv6 or both. IPv4 only gives the container no IPv6.
 2. The network the container attaches to, and its VLAN.
 3. For each version, DHCP, router advertisements (IPv6) or a static address.
-4. A static address, with or without `/prefix`, which the network's prefix fills in. A free address comes filled in, with how it was checked. The gateway is found from the network, within the address's subnet, and asked only when none is found.
+4. A static address, with or without `/prefix`, which the network's prefix fills in. A free address comes filled in, with how it was checked.
+5. The gateway, where the network gives none within the address's subnet.
 
-Then it asks about the interface:
+Then the interface:
 
 1. The DNS name people open it at, or none to use the appliance's address. The summary says when the name has no record or points elsewhere.
 2. Its certificate: one made here and signed by the Proxmox VE CA, files of your own, or one from ACME ([details](upgrading.md#the-interfaces-certificate)).
 
-It then asks only what is ambiguous, such as the storage, and shows a summary to install, change or cancel. Each run writes the commands' output to a log of its own, `/var/log/kubehenge-install-<UTC time>-<random>.log`. The newest ten are kept.
+It then asks only what is ambiguous, such as the storage, and shows a summary to install, change or cancel.
 
-A failed step keeps the installer open. The screen gives the cause and the fix, and offers to change the setting at fault, try again, quit and keep the container (`pct enter <id>`), or quit and remove it. Once it says the container is kept, only the last choice removes it. Before that, Ctrl+C or a lost session removes it unless `--keep-failed` is given. A new network or Proxmox VE API setting reaches the existing container. Any other change creates it afresh without repeating the downloads.
+### A failed step
 
-Without a terminal, with `TERM` empty or `dumb`, or with `--plain`, it prints the plan and a line as each step starts and ends, and asks nothing. A failed step shows its cause beside it. On a node whose own network is static, it then needs `--ip`, or `--ip dhcp` where a DHCP server answers. A dropped SSH session or Ctrl+C removes the container it was making, unless `--keep-failed` is given. A run that stops with answers given ends on the `install.sh` command that repeats them, on a terminal too.
+A failed step keeps the installer open. The screen gives the cause and the fix, then offers to:
+
+- change the setting at fault.
+- try again.
+- quit and keep the container (`pct enter <id>`).
+- quit and remove the container.
+
+Once the screen says the container is kept, only the last choice removes it. Before that, Ctrl+C or a lost session removes it unless `--keep-failed` is given.
+
+A new network or Proxmox VE API setting reaches the existing container. Any other change creates it afresh without repeating the downloads.
+
+### Without a terminal
+
+Without a terminal, with `TERM` empty or `dumb`, or with `--plain`, the installer asks nothing. It prints the plan and a line as each step starts and ends. A failed step shows its cause beside it.
+
+On a node whose own network is static, the installer needs `--ip`, or `--ip dhcp` where a DHCP server answers. A dropped SSH session or Ctrl+C removes the container it was making, unless `--keep-failed` is given. A run that stops with answers given ends on the `install.sh` command that repeats them, on a terminal too.
+
+### How an address is checked
 
 An address is checked against the node's neighbour table, then with an ARP probe on the container's network. The result is free, in use or not checked. No answer counts as free only where this node holds an address on that network or the gateway answers a probe. An address in use is refused.
 
-`install.sh --help` lists the options without a node, root or download. `install.sh` carries the version of its release and the checksums of the release archive and the OpenTofu release. It needs 1 GiB free in `/tmp` (or `TMPDIR`) for the unpacked release. The downloaded archive is kept in `~/.cache/kubehenge` (or `KUBEHENGE_CACHE_DIR`) and used again while it matches its checksum. The installer inside the archive carries the container template's checksum, and checks every download before it is used. Once Proxmox's mirror drops that template, the installer takes the one Proxmox's signed template index lists, with the checksum the index gives. To check the script itself before running it, see [Verifying a release](releasing.md#verifying-a-release).
+### Downloads and checksums
+
+- `install.sh` carries the version of its release and the checksums of the release archive and the OpenTofu release.
+- It needs 1 GiB free in `/tmp` (or `TMPDIR`) for the unpacked release.
+- The downloaded archive is kept in `~/.cache/kubehenge` (or `KUBEHENGE_CACHE_DIR`) and used again while it matches its checksum.
+- The installer inside the archive carries the container template's checksum and checks every download before it is used.
+- Once Proxmox's mirror drops that template, the installer takes the one Proxmox's signed template index lists, with the checksum the index gives.
+
+To check the script itself before running it, see [Verifying a release](releasing.md#verifying-a-release).
 
 ### Options
+
+`install.sh --help` lists the options without a node, root or download.
 
 | Option | Default | What it does |
 | --- | --- | --- |
@@ -163,13 +197,13 @@ Sign in with a Proxmox VE administrator to create the management cluster.
 Log: /var/log/kubehenge-install-20261119-134128-2706524411.log
 ```
 
+Each run writes the commands' output to a log of its own, `/var/log/kubehenge-install-<UTC time>-<random>.log`. The newest ten are kept.
+
 ### The Proxmox VE API
 
 The appliance, the management cluster and every cluster reach the Proxmox VE API at one URL and check the certificate it serves. Without `--proxmox-url`, the installer reads the names and addresses in this node's API certificate (`/etc/pve/local/pveproxy-ssl.pem`, else `pve-ssl.pem`). It keeps an address only if it belongs to one of this cluster's nodes. It keeps a name only if every address it resolves to belongs to one. A wildcard name counts for this node's own name (`hostname -f`) where it covers it.
 
-Where the certificate is valid for none of the cluster's names and addresses, the installer asks for a URL with a name or address the certificate is valid for. Without a terminal it stops, and `--proxmox-url` gives that URL.
-
-The management cluster's nodes resolve a name in that URL with the setup's DNS servers, not with the appliance's resolver or hosts file. The setup refuses a name when a server says it does not know it and none resolves it. Put an address in the URL, or add a DNS record. It warns when every server stays silent, and when the servers and the appliance resolve the name differently.
+Where the certificate is valid for none of the cluster's names and addresses, the installer asks for a URL it is valid for. Without a terminal it stops, and `--proxmox-url` gives that URL.
 
 #### Choosing the address
 
@@ -183,6 +217,10 @@ Of the names and addresses that remain, the installer takes, in this order:
 6. a name, then an address, of another node of the cluster.
 
 A name counts as it resolves on this node. The appliance and the clusters' VMs must resolve it the same way. Where several tie, the installer asks which, with the first as the default. Without a terminal it takes the first and names it.
+
+#### A name in the URL
+
+The management cluster's nodes resolve a name in the API's URL with the setup's DNS servers, not with the appliance's resolver or hosts file. The setup refuses a name when a server says it does not know it and none resolves it. Put an address in the URL, or add a DNS record. The setup warns when every server stays silent, and when the servers and the appliance resolve the name differently.
 
 #### An address the certificate lacks
 
@@ -203,7 +241,7 @@ A certificate of your own that lists the address works as well (**System**, **Ce
 
 #### The CA
 
-The CA the certificate is checked against is, without `--proxmox-ca`:
+Without `--proxmox-ca`, the certificate is checked against:
 
 1. the Proxmox VE cluster's own CA, `/etc/pve/pve-root-ca.pem`, where it signed the certificate.
 2. else the CA in this node's trust store (`/etc/ssl/certs/ca-certificates.crt`) the certificate rests on, such as your organisation's CA once it is installed there.
@@ -213,8 +251,6 @@ The CA the certificate is checked against is, without `--proxmox-ca`:
    - Without a terminal it stops and names the fingerprint.
 
 Where none of them applies, or you do not trust the CA it shows, the installer stops before it creates anything. Then give the CA with `--proxmox-ca`, or check nothing with `--proxmox-insecure`.
-
-Cluster API's token has its own roles ([what they hold](architecture.md#what-cluster-apis-token-may-do)).
 
 ### The Proxmox VE interface entry
 
@@ -247,14 +283,18 @@ Session lengths and sign-in limits are under [Sessions](architecture.md#sessions
 
 On first sign-in, an administrator sees the setup page. It creates the management cluster with the `management-cluster/` module and OpenTofu, inside the appliance.
 
-The page goes through five steps: **Placement**, **Network**, **Clusters**, **Services** and **Passphrase**. It preselects up to three Proxmox VE nodes that answer, so that the management cluster survives the loss of one. It then fills in what the first chosen node reports about itself, all of which can be changed:
+The page goes through five steps: **Placement**, **Network**, **Clusters**, **Services** and **Passphrase**. Administration shows the same settings on one page, with one section per step.
+
+### What the page fills in
+
+The page preselects up to three Proxmox VE nodes that answer, so that the management cluster survives the loss of one. It then fills in what the first chosen node reports about itself, all of which can be changed:
 
 - A shared storage for the VM disks, or else the one with the most free space.
 - The bridge the node reaches its gateway through, with that gateway.
 - The node's own DNS servers.
 - The network the node addresses go in, with free addresses in it as **Node addresses** and **API address**. With a VLAN tag, the page fills in no addresses.
 
-For clusters, it offers the same storage and bridge to start with. Administration shows the same settings on one page, with one section per step.
+For clusters, it offers the same storage and bridge to start with.
 
 ### Who may set it up
 
@@ -276,7 +316,7 @@ The same privileges open Administration later, in seven pages:
 - **Appliance**, Kubehenge's upgrades and repair access.
 - **Backups**, the [management cluster's etcd snapshots](install-settings.md#back-up-the-management-clusters-etcd).
 - **Templates**, the VM templates and their weekly build.
-- **Certificates**, the DNS-01 credential for every cluster.
+- **Certificates**, the interface's certificate and the DNS-01 credential for every cluster.
 - **Notifications**, the [targets that are told](install-settings.md#notifications).
 - **Activity**, [who did what](architecture.md#activity).
 
