@@ -182,6 +182,9 @@ data "talos_machine_configuration" "node" {
         [yamlencode({ machine = { env = local.proxy_talos_env } })],
         local.proxy_has_ca ? [yamlencode({ apiVersion = "v1alpha1", kind = "TrustedRootsConfig", name = "kubehenge-proxy", certificates = var.proxy.ca_bundle })] : [],
       ) : [],
+      # Image pulls and every other TLS connection of the nodes trust the site's CA, which TLS
+      # inspection without a proxy needs as much as a proxy does.
+      var.site_ca == "" ? [] : [yamlencode({ apiVersion = "v1alpha1", kind = "TrustedRootsConfig", name = "kubehenge-site", certificates = var.site_ca })],
       # The same MTU as the Proxmox VE interface, on the link by its alias, so it holds whatever
       # the guest driver negotiates.
       var.mtu == null ? [] : [yamlencode({ apiVersion = "v1alpha1", kind = "LinkConfig", name = "lan", mtu = var.mtu })],

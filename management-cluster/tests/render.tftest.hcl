@@ -665,6 +665,11 @@ run "controller_and_clusters_are_least_privilege" {
   }
 
   assert {
+    condition     = !strcontains(data.talos_machine_configuration.node[0].config_patches[1], "TrustedRootsConfig")
+    error_message = "without a site CA or proxy the management nodes trust only the public authorities"
+  }
+
+  assert {
     condition = [
       for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d).kubeNetworkPoliciesEnabled
       if try(yamldecode(d).kind, "") == "KubeFlannelCNIConfig"
@@ -709,6 +714,23 @@ run "controller_and_clusters_are_least_privilege" {
       !yamldecode(helm_release.kubehenge.values[0]).proxmox.etcdRestore
     )
     error_message = "no restore token unless restores through the guest agent are asked for"
+  }
+}
+
+run "site_ca_reaches_the_management_nodes" {
+  command = plan
+
+  variables {
+    site_ca = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+  }
+
+  assert {
+    condition = [
+      # Whole separator lines only: "---\n" also ends the certificate's last line.
+      for d in split("\n---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d).certificates
+      if try(yamldecode(d).kind, "") == "TrustedRootsConfig"
+    ] == ["-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"]
+    error_message = "the management nodes trust the site CA without a proxy"
   }
 }
 

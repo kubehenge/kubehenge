@@ -691,7 +691,7 @@ variable "release_mirror" {
 }
 
 variable "site_ca" {
-  description = "The PEM authority of the site's private CA, the default of every connection that names none of its own: the nodes of clusters without trustedCAs, the release mirror, the backup targets with an endpoint and the identity providers. Empty, none."
+  description = "The PEM authority of the site's private CA, the default of every connection that names none of its own: the management cluster's nodes, the nodes of clusters without trustedCAs, the release mirror, the backup targets with an endpoint and the identity providers. Empty, none."
   type        = string
   default     = ""
   nullable    = false
