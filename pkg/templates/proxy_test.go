@@ -308,6 +308,19 @@ func TestBakeTrustsTheSiteCAWithoutAProxy(t *testing.T) {
 				if b.Distribution == Kubeadm && recipe.Image != nil && !strings.Contains(recipe.Image.UserData, "/run/kubehenge-proxy/ca.crt") {
 					t.Errorf("%s: the image pull does not trust the site CA:\n%s", name, recipe.Image.UserData)
 				}
+				if f.Name() != (leap{}).Name() {
+					continue
+				}
+				// The snapshot the node reboots into drops the anchor, so run.sh puts it back for the
+				// pull, and the folder leaves the template afterwards.
+				if b.Distribution == Kubeadm && (len(recipe.RebootChecks) == 0 || !slices.Contains(recipe.RebootChecks[0], path.Join(buildDir, proxyDir, "run.sh"))) {
+					t.Errorf("%s: the pull after the reboot does not trust the site CA through run.sh: %v", name, recipe.RebootChecks)
+				}
+				if !slices.ContainsFunc(recipe.Cleanup, func(step []string) bool {
+					return slices.Equal(step, []string{"rm", "-rf", path.Join(buildDir, proxyDir)})
+				}) {
+					t.Errorf("%s: the authority's folder stays in the template: %v", name, recipe.Cleanup)
+				}
 			}
 		}
 	}

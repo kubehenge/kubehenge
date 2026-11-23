@@ -959,7 +959,9 @@ describe("setup", () => {
       bootstrapDatastore: "local",
     });
     const info = await screen.findByText(/^The management cluster and its downloads trust it\./u);
-    expect(info).toHaveTextContent("Clusters, the release mirror, backup targets and identity providers trust it unless they name their own.");
+    expect(info).toHaveTextContent(
+      "Other clusters, the release mirror, backup targets and identity providers trust it unless they name another.",
+    );
   });
 
   it("tells users without the rights that an administrator has to set it up", async () => {

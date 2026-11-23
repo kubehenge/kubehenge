@@ -734,6 +734,27 @@ run "site_ca_reaches_the_management_nodes" {
   }
 }
 
+run "site_ca_beside_the_proxy_authority_on_the_management_nodes" {
+  command = plan
+
+  variables {
+    site_ca = "-----BEGIN CERTIFICATE-----\nSITECA\n-----END CERTIFICATE-----\n"
+    proxy = {
+      url       = "https://proxy.example.com"
+      ca_bundle = "-----BEGIN CERTIFICATE-----\nPROXYCA\n-----END CERTIFICATE-----"
+    }
+  }
+
+  # Talos refuses two documents of one kind with the same name.
+  assert {
+    condition = [
+      for d in split("\n---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d).name
+      if try(yamldecode(d).kind, "") == "TrustedRootsConfig"
+    ] == ["kubehenge-proxy", "kubehenge-site"]
+    error_message = "the management nodes trust the proxy's authority and the site CA under names of their own"
+  }
+}
+
 run "cluster_sys_audit" {
   command = plan
 
@@ -2526,7 +2547,7 @@ run "neither_site_ca_nor_proxy_is_unchanged" {
   }
 }
 
-run "proxy_authority_alone_is_unchanged" {
+run "proxy_authority_alone_is_trusted_as_before" {
   command = plan
 
   variables {
@@ -2543,7 +2564,19 @@ run "proxy_authority_alone_is_unchanged" {
       yamldecode(helm_release.cluster_api_providers.values[0]).proxy == { secret = "kubehenge-proxy", ca = true } &&
       [for e in yamldecode(helm_release.cluster_api_operator.values[0]).env.manager : e.name] == ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "SSL_CERT_FILE"]
     )
-    error_message = "a proxy authority without a site CA is mounted and trusted exactly as it was, with nothing added"
+    error_message = "a proxy authority without a site CA is mounted and trusted as before"
+  }
+
+  # A pod that keeps running keeps the authority it read as it started.
+  assert {
+    condition = (
+      yamldecode(helm_release.cluster_api_operator.values[0]).podAnnotations == { "kubehenge.dev/trusted-ca" = sha256("-----BEGIN CERTIFICATE-----\nPROXYCA\n-----END CERTIFICATE-----") } &&
+      anytrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : (
+        p.name == "helm" &&
+        yamldecode(p.spec.patches[1].patch).spec.template.metadata.annotations == { "kubehenge.dev/trusted-ca" = sha256("-----BEGIN CERTIFICATE-----\nPROXYCA\n-----END CERTIFICATE-----") }
+      )])
+    )
+    error_message = "the operator's and the Add-on Provider for Helm's pods carry the hash of the proxy's authority, so that a new one restarts them"
   }
 }
 

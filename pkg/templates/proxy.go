@@ -51,7 +51,7 @@ func ProxyFromEnvironment() (*GuestProxy, error) {
 	if file := os.Getenv(CAFileEnv); file != "" {
 		pem, err := os.ReadFile(file) //nolint:gosec // the chart mounts it there
 		if err != nil {
-			return nil, fmt.Errorf("the certificate authorities: %w", err)
+			return nil, fmt.Errorf("the authority file: %w", err)
 		}
 		p.CABundle = string(pem)
 	}

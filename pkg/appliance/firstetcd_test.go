@@ -449,6 +449,7 @@ func TestCreatesClusterOnlyWithNodesKeptRunning(t *testing.T) {
 		"cluster updated, in place":  {[]map[string]any{imagedChange(clusterAddress, []string{"update"}, "", ""), imagedChange(machine, []string{"update"}, v1, v1)}, false},
 		"configured, then upgraded":  {[]map[string]any{created, imagedChange(machine, []string{"update"}, v1, v1), imagedChange(nodeModuleAddress+"2.talos_machine.this", []string{"update"}, v1, v2)}, false},
 		"image added where none was": {[]map[string]any{created, imagedChange(machine, []string{"update"}, "", v1)}, false},
+		"no image before or after":   {[]map[string]any{created, imagedChange(machine, []string{"update"}, "", "")}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

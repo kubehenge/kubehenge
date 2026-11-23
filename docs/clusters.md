@@ -975,7 +975,7 @@ Add the workload clusters' node networks and any internal registry.
 
 Proxmox VE downloads disk images through the datacenter's proxy. The Add-on Provider for Helm gets the authority too. Clusters' own nodes are not covered.
 
-The site CA reaches the same downloads whether or not there is a proxy, so a site behind TLS inspection without a proxy gives it once and sets nothing else. The downloads trust the site CA and the proxy's authority together.
+The site CA reaches the same downloads, with or without a proxy. Behind TLS inspection without a proxy, set the site CA alone.
 
 ## Node customisation
 

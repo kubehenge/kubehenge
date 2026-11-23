@@ -11,39 +11,45 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
+// renderedJob is the part of a rendered document the hook tests read.
+type renderedJob struct {
+	Kind string          `json:"kind"`
+	Spec renderedJobSpec `json:"spec"`
+}
+
+type renderedJobSpec struct {
+	Template corev1.PodTemplateSpec `json:"template"`
+}
+
 // hookPods renders the providers chart with the given values and returns the pod spec of each hook
 // Job that runs a kubehenge subcommand, by container name.
-func hookPods(t *testing.T, set ...string) map[string]corev1.PodSpec {
+func hookPods(t *testing.T, set ...string) map[string]*corev1.PodSpec {
 	t.Helper()
 	args := []string{
 		"template", "x", "../../management-cluster/charts/cluster-api-providers",
 		"--values", "testdata/cluster-api-providers-values.yaml",
 		"--show-only", "templates/manifests.yaml", "--show-only", "templates/wait.yaml",
 	}
-	for _, s := range set {
-		args = append(args, "--set", s)
+	if len(set) > 0 {
+		args = append(args, "--set", strings.Join(set, ","))
 	}
-	cmd := exec.CommandContext(t.Context(), "helm", args...) //nolint:gosec // helm with the test's own arguments
+	cmd := exec.CommandContext(t.Context(), "helm", args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("helm template: %v: %s", err, stderr.String())
 	}
-	pods := map[string]corev1.PodSpec{}
+	pods := map[string]*corev1.PodSpec{}
 	for doc := range strings.SplitSeq(string(out), "\n---\n") {
-		var job struct {
-			Kind string `json:"kind"`
-			Spec struct {
-				Template corev1.PodTemplateSpec `json:"template"`
-			} `json:"spec"`
-		}
+		var job renderedJob
 		if err := yaml.Unmarshal([]byte(doc), &job); err != nil {
 			t.Fatalf("%v:\n%s", err, doc)
 		}
 		if job.Kind == "Job" {
-			for _, c := range job.Spec.Template.Spec.Containers {
-				pods[c.Name] = job.Spec.Template.Spec
+			pod := &job.Spec.Template.Spec
+			for i := range pod.Containers {
+				pods[pod.Containers[i].Name] = pod
 			}
 		}
 	}
@@ -55,7 +61,7 @@ func hookPods(t *testing.T, set ...string) map[string]corev1.PodSpec {
 
 // authorityMounted reports whether the pod mounts the authority file from the named Secret and has
 // SSL_CERT_FILE name it.
-func authorityMounted(pod corev1.PodSpec, secret string) bool {
+func authorityMounted(pod *corev1.PodSpec, secret string) bool {
 	c := pod.Containers[0]
 	named := slices.ContainsFunc(c.Env, func(e corev1.EnvVar) bool {
 		return e.Name == "SSL_CERT_FILE" && e.Value == "/etc/kubehenge/proxy/ca.crt"
