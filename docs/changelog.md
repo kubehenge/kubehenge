@@ -4,6 +4,12 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-11-23
+
+### Fixed
+
+- The management cluster's nodes trust the site CA. Behind TLS inspection without a proxy, they could not pull etcd's image, so the first setup never finished.
+
 ## [0.5.5] - 2026-11-20
 
 ### Highlights
