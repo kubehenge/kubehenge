@@ -2336,7 +2336,7 @@ export function SiteFields({ form, set, shown }: FieldsProps): JSX.Element {
             <SiteCARollNote siteCA={form.siteCA} />
           </>
         }
-        info="Every cluster's nodes, the release mirror, backup targets and identity providers trust it unless they name an authority of their own."
+        info="The management cluster's nodes and the management side's downloads (providers, charts and template builds) trust it, with or without a proxy. Every cluster's nodes, the release mirror, backup targets and identity providers trust it unless they name an authority of their own."
         error={shown("siteCA")}
       >
         {(id) => <textarea id={id} rows={3} value={form.siteCA} onChange={(e) => set("siteCA", e.target.value)} />}

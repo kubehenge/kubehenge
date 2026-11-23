@@ -8,11 +8,12 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ### Highlights
 
-- **The management cluster's nodes trust the site CA.** Behind TLS inspection without a proxy, they now pull etcd's image.
+- **The management side trusts the site CA.** Behind TLS inspection without a proxy, the first setup of the management cluster finishes and template builds work.
 
 ### Fixed
 
 - The management cluster's nodes trust the site CA. Behind TLS inspection without a proxy, they could not pull etcd's image, so the management cluster never started.
+- Provider downloads, the Cluster API operator, the Add-on Provider for Helm, OpenTofu, the controller and template builds trust the site CA with or without a proxy.
 
 ## [0.5.5] - 2026-11-20
 

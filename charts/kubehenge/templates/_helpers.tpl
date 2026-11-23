@@ -2910,10 +2910,11 @@ content: |
 {{- end -}}
 
 {{/*
-The management side's HTTP(S) proxy, for the pods that download from the internet. The Secret holds
-HTTP_PROXY, HTTPS_PROXY and NO_PROXY (and the lower-case spellings), and ca.crt when the proxy
-re-signs TLS. Go reads SSL_CERT_FILE beside the system's certificate directories, so public hosts
-stay trusted. Call each with the chart's root context.
+The management side's HTTP(S) proxy and authorities, for the pods that download from the internet.
+The Secret holds HTTP_PROXY, HTTPS_PROXY and NO_PROXY (and the lower-case spellings) while there is a
+proxy, and ca.crt with the site CA and the proxy's authority. Without a proxy it holds ca.crt alone,
+and proxy.caSecret names it. Go reads SSL_CERT_FILE beside the system's certificate directories, so
+public hosts stay trusted. Call each with the chart's root context.
 */}}
 {{- define "kubehenge.proxyEnvFrom" -}}
 {{- with .Values.proxy.secret }}
@@ -2924,7 +2925,7 @@ envFrom:
 {{- end -}}
 
 {{- define "kubehenge.proxyEnv" -}}
-{{- if and .Values.proxy.secret .Values.proxy.ca }}
+{{- if .Values.proxy.ca }}
 - name: SSL_CERT_FILE
   value: /etc/kubehenge/proxy/ca.crt
 - name: KUBEHENGE_PROXY_CA_FILE
@@ -2933,7 +2934,7 @@ envFrom:
 {{- end -}}
 
 {{- define "kubehenge.proxyMount" -}}
-{{- if and .Values.proxy.secret .Values.proxy.ca }}
+{{- if .Values.proxy.ca }}
 - name: proxy-ca
   mountPath: /etc/kubehenge/proxy
   readOnly: true
@@ -2941,10 +2942,10 @@ envFrom:
 {{- end -}}
 
 {{- define "kubehenge.proxyVolume" -}}
-{{- if and .Values.proxy.secret .Values.proxy.ca }}
+{{- if .Values.proxy.ca }}
 - name: proxy-ca
   secret:
-    secretName: {{ .Values.proxy.secret }}
+    secretName: {{ or .Values.proxy.caSecret .Values.proxy.secret }}
     items:
       - key: ca.crt
         path: ca.crt

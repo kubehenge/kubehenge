@@ -943,6 +943,25 @@ describe("setup", () => {
     ).resolves.toBeInTheDocument();
   });
 
+  it("says the site CA reaches the management side's downloads, with or without a proxy", async () => {
+    window.history.replaceState(null, "", "/administration");
+    await editStored({
+      nodes: ["pve1"],
+      imageDatastore: "local",
+      vmDatastore: "local-lvm",
+      bridge: "vmbr0",
+      nodeAddresses: ["192.0.2.11/24"],
+      apiAddress: "192.0.2.10",
+      gateway: "192.0.2.1",
+      dnsServers: ["192.0.2.1"],
+      workloadDatastores: ["local-lvm"],
+      workloadBridges: ["vmbr0"],
+      bootstrapDatastore: "local",
+    });
+    const info = await screen.findByText(/^The management cluster's nodes and the management side's downloads/u);
+    expect(info).toHaveTextContent("(providers, charts and template builds) trust it, with or without a proxy.");
+  });
+
   it("tells users without the rights that an administrator has to set it up", async () => {
     fakeServer({
       "GET /api/session": { body: { user: "dev@pve", csrf: "c1" } },

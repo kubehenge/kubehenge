@@ -120,10 +120,12 @@ controllerLogs:
 
 # The HTTP(S) proxy the controller and the template builds download through. secret names a Secret
 # in the release namespace with HTTP_PROXY, HTTPS_PROXY and NO_PROXY, and with ca.crt when ca is
-# true, for a proxy that re-signs TLS. Empty, they go direct.
+# true. Empty, they go direct. With ca true they trust ca.crt (the site CA and a proxy's that
+# re-signs TLS), from the Secret that secret names or, where there is no proxy, that caSecret names.
 proxy:
   secret: ""
   ca: false
+  caSecret: ""
 
 # Mirrors of the chart repositories, by repository host, such as ghcr.io. Every chart a cluster
 # installs is fetched from the mirror of its host, which serves the same charts under the same

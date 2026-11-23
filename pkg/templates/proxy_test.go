@@ -278,3 +278,67 @@ func TestProxyRunsInOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestBakeTrustsTheSiteCAWithoutAProxy(t *testing.T) {
+	t.Parallel()
+	ca := "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+	for _, f := range Families {
+		for _, r := range f.Releases() {
+			for _, b := range proxyBakes() {
+				b.NodeOS = NodeOS{Family: f.Name(), Release: r.Name}
+				b.Proxy = &GuestProxy{CABundle: ca}
+				recipe, err := f.Recipe(&r, &b, fakeKeys(f.Keys(&r, &b)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, files := parseCloudConfig(t, recipe.UserData)
+				name := b.NodeOS.String() + "/" + string(b.Distribution)
+				if files[proxyDir+"/ca.crt"] != ca {
+					t.Errorf("%s: ca.crt = %q, want the site CA", name, files[proxyDir+"/ca.crt"])
+				}
+				up := files[proxyDir+"/up.sh"]
+				if !strings.Contains(up, "update-ca-trust") || !strings.Contains(up, "update-ca-certificates") {
+					t.Errorf("%s: up.sh does not trust the authority:\n%s", name, up)
+				}
+				for _, banned := range []string{"proxy=", "/etc/environment", "/etc/sysconfig/proxy", "/etc/profile.d/", "containerd.service.d"} {
+					if strings.Contains(up, banned) {
+						t.Errorf("%s: up.sh sets up a proxy it was not given (%q)", name, banned)
+					}
+				}
+				if b.Distribution == Kubeadm && recipe.Image != nil && !strings.Contains(recipe.Image.UserData, "/run/kubehenge-proxy/ca.crt") {
+					t.Errorf("%s: the image pull does not trust the site CA:\n%s", name, recipe.Image.UserData)
+				}
+			}
+		}
+	}
+}
+
+func TestPullUserDataTrustsTheSiteCAWithoutAProxy(t *testing.T) {
+	t.Parallel()
+	got := pullUserData(&GuestProxy{CABundle: "PEM"}, "v1.37.1")
+	if !strings.Contains(got, "/run/kubehenge-proxy/ca.crt") || !strings.Contains(got, "/run/kubehenge-proxy/run.sh") {
+		t.Errorf("the authority is not written:\n%s", got)
+	}
+}
+
+func TestRunScriptTakesUpAProxyOnlyWhenThereIsOne(t *testing.T) {
+	t.Parallel()
+	if strings.Contains(proxyRun, "\n. /etc/profile.d/kubehenge-proxy.sh") {
+		t.Error("run.sh sources a file that only a proxy writes, which ends sh when it is missing")
+	}
+}
+
+func TestProxyFromEnvironmentReadsTheAuthorityWithoutAProxy(t *testing.T) {
+	for _, name := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"} {
+		t.Setenv(name, "")
+	}
+	ca := t.TempDir() + "/ca.crt"
+	if err := os.WriteFile(ca, []byte("PEM"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(CAFileEnv, ca)
+	p, err := ProxyFromEnvironment()
+	if err != nil || p.Enabled() || !p.Configured() || p.CABundle != "PEM" {
+		t.Fatalf("got %+v, %v", p, err)
+	}
+}

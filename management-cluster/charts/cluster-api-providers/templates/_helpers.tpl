@@ -28,7 +28,7 @@ containers:
       - secretRef:
           name: {{ . }}
     {{- end }}
-    {{- if and $root.Values.proxy.secret $root.Values.proxy.ca }}
+    {{- if $root.Values.proxy.ca }}
     env:
       # Go reads this file beside the system's certificate directories.
       - name: SSL_CERT_FILE
@@ -38,11 +38,11 @@ containers:
         mountPath: /etc/kubehenge/proxy
         readOnly: true
     {{- end }}
-{{- if and $root.Values.proxy.secret $root.Values.proxy.ca }}
+{{- if $root.Values.proxy.ca }}
 volumes:
   - name: proxy-ca
     secret:
-      secretName: {{ $root.Values.proxy.secret }}
+      secretName: {{ or $root.Values.proxy.caSecret $root.Values.proxy.secret }}
       items:
         - key: ca.crt
           path: ca.crt

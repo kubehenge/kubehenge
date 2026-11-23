@@ -132,7 +132,7 @@ func recipeBuild(b *Bake, repos []*repository, keys map[string]string, dir strin
 	if b.Distribution == Kubeadm {
 		build = append(build, b.KubernetesVersion)
 	}
-	if b.Proxy.Enabled() {
+	if b.Proxy.Configured() {
 		if err := checkGuestProxy(b.Proxy); err != nil {
 			return nil, nil, err
 		}

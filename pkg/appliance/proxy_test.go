@@ -304,7 +304,7 @@ func TestOpenTofuGetsTheSettingsProxy(t *testing.T) {
 	if !slices.Contains(env, "HTTPS_PROXY="+proxyWithPassword) || slices.Contains(env, "HTTPS_PROXY=http://from-the-service:1") {
 		t.Errorf("the settings' proxy must replace the service's: %v", env)
 	}
-	file := filepath.Join(a.workdir(), "proxy-ca.pem")
+	file := filepath.Join(a.workdir(), "outbound-ca.pem")
 	if !slices.Contains(env, "SSL_CERT_FILE="+file) {
 		t.Error("SSL_CERT_FILE missing from the environment")
 	}
@@ -440,5 +440,69 @@ func TestProxyTransportTrustsTheAuthority(t *testing.T) {
 	}
 	if _, err := (&Proxy{URL: "http://127.0.0.1:9", CABundle: "junk"}).Transport(nil); err == nil {
 		t.Error("a bundle without a certificate was accepted")
+	}
+}
+
+// outboundEnv is the environment OpenTofu gets for settings with the site CA and the proxy given,
+// and the content of the file its SSL_CERT_FILE names.
+func outboundEnv(t *testing.T, siteCA string, proxy *Proxy) (env []string, caFile string) {
+	t.Helper()
+	a := &Appliance{Dir: t.TempDir(), ProxmoxURL: "https://pve.example.org:8006"}
+	if err := os.MkdirAll(a.workdir(), privateDir); err != nil {
+		t.Fatal(err)
+	}
+	s := settings("pve1")
+	s.SiteCA, s.Proxy = siteCA, proxy
+	if err := a.writeConfig(s, VMIDRange{DefaultVMIDStart, DefaultVMIDEnd}); err != nil {
+		t.Fatal(err)
+	}
+	env, err := a.env("a passphrase of 16+ chars", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range env {
+		if file, ok := strings.CutPrefix(e, "SSL_CERT_FILE="); ok {
+			content, readErr := os.ReadFile(file) //nolint:gosec // the test's own file
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			return env, string(content)
+		}
+	}
+	return env, ""
+}
+
+func TestOpenTofuTrustsTheSiteCAWithoutAProxy(t *testing.T) {
+	site := certificatePEM(t)
+	env, file := outboundEnv(t, site, nil)
+	if file != site {
+		t.Errorf("SSL_CERT_FILE holds %q, want the site CA", file)
+	}
+	for _, e := range env {
+		if strings.HasPrefix(strings.ToUpper(e), "HTTPS_PROXY=") {
+			t.Errorf("a proxy appeared from nowhere: %s", e)
+		}
+	}
+}
+
+func TestOpenTofuTrustsTheSiteCAAndTheProxyCA(t *testing.T) {
+	site, proxyCA := certificatePEM(t), certificatePEM(t)
+	proxy := passwordProxy()
+	proxy.CABundle = proxyCA
+	_, file := outboundEnv(t, site, proxy)
+	if !strings.Contains(file, strings.TrimSpace(site)) || !strings.Contains(file, strings.TrimSpace(proxyCA)) {
+		t.Errorf("SSL_CERT_FILE holds %q, want both authorities", file)
+	}
+}
+
+func TestOpenTofuTrustsNoExtraAuthorityWithNeither(t *testing.T) {
+	env, _ := outboundEnv(t, "", nil)
+	for _, e := range env {
+		if strings.HasPrefix(e, "SSL_CERT_FILE=") {
+			t.Errorf("%s set without a site CA or a proxy authority", e)
+		}
+	}
+	if _, file := outboundEnv(t, "", passwordProxy()); file != "" {
+		t.Errorf("a proxy without an authority gave %q", file)
 	}
 }

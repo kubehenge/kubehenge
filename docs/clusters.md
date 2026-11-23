@@ -975,6 +975,8 @@ Add the workload clusters' node networks and any internal registry.
 
 Proxmox VE downloads disk images through the datacenter's proxy. The Add-on Provider for Helm gets the authority too. Clusters' own nodes are not covered.
 
+The site CA reaches the same downloads whether or not there is a proxy, so a site behind TLS inspection without a proxy gives it once and sets nothing else. The downloads trust the site CA and the proxy's authority together.
+
 ## Node customisation
 
 The `nodeCustomisation` variable adds files, boot commands, arguments and audit settings to a cluster's nodes. Edits to the generated bootstrap objects are reverted by Cluster API, so this is the way to make them last. Kubehenge's own settings come first and stay: the variable cannot set a path or argument that Kubehenge sets ([troubleshooting.md](troubleshooting.md#node-customisation-is-refused)).

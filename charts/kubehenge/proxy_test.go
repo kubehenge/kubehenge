@@ -3,6 +3,7 @@ package kubehenge_test
 import (
 	"bytes"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 
@@ -167,6 +168,32 @@ func TestNoProxyLeavesThePodsAsTheyWere(t *testing.T) {
 			if e.Name == "SSL_CERT_FILE" || e.Name == "KUBEHENGE_PROXY_CA_FILE" {
 				t.Errorf("%s sets %s without a proxy", kind, e.Name)
 			}
+		}
+	}
+}
+
+func TestAuthoritiesReachControllerAndTemplateRefreshWithoutAProxy(t *testing.T) {
+	t.Parallel()
+	for kind, pod := range proxyPods(t, "proxy.ca=true", "proxy.caSecret=kubehenge-proxy") {
+		c := pod.Containers[0]
+		if len(c.EnvFrom) != 0 {
+			t.Errorf("%s: envFrom = %+v, want none without a proxy", kind, c.EnvFrom)
+		}
+		env := map[string]string{}
+		for _, e := range c.Env {
+			env[e.Name] = e.Value
+		}
+		if env["SSL_CERT_FILE"] != "/etc/kubehenge/proxy/ca.crt" || env["KUBEHENGE_PROXY_CA_FILE"] != "/etc/kubehenge/proxy/ca.crt" {
+			t.Errorf("%s: env = %v, want the CA file named", kind, env)
+		}
+		mounted := slices.ContainsFunc(c.VolumeMounts, func(m volumeMount) bool {
+			return m.Name == "proxy-ca" && m.MountPath == "/etc/kubehenge/proxy"
+		})
+		hasVolume := slices.ContainsFunc(pod.Volumes, func(v volume) bool {
+			return v.Name == "proxy-ca" && v.Secret.SecretName == "kubehenge-proxy"
+		})
+		if !mounted || !hasVolume {
+			t.Errorf("%s: CA mounted = %v, volume = %v", kind, mounted, hasVolume)
 		}
 	}
 }
