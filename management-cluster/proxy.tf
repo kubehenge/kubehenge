@@ -60,9 +60,14 @@ locals {
     local.outbound_has_ca ? { "ca.crt" = local.outbound_ca } : {},
   )
 
-  # The operator chart's values for the proxy and the authorities. A for expression, since the three
-  # keys have different types and a conditional between them and {} has no common type.
+  # The annotation that rolls a Deployment whose program reads the authorities once, as it starts,
+  # when they change.
+  trusted_ca_annotation = "kubehenge.dev/trusted-ca"
+
+  # The operator chart's values for the proxy and the authorities. A for expression, since the keys
+  # have different types and a conditional between them and {} has no common type.
   capi_operator_proxy_values = { for k, v in {
+    podAnnotations = { (local.trusted_ca_annotation) = sha256(local.outbound_ca) }
     env = { manager = concat(
       local.proxy_enabled ? [for name in ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"] : {
         name      = name
@@ -79,7 +84,7 @@ locals {
       [{ name = "cert", mountPath = "/tmp/k8s-webhook-server/serving-certs", readOnly = true }],
       local.outbound_has_ca ? [{ name = "proxy-ca", mountPath = "/etc/kubehenge/proxy", readOnly = true }] : [],
     ) }
-  } : k => v if local.outbound_secret_on }
+  } : k => v if local.outbound_secret_on && (k != "podAnnotations" || local.outbound_has_ca) }
 
   # What Talos puts in its services' environment, containerd's image pulls and the kubelet's among
   # them. The values stay sensitive until they are in the machine configuration.

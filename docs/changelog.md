@@ -14,6 +14,8 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 - The management cluster's nodes trust the site CA. Behind TLS inspection without a proxy, they could not pull etcd's image, so the management cluster never started.
 - Provider downloads, the Cluster API operator, the Add-on Provider for Helm, OpenTofu, the controller and template builds trust the site CA with or without a proxy.
+- A first setup that failed for want of the site CA finishes on one Apply once the CA is set. Before, the nodes' etcd stayed Failed and the Apply timed out after 20 minutes.
+- A changed site CA or proxy certificate restarts the Cluster API operator and the Add-on Provider for Helm. They read it only as they start.
 
 ## [0.5.5] - 2026-11-20
 

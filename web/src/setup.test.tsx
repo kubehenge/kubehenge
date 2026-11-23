@@ -943,7 +943,7 @@ describe("setup", () => {
     ).resolves.toBeInTheDocument();
   });
 
-  it("says the site CA reaches the management side's downloads, with or without a proxy", async () => {
+  it("says the site CA reaches the management cluster's downloads", async () => {
     window.history.replaceState(null, "", "/administration");
     await editStored({
       nodes: ["pve1"],
@@ -958,8 +958,8 @@ describe("setup", () => {
       workloadBridges: ["vmbr0"],
       bootstrapDatastore: "local",
     });
-    const info = await screen.findByText(/^The management cluster's nodes and the management side's downloads/u);
-    expect(info).toHaveTextContent("(providers, charts and template builds) trust it, with or without a proxy.");
+    const info = await screen.findByText(/^The management cluster and its downloads trust it\./u);
+    expect(info).toHaveTextContent("Clusters, the release mirror, backup targets and identity providers trust it unless they name their own.");
   });
 
   it("tells users without the rights that an administrator has to set it up", async () => {

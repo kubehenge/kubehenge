@@ -71,7 +71,7 @@ func proxyBuild(build []string) []string {
 // by their path below buildDir.
 func proxyFiles(p *GuestProxy) map[string]string {
 	files := map[string]string{
-		proxyDir + "/run.sh":  proxyRun,
+		proxyDir + "/run.sh":  proxyRun(p),
 		proxyDir + "/down.sh": proxyDown,
 		proxyDir + "/up.sh":   proxyUp(p),
 	}
@@ -81,18 +81,25 @@ func proxyFiles(p *GuestProxy) map[string]string {
 	return files
 }
 
-// proxyRun sets the proxy up, runs the command it is given, and takes the proxy away again.
-const proxyRun = `#!/bin/sh
+// proxyRun is the script that sets the proxy and the authorities up, runs the command it is given,
+// and takes them away again. Only a proxy writes the environment it takes up.
+func proxyRun(p *GuestProxy) string {
+	takeUp := ""
+	if p.Enabled() {
+		takeUp = `# up.sh runs in a shell of its own, so the environment it wrote for logins is taken up here: curl,
+# podman and everything the build starts go through the proxy.
+. /etc/profile.d/kubehenge-proxy.sh
+`
+	}
+	return `#!/bin/sh
 dir=$(dirname "$0")
 sh "${dir}/up.sh" || exit 1
-# up.sh runs in a shell of its own, so the environment it wrote for logins is taken up here: curl,
-# podman and everything the build starts go through the proxy, when there is one.
-if [ -f /etc/profile.d/kubehenge-proxy.sh ]; then . /etc/profile.d/kubehenge-proxy.sh; fi
-"$@"
+` + takeUp + `"$@"
 status=$?
 sh "${dir}/down.sh"
 exit "${status}"
 `
+}
 
 // proxyDown removes everything up.sh put in the guest, so that the credentials and the authority
 // are in no image a cluster boots from.

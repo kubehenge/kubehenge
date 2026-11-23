@@ -274,8 +274,8 @@ func TestFirstEtcdReadsTheStateAgain(t *testing.T) {
 }
 
 // Only the apply whose plan creates the cluster watches etcd. An upgrade, the apply after a
-// restore or of a recreated cluster's VMs, and one that replaces, updates or reboots a node leave
-// the nodes alone.
+// restore or of a recreated cluster's VMs, and one that replaces or reboots a node leave the nodes
+// alone. An update of a node's Talos whose image the plan does not show the same may reboot it.
 func TestOnlyTheApplyThatCreatesTheClusterWatchesEtcd(t *testing.T) {
 	t.Parallel()
 	talosMachine := nodeModuleAddress + "1.talos_machine.this"
@@ -409,4 +409,80 @@ func TestRemovalForgetsTheEtcdStarts(t *testing.T) {
 	if _, err := os.Stat(a.etcdStartsPath()); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the starts are still there: %v", err)
 	}
+}
+
+// imagedChange is a planned change of address whose before and after hold the Talos images given,
+// an empty one left out as the plan leaves out a value it knows only after the apply.
+func imagedChange(address string, actions []string, before, after string) map[string]any {
+	value := func(image string) map[string]any {
+		if image == "" {
+			return map[string]any{"node": "10.0.0.11"}
+		}
+		return map[string]any{"node": "10.0.0.11", "image": image}
+	}
+	return map[string]any{"address": address, "change": map[string]any{"actions": actions, "before": value(before), "after": value(after)}}
+}
+
+// A plan that creates the cluster bootstraps it unless it changes a node in a way that reboots or
+// replaces it. A new machine configuration on a node whose image stays is applied in place.
+func TestCreatesClusterOnlyWithNodesKeptRunning(t *testing.T) {
+	t.Parallel()
+	const v1, v2 = "factory.talos.dev/installer/x:v1.14.6", "factory.talos.dev/installer/x:v1.14.7"
+	machine := nodeModuleAddress + "1.talos_machine.this"
+	created := imagedChange(clusterAddress, []string{"create"}, "", "")
+	for name, tc := range map[string]struct {
+		changes []map[string]any
+		want    bool
+	}{
+		"nodes unchanged":            {[]map[string]any{created, imagedChange(machine, []string{"no-op"}, v1, v1)}, true},
+		"configured in place":        {[]map[string]any{created, imagedChange(machine, []string{"update"}, v1, v1)}, true},
+		"upgraded":                   {[]map[string]any{created, imagedChange(machine, []string{"update"}, v1, v2)}, false},
+		"image known after apply":    {[]map[string]any{created, imagedChange(machine, []string{"update"}, v1, "")}, false},
+		"Talos replaced":             {[]map[string]any{created, imagedChange(machine, []string{"delete", "create"}, v1, v1)}, false},
+		"Talos deleted":              {[]map[string]any{created, imagedChange(machine, []string{"delete"}, v1, v1)}, false},
+		"VM replaced":                {[]map[string]any{created, imagedChange(nodeVMAddress+"[1]", []string{"delete", "create"}, "", "")}, false},
+		"VM deleted":                 {[]map[string]any{created, imagedChange(nodeVMAddress+"[1]", []string{"delete"}, "", "")}, false},
+		"VM updated":                 {[]map[string]any{created, imagedChange(nodeVMAddress+"[1]", []string{"update"}, v1, v1)}, false},
+		"node's VM trigger updated":  {[]map[string]any{created, imagedChange(nodeModuleAddress+"1.terraform_data.vm", []string{"update"}, v1, v1)}, false},
+		"cluster there, configured":  {[]map[string]any{imagedChange(machine, []string{"update"}, v1, v1)}, false},
+		"cluster there, unchanged":   {[]map[string]any{imagedChange(clusterAddress, []string{"no-op"}, "", "")}, false},
+		"cluster updated, in place":  {[]map[string]any{imagedChange(clusterAddress, []string{"update"}, "", ""), imagedChange(machine, []string{"update"}, v1, v1)}, false},
+		"configured, then upgraded":  {[]map[string]any{created, imagedChange(machine, []string{"update"}, v1, v1), imagedChange(nodeModuleAddress+"2.talos_machine.this", []string{"update"}, v1, v2)}, false},
+		"image added where none was": {[]map[string]any{created, imagedChange(machine, []string{"update"}, "", v1)}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			shown, err := json.Marshal(map[string]any{"resource_changes": tc.changes})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := createsCluster(shown); got != tc.want {
+				t.Errorf("createsCluster = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// The retry of a first setup that failed on a missing site CA updates every node's machine
+// configuration in place, and still starts the etcd Talos left Failed.
+func TestFirstEtcdWatchedOnARetryThatConfiguresTheNodesInPlace(t *testing.T) {
+	t.Parallel()
+	const image = "factory.talos.dev/installer/x:v1.14.6"
+	a, _ := newAppliance(t)
+	shown, err := json.Marshal(map[string]any{"resource_changes": []any{
+		imagedChange(clusterAddress, []string{"create"}, "", ""),
+		imagedChange(nodeModuleAddress+"0.talos_machine.this", []string{"update"}, image, image),
+		imagedChange(nodeModuleAddress+"1.talos_machine.this", []string{"update"}, image, image),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(a.Dir, "plan.json"), shown, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nodes := newFirstNodes(map[string]string{"10.0.0.12": "Failed"})
+	startFirstApply(t, a, nodes, "held")
+	eventually(t, "rebooted", func() bool { return slices.Equal(nodes.made(), []string{"10.0.0.12 reboot"}) })
+	releaseApply(t, a)
+	waitFor(t, a)
 }

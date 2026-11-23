@@ -238,10 +238,13 @@ locals {
   # proxy from the Secret beside it. The operator's container list has no volumes, so the authority
   # arrives through a strategic merge patch of the Deployment, which merges the container by name.
   proxy_addon_ca_dir = "/etc/kubehenge/proxy"
-  proxy_addon_ca_patch = { target = { kind = "Deployment" }, patch = yamlencode({ spec = { template = { spec = {
-    volumes    = [{ name = "proxy-ca", secret = { secretName = local.proxy_addon_secret_name, items = [{ key = "ca.crt", path = "ca.crt" }] } }]
-    containers = [{ name = "manager", volumeMounts = [{ name = "proxy-ca", mountPath = local.proxy_addon_ca_dir, readOnly = true }] }]
-  } } } }) }
+  proxy_addon_ca_patch = { target = { kind = "Deployment" }, patch = yamlencode({ spec = { template = {
+    metadata = { annotations = { (local.trusted_ca_annotation) = sha256(local.addon_ca) } }
+    spec = {
+      volumes    = [{ name = "proxy-ca", secret = { secretName = local.proxy_addon_secret_name, items = [{ key = "ca.crt", path = "ca.crt" }] } }]
+      containers = [{ name = "manager", volumeMounts = [{ name = "proxy-ca", mountPath = local.proxy_addon_ca_dir, readOnly = true }] }]
+    }
+  } } }) }
 
   # Every Cluster API provider names its controller container "manager".
   provider_containers = { for p in local.provider_specs : "${p.kind}/${p.name}" => merge({

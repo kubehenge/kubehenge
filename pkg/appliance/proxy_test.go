@@ -445,7 +445,7 @@ func TestProxyTransportTrustsTheAuthority(t *testing.T) {
 
 // outboundEnv is the environment OpenTofu gets for settings with the site CA and the proxy given,
 // and the content of the file its SSL_CERT_FILE names.
-func outboundEnv(t *testing.T, siteCA string, proxy *Proxy) (env []string, caFile string) {
+func outboundEnv(t *testing.T, siteCA string, proxy *Proxy) ([]string, string) {
 	t.Helper()
 	a := &Appliance{Dir: t.TempDir(), ProxmoxURL: "https://pve.example.org:8006"}
 	if err := os.MkdirAll(a.workdir(), privateDir); err != nil {
@@ -473,6 +473,7 @@ func outboundEnv(t *testing.T, siteCA string, proxy *Proxy) (env []string, caFil
 }
 
 func TestOpenTofuTrustsTheSiteCAWithoutAProxy(t *testing.T) {
+	t.Parallel()
 	site := certificatePEM(t)
 	env, file := outboundEnv(t, site, nil)
 	if file != site {
@@ -486,6 +487,7 @@ func TestOpenTofuTrustsTheSiteCAWithoutAProxy(t *testing.T) {
 }
 
 func TestOpenTofuTrustsTheSiteCAAndTheProxyCA(t *testing.T) {
+	t.Parallel()
 	site, proxyCA := certificatePEM(t), certificatePEM(t)
 	proxy := passwordProxy()
 	proxy.CABundle = proxyCA
@@ -496,6 +498,7 @@ func TestOpenTofuTrustsTheSiteCAAndTheProxyCA(t *testing.T) {
 }
 
 func TestOpenTofuTrustsNoExtraAuthorityWithNeither(t *testing.T) {
+	t.Parallel()
 	env, _ := outboundEnv(t, "", nil)
 	for _, e := range env {
 		if strings.HasPrefix(e, "SSL_CERT_FILE=") {

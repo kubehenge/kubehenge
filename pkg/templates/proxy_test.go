@@ -223,7 +223,7 @@ func recipeScript(t *testing.T, name string) string {
 // of a Leap one). Everything with a credential is gone before the image is what clones boot.
 func TestProxyRunsInOrder(t *testing.T) {
 	t.Parallel()
-	inOrder(t, "run.sh", proxyRun, `sh "${dir}/up.sh"`, "/etc/profile.d/kubehenge-proxy.sh", `"$@"`, `sh "${dir}/down.sh"`)
+	inOrder(t, "run.sh", proxyRun(&GuestProxy{URL: testProxy}), `sh "${dir}/up.sh"`, "/etc/profile.d/kubehenge-proxy.sh", `"$@"`, `sh "${dir}/down.sh"`)
 
 	// EL: podman passes the exported proxy on to the container's dnf. The build adds the authority
 	// to the container's trust, and the anchor leaves with the packages installed.
@@ -323,8 +323,11 @@ func TestPullUserDataTrustsTheSiteCAWithoutAProxy(t *testing.T) {
 
 func TestRunScriptTakesUpAProxyOnlyWhenThereIsOne(t *testing.T) {
 	t.Parallel()
-	if strings.Contains(proxyRun, "\n. /etc/profile.d/kubehenge-proxy.sh") {
-		t.Error("run.sh sources a file that only a proxy writes, which ends sh when it is missing")
+	if run := proxyRun(&GuestProxy{CABundle: "PEM"}); strings.Contains(run, "kubehenge-proxy.sh") {
+		t.Errorf("run.sh without a proxy sources a file that only a proxy writes, which ends sh when it is missing:\n%s", run)
+	}
+	if run := proxyRun(&GuestProxy{URL: testProxy}); !strings.Contains(run, "\n. /etc/profile.d/kubehenge-proxy.sh\n") {
+		t.Errorf("run.sh with a proxy does not take up its environment:\n%s", run)
 	}
 }
 

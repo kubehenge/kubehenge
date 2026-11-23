@@ -2546,3 +2546,88 @@ run "proxy_authority_alone_is_unchanged" {
     error_message = "a proxy authority without a site CA is mounted and trusted exactly as it was, with nothing added"
   }
 }
+
+run "site_ca_rolls_the_operator_and_the_helm_addon_provider" {
+  command = plan
+
+  variables {
+    site_ca = "-----BEGIN CERTIFICATE-----\nSITECA\n-----END CERTIFICATE-----\n"
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.cluster_api_operator.values[0]).podAnnotations == { "kubehenge.dev/trusted-ca" = sha256("-----BEGIN CERTIFICATE-----\nSITECA\n-----END CERTIFICATE-----\n") }
+    error_message = "the operator's pods carry the hash of the authorities they trust, so that a new site CA restarts them"
+  }
+
+  assert {
+    condition = anytrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : (
+      p.name == "helm" &&
+      yamldecode(p.spec.patches[1].patch).spec.template.metadata.annotations == { "kubehenge.dev/trusted-ca" = sha256("-----BEGIN CERTIFICATE-----\nSITECA\n-----END CERTIFICATE-----\n") }
+    )])
+    error_message = "the Add-on Provider for Helm's pods carry the hash of the authorities they trust, so that a new site CA restarts them"
+  }
+}
+
+run "another_site_ca_rolls_them_again" {
+  command = plan
+
+  variables {
+    site_ca = "-----BEGIN CERTIFICATE-----\nROTATED\n-----END CERTIFICATE-----\n"
+    chart_repositories = {
+      mirrors   = { "ghcr.io" = "oci://registry.example.org/ghcr" }
+      ca_bundle = "-----BEGIN CERTIFICATE-----\nMIRRORCA\n-----END CERTIFICATE-----"
+    }
+  }
+
+  assert {
+    condition = (
+      yamldecode(helm_release.cluster_api_operator.values[0]).podAnnotations["kubehenge.dev/trusted-ca"] == sha256("-----BEGIN CERTIFICATE-----\nROTATED\n-----END CERTIFICATE-----\n") &&
+      yamldecode(helm_release.cluster_api_operator.values[0]).podAnnotations["kubehenge.dev/trusted-ca"] != sha256("-----BEGIN CERTIFICATE-----\nSITECA\n-----END CERTIFICATE-----\n")
+    )
+    error_message = "a different site CA gives the operator's pods a different hash"
+  }
+
+  assert {
+    condition = anytrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : (
+      p.name == "helm" &&
+      yamldecode(p.spec.patches[1].patch).spec.template.metadata.annotations["kubehenge.dev/trusted-ca"] == sha256("-----BEGIN CERTIFICATE-----\nROTATED\n-----END CERTIFICATE-----\n\n-----BEGIN CERTIFICATE-----\nMIRRORCA\n-----END CERTIFICATE-----")
+    )])
+    error_message = "the Add-on Provider for Helm's hash covers every authority in its file, the chart mirror's included"
+  }
+}
+
+run "a_new_proxy_authority_rolls_the_operator" {
+  command = plan
+
+  variables {
+    site_ca = "-----BEGIN CERTIFICATE-----\nSITECA\n-----END CERTIFICATE-----\n"
+    proxy = {
+      url       = "https://proxy.example.com"
+      ca_bundle = "-----BEGIN CERTIFICATE-----\nPROXYCA\n-----END CERTIFICATE-----"
+    }
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.cluster_api_operator.values[0]).podAnnotations["kubehenge.dev/trusted-ca"] == sha256("-----BEGIN CERTIFICATE-----\nSITECA\n-----END CERTIFICATE-----\n\n-----BEGIN CERTIFICATE-----\nPROXYCA\n-----END CERTIFICATE-----")
+    error_message = "the operator's hash covers the proxy's authority beside the site CA"
+  }
+}
+
+run "no_authority_rolls_nothing" {
+  command = plan
+
+  variables {
+    proxy = {
+      url      = "https://proxy.example.com"
+      no_proxy = "pve.example.org"
+    }
+  }
+
+  assert {
+    condition = (
+      !contains(keys(yamldecode(helm_release.cluster_api_operator.values[0])), "podAnnotations") &&
+      alltrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : p.name != "helm" || length(p.spec.patches) == 1])
+    )
+    error_message = "without any authority neither the operator nor the Add-on Provider for Helm gets an annotation"
+  }
+}
