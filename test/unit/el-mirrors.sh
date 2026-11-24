@@ -427,6 +427,7 @@ cat > "${own}/rocky.repo" << 'EOF'
 name=Rocky Linux $releasever - BaseOS
 #baseurl=http://dl.rockylinux.org/$contentdir/$releasever/BaseOS/$basearch/os/
 metalink=https://mirrors.rockylinux.org/metalink?arch=$basearch&repo=BaseOS-$releasever$rltype
+mirrorlist=https://mirrors.rockylinux.org/mirrorlist?arch=$basearch&repo=BaseOS-$releasever$rltype
 enabled=1
 gpgcheck=1
 
