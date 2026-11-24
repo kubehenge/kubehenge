@@ -57,7 +57,7 @@ func (a *Appliance) siteCA() string {
 	return ""
 }
 
-// OutboundCA is the authorities the management side's downloads trust beside the public ones: the
+// OutboundCA holds the authorities the management side's downloads trust beside the public ones: the
 // site CA, then the proxy's. Either may be empty, and the proxy's counts only while there is a proxy.
 func (s *Settings) OutboundCA() string {
 	var parts []string

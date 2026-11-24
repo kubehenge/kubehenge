@@ -973,9 +973,9 @@ Kubehenge adds these exceptions:
 
 Add the workload clusters' node networks and any internal registry.
 
-Proxmox VE downloads disk images through the datacenter's proxy. The Add-on Provider for Helm gets the authority too. Clusters' own nodes are not covered.
+Proxmox VE downloads disk images through the datacenter's proxy. The Add-on Provider for Helm gets the authority too. The proxy does not cover clusters' own nodes.
 
-The site CA reaches the same downloads, with or without a proxy. Behind TLS inspection without a proxy, set the site CA alone.
+The site CA reaches the same downloads and the management nodes, with or without a proxy. Behind TLS inspection without a proxy, set the site CA alone. Proxmox VE downloads disk images with each node's own trust store. Add the CA to every Proxmox VE node.
 
 ## Node customisation
 

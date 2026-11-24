@@ -8,12 +8,12 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ### Highlights
 
-- **The management cluster trusts the site CA.** Behind TLS inspection without a proxy, its first setup finishes and template builds work once the Proxmox VE nodes trust the CA too.
+- **The management cluster trusts the site CA.** Behind TLS inspection without a proxy, the first setup now finishes. Template builds work once the Proxmox VE nodes trust the CA as well.
 
 ### Fixed
 
-- The management cluster's nodes trust the site CA. Behind TLS inspection without a proxy, they could not pull etcd's image, so the management cluster never started.
-- The management cluster's downloads trust the site CA, with or without a proxy: OpenTofu, Cluster API's providers, charts and template builds.
+- Behind TLS inspection without a proxy, the management nodes could not pull etcd's image. They now trust the site CA.
+- OpenTofu, Cluster API's providers, charts and template builds trust the site CA, with or without a proxy.
 - A first setup that failed without the site CA finishes on the next Apply once the CA is set. Before, that Apply timed out after 20 minutes.
 - A changed site CA or proxy certificate restarts the Cluster API operator and the Add-on Provider for Helm on the next Apply.
 

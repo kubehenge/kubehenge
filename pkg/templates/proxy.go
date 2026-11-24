@@ -20,7 +20,8 @@ type GuestProxy struct {
 	URL string
 	// NoProxy is the comma-separated list of hosts, domains and networks that bypass it.
 	NoProxy string
-	// CABundle is the PEM authorities the guests trust: the site's and a proxy's that re-signs TLS.
+	// CABundle holds the PEM authorities the guests trust: the site CA and the authority of a proxy
+	// that re-signs TLS.
 	CABundle string
 }
 
@@ -51,7 +52,7 @@ func ProxyFromEnvironment() (*GuestProxy, error) {
 	if file := os.Getenv(CAFileEnv); file != "" {
 		pem, err := os.ReadFile(file) //nolint:gosec // the chart mounts it there
 		if err != nil {
-			return nil, fmt.Errorf("the authority file: %w", err)
+			return nil, fmt.Errorf("reading the certificate authorities: %w", err)
 		}
 		p.CABundle = string(pem)
 	}

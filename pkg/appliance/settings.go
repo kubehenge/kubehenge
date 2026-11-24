@@ -61,8 +61,9 @@ type Settings struct {
 	// ReleaseMirror serves the RKE2 and k3s releases in place of GitHub.
 	ReleaseMirror *ReleaseMirror `json:"releaseMirror,omitempty"`
 	// SiteCA is the PEM authority of the site's private CA. Every connection that names no authority
-	// of its own trusts it: the management cluster's nodes, the clusters' nodes, the release mirror, the backup targets, the
-	// identity providers and the appliance's own outgoing connections. Empty, none.
+	// of its own trusts it: the management cluster's nodes and downloads, the other clusters' nodes,
+	// the release mirror, the backup targets, the identity providers and the appliance's own outgoing
+	// connections. Empty, none.
 	SiteCA string `json:"siteCA,omitempty"`
 	// TimeZone is the IANA time zone of schedules that name none. Empty, UTC.
 	TimeZone string `json:"timeZone,omitempty"`

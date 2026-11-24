@@ -118,10 +118,10 @@ controllerLogs:
   level: info
   development: false
 
-# The HTTP(S) proxy the controller and the template builds download through. secret names a Secret
-# in the release namespace with HTTP_PROXY, HTTPS_PROXY and NO_PROXY, and with ca.crt when ca is
-# true. Empty, they go direct. With ca true they trust its ca.crt: the site CA and the proxy's.
-# Without a proxy, caSecret names the Secret that holds ca.crt.
+# The HTTP(S) proxy the controller and the template builds download through, and the authorities
+# they trust. secret names a Secret in the release namespace with HTTP_PROXY, HTTPS_PROXY and
+# NO_PROXY. Without secret, they go direct. With ca true they also trust the Secret's ca.crt, which
+# holds the site CA and the proxy's. Without a proxy, caSecret names the Secret that holds ca.crt.
 proxy:
   secret: ""
   ca: false

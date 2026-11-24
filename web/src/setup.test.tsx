@@ -958,10 +958,8 @@ describe("setup", () => {
       workloadBridges: ["vmbr0"],
       bootstrapDatastore: "local",
     });
-    const info = await screen.findByText(/^The management cluster and its downloads trust it\./u);
-    expect(info).toHaveTextContent(
-      "Other clusters, the release mirror, backup targets and identity providers trust it unless they name another.",
-    );
+    const info = await screen.findByText(/^Everything that names no other CA trusts it/u);
+    expect(info).toHaveTextContent("Proxmox VE's own downloads do not.");
   });
 
   it("tells users without the rights that an administrator has to set it up", async () => {
