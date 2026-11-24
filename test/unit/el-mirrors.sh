@@ -449,17 +449,22 @@ use_own_servers "${own}"
 has "the metalink's repository reads one https folder of the own server" "${own}/rocky.repo" \
     'baseurl=https://dl.rockylinux.org/$contentdir/$releasever/BaseOS/$basearch/os/'
 lines "with the one active baseurl line of its section" "${own}/rocky.repo" 17
-expect "and no active metalink or mirror list in it" 0 "$(sed -n '/^\[baseos\]/,/^\[baseos-debug\]/p' "${own}/rocky.repo" | grep -cE '^(metalink|mirrorlist)=')"
-expect "and no active http folder" 0 "$(grep -c '^baseurl=http:' "${own}/rocky.repo")"
+sed -n '/^\[baseos\]/,/^\[baseos-debug\]/p' "${own}/rocky.repo" > "${own}/baseos"
+lacks "and no active metalink in it" "${own}/baseos" 'metalink='
+lacks "nor mirror list" "${own}/baseos" 'mirrorlist='
+http=$(grep -c '^baseurl=http:' "${own}/rocky.repo" || true)
+expect "and no active http folder" 0 "${http}"
 has "a disabled repository is switched too, and stays disabled" "${own}/rocky.repo" \
     'baseurl=https://dl.rockylinux.org/$contentdir/$releasever/BaseOS/source/tree/'
-expect "a repository's own enabled line stays" 2 "$(grep -c '^enabled=1' "${own}/rocky.repo")"
+enabled=$(grep -c '^enabled=1' "${own}/rocky.repo")
+expect "a repository's own enabled line stays" 2 "${enabled}"
 has "a repository without a folder line stays on its metalink" "${own}/rocky.repo" \
     'metalink=https://mirrors.rockylinux.org/metalink?arch=$basearch&repo=plus-$releasever$rltype'
-expect "AlmaLinux's mirror list is untouched" "$(cat "${own}/almalinux.orig")" "$(cat "${own}/almalinux-baseos.repo")"
-cp "${own}/rocky.repo" "${own}/rocky.once"
+alma=$(cat "${own}/almalinux.orig")
+holds "AlmaLinux's mirror list is untouched" "${own}/almalinux-baseos.repo" "${alma}"
+once=$(cat "${own}/rocky.repo")
 use_own_servers "${own}"
-expect "the switch changes nothing the second time" "$(cat "${own}/rocky.once")" "$(cat "${own}/rocky.repo")"
+holds "the switch changes nothing the second time" "${own}/rocky.repo" "${once}"
 
 # from_repositories switches only once an attempt has failed, and leaves the mark the image's build reads.
 cp "${own}/rocky.orig" "${own}/rocky.repo"
@@ -482,9 +487,12 @@ marked=no
 [ ! -e "${own}/lists/.own-servers" ] || marked=yes
 expect "and leaves the mark" yes "${marked}"
 
-# node.sh's copies of the family's files, as that step makes them, read the own server on the mark.
-node_repos=${root}/node-repos
-mkdir "${node_repos}"
+# node.sh's own steps on its copies of the family's files, in node.sh's order, read the own server
+# on the mark. Rocky Linux's files come with a mirror list, which use_metalinks makes the metalink.
+node_repos=${root}/node-repos node_files=${root}/node-files
+mkdir "${node_repos}" "${node_files}"
+ln -s "${own}/lists" "${node_files}/mirrors"
+grep -E '^(use_metalinks|pin_release|point_at_mirrors) |own-servers' "${here}/../../pkg/templates/el/node.sh" > "${root}/node-steps" || true
 cat > "${node_repos}/rocky.repo" << 'EOF'
 [baseos]
 name=Rocky Linux $releasever - BaseOS
@@ -492,16 +500,21 @@ name=Rocky Linux $releasever - BaseOS
 mirrorlist=https://mirrors.rockylinux.org/mirrorlist?arch=$basearch&repo=BaseOS-$releasever$rltype
 enabled=1
 EOF
-use_metalinks "${node_repos}"
-point_at_mirrors "${node_repos}" "${own}/lists"
-[ ! -e "${own}/lists/.own-servers" ] || use_own_servers "${node_repos}"
+lines "node.sh has its four steps on the repositories" "${root}/node-steps" 4
+(
+    # shellcheck disable=SC2034 # node.sh's steps read them.
+    repos=${node_repos} files=${node_files} release=10.3
+    # shellcheck disable=SC1090,SC1091 # node.sh's own lines, read above.
+    . "${root}/node-steps"
+)
 has "the image's build reads the own server" "${node_repos}/rocky.repo" \
-    'baseurl=https://dl.rockylinux.org/$contentdir/$releasever/BaseOS/$basearch/os/'
+    'baseurl=https://dl.rockylinux.org/$contentdir/10.3/BaseOS/$basearch/os/'
 lacks "not the metalink" "${node_repos}/rocky.repo" 'metalink='
-expect "every step of build.sh passes the repositories to from_repositories" 0 "$(grep -c '^ *from_repositories "' "${here}/../../pkg/templates/el/build.sh")"
-expect "and build.sh has four such steps" 4 "$(grep -c 'from_repositories /etc/yum.repos.d "${mirrors}" ' "${here}/../../pkg/templates/el/build.sh")"
-has "node.sh applies the mark" "${here}/../../pkg/templates/el/node.sh" \
-    '[ ! -e "${files}/mirrors/.own-servers" ] || use_own_servers "${repos}"'
+build=${here}/../../pkg/templates/el/build.sh
+unpassed=$(grep -c '^ *from_repositories "' "${build}" || true)
+expect "every step of build.sh passes the repositories to from_repositories" 0 "${unpassed}"
+passed=$(grep -c 'from_repositories /etc/yum.repos.d "${mirrors}" ' "${build}")
+expect "and build.sh has four such steps" 4 "${passed}"
 
 if [ "${failures}" -ne 0 ]; then
     echo "el-mirrors: ${failures} of $((passes + failures)) checks failed"
