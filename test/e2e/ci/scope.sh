@@ -90,7 +90,7 @@ need=
         .github/workflows/links.yml | .github/actionlint.yaml | .github/dependency-review-config.yml) ;;
         .typos.toml | lychee.toml) ;;
         # The web interface's unit and flow tests, its lint settings and the script that takes the docs' screenshots.
-        web/*.test.ts | web/*.test.tsx | web/screenshots.ts | web/stylelint.config.mjs | web/osv-scanner.toml) ;;
+        web/*.test.ts | web/*.test.tsx | web/screenshots.ts | web/stylelint.config.mjs) ;;
         web/flows/* | web/playwright.config.ts) ;;
         # The Go tests that run against a Proxmox VE host are the tests' own, as `make e2e-*` runs them.
         pkg/appliance/e2e_test.go) need="${need} appliance" ;;
