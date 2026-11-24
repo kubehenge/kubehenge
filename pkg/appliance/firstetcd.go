@@ -44,10 +44,12 @@ func (a *Appliance) freshEtcdStarts() error {
 // createsCluster reports whether a plan, as `tofu show -json` prints it, bootstraps the management
 // cluster: its first apply, or the next after one that failed before the cluster was up. Every
 // other apply has the cluster in its state already. A plan that changes a node in any other way
-// than creating it is left out, since such an apply reboots or replaces the node itself.
+// than creating it is left out, since such an apply reboots or replaces the node itself. The one
+// change let through is a new machine configuration on a node whose Talos image stays, which Talos
+// applies in place without a reboot.
 func createsCluster(shown []byte) bool {
 	var plan struct {
-		ResourceChanges []plannedChange `json:"resource_changes"`
+		ResourceChanges []nodeChange `json:"resource_changes"`
 	}
 	_ = json.Unmarshal(shown, &plan) // plannedNodeVMs refused a plan that does not read
 	creates := false
@@ -56,11 +58,38 @@ func createsCluster(shown []byte) bool {
 		case rc.Address == clusterAddress:
 			creates = slices.Contains(rc.Change.Actions, "create")
 		case !strings.HasPrefix(rc.Address, nodeVMAddress+"[") && !strings.HasPrefix(rc.Address, nodeModuleAddress):
+		case rc.configuresInPlace():
 		case slices.ContainsFunc(rc.Change.Actions, func(action string) bool { return action != "create" && action != "no-op" }):
 			return false
 		}
 	}
 	return creates
+}
+
+// nodeChange is a planned change of a node's resource, with the Talos image before and after it.
+// An image the plan knows only after the apply reads as empty.
+type nodeChange struct {
+	Address string      `json:"address"`
+	Change  imageChange `json:"change"`
+}
+
+type imageChange struct {
+	Actions []string    `json:"actions"`
+	Before  *talosImage `json:"before"`
+	After   *talosImage `json:"after"`
+}
+
+type talosImage struct {
+	Image string `json:"image"`
+}
+
+// configuresInPlace reports whether the change updates a node's talos_machine and keeps its image.
+// A changed image upgrades the node, which reboots it.
+func (c nodeChange) configuresInPlace() bool {
+	before, after := c.Change.Before, c.Change.After
+	return strings.HasPrefix(c.Address, nodeModuleAddress) && strings.HasSuffix(c.Address, ".talos_machine.this") &&
+		slices.Equal(c.Change.Actions, []string{"update"}) &&
+		before != nil && after != nil && before.Image != "" && before.Image == after.Image
 }
 
 // pulledResource is a resource in a state as `tofu state pull` prints it, with what the module's

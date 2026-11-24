@@ -3,6 +3,7 @@ package appliance
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
@@ -54,6 +55,19 @@ func (a *Appliance) siteCA() string {
 		return saved.SiteCA
 	}
 	return ""
+}
+
+// OutboundCA holds the authorities the management side's downloads trust beside the public ones: the
+// site CA, then the proxy's. Either may be empty, and the proxy's counts only while there is a proxy.
+func (s *Settings) OutboundCA() string {
+	var parts []string
+	if s.SiteCA != "" {
+		parts = append(parts, s.SiteCA)
+	}
+	if s.Proxy.Enabled() && s.Proxy.CABundle != "" {
+		parts = append(parts, s.Proxy.CABundle)
+	}
+	return strings.Join(parts, "\n")
 }
 
 // trustSiteCA has a transport trust the site CA beside the authorities it trusts already.

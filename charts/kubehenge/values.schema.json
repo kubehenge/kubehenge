@@ -127,7 +127,8 @@
       "additionalProperties": false,
       "properties": {
         "secret": { "type": "string" },
-        "ca": { "type": "boolean" }
+        "ca": { "type": "boolean" },
+        "caSecret": { "type": "string" }
       }
     },
     "chartMirrors": {

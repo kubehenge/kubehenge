@@ -12,27 +12,30 @@ import (
 	"strings"
 )
 
-// GuestProxy is the HTTP(S) proxy a bake's VMs download through, for a site without direct internet
-// access. The zero value, or nil, is no proxy, and a bake without one produces the same cloud-config
-// it always did.
+// GuestProxy is the HTTP(S) proxy and the authorities a bake's VMs download through and trust, for
+// a site without direct internet access or behind TLS inspection. The zero value, or nil, is
+// neither, and a bake without them produces the same cloud-config it always did.
 type GuestProxy struct {
-	// URL is the proxy's address, with credentials if it needs them.
+	// URL is the proxy's address, with credentials if it needs them. Empty, there is no proxy.
 	URL string
 	// NoProxy is the comma-separated list of hosts, domains and networks that bypass it.
 	NoProxy string
-	// CABundle is the PEM authority of a proxy that re-signs TLS.
+	// CABundle holds the PEM authorities the guests trust: the site CA and the authority of a proxy
+	// that re-signs TLS.
 	CABundle string
 }
 
 // Enabled tells whether there is a proxy.
 func (p *GuestProxy) Enabled() bool { return p != nil && p.URL != "" }
 
-// CAFileEnv names the variable that holds the path of the proxy's authority, where the chart
-// mounts it.
+// Configured tells whether the guests get a proxy or an authority.
+func (p *GuestProxy) Configured() bool { return p.Enabled() || (p != nil && p.CABundle != "") }
+
+// CAFileEnv names the variable that holds the path of the authorities, where the chart mounts them.
 const CAFileEnv = "KUBEHENGE_PROXY_CA_FILE"
 
-// ProxyFromEnvironment reads the proxy the pod was given: the standard variables, and the
-// authority from the file CAFileEnv names. Without a proxy it returns one that is not Enabled.
+// ProxyFromEnvironment reads what the pod was given: the standard proxy variables, and the
+// authorities from the file CAFileEnv names. With neither it returns one that is not Configured.
 func ProxyFromEnvironment() (*GuestProxy, error) {
 	first := func(names ...string) string {
 		for _, n := range names {
@@ -42,15 +45,14 @@ func ProxyFromEnvironment() (*GuestProxy, error) {
 		}
 		return ""
 	}
-	address := first("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy")
-	if address == "" {
-		return &GuestProxy{}, nil
+	p := &GuestProxy{}
+	if address := first("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"); address != "" {
+		p.URL, p.NoProxy = address, first("NO_PROXY", "no_proxy")
 	}
-	p := &GuestProxy{URL: address, NoProxy: first("NO_PROXY", "no_proxy")}
 	if file := os.Getenv(CAFileEnv); file != "" {
 		pem, err := os.ReadFile(file) //nolint:gosec // the chart mounts it there
 		if err != nil {
-			return nil, fmt.Errorf("the proxy's certificate authority: %w", err)
+			return nil, fmt.Errorf("reading the certificate authorities: %w", err)
 		}
 		p.CABundle = string(pem)
 	}
@@ -70,7 +72,7 @@ func proxyBuild(build []string) []string {
 // by their path below buildDir.
 func proxyFiles(p *GuestProxy) map[string]string {
 	files := map[string]string{
-		proxyDir + "/run.sh":  proxyRun,
+		proxyDir + "/run.sh":  proxyRun(p),
 		proxyDir + "/down.sh": proxyDown,
 		proxyDir + "/up.sh":   proxyUp(p),
 	}
@@ -80,18 +82,25 @@ func proxyFiles(p *GuestProxy) map[string]string {
 	return files
 }
 
-// proxyRun sets the proxy up, runs the command it is given, and takes the proxy away again.
-const proxyRun = `#!/bin/sh
-dir=$(dirname "$0")
-sh "${dir}/up.sh" || exit 1
-# up.sh runs in a shell of its own, so the environment it wrote for logins is taken up here: curl,
+// proxyRun is the script that sets the proxy and the authorities up, runs the command it is given,
+// and takes them away again. Only a proxy writes the environment it takes up.
+func proxyRun(p *GuestProxy) string {
+	takeUp := ""
+	if p.Enabled() {
+		takeUp = `# up.sh runs in a shell of its own, so the environment it wrote for logins is taken up here: curl,
 # podman and everything the build starts go through the proxy.
 . /etc/profile.d/kubehenge-proxy.sh
-"$@"
+`
+	}
+	return `#!/bin/sh
+dir=$(dirname "$0")
+sh "${dir}/up.sh" || exit 1
+` + takeUp + `"$@"
 status=$?
 sh "${dir}/down.sh"
 exit "${status}"
 `
+}
 
 // proxyDown removes everything up.sh put in the guest, so that the credentials and the authority
 // are in no image a cluster boots from.
@@ -118,19 +127,38 @@ if [ -n "${removed}" ]; then
 fi
 `
 
-// proxyUp is the script that sets the proxy up: for dnf and zypper, for curl and everything that
-// reads the environment, and for containerd's image pulls, and that trusts the proxy's authority.
+// proxyUp is the script that sets the proxy up, when there is one, and that trusts the authorities.
 func proxyUp(p *GuestProxy) string {
 	var sb strings.Builder
 	sb.WriteString("#!/bin/sh\nset -eu\ndir=$(dirname \"$0\")\n")
-	fmt.Fprintf(&sb, "proxy=%s\nno_proxy=%s\n", shellQuote(p.URL), shellQuote(p.NoProxy))
+	if p.Enabled() {
+		writeProxyUp(&sb, p)
+	}
+	if p.CABundle != "" {
+		sb.WriteString(`for anchor in /etc/pki/ca-trust/source/anchors /etc/pki/trust/anchors /usr/local/share/ca-certificates; do
+    if [ -d "${anchor}" ]; then
+        cp "${dir}/ca.crt" "${anchor}/kubehenge-proxy.crt"
+        break
+    fi
+done
+if command -v update-ca-trust > /dev/null; then update-ca-trust; else update-ca-certificates; fi
+systemctl try-restart containerd 2> /dev/null || true
+`)
+	}
+	return sb.String()
+}
+
+// writeProxyUp writes the part of up.sh that sets the proxy up: for dnf and zypper, for curl and
+// everything that reads the environment, and for containerd's image pulls.
+func writeProxyUp(sb *strings.Builder, p *GuestProxy) {
+	fmt.Fprintf(sb, "proxy=%s\nno_proxy=%s\n", shellQuote(p.URL), shellQuote(p.NoProxy))
 	// dnf takes the credentials as options of their own.
 	sb.WriteString("if [ -f /etc/dnf/dnf.conf ]; then\n")
 	sb.WriteString("    sed -i '/^proxy=/d;/^proxy_username=/d;/^proxy_password=/d' /etc/dnf/dnf.conf\n")
 	address, user, password := splitCredentials(p.URL)
-	fmt.Fprintf(&sb, "    printf 'proxy=%%s\\n' %s >> /etc/dnf/dnf.conf\n", shellQuote(address))
+	fmt.Fprintf(sb, "    printf 'proxy=%%s\\n' %s >> /etc/dnf/dnf.conf\n", shellQuote(address))
 	if user != "" {
-		fmt.Fprintf(&sb, "    printf 'proxy_username=%%s\\nproxy_password=%%s\\n' %s %s >> /etc/dnf/dnf.conf\n", shellQuote(user), shellQuote(password))
+		fmt.Fprintf(sb, "    printf 'proxy_username=%%s\\nproxy_password=%%s\\n' %s %s >> /etc/dnf/dnf.conf\n", shellQuote(user), shellQuote(password))
 	}
 	sb.WriteString("fi\n")
 	sb.WriteString(`if [ -f /etc/sysconfig/proxy ]; then
@@ -165,18 +193,6 @@ escaped_no=$(printf '%s' "${no_proxy}" | sed 's/%/%%/g;s/\\/\\\\/g;s/"/\\"/g')
 } > /etc/systemd/system/containerd.service.d/kubehenge-proxy.conf
 systemctl daemon-reload
 `)
-	if p.CABundle != "" {
-		sb.WriteString(`for anchor in /etc/pki/ca-trust/source/anchors /etc/pki/trust/anchors /usr/local/share/ca-certificates; do
-    if [ -d "${anchor}" ]; then
-        cp "${dir}/ca.crt" "${anchor}/kubehenge-proxy.crt"
-        break
-    fi
-done
-if command -v update-ca-trust > /dev/null; then update-ca-trust; else update-ca-certificates; fi
-systemctl try-restart containerd 2> /dev/null || true
-`)
-	}
-	return sb.String()
 }
 
 // splitCredentials separates a proxy address from the user and password it carries.
@@ -214,7 +230,7 @@ func checkGuestProxy(p *GuestProxy) error {
 // pullUserData is the cloud-config of the booted node that pulls a kubeadm node's images, with the
 // proxy up for the pulls and taken away after them.
 func pullUserData(p *GuestProxy, version string) string {
-	if !p.Enabled() {
+	if !p.Configured() {
 		return fmt.Sprintf("#cloud-config\nruncmd:\n  - [%s, %s]\n", imagesPath, version)
 	}
 	const dir = "/run/kubehenge-proxy"

@@ -42,7 +42,7 @@ func connect(conn *pve.Config) (*templates.Builder, error) {
 	}
 	proxy, err := templates.ProxyFromEnvironment()
 	if err != nil {
-		return nil, fmt.Errorf("reading the proxy: %w", err)
+		return nil, fmt.Errorf("reading the proxy and certificate authorities: %w", err)
 	}
 	return &templates.Builder{Client: api, Sources: templates.DefaultSources(provisioner.DefaultReleasePins().Talos()), Proxy: proxy}, nil
 }

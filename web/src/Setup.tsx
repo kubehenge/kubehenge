@@ -2336,7 +2336,7 @@ export function SiteFields({ form, set, shown }: FieldsProps): JSX.Element {
             <SiteCARollNote siteCA={form.siteCA} />
           </>
         }
-        info="Every cluster's nodes, the release mirror, backup targets and identity providers trust it unless they name an authority of their own."
+        info="Everything that names no other CA trusts it, the management cluster included. Proxmox VE's own downloads do not."
         error={shown("siteCA")}
       >
         {(id) => <textarea id={id} rows={3} value={form.siteCA} onChange={(e) => set("siteCA", e.target.value)} />}

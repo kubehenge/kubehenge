@@ -223,7 +223,7 @@ func recipeScript(t *testing.T, name string) string {
 // of a Leap one). Everything with a credential is gone before the image is what clones boot.
 func TestProxyRunsInOrder(t *testing.T) {
 	t.Parallel()
-	inOrder(t, "run.sh", proxyRun, `sh "${dir}/up.sh"`, "/etc/profile.d/kubehenge-proxy.sh", `"$@"`, `sh "${dir}/down.sh"`)
+	inOrder(t, "run.sh", proxyRun(&GuestProxy{URL: testProxy}), `sh "${dir}/up.sh"`, "/etc/profile.d/kubehenge-proxy.sh", `"$@"`, `sh "${dir}/down.sh"`)
 
 	// EL: podman passes the exported proxy on to the container's dnf. The build adds the authority
 	// to the container's trust, and the anchor leaves with the packages installed.
@@ -276,5 +276,85 @@ func TestProxyRunsInOrder(t *testing.T) {
 				t.Errorf("%s: the proxy scripts stay in the template: %v", name, recipe.Cleanup)
 			}
 		}
+	}
+}
+
+func TestBakeTrustsTheSiteCAWithoutAProxy(t *testing.T) {
+	t.Parallel()
+	ca := "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+	for _, f := range Families {
+		for _, r := range f.Releases() {
+			for _, b := range proxyBakes() {
+				b.NodeOS = NodeOS{Family: f.Name(), Release: r.Name}
+				b.Proxy = &GuestProxy{CABundle: ca}
+				recipe, err := f.Recipe(&r, &b, fakeKeys(f.Keys(&r, &b)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, files := parseCloudConfig(t, recipe.UserData)
+				name := b.NodeOS.String() + "/" + string(b.Distribution)
+				if files[proxyDir+"/ca.crt"] != ca {
+					t.Errorf("%s: ca.crt = %q, want the site CA", name, files[proxyDir+"/ca.crt"])
+				}
+				up := files[proxyDir+"/up.sh"]
+				if !strings.Contains(up, "update-ca-trust") || !strings.Contains(up, "update-ca-certificates") {
+					t.Errorf("%s: up.sh does not trust the authority:\n%s", name, up)
+				}
+				for _, banned := range []string{"proxy=", "/etc/environment", "/etc/sysconfig/proxy", "/etc/profile.d/", "containerd.service.d"} {
+					if strings.Contains(up, banned) {
+						t.Errorf("%s: up.sh sets up a proxy it was not given (%q)", name, banned)
+					}
+				}
+				if b.Distribution == Kubeadm && recipe.Image != nil && !strings.Contains(recipe.Image.UserData, "/run/kubehenge-proxy/ca.crt") {
+					t.Errorf("%s: the image pull does not trust the site CA:\n%s", name, recipe.Image.UserData)
+				}
+				if f.Name() != (leap{}).Name() {
+					continue
+				}
+				// The snapshot the node reboots into drops the anchor, so run.sh puts it back for the
+				// pull, and the folder leaves the template afterwards.
+				if b.Distribution == Kubeadm && (len(recipe.RebootChecks) == 0 || !slices.Contains(recipe.RebootChecks[0], path.Join(buildDir, proxyDir, "run.sh"))) {
+					t.Errorf("%s: the pull after the reboot does not trust the site CA through run.sh: %v", name, recipe.RebootChecks)
+				}
+				if !slices.ContainsFunc(recipe.Cleanup, func(step []string) bool {
+					return slices.Equal(step, []string{"rm", "-rf", path.Join(buildDir, proxyDir)})
+				}) {
+					t.Errorf("%s: the authority's folder stays in the template: %v", name, recipe.Cleanup)
+				}
+			}
+		}
+	}
+}
+
+func TestPullUserDataTrustsTheSiteCAWithoutAProxy(t *testing.T) {
+	t.Parallel()
+	got := pullUserData(&GuestProxy{CABundle: "PEM"}, "v1.37.1")
+	if !strings.Contains(got, "/run/kubehenge-proxy/ca.crt") || !strings.Contains(got, "/run/kubehenge-proxy/run.sh") {
+		t.Errorf("the authority is not written:\n%s", got)
+	}
+}
+
+func TestRunScriptTakesUpAProxyOnlyWhenThereIsOne(t *testing.T) {
+	t.Parallel()
+	if run := proxyRun(&GuestProxy{CABundle: "PEM"}); strings.Contains(run, "kubehenge-proxy.sh") {
+		t.Errorf("run.sh without a proxy sources a file that only a proxy writes, which ends sh when it is missing:\n%s", run)
+	}
+	if run := proxyRun(&GuestProxy{URL: testProxy}); !strings.Contains(run, "\n. /etc/profile.d/kubehenge-proxy.sh\n") {
+		t.Errorf("run.sh with a proxy does not take up its environment:\n%s", run)
+	}
+}
+
+func TestProxyFromEnvironmentReadsTheAuthorityWithoutAProxy(t *testing.T) {
+	for _, name := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"} {
+		t.Setenv(name, "")
+	}
+	ca := t.TempDir() + "/ca.crt"
+	if err := os.WriteFile(ca, []byte("PEM"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(CAFileEnv, ca)
+	p, err := ProxyFromEnvironment()
+	if err != nil || p.Enabled() || !p.Configured() || p.CABundle != "PEM" {
+		t.Fatalf("got %+v, %v", p, err)
 	}
 }

@@ -238,10 +238,13 @@ locals {
   # proxy from the Secret beside it. The operator's container list has no volumes, so the authority
   # arrives through a strategic merge patch of the Deployment, which merges the container by name.
   proxy_addon_ca_dir = "/etc/kubehenge/proxy"
-  proxy_addon_ca_patch = { target = { kind = "Deployment" }, patch = yamlencode({ spec = { template = { spec = {
-    volumes    = [{ name = "proxy-ca", secret = { secretName = local.proxy_addon_secret_name, items = [{ key = "ca.crt", path = "ca.crt" }] } }]
-    containers = [{ name = "manager", volumeMounts = [{ name = "proxy-ca", mountPath = local.proxy_addon_ca_dir, readOnly = true }] }]
-  } } } }) }
+  proxy_addon_ca_patch = { target = { kind = "Deployment" }, patch = yamlencode({ spec = { template = {
+    metadata = { annotations = { (local.trusted_ca_annotation) = sha256(local.addon_ca) } }
+    spec = {
+      volumes    = [{ name = "proxy-ca", secret = { secretName = local.proxy_addon_secret_name, items = [{ key = "ca.crt", path = "ca.crt" }] } }]
+      containers = [{ name = "manager", volumeMounts = [{ name = "proxy-ca", mountPath = local.proxy_addon_ca_dir, readOnly = true }] }]
+    }
+  } } }) }
 
   # Every Cluster API provider names its controller container "manager".
   provider_containers = { for p in local.provider_specs : "${p.kind}/${p.name}" => merge({
@@ -374,11 +377,11 @@ resource "helm_release" "cluster_api_providers" {
       var.etcd_restore ? { (local.restore_secret.name) = { namespace = local.restore_secret.namespace, data = {} } } : {},
       # The controller's and the template builds' pods, and the Add-on Provider for Helm, each in
       # its own namespace. The operator's is the proxy release's.
-      local.proxy_enabled ? { (local.proxy_secret_name) = { namespace = local.kubehenge_namespace, data = local.proxy_secret_plain } } : {},
+      local.outbound_secret_on ? { (local.proxy_secret_name) = { namespace = local.kubehenge_namespace, data = local.proxy_secret_plain } } : {},
       local.addon_secret_on ? { (local.proxy_addon_secret_name) = { namespace = local.addon_namespace, data = local.addon_secret_plain } } : {},
     )
     },
-    local.proxy_enabled ? { proxy = { secret = local.proxy_secret_name, ca = local.proxy_has_ca } } : {},
+    local.outbound_secret_on ? { proxy = local.proxy_chart } : {},
   ))]
 
   set_sensitive = concat(local.proxy_enabled ? flatten([for name, ns in local.proxy_secrets : [
@@ -542,7 +545,7 @@ resource "helm_release" "kubehenge" {
     var.time_zone != "" ? { timeZone = var.time_zone } : {},
     var.workload_vm_id_range == null ? {} : { vmIDRange = var.workload_vm_id_range },
     var.site_ca != "" ? { siteCA = var.site_ca } : {},
-    local.proxy_enabled ? { proxy = { secret = local.proxy_secret_name, ca = local.proxy_has_ca } } : {},
+    local.outbound_secret_on ? { proxy = local.proxy_chart } : {},
     length(var.chart_repositories.mirrors) > 0 ? { chartMirrors = var.chart_repositories.mirrors } : {},
     var.release_mirror.url != "" ? { releaseMirror = { url = var.release_mirror.url, caBundle = var.release_mirror.ca_bundle } } : {},
   ))]

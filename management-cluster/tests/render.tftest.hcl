@@ -665,6 +665,11 @@ run "controller_and_clusters_are_least_privilege" {
   }
 
   assert {
+    condition     = !strcontains(data.talos_machine_configuration.node[0].config_patches[1], "TrustedRootsConfig")
+    error_message = "without a site CA or proxy the management nodes trust only the public authorities"
+  }
+
+  assert {
     condition = [
       for d in split("---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d).kubeNetworkPoliciesEnabled
       if try(yamldecode(d).kind, "") == "KubeFlannelCNIConfig"
@@ -709,6 +714,44 @@ run "controller_and_clusters_are_least_privilege" {
       !yamldecode(helm_release.kubehenge.values[0]).proxmox.etcdRestore
     )
     error_message = "no restore token unless restores through the guest agent are asked for"
+  }
+}
+
+run "site_ca_reaches_the_management_nodes" {
+  command = plan
+
+  variables {
+    site_ca = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+  }
+
+  assert {
+    condition = [
+      # Whole separator lines only: "---\n" also ends the certificate's last line.
+      for d in split("\n---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d).certificates
+      if try(yamldecode(d).kind, "") == "TrustedRootsConfig"
+    ] == ["-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"]
+    error_message = "the management nodes trust the site CA without a proxy"
+  }
+}
+
+run "site_ca_beside_the_proxy_authority_on_the_management_nodes" {
+  command = plan
+
+  variables {
+    site_ca = "-----BEGIN CERTIFICATE-----\nSITECA\n-----END CERTIFICATE-----\n"
+    proxy = {
+      url       = "https://proxy.example.com"
+      ca_bundle = "-----BEGIN CERTIFICATE-----\nPROXYCA\n-----END CERTIFICATE-----"
+    }
+  }
+
+  # Talos refuses two documents of one kind with the same name.
+  assert {
+    condition = [
+      for d in split("\n---\n", data.talos_machine_configuration.node[0].config_patches[1]) : yamldecode(d).name
+      if try(yamldecode(d).kind, "") == "TrustedRootsConfig"
+    ] == ["kubehenge-proxy", "kubehenge-site"]
+    error_message = "the management nodes trust the proxy's authority and the site CA under names of their own"
   }
 }
 
@@ -2368,5 +2411,256 @@ run "accepts_an_ipv6_range_beside_the_node_network" {
     gateway_ipv6        = "2001:db8:1::1"
     dns_servers         = ["192.0.2.1", "2001:db8:1::53"]
     pod_subnets         = ["10.244.0.0/16", "2001:db8:2::/56"]
+  }
+}
+
+run "site_ca_without_proxy_reaches_the_provider_hooks" {
+  command = plan
+
+  variables {
+    site_ca = "-----BEGIN CERTIFICATE-----\nSITECA\n-----END CERTIFICATE-----\n"
+  }
+
+  assert {
+    condition = (
+      length(helm_release.proxy_operator) == 1 &&
+      yamldecode(helm_release.proxy_operator[0].values[0]).data == { "ca.crt" = "-----BEGIN CERTIFICATE-----\nSITECA\n-----END CERTIFICATE-----\n" } &&
+      yamldecode(helm_release.cluster_api_providers.values[0]).proxy == { ca = true, caSecret = "kubehenge-proxy" } &&
+      yamldecode(helm_release.kubehenge.values[0]).proxy == { ca = true, caSecret = "kubehenge-proxy" }
+    )
+    error_message = "with a site CA and no proxy, the Secret the hook Jobs and the controller mount holds the site CA alone, and the charts are told it holds an authority and no proxy"
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.cluster_api_providers.values[0]).secrets["kubehenge-proxy"].data == { "ca.crt" = "-----BEGIN CERTIFICATE-----\nSITECA\n-----END CERTIFICATE-----\n" }
+    error_message = "the controller's namespace gets the site CA in the same Secret"
+  }
+}
+
+run "site_ca_without_proxy_reaches_the_operator" {
+  command = plan
+
+  variables {
+    site_ca = "-----BEGIN CERTIFICATE-----\nSITECA\n-----END CERTIFICATE-----\n"
+  }
+
+  assert {
+    condition = (
+      yamldecode(helm_release.cluster_api_operator.values[0]).env.manager == [{ name = "SSL_CERT_FILE", value = "/etc/kubehenge/proxy/ca.crt" }] &&
+      length(yamldecode(helm_release.cluster_api_operator.values[0]).volumes) == 2 &&
+      yamldecode(helm_release.cluster_api_operator.values[0]).volumes[1].secret.secretName == "kubehenge-proxy" &&
+      length(yamldecode(helm_release.cluster_api_operator.values[0]).volumeMounts.manager) == 2
+    )
+    error_message = "with a site CA and no proxy, the operator trusts it from the mounted Secret and gets no proxy variable"
+  }
+}
+
+run "site_ca_without_proxy_reaches_the_helm_addon_provider" {
+  command = plan
+
+  variables {
+    site_ca = "-----BEGIN CERTIFICATE-----\nSITECA\n-----END CERTIFICATE-----\n"
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.cluster_api_providers.values[0]).secrets["kubehenge-proxy-addon"].data == { "ca.crt" = "-----BEGIN CERTIFICATE-----\nSITECA\n-----END CERTIFICATE-----\n" }
+    error_message = "the Add-on Provider for Helm's Secret holds the site CA, with no proxy exceptions"
+  }
+
+  assert {
+    condition = anytrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : (
+      p.name == "helm" &&
+      [for e in p.spec.deployment.containers[0].env : e.name] == ["SSL_CERT_FILE"] &&
+      length(p.spec.patches) == 2 &&
+      strcontains(p.spec.patches[1].patch, "\"secretName\": \"kubehenge-proxy-addon\"")
+    )])
+    error_message = "the Add-on Provider for Helm trusts the site CA from its Secret and takes no proxy variable"
+  }
+}
+
+run "site_ca_and_proxy_authority_reach_every_downloader" {
+  command = plan
+
+  variables {
+    site_ca = "-----BEGIN CERTIFICATE-----\nSITECA\n-----END CERTIFICATE-----\n"
+    proxy = {
+      url       = "https://proxy.example.com"
+      ca_bundle = "-----BEGIN CERTIFICATE-----\nPROXYCA\n-----END CERTIFICATE-----"
+    }
+  }
+
+  assert {
+    condition = (
+      yamldecode(helm_release.proxy_operator[0].values[0]).data["ca.crt"] == "-----BEGIN CERTIFICATE-----\nSITECA\n-----END CERTIFICATE-----\n\n-----BEGIN CERTIFICATE-----\nPROXYCA\n-----END CERTIFICATE-----" &&
+      yamldecode(helm_release.cluster_api_providers.values[0]).secrets["kubehenge-proxy"].data["ca.crt"] == yamldecode(helm_release.proxy_operator[0].values[0]).data["ca.crt"] &&
+      strcontains(yamldecode(helm_release.cluster_api_providers.values[0]).secrets["kubehenge-proxy-addon"].data["ca.crt"], "SITECA") &&
+      strcontains(yamldecode(helm_release.cluster_api_providers.values[0]).secrets["kubehenge-proxy-addon"].data["ca.crt"], "PROXYCA")
+    )
+    error_message = "with both, the operator's, the controller's and the Add-on Provider for Helm's Secrets hold the site CA and the proxy's authority"
+  }
+
+  assert {
+    condition = (
+      [for e in yamldecode(helm_release.cluster_api_operator.values[0]).env.manager : e.name] == ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "SSL_CERT_FILE"] &&
+      yamldecode(helm_release.cluster_api_providers.values[0]).proxy == { secret = "kubehenge-proxy", ca = true } &&
+      yamldecode(helm_release.kubehenge.values[0]).proxy == { secret = "kubehenge-proxy", ca = true }
+    )
+    error_message = "with both, the proxy variables stay and the charts mount the authorities from the proxy's Secret"
+  }
+}
+
+run "proxy_without_authority_nor_site_ca_is_unchanged" {
+  command = plan
+
+  variables {
+    proxy = {
+      url      = "https://proxy.example.com"
+      no_proxy = "pve.example.org"
+    }
+  }
+
+  assert {
+    condition = (
+      yamldecode(helm_release.proxy_operator[0].values[0]).data == { NO_PROXY = "pve.example.org", no_proxy = "pve.example.org" } &&
+      yamldecode(helm_release.cluster_api_providers.values[0]).proxy == { secret = "kubehenge-proxy", ca = false } &&
+      yamldecode(helm_release.kubehenge.values[0]).proxy == { secret = "kubehenge-proxy", ca = false } &&
+      [for e in yamldecode(helm_release.cluster_api_operator.values[0]).env.manager : e.name] == ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"] &&
+      length(yamldecode(helm_release.cluster_api_operator.values[0]).volumes) == 1
+    )
+    error_message = "a proxy without an authority and no site CA leaves the Secrets and the charts' values as they were"
+  }
+}
+
+run "neither_site_ca_nor_proxy_is_unchanged" {
+  command = plan
+
+  assert {
+    condition = (
+      length(helm_release.proxy_operator) == 0 &&
+      !contains(keys(yamldecode(helm_release.kubehenge.values[0])), "proxy") &&
+      !contains(keys(yamldecode(helm_release.cluster_api_providers.values[0])), "proxy") &&
+      !contains(keys(yamldecode(helm_release.cluster_api_providers.values[0]).secrets), "kubehenge-proxy") &&
+      !contains(keys(yamldecode(helm_release.cluster_api_providers.values[0]).secrets), "kubehenge-proxy-addon") &&
+      !can(yamldecode(helm_release.cluster_api_operator.values[0]).env)
+    )
+    error_message = "without a site CA and a proxy no Secret, release or chart value is added"
+  }
+}
+
+run "proxy_authority_alone_is_trusted_as_before" {
+  command = plan
+
+  variables {
+    proxy = {
+      url       = "https://proxy.example.com"
+      ca_bundle = "-----BEGIN CERTIFICATE-----\nPROXYCA\n-----END CERTIFICATE-----"
+    }
+  }
+
+  assert {
+    condition = (
+      yamldecode(helm_release.proxy_operator[0].values[0]).data["ca.crt"] == "-----BEGIN CERTIFICATE-----\nPROXYCA\n-----END CERTIFICATE-----" &&
+      yamldecode(helm_release.cluster_api_providers.values[0]).secrets["kubehenge-proxy-addon"].data["ca.crt"] == "-----BEGIN CERTIFICATE-----\nPROXYCA\n-----END CERTIFICATE-----" &&
+      yamldecode(helm_release.cluster_api_providers.values[0]).proxy == { secret = "kubehenge-proxy", ca = true } &&
+      [for e in yamldecode(helm_release.cluster_api_operator.values[0]).env.manager : e.name] == ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "SSL_CERT_FILE"]
+    )
+    error_message = "a proxy authority without a site CA is mounted and trusted as before"
+  }
+
+  # A pod that keeps running keeps the authority it read as it started.
+  assert {
+    condition = (
+      yamldecode(helm_release.cluster_api_operator.values[0]).podAnnotations == { "kubehenge.dev/trusted-ca" = sha256("-----BEGIN CERTIFICATE-----\nPROXYCA\n-----END CERTIFICATE-----") } &&
+      anytrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : (
+        p.name == "helm" &&
+        yamldecode(p.spec.patches[1].patch).spec.template.metadata.annotations == { "kubehenge.dev/trusted-ca" = sha256("-----BEGIN CERTIFICATE-----\nPROXYCA\n-----END CERTIFICATE-----") }
+      )])
+    )
+    error_message = "the operator's and the Add-on Provider for Helm's pods carry the hash of the proxy's authority, so that a new one restarts them"
+  }
+}
+
+run "site_ca_rolls_the_operator_and_the_helm_addon_provider" {
+  command = plan
+
+  variables {
+    site_ca = "-----BEGIN CERTIFICATE-----\nSITECA\n-----END CERTIFICATE-----\n"
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.cluster_api_operator.values[0]).podAnnotations == { "kubehenge.dev/trusted-ca" = sha256("-----BEGIN CERTIFICATE-----\nSITECA\n-----END CERTIFICATE-----\n") }
+    error_message = "the operator's pods carry the hash of the authorities they trust, so that a new site CA restarts them"
+  }
+
+  assert {
+    condition = anytrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : (
+      p.name == "helm" &&
+      yamldecode(p.spec.patches[1].patch).spec.template.metadata.annotations == { "kubehenge.dev/trusted-ca" = sha256("-----BEGIN CERTIFICATE-----\nSITECA\n-----END CERTIFICATE-----\n") }
+    )])
+    error_message = "the Add-on Provider for Helm's pods carry the hash of the authorities they trust, so that a new site CA restarts them"
+  }
+}
+
+run "another_site_ca_rolls_them_again" {
+  command = plan
+
+  variables {
+    site_ca = "-----BEGIN CERTIFICATE-----\nROTATED\n-----END CERTIFICATE-----\n"
+    chart_repositories = {
+      mirrors   = { "ghcr.io" = "oci://registry.example.org/ghcr" }
+      ca_bundle = "-----BEGIN CERTIFICATE-----\nMIRRORCA\n-----END CERTIFICATE-----"
+    }
+  }
+
+  assert {
+    condition = (
+      yamldecode(helm_release.cluster_api_operator.values[0]).podAnnotations["kubehenge.dev/trusted-ca"] == sha256("-----BEGIN CERTIFICATE-----\nROTATED\n-----END CERTIFICATE-----\n") &&
+      yamldecode(helm_release.cluster_api_operator.values[0]).podAnnotations["kubehenge.dev/trusted-ca"] != sha256("-----BEGIN CERTIFICATE-----\nSITECA\n-----END CERTIFICATE-----\n")
+    )
+    error_message = "a different site CA gives the operator's pods a different hash"
+  }
+
+  assert {
+    condition = anytrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : (
+      p.name == "helm" &&
+      yamldecode(p.spec.patches[1].patch).spec.template.metadata.annotations["kubehenge.dev/trusted-ca"] == sha256("-----BEGIN CERTIFICATE-----\nROTATED\n-----END CERTIFICATE-----\n\n-----BEGIN CERTIFICATE-----\nMIRRORCA\n-----END CERTIFICATE-----")
+    )])
+    error_message = "the Add-on Provider for Helm's hash covers every authority in its file, the chart mirror's included"
+  }
+}
+
+run "a_new_proxy_authority_rolls_the_operator" {
+  command = plan
+
+  variables {
+    site_ca = "-----BEGIN CERTIFICATE-----\nSITECA\n-----END CERTIFICATE-----\n"
+    proxy = {
+      url       = "https://proxy.example.com"
+      ca_bundle = "-----BEGIN CERTIFICATE-----\nPROXYCA\n-----END CERTIFICATE-----"
+    }
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.cluster_api_operator.values[0]).podAnnotations["kubehenge.dev/trusted-ca"] == sha256("-----BEGIN CERTIFICATE-----\nSITECA\n-----END CERTIFICATE-----\n\n-----BEGIN CERTIFICATE-----\nPROXYCA\n-----END CERTIFICATE-----")
+    error_message = "the operator's hash covers the proxy's authority beside the site CA"
+  }
+}
+
+run "no_authority_rolls_nothing" {
+  command = plan
+
+  variables {
+    proxy = {
+      url      = "https://proxy.example.com"
+      no_proxy = "pve.example.org"
+    }
+  }
+
+  assert {
+    condition = (
+      !contains(keys(yamldecode(helm_release.cluster_api_operator.values[0])), "podAnnotations") &&
+      alltrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : p.name != "helm" || length(p.spec.patches) == 1])
+    )
+    error_message = "without any authority neither the operator nor the Add-on Provider for Helm gets an annotation"
   }
 }

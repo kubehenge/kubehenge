@@ -58,7 +58,7 @@ func leapRecipe(b *Bake, keys map[string]string) (Recipe, error) {
 	var rebootChecks [][]string
 	if b.Distribution == Kubeadm {
 		pull := []string{imagesPath, b.KubernetesVersion}
-		if b.Proxy.Enabled() {
+		if b.Proxy.Configured() {
 			// The bake's scripts are still in /var, which a snapshot leaves alone.
 			pull = proxyBuild(pull)
 		}
@@ -66,7 +66,7 @@ func leapRecipe(b *Bake, keys map[string]string) (Recipe, error) {
 	}
 	// Leap's image has an SSH server, whose host keys the bake's boot made.
 	cleanup := [][]string{{"sh", "-c", "rm -f /etc/ssh/ssh_host_*"}}
-	if b.Proxy.Enabled() {
+	if b.Proxy.Configured() {
 		// The scripts hold the proxy's address and password. They stay in /var, which the template
 		// keeps, until the pull after the reboot has used them.
 		cleanup = append(cleanup, []string{"rm", "-rf", path.Join(buildDir, proxyDir)})

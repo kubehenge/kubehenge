@@ -352,22 +352,23 @@ func (a *Appliance) env(passphrase string, auth []string) ([]string, error) {
 	}
 	env = append(env, auth...)
 	// The setting wins over the service's own environment, which only the installer sets.
-	if saved := a.SavedSettings(); saved != nil && saved.Proxy.Enabled() {
+	saved := a.SavedSettings()
+	if saved != nil && saved.Proxy.Enabled() {
 		env = append(env, saved.Proxy.Env(saved.NoProxyList(a.ProxmoxURL))...)
-		if saved.Proxy.CABundle != "" {
-			path := filepath.Join(a.workdir(), "proxy-ca.pem")
-			if err := writeFileAtomic(path, []byte(saved.Proxy.CABundle)); err != nil {
-				return nil, err
+	} else {
+		for _, k := range []string{"HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy"} {
+			if v, ok := os.LookupEnv(k); ok {
+				env = append(env, k+"="+v)
 			}
-			// Go reads this file beside the system's certificate directories, so public hosts stay trusted.
-			env = append(env, "SSL_CERT_FILE="+path)
 		}
-		return env, nil
 	}
-	for _, k := range []string{"HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy"} {
-		if v, ok := os.LookupEnv(k); ok {
-			env = append(env, k+"="+v)
+	if saved != nil && saved.OutboundCA() != "" {
+		path := filepath.Join(a.workdir(), "outbound-ca.pem")
+		if err := writeFileAtomic(path, []byte(saved.OutboundCA())); err != nil {
+			return nil, err
 		}
+		// Go reads this file beside the system's certificate directories, so public hosts stay trusted.
+		env = append(env, "SSL_CERT_FILE="+path)
 	}
 	return env, nil
 }

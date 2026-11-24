@@ -30,13 +30,19 @@ func (o *serveOptions) savedReleaseMirror() provisioner.ReleaseMirror {
 	return saved.EffectiveReleaseMirror()
 }
 
-// savedGuestProxy is the proxy the appliance's template builds give their guests, nil without one.
+// savedGuestProxy is the proxy and the authorities the appliance's template builds give their
+// guests, nil with neither.
 func savedGuestProxy(a *appliance.Appliance) *templates.GuestProxy {
 	saved := a.SavedSettings()
-	if saved == nil || !saved.Proxy.Enabled() {
+	if saved == nil {
 		return nil
 	}
-	return &templates.GuestProxy{
-		URL: saved.Proxy.FullURL(), NoProxy: strings.Join(saved.NoProxyList(a.ProxmoxURL), ","), CABundle: saved.Proxy.CABundle,
+	guest := &templates.GuestProxy{CABundle: saved.OutboundCA()}
+	if saved.Proxy.Enabled() {
+		guest.URL, guest.NoProxy = saved.Proxy.FullURL(), strings.Join(saved.NoProxyList(a.ProxmoxURL), ",")
 	}
+	if !guest.Configured() {
+		return nil
+	}
+	return guest
 }
