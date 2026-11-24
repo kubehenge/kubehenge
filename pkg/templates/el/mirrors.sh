@@ -162,16 +162,53 @@ next_mirrors() {
     done
 }
 
-# from_repositories <lists> <command>...: the command up to three times, each attempt after a
-# failed one on the next mirror of every list, which every later step keeps. The pause is for a
-# fault of the network, which a mirror's sync is not.
+# use_own_servers <repositories>: Rocky Linux's metalink can refuse for hours the repomd.xml that
+# every mirror serves, which no other mirror cures. A repository on that metalink reads the
+# publisher's own server instead, at the folder its file gives in a commented baseurl line, over
+# https. A repository whose file gives none stays on the metalink, and one that is disabled is
+# switched all the same, so that enabling it later reads the same server.
+use_own_servers() {
+    for repo in "$1"/*.repo; do
+        [ -f "${repo}" ] || continue
+        awk '
+            function flush(   i, done) {
+                for (i = 1; i <= n; i++) {
+                    if (metalink && own != "" && lines[i] ~ /^(metalink|mirrorlist)=/) {
+                        if (!done) print "baseurl=" own
+                        done = 1
+                    } else {
+                        print lines[i]
+                    }
+                }
+                n = 0
+                metalink = 0
+                own = ""
+            }
+            /^\[/ { flush() }
+            { lines[++n] = $0 }
+            /^metalink=https:\/\/mirrors\.rockylinux\.org\// { metalink = 1 }
+            /^#baseurl=http:\/\/dl\.rockylinux\.org\// { own = "https" substr($0, 14) }
+            END { flush() }
+        ' "${repo}" > "${repo}.own" && cat "${repo}.own" > "${repo}"
+        rm -f "${repo}.own"
+    done
+}
+
+# from_repositories <repositories> <lists> <command>...: the command up to three times, each attempt
+# after a failed one on the next mirror of every list and with the repositories on Rocky Linux's own
+# server (use_own_servers), which every later step keeps. A step that cannot change the files, such
+# as the image's build, finds the switch in the mark left in <lists>. The pause is for a fault of
+# the network, which a mirror's sync is not.
 from_repositories() {
-    lists=$1
-    shift
+    repositories=$1
+    lists=$2
+    shift 2
     for attempt in 1 2 3; do
         "$@" && return 0
         [ "${attempt}" -lt 3 ] || return 1
         next_mirrors "${lists}"
+        use_own_servers "${repositories}"
+        : > "${lists}/.own-servers"
         echo "trying again in 10 s, on the next mirrors: $*" >&2
         sleep 10
     done
