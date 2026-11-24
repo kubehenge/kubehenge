@@ -498,6 +498,8 @@ point_at_mirrors "${node_repos}" "${own}/lists"
 has "the image's build reads the own server" "${node_repos}/rocky.repo" \
     'baseurl=https://dl.rockylinux.org/$contentdir/$releasever/BaseOS/$basearch/os/'
 lacks "not the metalink" "${node_repos}/rocky.repo" 'metalink='
+expect "every step of build.sh passes the repositories to from_repositories" 0 "$(grep -c '^ *from_repositories "' "${here}/../../pkg/templates/el/build.sh")"
+expect "and build.sh has four such steps" 4 "$(grep -c 'from_repositories /etc/yum.repos.d "${mirrors}" ' "${here}/../../pkg/templates/el/build.sh")"
 has "node.sh applies the mark" "${here}/../../pkg/templates/el/node.sh" \
     '[ ! -e "${files}/mirrors/.own-servers" ] || use_own_servers "${repos}"'
 
