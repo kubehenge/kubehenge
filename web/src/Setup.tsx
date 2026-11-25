@@ -2846,14 +2846,14 @@ function usePreflight(complete: boolean, form: SetupForm): SetupFindings | undef
 
 // stopsRun tells whether the run would refuse these settings, on the last step, where errors are
 // listed. Warnings never stop it.
-// The faults of the hosts' chains against the Site CA show beside its field, without the label they
-// open with. Where every section shows at once, the list of errors leaves them out.
+// The faults of the hosts' chains against the Site CA show beside its field, one per line, without
+// the label they open with. Where every section shows at once, the list of errors leaves them out.
 const siteCAFault = "Site CA: ";
 
 const siteCAFaultsOf = (findings: SetupFindings | undefined): string | undefined => {
   const faults =
     findings?.errors.filter((e) => e.startsWith(siteCAFault)).map((e) => e.slice(siteCAFault.length)) ?? [];
-  return faults.length > 0 ? faults.join(" ") : undefined;
+  return faults.length > 0 ? faults.join("\n") : undefined;
 };
 
 const withoutSiteCAFaults = (findings: SetupFindings | undefined): SetupFindings | undefined =>

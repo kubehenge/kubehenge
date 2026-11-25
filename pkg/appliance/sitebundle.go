@@ -30,10 +30,9 @@ const (
 // save up for no longer.
 const siteDialTimeout = 6 * time.Second
 
-// siteHosts are the hosts the management nodes reach first, whose chains the Site CA has to cover for
-// the nodes to come up: the Talos image factory, the registry of the Talos images and Sigstore's
-// TUF repository.
-var siteHosts = []string{"factory.talos.dev", "ghcr.io", "tuf-repo-cdn.sigstore.dev"}
+// siteRegistries are the registries the management nodes pull from, each read in its mirrors' place
+// where it has mirrors.
+var siteRegistries = []string{"ghcr.io", "registry.k8s.io"}
 
 // siteCheckTimeout bounds the whole check of the Site CA at a save, the hosts being read in parallel.
 const siteCheckTimeout = 2 * siteDialTimeout
@@ -90,14 +89,28 @@ func (s *Settings) siteTrust() string {
 	return s.SiteCA
 }
 
-// hosts are the hosts whose chains the Site CA is checked against: those every node reaches, and
-// an https release mirror that has no authority of its own.
+// siteHosts are the hosts whose chains the Site CA has to cover for the management nodes to come up:
+// the Talos image factory, the registries or their https mirrors, Sigstore's TUF repository, and an
+// https release mirror that has no authority of its own.
 func (s *Settings) siteHosts() []string {
-	hosts := slices.Clone(siteHosts)
-	if m := s.ReleaseMirror; m != nil && m.CABundle == "" {
-		if u, err := url.Parse(m.URL); err == nil && u.Scheme == "https" && u.Host != "" && !slices.Contains(hosts, u.Host) {
+	hosts := []string{"factory.talos.dev"}
+	add := func(address string) {
+		if u, err := url.Parse(address); err == nil && u.Scheme == schemeHTTPS && u.Host != "" && !slices.Contains(hosts, u.Host) {
 			hosts = append(hosts, u.Host)
 		}
+	}
+	for _, registry := range siteRegistries {
+		mirrors := s.RegistryMirrors[registry]
+		if len(mirrors) == 0 {
+			mirrors = []string{"https://" + registry}
+		}
+		for _, m := range mirrors {
+			add(m)
+		}
+	}
+	add("https://tuf-repo-cdn.sigstore.dev")
+	if m := s.ReleaseMirror; m != nil && m.CABundle == "" {
+		add(m.URL)
 	}
 	return hosts
 }
@@ -148,6 +161,30 @@ func (a *Appliance) ResolveSite(ctx context.Context, s *Settings) ([]string, err
 	}
 	for _, auth := range authorities {
 		*auth.bundle = auth.derived()
+	}
+	return unchecked, nil
+}
+
+// resolveSiteUnattended is ResolveSite for a run nobody watches. A chain the nodes would refuse
+// keeps the bundles of the last run that passed, and the log says why, since nobody is there to fix
+// the chain and the nodes go on as they are.
+func (a *Appliance) resolveSiteUnattended(ctx context.Context, j *Job, s *Settings) ([]string, error) {
+	site, proxy := s.SiteBundle, ""
+	if s.Proxy != nil {
+		proxy = s.Proxy.Bundle
+	}
+	unchecked, err := a.ResolveSite(ctx, s)
+	faults, ok := errors.AsType[SiteChainErrors](err)
+	if !ok {
+		return unchecked, err
+	}
+	s.SiteBundle = site
+	if s.Proxy != nil {
+		s.Proxy.Bundle = proxy
+	}
+	j.Add("Kept the certificates of the last run, since the nodes would refuse these chains:")
+	for _, fault := range faults {
+		j.Add(fault)
 	}
 	return unchecked, nil
 }
@@ -249,9 +286,7 @@ func newSiteAuthority(label, pasted, kept string, bundle *string) (*siteAuthorit
 	held, _ := parseCertificates(kept)
 	for _, c := range held {
 		// Only a renamed root carries a pasted root's key.
-		if !slices.ContainsFunc(roots, c.Equal) && slices.ContainsFunc(roots, func(r *x509.Certificate) bool {
-			return bytes.Equal(r.RawSubjectPublicKeyInfo, c.RawSubjectPublicKeyInfo)
-		}) {
+		if !slices.ContainsFunc(roots, c.Equal) && slices.ContainsFunc(roots, sameKey(c)) {
 			auth.add(c)
 		}
 	}
@@ -295,7 +330,9 @@ func (a *Appliance) publicRoots() *x509.CertPool {
 }
 
 // DialChain is the SiteChains of the network: it opens a TLS connection to the host, through the
-// settings' proxy when there is one, and returns what the host presented without judging it.
+// settings' proxy when there is one, and returns what the host presented without judging it. An
+// https proxy is verified as every download verifies it, so that its credentials go nowhere else,
+// and a proxy that fails that or refuses the tunnel leaves the host unread.
 func (a *Appliance) DialChain(ctx context.Context, s *Settings, host string) ([]*x509.Certificate, error) {
 	transport, err := s.Proxy.Transport(s.NoProxyList(a.ProxmoxURL))
 	if err != nil {
@@ -304,23 +341,45 @@ func (a *Appliance) DialChain(ctx context.Context, s *Settings, host string) ([]
 	if !s.Proxy.Enabled() {
 		transport.Proxy = http.ProxyFromEnvironment
 	}
+	if err = trustSiteCA(transport, s.siteTrust()); err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, "https://"+host+"/", http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", host, err)
+	}
+	proxy, err := transport.Proxy(req)
+	if err != nil {
+		return nil, fmt.Errorf("%s: the proxy: %w", host, err)
+	}
+	// Go's transport hands the proxy's handshake and the host's the same TLS configuration, the
+	// proxy's first.
+	verifyProxy := proxy != nil && proxy.Scheme == "https"
+	proxyName := ""
+	if verifyProxy {
+		proxyName = proxy.Hostname()
+	}
+	var proxyRoots *x509.CertPool
+	if transport.TLSClientConfig != nil {
+		proxyRoots = transport.TLSClientConfig.RootCAs
+	}
 	var mu sync.Mutex
 	var presented []*x509.Certificate
 	transport.TLSClientConfig = &tls.Config{
 		MinVersion:         tls.VersionTLS12,
-		InsecureSkipVerify: true, //nolint:gosec // only the presented chain is wanted, and judgeChains judges it
+		InsecureSkipVerify: true, //nolint:gosec // VerifyConnection verifies the proxy, and judgeChains judges the host's chain
 		VerifyConnection: func(cs tls.ConnectionState) error {
 			mu.Lock()
 			defer mu.Unlock()
+			if verifyProxy {
+				verifyProxy = false
+				return verifyPeer(cs.PeerCertificates, proxyRoots, proxyName)
+			}
 			presented = cs.PeerCertificates
 			return nil
 		},
 	}
 	defer transport.CloseIdleConnections()
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, "https://"+host+"/", http.NoBody)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", host, err)
-	}
 	resp, err := transport.RoundTrip(req)
 	if err == nil {
 		_ = resp.Body.Close()
@@ -336,6 +395,23 @@ func (a *Appliance) DialChain(ctx context.Context, s *Settings, host string) ([]
 	return nil, fmt.Errorf("%s: %w", host, err)
 }
 
+// verifyPeer is the check Go's TLS client makes of a server: its chain to roots, the system's when
+// nil, and its name.
+func verifyPeer(peer []*x509.Certificate, roots *x509.CertPool, name string) error {
+	if len(peer) == 0 {
+		return errors.New("the proxy presented no certificate")
+	}
+	intermediates := x509.NewCertPool()
+	for _, c := range peer[1:] {
+		intermediates.AddCert(c)
+	}
+	_, err := peer[0].Verify(x509.VerifyOptions{Roots: roots, Intermediates: intermediates, DNSName: name})
+	if err != nil {
+		return fmt.Errorf("the proxy's certificate: %w", err)
+	}
+	return nil
+}
+
 // hostChain is the chain one host presented, leaf first.
 type hostChain struct {
 	host  string
@@ -347,27 +423,44 @@ type hostChain struct {
 // constraints and validity itself. A chain it still refuses is a fault, and the hosts with the same
 // fault share its line.
 func judgeChains(authorities []*siteAuthority, public *x509.CertPool, chains []hostChain, now time.Time) error {
-	var faults []string
-	hosts := map[string][]string{}
+	type labelled struct{ label, fault string }
+	var faults []labelled
+	hosts := map[labelled][]string{}
 	for _, hc := range chains {
 		if public != nil && verifyChain(hc.chain, public, now) == nil {
 			continue
 		}
 		if fault := judgeChain(authorities, hc.chain, now); fault != "" {
-			if _, seen := hosts[fault]; !seen {
-				faults = append(faults, fault)
+			key := labelled{authorityOf(authorities, hc.chain).label, fault}
+			if _, seen := hosts[key]; !seen {
+				faults = append(faults, key)
 			}
-			hosts[fault] = append(hosts[fault], hc.host)
+			hosts[key] = append(hosts[key], hc.host)
 		}
 	}
 	if len(faults) == 0 {
 		return nil
 	}
 	lines := make(SiteChainErrors, 0, len(faults))
-	for _, fault := range faults {
-		lines = append(lines, authorities[0].label+" "+strings.Join(hosts[fault], ", ")+": "+fault)
+	for _, key := range faults {
+		lines = append(lines, key.label+" "+strings.Join(hosts[key], ", ")+": "+key.fault)
 	}
 	return lines
+}
+
+// authorityOf is the authority a refused chain is about: the one whose root a certificate of the
+// chain names as its issuer or names the key of, else the proxy's, which re-signs what it carries.
+func authorityOf(authorities []*siteAuthority, chain []*x509.Certificate) *siteAuthority {
+	for _, c := range chain {
+		for _, auth := range authorities {
+			for _, r := range slices.Concat(auth.roots, auth.copies) {
+				if canonicalName(c.RawIssuer) == canonicalName(r.RawSubject) || (len(c.AuthorityKeyId) > 0 && bytes.Equal(c.AuthorityKeyId, r.SubjectKeyId)) {
+					return auth
+				}
+			}
+		}
+	}
+	return authorities[len(authorities)-1]
 }
 
 // judgeChain adds the renamed roots that make Go accept one chain, or names what keeps it from
@@ -411,13 +504,13 @@ func poolOf(certs []*x509.Certificate) *x509.CertPool {
 	return pool
 }
 
-// verifyChain is the nodes' check: Go's verifier with the presented intermediates.
+// verifyChain is the nodes' check: Go's verifier with the presented intermediates, for a server.
 func verifyChain(chain []*x509.Certificate, roots *x509.CertPool, now time.Time) error {
 	intermediates := x509.NewCertPool()
 	for _, c := range chain[1:] {
 		intermediates.AddCert(c)
 	}
-	_, err := chain[0].Verify(x509.VerifyOptions{Roots: roots, Intermediates: intermediates, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}})
+	_, err := chain[0].Verify(x509.VerifyOptions{Roots: roots, Intermediates: intermediates, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}})
 	return err //nolint:wrapcheck // chainFault reads the verifier's own error
 }
 
@@ -461,23 +554,51 @@ func chainFault(chain, anchors []*x509.Certificate, verifyErr error, now time.Ti
 		if fault != "" {
 			return fault
 		}
-		if !slices.ContainsFunc(anchors, parent.Equal) && !bytes.Equal(cur.RawIssuer, parent.RawSubject) {
-			return fmt.Sprintf("%q encodes its issuer's name %q differently. Reissue it on the device.", subjectOf(cur), subjectOf(parent))
+		if fault := presentedFault(cur, parent, anchors); fault != "" {
+			return fault
 		}
 		path = append(path, parent)
 		cur = parent
 	}
-	invalid, ok := errors.AsType[x509.CertificateInvalidError](verifyErr)
-	if ok && invalid.Reason == x509.TooManyIntermediates {
-		return fmt.Sprintf("%q allows fewer intermediates than the host presents. Shorten the chain on the device.", subjectOf(invalid.Cert))
-	}
-	if ok && invalid.Reason == x509.CANotAuthorizedForThisName {
-		return fmt.Sprintf("%q names a host its issuers may not sign for. Check their name constraints.", subjectOf(invalid.Cert))
-	}
-	if ok && invalid.Reason == x509.NotAuthorizedToSign {
-		return notCA(invalid.Cert)
+	if invalid, ok := errors.AsType[x509.CertificateInvalidError](verifyErr); ok {
+		if fault := verifyFault(invalid); fault != "" {
+			return fault
+		}
 	}
 	return fmt.Sprintf("the nodes refuse %q. Check the chain on the device.", subjectOf(chain[0]))
+}
+
+// verifyFault names a refusal of Go's verifier that following the chain by names does not find,
+// empty for another.
+func verifyFault(invalid x509.CertificateInvalidError) string {
+	reason, c := invalid.Reason, invalid.Cert
+	if reason == x509.TooManyIntermediates {
+		return fmt.Sprintf("%q allows fewer intermediates than the host presents. Shorten the chain on the device.", subjectOf(c))
+	}
+	if reason == x509.CANotAuthorizedForThisName {
+		return fmt.Sprintf("%q names a host its issuers may not sign for. Check their name constraints.", subjectOf(c))
+	}
+	if reason == x509.NotAuthorizedToSign {
+		return notCA(c)
+	}
+	if reason == x509.IncompatibleUsage {
+		return fmt.Sprintf("%q is not for servers. Reissue it for server authentication.", subjectOf(c))
+	}
+	return ""
+}
+
+// presentedFault says what keeps a presented parent of cur from carrying the chain to a pasted
+// root: it is another root, or cur names it in other bytes. Empty for a pasted root or a copy.
+func presentedFault(cur, parent *x509.Certificate, anchors []*x509.Certificate) string {
+	switch {
+	case slices.ContainsFunc(anchors, parent.Equal):
+		return ""
+	case canonicalName(parent.RawIssuer) == canonicalName(parent.RawSubject) && !slices.ContainsFunc(anchors, sameKey(parent)):
+		return fmt.Sprintf("%q is a root that was not pasted. Paste that root.", subjectOf(parent))
+	case !bytes.Equal(cur.RawIssuer, parent.RawSubject):
+		return fmt.Sprintf("%q encodes its issuer's name %q differently. Reissue it on the device.", subjectOf(cur), subjectOf(parent))
+	}
+	return ""
 }
 
 // issuerIn finds the certificate that signs cur among the anchors and the presented certificates,
@@ -503,12 +624,22 @@ func issuerIn(cur *x509.Certificate, anchors, presented, path []*x509.Certificat
 			fault = notCA(p)
 		case p.KeyUsage != 0 && p.KeyUsage&x509.KeyUsageCertSign == 0:
 			fault = fmt.Sprintf("%q may not sign certificates. Reissue it with certificate signing.", subjectOf(p))
+		case slices.ContainsFunc(anchors, p.Equal):
+			// The device's root was made again under the same name, with another key.
+			fault = fmt.Sprintf("%q is signed by a new %q. Paste it.", subjectOf(cur), subjectOf(p))
 		}
 	}
 	if fault == "" {
 		fault = fmt.Sprintf("%q is missing. Paste it with the root.", issuerOf(cur))
 	}
 	return nil, fault
+}
+
+// sameKey matches a certificate that carries c's key.
+func sameKey(c *x509.Certificate) func(*x509.Certificate) bool {
+	return func(o *x509.Certificate) bool {
+		return bytes.Equal(o.RawSubjectPublicKeyInfo, c.RawSubjectPublicKeyInfo)
+	}
 }
 
 func notCA(c *x509.Certificate) string {
@@ -555,9 +686,9 @@ func subjectOf(c *x509.Certificate) string { return c.Subject.String() }
 
 func issuerOf(c *x509.Certificate) string { return c.Issuer.String() }
 
-// canonicalName is a distinguished name as RFC 5280 section 7.1 compares it, and OpenSSL: each value
-// in lower case with its white space collapsed, whatever its string type. Go compares the encoded
-// bytes instead.
+// canonicalName is a distinguished name as OpenSSL compares it (x509_name_canon in
+// crypto/x509/x_name.c): each value folded by canonicalValue, whatever its string type. Go compares
+// the encoded bytes instead.
 func canonicalName(raw []byte) string {
 	var rdns pkix.RDNSequence
 	if rest, err := asn1.Unmarshal(raw, &rdns); err != nil || len(rest) > 0 {
@@ -569,7 +700,7 @@ func canonicalName(raw []byte) string {
 		for _, atv := range rdn {
 			value := fmt.Sprint(atv.Value)
 			if s, ok := atv.Value.(string); ok {
-				value = strings.ToLower(strings.Join(strings.Fields(s), " "))
+				value = canonicalValue(s)
 			}
 			parts = append(parts, atv.Type.String()+"="+value)
 		}
@@ -578,6 +709,30 @@ func canonicalName(raw []byte) string {
 		sb.WriteByte(';')
 	}
 	return sb.String()
+}
+
+// canonicalValue folds a value as OpenSSL's asn1_string_canon does: ASCII letters to lower case,
+// each run of ASCII white space to one space and none at the ends. Every other character stays, so
+// names that differ in the case of a non-ASCII letter stay apart, as OpenSSL keeps them.
+func canonicalValue(s string) string {
+	var out strings.Builder
+	space := false
+	for i := range len(s) {
+		c := s[i]
+		if c == ' ' || ('\t' <= c && c <= '\r') {
+			space = out.Len() > 0
+			continue
+		}
+		if space {
+			out.WriteByte(' ')
+			space = false
+		}
+		if 'A' <= c && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		out.WriteByte(c)
+	}
+	return out.String()
 }
 
 // withSubject is a copy of c whose subject is the encoded name, with the same key, extensions and

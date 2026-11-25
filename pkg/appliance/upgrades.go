@@ -320,7 +320,7 @@ func (a *Appliance) ApplyUnattended(ready func(ctx context.Context, kubeconfig [
 		if err := s.ValidateAgainst(s); err != nil {
 			return err
 		}
-		unchecked, err := a.ResolveSite(ctx, s)
+		unchecked, err := a.resolveSiteUnattended(ctx, j, s)
 		if err != nil {
 			return err
 		}

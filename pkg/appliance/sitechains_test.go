@@ -89,8 +89,10 @@ type issuance struct {
 	leaf      bool
 	// notCA and noSign make an intermediate that may not sign.
 	notCA, noSign bool
-	notAfter      time.Time
-	sig           x509.SignatureAlgorithm
+	// clientOnly makes a leaf for client authentication alone.
+	clientOnly bool
+	notAfter   time.Time
+	sig        x509.SignatureAlgorithm
 }
 
 func (a *testAuthority) issue(t *testing.T, o issuance) *testAuthority {
@@ -116,6 +118,9 @@ func (a *testAuthority) issue(t *testing.T, o issuance) *testAuthority {
 	if o.leaf {
 		tmpl.KeyUsage = x509.KeyUsageDigitalSignature
 		tmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+		if o.clientOnly {
+			tmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
+		}
 		tmpl.IPAddresses = []net.IP{net.IPv4(127, 0, 0, 1)}
 		tmpl.DNSNames = []string{"host.example"}
 	}
@@ -162,7 +167,7 @@ func goTrusts(chain []*x509.Certificate, bundle string) error {
 	for _, c := range chain[1:] {
 		intermediates.AddCert(c)
 	}
-	_, err := chain[0].Verify(x509.VerifyOptions{Roots: roots, Intermediates: intermediates, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}})
+	_, err := chain[0].Verify(x509.VerifyOptions{Roots: roots, Intermediates: intermediates, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}})
 	return err
 }
 
@@ -304,7 +309,7 @@ func TestSiteCheckListsAHostThatDoesNotAnswerAndKeepsTheOthers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"factory.talos.dev", "tuf-repo-cdn.sigstore.dev"}; !slices.Equal(unchecked, want) {
+	if want := []string{"factory.talos.dev", "registry.k8s.io", "tuf-repo-cdn.sigstore.dev"}; !slices.Equal(unchecked, want) {
 		t.Errorf("unchecked %v, want %v", unchecked, want)
 	}
 	if s.SiteBundle == "" || goTrusts(certs(c.leaf, c.intermediate), s.siteTrust()) != nil {
@@ -321,7 +326,7 @@ func TestSiteCheckAddsNothingForAChainThatAPublicAuthoritySigns(t *testing.T) {
 	pool.AddCert(public.cert)
 	inspection := newTestRoot(t, "Inspect Root")
 	chain := certs(leaf, issuer)
-	a := &Appliance{sitePublic: pool, SiteChains: fakeChains(map[string][]*x509.Certificate{"factory.talos.dev": chain, "ghcr.io": chain, "tuf-repo-cdn.sigstore.dev": chain})}
+	a := &Appliance{sitePublic: pool, SiteChains: fakeChains(map[string][]*x509.Certificate{"factory.talos.dev": chain, "ghcr.io": chain, "registry.k8s.io": chain, "tuf-repo-cdn.sigstore.dev": chain})}
 	s := &Settings{SiteCA: inspection.pem()}
 	unchecked, err := a.ResolveSite(t.Context(), s)
 	if err != nil || len(unchecked) != 0 || s.SiteBundle != "" || s.siteTrust() != s.SiteCA {
@@ -609,7 +614,7 @@ func TestAnAutomaticRunDerivesTheBundle(t *testing.T) {
 	if got := moduleSiteCAOf(t, a); j.State != StateSucceeded || goTrusts(chain, got) != nil || a.SavedSettings().SiteBundle != got {
 		t.Errorf("the automatic run (%s) gave the nodes %q", j.State, got)
 	}
-	if log := strings.Join(j.Log, "\n"); !strings.Contains(log, "not checked against factory.talos.dev, tuf-repo-cdn.sigstore.dev") {
+	if log := strings.Join(j.Log, "\n"); !strings.Contains(log, "not checked against factory.talos.dev, registry.k8s.io, tuf-repo-cdn.sigstore.dev") {
 		t.Errorf("the automatic run's log lacks the hosts that did not answer: %q", log)
 	}
 }
@@ -689,13 +694,12 @@ func TestSiteNoteReadsTheAppliancesOwnAddresses(t *testing.T) {
 	}
 }
 
-// connectProxy is a CONNECT proxy on the loopback that tunnels every request to target, and records
-// what it was asked for.
-func connectProxy(t *testing.T, target string) (string, func() []string) {
-	t.Helper()
+// connectHandler is a CONNECT proxy that tunnels every request to target, and records what it was
+// asked for.
+func connectHandler(target string) (http.Handler, func() []string) {
 	var mu sync.Mutex
 	var asked []string
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		asked = append(asked, r.Method+" "+r.Host)
 		mu.Unlock()
@@ -713,19 +717,36 @@ func connectProxy(t *testing.T, target string) (string, func() []string) {
 		go func() { _, _ = io.Copy(upstream, buffered); _ = upstream.Close() }()
 		_, _ = io.Copy(conn, upstream)
 		_ = conn.Close()
-	}))
+	}), func() []string { mu.Lock(); defer mu.Unlock(); return slices.Clone(asked) }
+}
+
+// connectProxy is connectHandler on the loopback.
+func connectProxy(t *testing.T, target string) (string, func() []string) {
+	t.Helper()
+	handler, asked := connectHandler(target)
+	proxy := httptest.NewServer(handler)
 	t.Cleanup(proxy.Close)
-	return proxy.URL, func() []string { mu.Lock(); defer mu.Unlock(); return slices.Clone(asked) }
+	return proxy.URL, asked
+}
+
+// tlsHost is a TLS server on the loopback that presents the chain, leaf first, and its address.
+func tlsHost(t *testing.T, chain ...*testAuthority) string {
+	t.Helper()
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	raw := make([][]byte, 0, len(chain))
+	for _, c := range chain {
+		raw = append(raw, c.cert.Raw)
+	}
+	server.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: raw, PrivateKey: chain[0].key}}}
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	return strings.TrimPrefix(server.URL, "https://")
 }
 
 func TestDialChainReadsWhatTheHostPresentsDirectlyAndThroughTheProxy(t *testing.T) {
 	t.Parallel()
 	c := newInspected(t)
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
-	server.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{c.leaf.cert.Raw, c.intermediate.cert.Raw}, PrivateKey: c.leaf.key}}}
-	server.StartTLS()
-	t.Cleanup(server.Close)
-	target := strings.TrimPrefix(server.URL, "https://")
+	target := tlsHost(t, c.leaf, c.intermediate)
 	a := &Appliance{ProxmoxURL: "https://10.0.0.50:8006"}
 
 	chain, err := a.DialChain(t.Context(), &Settings{}, target)
@@ -763,6 +784,221 @@ func TestDialChainGivesUpOnAHostThatDoesNotAnswer(t *testing.T) {
 	chain, err := (&Appliance{}).DialChain(ctx, &Settings{}, silent.Addr().String())
 	if err == nil || len(chain) != 0 || !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("a silent host gave %d certificates and %v", len(chain), err)
+	}
+}
+
+// TestDialChainVerifiesAnHTTPSProxyBeforeItSendsCredentials leaves the host unread through an https
+// proxy whose certificate nothing trusts, before any CONNECT carries the password, and reads it
+// through one the proxy's CA vouches for.
+func TestDialChainVerifiesAnHTTPSProxyBeforeItSendsCredentials(t *testing.T) {
+	t.Parallel()
+	c := newInspected(t)
+	target := tlsHost(t, c.leaf, c.intermediate)
+	handler, asked := connectHandler(target)
+	var mu sync.Mutex
+	var auth []string
+	proxy := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		auth = append(auth, r.Header.Get("Proxy-Authorization"))
+		mu.Unlock()
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(proxy.Close)
+	a := &Appliance{ProxmoxURL: "https://10.0.0.50:8006", sitePublic: x509.NewCertPool()}
+	a.SiteChains = a.DialChain
+	untrusted := &Settings{SiteCA: c.root.pem(), Proxy: &Proxy{URL: proxy.URL, User: "alice", Password: "s3cret"}}
+
+	if chain, err := a.DialChain(t.Context(), untrusted, "factory.talos.dev"); err == nil || len(chain) != 0 {
+		t.Errorf("an untrusted proxy gave %d certificates and %v", len(chain), err)
+	}
+	unchecked, err := a.ResolveSite(t.Context(), untrusted)
+	if err != nil || !slices.Equal(unchecked, untrusted.siteHosts()) {
+		t.Errorf("behind an untrusted proxy: unchecked %q, %v", unchecked, err)
+	}
+	mu.Lock()
+	sent := slices.Clone(auth)
+	mu.Unlock()
+	if got := asked(); len(got) != 0 || len(sent) != 0 {
+		t.Errorf("an untrusted proxy was asked %q with %q", got, sent)
+	}
+
+	proxyCA := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: proxy.Certificate().Raw}))
+	trusted := &Settings{Proxy: &Proxy{URL: proxy.URL, User: "alice", Password: "s3cret", CABundle: proxyCA}}
+	chain, err := a.DialChain(t.Context(), trusted, "factory.talos.dev")
+	if err != nil || len(chain) != 2 || !chain[0].Equal(c.leaf.cert) {
+		t.Errorf("through a trusted proxy: %d certificates, %v", len(chain), err)
+	}
+	if got := asked(); !slices.Equal(got, []string{"CONNECT factory.talos.dev:443"}) {
+		t.Errorf("a trusted proxy was asked %q", got)
+	}
+}
+
+// TestSiteCheckLeavesAHostUncheckedWhenTheProxyRefusesTheTunnel judges no host on what a proxy that
+// refuses CONNECT answers, its own certificate included, and saves.
+func TestSiteCheckLeavesAHostUncheckedWhenTheProxyRefusesTheTunnel(t *testing.T) {
+	t.Parallel()
+	refuse := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) })
+	plain := httptest.NewServer(refuse)
+	t.Cleanup(plain.Close)
+	inspecting := httptest.NewTLSServer(refuse)
+	t.Cleanup(inspecting.Close)
+	inspectingCA := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: inspecting.Certificate().Raw}))
+	for name, proxy := range map[string]*Proxy{
+		"http":  {URL: plain.URL},
+		"https": {URL: inspecting.URL, CABundle: inspectingCA},
+	} {
+		a := &Appliance{ProxmoxURL: "https://10.0.0.50:8006", sitePublic: x509.NewCertPool()}
+		a.SiteChains = a.DialChain
+		s := &Settings{SiteCA: newInspected(t).root.pem(), Proxy: proxy}
+		unchecked, err := a.ResolveSite(t.Context(), s)
+		if err != nil || !slices.Equal(unchecked, s.siteHosts()) {
+			t.Errorf("%s: unchecked %q, %v", name, unchecked, err)
+		}
+	}
+}
+
+// TestSiteBundleFoldsOnlyASCIICaseAsOpenSSLDoes copies a root for a name that differs in ASCII case
+// and white space, and refuses one that differs in the case of another letter, as OpenSSL does.
+func TestSiteBundleFoldsOnlyASCIICaseAsOpenSSLDoes(t *testing.T) {
+	t.Parallel()
+	root := newTestRoot(t, "ÄRGER ROOT", func(c *x509.Certificate) { c.RawSubject = nameDER(t, "ÄRGER ROOT", asn1.TagUTF8String) })
+	root.tag = asn1.TagUTF8String
+	named := func(issuer string) []*testAuthority {
+		alias := *root
+		alias.cn = issuer
+		intermediate := alias.issue(t, issuance{cn: "Inspect Intermediate"})
+		return []*testAuthority{intermediate.issue(t, issuance{cn: "host.example", leaf: true}), intermediate}
+	}
+	ascii := named("  Ärger   root ")
+	bundle, err := bundleFor(root, ascii...)
+	if err != nil || goTrusts(certs(ascii...), bundle) != nil {
+		t.Errorf("a name in other ASCII case and spacing: %v", err)
+	}
+	if _, err = bundleFor(root, named("äRGER ROOT")...); err == nil {
+		t.Error("a name in other non-ASCII case was given a copy of the root")
+	}
+}
+
+// TestSiteHostsAreTheOnesTheNodesReach reads a registry's https mirror in its place, never the
+// registry, and the release mirror.
+func TestSiteHostsAreTheOnesTheNodesReach(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	var asked []string
+	a := &Appliance{sitePublic: x509.NewCertPool(), SiteChains: func(_ context.Context, _ *Settings, host string) ([]*x509.Certificate, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		asked = append(asked, host)
+		return nil, errors.New("no answer")
+	}}
+	s := &Settings{
+		SiteCA:          newInspected(t).root.pem(),
+		RegistryMirrors: map[string][]string{"ghcr.io": {"https://mirror.example.org:5000", "http://plain.example.org"}},
+		ReleaseMirror:   &ReleaseMirror{URL: "https://releases.example.org/github"},
+	}
+	if _, err := a.ResolveSite(t.Context(), s); err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(asked)
+	want := []string{"factory.talos.dev", "mirror.example.org:5000", "registry.k8s.io", "releases.example.org", "tuf-repo-cdn.sigstore.dev"}
+	if !slices.Equal(asked, want) {
+		t.Errorf("read %q, want %q", asked, want)
+	}
+}
+
+// TestAnUnattendedRunKeepsTheLastBundleThroughAChainFault goes on with the bundle of the last run
+// and logs the fault once, where an Apply the owner starts refuses.
+func TestAnUnattendedRunKeepsTheLastBundleThroughAChainFault(t *testing.T) {
+	t.Parallel()
+	c := newInspected(t)
+	a, ready := newAppliance(t)
+	a.sitePublic = x509.NewCertPool()
+	good := certs(c.leaf, c.intermediate)
+	a.SiteChains = fakeChains(map[string][]*x509.Certificate{"ghcr.io": good})
+	s := settings("pve1")
+	s.SiteCA = c.root.pem()
+	if err := a.Apply(s, "correct horse battery staple", ticket(), func(_ context.Context, k []byte) error { ready <- k; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, a)
+	<-ready
+	first := moduleSiteCAOf(t, a)
+	if goTrusts(good, first) != nil {
+		t.Fatalf("the first run gave the nodes %q", first)
+	}
+
+	a.SiteChains = fakeChains(map[string][]*x509.Certificate{"ghcr.io": certs(c.leaf)})
+	const fault = `Site CA: ghcr.io: "CN=Inspect Intermediate" is missing. Paste it with the root.`
+	if err := a.KeepUnattended(Unattended{Passphrase: "correct horse battery staple", Token: upgraderAPI}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ApplyUnattended(func(_ context.Context, k []byte) error { ready <- k; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	j := waitFor(t, a)
+	if j.State != StateSucceeded {
+		t.Fatalf("the automatic run %s: %q", j.State, j.Error)
+	}
+	<-ready
+	if moduleSiteCAOf(t, a) != first || a.SavedSettings().SiteBundle != first {
+		t.Error("the automatic run gave the nodes another bundle")
+	}
+	if n := strings.Count(strings.Join(j.Log, "\n"), fault); n != 1 {
+		t.Errorf("the automatic run logged the fault %d times: %q", n, j.Log)
+	}
+
+	again := settings("pve1")
+	again.SiteCA = c.root.pem()
+	if err := a.Apply(again, "correct horse battery staple", ticket(), func(context.Context, []byte) error { return nil }); err == nil || err.Error() != fault {
+		t.Errorf("an Apply with the fault gave %v", err)
+	}
+}
+
+func TestSiteBundleRefusesALeafForClientsOnly(t *testing.T) {
+	t.Parallel()
+	c := newInspected(t)
+	leaf := c.intermediate.issue(t, issuance{cn: "host.example", leaf: true, clientOnly: true})
+	const want = `Site CA: host.example: "CN=host.example" is not for servers. Reissue it for server authentication.`
+	if _, err := bundleFor(c.root, leaf, c.intermediate); err == nil || err.Error() != want {
+		t.Errorf("a leaf for clients only gave %v, want %q", err, want)
+	}
+}
+
+// TestAProxyCAFaultNamesTheProxyCertificate labels a fault in a chain of the proxy's CA with the
+// proxy's field, also where the chain names neither root.
+func TestAProxyCAFaultNamesTheProxyCertificate(t *testing.T) {
+	t.Parallel()
+	c := newInspected(t)
+	old := c.root.issue(t, issuance{cn: "Inspect Old", issuerTag: asn1.TagUTF8String, notAfter: time.Now().Add(-time.Minute)})
+	for name, chain := range map[string][]*x509.Certificate{
+		"an expired intermediate": certs(old.issue(t, issuance{cn: "host.example", leaf: true}), old),
+		"a missing intermediate":  certs(c.leaf),
+	} {
+		a := &Appliance{sitePublic: x509.NewCertPool(), SiteChains: fakeChains(map[string][]*x509.Certificate{"ghcr.io": chain})}
+		s := &Settings{SiteCA: newTestRoot(t, "Site Root").pem(), Proxy: &Proxy{URL: "http://proxy.example:3128", CABundle: c.root.pem()}}
+		_, err := a.ResolveSite(t.Context(), s)
+		if err == nil || !strings.HasPrefix(err.Error(), "Proxy certificate: ghcr.io: ") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// TestSiteBundleNamesARootTheDeviceMadeAgain names the intermediate a new root of the same name
+// signs, and the new root where the device presents it.
+func TestSiteBundleNamesARootTheDeviceMadeAgain(t *testing.T) {
+	t.Parallel()
+	pasted := newTestRoot(t, "Inspect Root")
+	c := newInspected(t)
+	for name, tc := range map[string]struct {
+		chain []*testAuthority
+		want  string
+	}{
+		"without the new root": {[]*testAuthority{c.leaf, c.intermediate}, `"CN=Inspect Intermediate" is signed by a new "CN=Inspect Root". Paste it.`},
+		"with the new root":    {[]*testAuthority{c.leaf, c.intermediate, c.root}, `"CN=Inspect Root" is a root that was not pasted. Paste that root.`},
+	} {
+		if _, err := bundleFor(pasted, tc.chain...); err == nil || err.Error() != "Site CA: host.example: "+tc.want {
+			t.Errorf("%s: %v, want %q", name, err, tc.want)
+		}
 	}
 }
 

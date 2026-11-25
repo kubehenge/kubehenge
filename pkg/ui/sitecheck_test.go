@@ -140,7 +140,7 @@ func TestSetupCheckNamesTheFaultsOfTheSiteCAChainAsTheSaveDoes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = `Site CA: factory.talos.dev, ghcr.io, tuf-repo-cdn.sigstore.dev: "CN=Inspect Intermediate" is missing. Paste it with the root.`
+	const want = `Site CA: factory.talos.dev, ghcr.io, registry.k8s.io, tuf-repo-cdn.sigstore.dev: "CN=Inspect Intermediate" is missing. Paste it with the root.`
 	check, err := json.Marshal(map[string]any{"settings": settings["settings"]})
 	if err != nil {
 		t.Fatal(err)

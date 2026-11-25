@@ -1836,21 +1836,27 @@ describe("setup", () => {
       workloadBridges: ["vmbr0"],
       bootstrapDatastore: "local",
     };
-    const fault = 'factory.talos.dev, ghcr.io: "CN=Inspect Two" is missing. Paste it with the root.';
+    const faults = [
+      'factory.talos.dev, ghcr.io: "CN=Inspect Two" is missing. Paste it with the root.',
+      'registry.k8s.io: "CN=Inspect Old" expired on 2026-11-25. Renew it on the device.',
+    ];
     fakeServer({
       ...administrator,
       ...administration,
       ...oneNode,
       "GET /api/setup": { body: { appliance: true, ready: true, allowed: true, settings: saved } },
-      "POST /api/setup/check": { body: { errors: [`Site CA: ${fault}`], warnings: [] } },
+      "POST /api/setup/check": { body: { errors: faults.map((f) => `Site CA: ${f}`), warnings: [] } },
     });
     const user = userEvent.setup({ delay: null });
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "Edit settings" }));
     const wizard = within(screen.getByRole("region", { name: "Management cluster" }));
     await user.type(wizard.getByLabelText("State passphrase"), "correct horse battery staple");
-    await expect(wizard.findByText(fault)).resolves.toBeInTheDocument();
-    expect(wizard.getByLabelText("Site CA")).toHaveAttribute("aria-invalid", "true");
+    const field = wizard.getByLabelText("Site CA");
+    await waitFor(() => {
+      expect(field.closest(".field")?.querySelector(".field-error")?.textContent).toBe(faults.join("\n"));
+    });
+    expect(field).toHaveAttribute("aria-invalid", "true");
     expect(wizard.queryByRole("alert", { name: "Errors" })).not.toBeInTheDocument();
   });
 
