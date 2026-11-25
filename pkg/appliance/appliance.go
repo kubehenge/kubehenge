@@ -179,13 +179,13 @@ func (a *Appliance) Apply(settings *Settings, passphrase string, ticket *pve.Tic
 		return err
 	}
 	checking, cancel := context.WithTimeout(context.Background(), siteCheckTimeout)
-	unchecked, err := a.ResolveSite(checking, &s)
+	unchecked, kept, err := a.resolveSiteKeeping(checking, &s)
 	cancel()
 	if err != nil {
 		return err
 	}
 	return a.start(ticket, "apply", func(ctx context.Context, j *Job) error {
-		a.noteSite(j, &s, unchecked)
+		noteSite(j, unchecked, kept)
 		kubeconfig, err := a.run(ctx, j, &s, passphrase, ticket)
 		if err != nil {
 			return err

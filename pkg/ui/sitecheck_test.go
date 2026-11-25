@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -152,5 +153,48 @@ func TestSetupCheckNamesTheFaultsOfTheSiteCAChainAsTheSaveDoes(t *testing.T) {
 	rec := b.do("POST", "/api/setup", string(raw))
 	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "Paste it with the root.") || h.server.Appliance.Current() != nil {
 		t.Errorf("the save answered %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestSetupCheckWarnsOfAChainFaultWhileTheSiteCAIsTheSaved gives the fault as a warning where the
+// Site CA is the saved one, since the save then keeps the last run's certificates.
+func TestSetupCheckWarnsOfAChainFaultWhileTheSiteCAIsTheSaved(t *testing.T) {
+	t.Parallel()
+	h, b := preflightHarness(t)
+	root := issueSiteCert(t, "Inspect Root", nil, true)
+	intermediate := issueSiteCert(t, "Inspect Intermediate", &root, true)
+	leaf := issueSiteCert(t, "host.example", &intermediate, false)
+	h.server.Appliance.SiteChains = func(context.Context, *appliance.Settings, string) ([]*x509.Certificate, error) {
+		return []*x509.Certificate{leaf.cert}, nil
+	}
+	siteCA := normalisedSiteCA(t, root.pem())
+	dir := filepath.Join(h.server.Appliance.Dir, "management")
+	saved, err := json.Marshal(appliance.Settings{SiteCA: siteCA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "settings.json"), saved, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err = json.Unmarshal([]byte(preflightApply), &settings); err != nil {
+		t.Fatal(err)
+	}
+	inner, ok := settings["settings"].(map[string]any)
+	if !ok {
+		t.Fatal("the settings are no object")
+	}
+	inner["siteCA"] = siteCA
+	check, err := json.Marshal(map[string]any{"settings": inner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `Site CA: factory.talos.dev, ghcr.io, registry.k8s.io, tuf-repo-cdn.sigstore.dev: "CN=Inspect Intermediate" is missing. Paste it with the root.`
+	f := checkSettings(t, b, string(check))
+	if slices.Contains(f.Errors, want) || !slices.Contains(f.Warnings, want) {
+		t.Errorf("the live check gave errors %q and warnings %q, want the warning %q", f.Errors, f.Warnings, want)
 	}
 }

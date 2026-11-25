@@ -7,16 +7,20 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // siteCALabel and proxyCALabel open the messages about the pasted authorities, as the interface
@@ -37,40 +41,18 @@ var siteRegistries = []string{"ghcr.io", "registry.k8s.io"}
 // siteCheckTimeout bounds the whole check of the Site CA at a save, the hosts being read in parallel.
 const siteCheckTimeout = 2 * siteDialTimeout
 
-// noteSite tells the job's log where the chains were read from, which hosts did not answer, and
-// that the management nodes' network was not checked where the appliance sits outside it, since a
-// device may treat the two differently.
-func (a *Appliance) noteSite(j *Job, s *Settings, unchecked []string) {
-	if !s.pastesAuthority() || a.SiteChains == nil {
-		return
-	}
-	own, _ := a.addresses()
-	if len(own) > 0 {
-		j.Add("The Site CA was checked from the appliance at " + strings.Join(own, ", "))
-		if !withinNodeNetwork(own, s) {
-			j.Add("The management nodes' network was not checked")
+// noteSite tells the job's log which faults of the hosts' chains the run goes on past with the
+// certificates of the last run, and which hosts did not answer.
+func noteSite(j *Job, unchecked, kept []string) {
+	if len(kept) > 0 {
+		j.Add("Kept the certificates of the last run, since the nodes would refuse these chains:")
+		for _, fault := range kept {
+			j.Add(fault)
 		}
 	}
 	if len(unchecked) > 0 {
 		j.Add("The Site CA was not checked against " + strings.Join(unchecked, ", ") + ", which did not answer")
 	}
-}
-
-// withinNodeNetwork tells whether any of the addresses lies in a subnet the management nodes have an
-// address in.
-func withinNodeNetwork(addresses []string, s *Settings) bool {
-	for _, text := range addresses {
-		own, err := netip.ParseAddr(strings.TrimSuffix(text, text[strings.Index(text+"/", "/"):]))
-		if err != nil {
-			continue
-		}
-		for _, node := range slices.Concat(s.NodeAddresses, s.NodeAddressesIPv6) {
-			if prefix, err := netip.ParsePrefix(node); err == nil && prefix.Contains(own) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // SiteChains reads the chain a host presents over TLS, leaf first, as the appliance reaches it with
@@ -115,12 +97,6 @@ func (s *Settings) siteHosts() []string {
 	return hosts
 }
 
-// pastesAuthority tells whether the settings carry an authority the hosts' chains are checked
-// against: the Site CA, or the CA of a proxy that re-signs TLS.
-func (s *Settings) pastesAuthority() bool {
-	return s.SiteCA != "" || (s.Proxy.Enabled() && s.Proxy.CABundle != "")
-}
-
 // SiteTrustFor is the authority the nodes get for the Site CA ca: the saved bundle while ca is the
 // saved Site CA, else ca as pasted.
 func (a *Appliance) SiteTrustFor(ca string) string {
@@ -141,15 +117,16 @@ func (f SiteChainErrors) Error() string { return strings.Join(f, "\n") }
 // refuse with the bundles fails with SiteChainErrors.
 func (a *Appliance) ResolveSite(ctx context.Context, s *Settings) ([]string, error) {
 	authorities, err := a.siteAuthorities(s)
-	s.SiteBundle = ""
-	if s.Proxy != nil {
-		s.Proxy.Bundle = ""
-	}
+	clearBundles(s)
 	if err != nil {
 		return nil, err
 	}
 	if len(authorities) == 0 || a.SiteChains == nil {
 		return nil, nil
+	}
+	// An https proxy is verified with the copies the last run found, as the downloads verify it.
+	for _, auth := range authorities {
+		*auth.bundle = auth.derived()
 	}
 	answered, unchecked := a.readChains(ctx, s)
 	now := time.Now()
@@ -157,6 +134,7 @@ func (a *Appliance) ResolveSite(ctx context.Context, s *Settings) ([]string, err
 		now = a.Now()
 	}
 	if err := judgeChains(authorities, a.publicRoots(), answered, now); err != nil {
+		clearBundles(s)
 		return unchecked, err
 	}
 	for _, auth := range authorities {
@@ -165,46 +143,57 @@ func (a *Appliance) ResolveSite(ctx context.Context, s *Settings) ([]string, err
 	return unchecked, nil
 }
 
-// resolveSiteUnattended is ResolveSite for a run nobody watches. A chain the nodes would refuse
-// keeps the bundles of the last run that passed, and the log says why, since nobody is there to fix
-// the chain and the nodes go on as they are.
-func (a *Appliance) resolveSiteUnattended(ctx context.Context, j *Job, s *Settings) ([]string, error) {
-	site, proxy := s.SiteBundle, ""
+func clearBundles(s *Settings) {
+	s.SiteBundle = ""
 	if s.Proxy != nil {
-		proxy = s.Proxy.Bundle
+		s.Proxy.Bundle = ""
 	}
-	unchecked, err := a.ResolveSite(ctx, s)
-	faults, ok := errors.AsType[SiteChainErrors](err)
-	if !ok {
-		return unchecked, err
-	}
-	s.SiteBundle = site
-	if s.Proxy != nil {
-		s.Proxy.Bundle = proxy
-	}
-	j.Add("Kept the certificates of the last run, since the nodes would refuse these chains:")
-	for _, fault := range faults {
-		j.Add(fault)
-	}
-	return unchecked, nil
 }
 
-// CheckSite runs the check ResolveSite runs, on a copy of s, for the setup to show its faults before
-// a save. It returns no line where the nodes would trust every host that answered.
-func (a *Appliance) CheckSite(ctx context.Context, s *Settings) []string {
+// resolveSiteKeeping is ResolveSite for a run that leaves the Site CA and the proxy's CA as they
+// were saved. A chain the nodes would refuse keeps the bundles of the last run and comes back in
+// kept, since the nodes go on as they are and the fault should not block other settings. A first or
+// changed authority still fails.
+func (a *Appliance) resolveSiteKeeping(ctx context.Context, s *Settings) ([]string, []string, error) {
+	unchecked, err := a.ResolveSite(ctx, s)
+	faults, ok := errors.AsType[SiteChainErrors](err)
+	saved := a.SavedSettings()
+	if !ok || saved == nil || saved.SiteCA != s.SiteCA || proxyCAOf(saved) != proxyCAOf(s) {
+		return unchecked, nil, err
+	}
+	s.SiteBundle = saved.SiteBundle
+	if s.Proxy != nil && saved.Proxy != nil {
+		s.Proxy.Bundle = saved.Proxy.Bundle
+	}
+	return unchecked, faults, nil
+}
+
+// proxyCAOf is the CA of the settings' proxy, empty without a proxy.
+func proxyCAOf(s *Settings) string {
+	if !s.Proxy.Enabled() {
+		return ""
+	}
+	return s.Proxy.CABundle
+}
+
+// CheckSite runs the check a save runs, on a copy of s, for the setup to show its faults before a
+// save. It returns the errors the save would refuse with, then the warnings of faults it goes on past
+// with the last run's certificates. Both are empty where the nodes would trust every host that
+// answered.
+func (a *Appliance) CheckSite(ctx context.Context, s *Settings) ([]string, []string) {
 	c := *s
 	if s.Proxy != nil {
 		proxy := *s.Proxy
 		c.Proxy = &proxy
 	}
-	_, err := a.ResolveSite(ctx, &c)
+	_, kept, err := a.resolveSiteKeeping(ctx, &c)
 	if faults, ok := errors.AsType[SiteChainErrors](err); ok {
-		return faults
+		return faults, nil
 	}
 	if err != nil {
-		return []string{err.Error()}
+		return []string{err.Error()}, nil
 	}
-	return nil
+	return nil, kept
 }
 
 // readChains reads what each host presents, the hosts in parallel, each within siteDialTimeout.
@@ -573,10 +562,10 @@ func chainFault(chain, anchors []*x509.Certificate, verifyErr error, now time.Ti
 func verifyFault(invalid x509.CertificateInvalidError) string {
 	reason, c := invalid.Reason, invalid.Cert
 	if reason == x509.TooManyIntermediates {
-		return fmt.Sprintf("%q allows fewer intermediates than the host presents. Shorten the chain on the device.", subjectOf(c))
+		return fmt.Sprintf("%q allows fewer intermediates than presented. Shorten the chain on the device.", subjectOf(c))
 	}
 	if reason == x509.CANotAuthorizedForThisName {
-		return fmt.Sprintf("%q names a host its issuers may not sign for. Check their name constraints.", subjectOf(c))
+		return fmt.Sprintf("%q is outside its issuers' name constraints. Check them on the device.", subjectOf(c))
 	}
 	if reason == x509.NotAuthorizedToSign {
 		return notCA(c)
@@ -682,33 +671,146 @@ func parseCertificates(bundle string) ([]*x509.Certificate, error) {
 	return certs, nil
 }
 
-func subjectOf(c *x509.Certificate) string { return c.Subject.String() }
+func subjectOf(c *x509.Certificate) string { return nameText(c.Subject.String(), c.RawSubject) }
 
-func issuerOf(c *x509.Certificate) string { return c.Issuer.String() }
+func issuerOf(c *x509.Certificate) string { return nameText(c.Issuer.String(), c.RawIssuer) }
 
-// canonicalName is a distinguished name as OpenSSL compares it (x509_name_canon in
-// crypto/x509/x_name.c): each value folded by canonicalValue, whatever its string type. Go compares
-// the encoded bytes instead.
+// nameText is a distinguished name for a person to read: Go's text of it, else the values as
+// canonicalName decodes them, since Go leaves out values in UniversalString.
+func nameText(goText string, raw []byte) string {
+	if goText != "" {
+		return goText
+	}
+	rdns, ok := nameAttributes(raw)
+	if !ok {
+		return ""
+	}
+	seq := make(pkix.RDNSequence, 0, len(rdns))
+	for _, rdn := range rdns {
+		set := make(pkix.RelativeDistinguishedNameSET, 0, len(rdn))
+		for _, atv := range rdn {
+			var value any = atv.Value
+			if text, canon, ok := nameString(atv.Value); canon && ok {
+				value = text
+			}
+			set = append(set, pkix.AttributeTypeAndValue{Type: atv.Type, Value: value})
+		}
+		seq = append(seq, set)
+	}
+	return seq.String()
+}
+
+// nameAttribute is one attribute of a distinguished name, with its value as encoded.
+type nameAttribute struct {
+	Type  asn1.ObjectIdentifier
+	Value asn1.RawValue
+}
+
+// nameAttributesSET is one relative distinguished name. Go's asn1 package reads a slice type whose
+// name ends in SET as a SET OF.
+type nameAttributesSET []nameAttribute
+
+func nameAttributes(raw []byte) ([]nameAttributesSET, bool) {
+	var rdns []nameAttributesSET
+	rest, err := asn1.Unmarshal(raw, &rdns)
+	return rdns, err == nil && len(rest) == 0
+}
+
+// canonicalName is a distinguished name as OpenSSL compares it, after x509_name_canon and
+// asn1_string_canon in crypto/x509/x_name.c. A value of a string type in ASN1_MASK_CANON becomes
+// UTF-8 folded by canonicalValue, so its type no longer counts. A value of any other type keeps its
+// tag and bytes, so it matches only the same type. A name OpenSSL cannot load matches no other. Go
+// compares the encoded bytes instead.
 func canonicalName(raw []byte) string {
-	var rdns pkix.RDNSequence
-	if rest, err := asn1.Unmarshal(raw, &rdns); err != nil || len(rest) > 0 {
-		return string(raw)
+	unloadable := "!" + hex.EncodeToString(raw)
+	rdns, ok := nameAttributes(raw)
+	if !ok {
+		return unloadable
 	}
 	var sb strings.Builder
 	for _, rdn := range rdns {
 		parts := make([]string, 0, len(rdn))
 		for _, atv := range rdn {
-			value := fmt.Sprint(atv.Value)
-			if s, ok := atv.Value.(string); ok {
-				value = canonicalValue(s)
+			text, canon, ok := nameString(atv.Value)
+			switch {
+			case !ok:
+				return unloadable
+			case canon:
+				parts = append(parts, atv.Type.String()+"="+strconv.Quote(canonicalValue(text)))
+			default:
+				parts = append(parts, atv.Type.String()+"=#"+hex.EncodeToString(atv.Value.FullBytes))
 			}
-			parts = append(parts, atv.Type.String()+"="+value)
 		}
+		// The canonical encoding is a DER SET OF, whose order is fixed.
 		slices.Sort(parts)
 		sb.WriteString(strings.Join(parts, "+"))
 		sb.WriteByte(';')
 	}
 	return sb.String()
+}
+
+// The ASN.1 string types Go's asn1 package has no constant for.
+const (
+	tagVisibleString   = 26
+	tagUniversalString = 28
+)
+
+// The bytes a character of BMPString and of UniversalString takes.
+const (
+	bmpWidth       = 2
+	universalWidth = 4
+)
+
+// nameString decodes a value of a string type in OpenSSL's ASN1_MASK_CANON to UTF-8, as
+// ASN1_STRING_to_UTF8 does: the one-byte types as Latin-1, BMPString as UCS-2 and UniversalString as
+// UCS-4, both big-endian. The first flag is false for a value of another type. The second is false
+// for one OpenSSL cannot convert, and for VisibleString, which OpenSSL's name entries cannot hold
+// (their value is an ASN1_PRINTABLE, whose B_ASN1_PRINTABLE leaves VisibleString out).
+func nameString(v asn1.RawValue) (string, bool, bool) {
+	if v.Class != asn1.ClassUniversal || v.IsCompound {
+		return "", false, true
+	}
+	switch v.Tag {
+	case asn1.TagUTF8String:
+		return string(v.Bytes), true, utf8.Valid(v.Bytes)
+	case asn1.TagPrintableString, asn1.TagT61String, asn1.TagIA5String:
+		runes := make([]rune, len(v.Bytes))
+		for i, b := range v.Bytes {
+			runes[i] = rune(b)
+		}
+		return string(runes), true, true
+	case asn1.TagBMPString:
+		text, ok := ucs(v.Bytes, bmpWidth)
+		return text, true, ok
+	case tagUniversalString:
+		text, ok := ucs(v.Bytes, universalWidth)
+		return text, true, ok
+	case tagVisibleString:
+		return "", true, false
+	}
+	return "", false, true
+}
+
+// ucs decodes big-endian code points of width bytes each, refusing surrogates and values past
+// Unicode as OpenSSL's UTF8_putc does.
+func ucs(b []byte, width int) (string, bool) {
+	if len(b)%width != 0 {
+		return "", false
+	}
+	var out strings.Builder
+	for i := 0; i < len(b); i += width {
+		var r uint32
+		if width == bmpWidth {
+			r = uint32(binary.BigEndian.Uint16(b[i:]))
+		} else {
+			r = binary.BigEndian.Uint32(b[i:])
+		}
+		if r > unicode.MaxRune || (0xD800 <= r && r <= 0xDFFF) {
+			return "", false
+		}
+		out.WriteRune(rune(r))
+	}
+	return out.String(), true
 }
 
 // canonicalValue folds a value as OpenSSL's asn1_string_canon does: ASCII letters to lower case,

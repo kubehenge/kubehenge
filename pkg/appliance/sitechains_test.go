@@ -32,10 +32,19 @@ import (
 var oidCommonName = asn1.ObjectIdentifier{2, 5, 4, 3}
 
 // nameDER encodes a name of one common name as the given ASN.1 string type, which is how two
-// encodings of one name differ for Go and not for OpenSSL.
+// encodings of one name differ for Go and not for OpenSSL. BMPString and UniversalString take two
+// and four bytes a character, here for ASCII names.
 func nameDER(t *testing.T, cn string, tag int) []byte {
 	t.Helper()
-	der, err := asn1.Marshal(pkix.RDNSequence{{{Type: oidCommonName, Value: asn1.RawValue{Class: asn1.ClassUniversal, Tag: tag, Bytes: []byte(cn)}}}})
+	value := []byte(cn)
+	if width := map[int]int{asn1.TagBMPString: bmpWidth, tagUniversalString: universalWidth}[tag]; width > 0 {
+		value = nil
+		for _, c := range []byte(cn) {
+			value = append(value, make([]byte, width-1)...)
+			value = append(value, c)
+		}
+	}
+	der, err := asn1.Marshal(pkix.RDNSequence{{{Type: oidCommonName, Value: asn1.RawValue{Class: asn1.ClassUniversal, Tag: tag, Bytes: value}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,27 +407,6 @@ type moduleSiteCA struct {
 	SiteCA string `json:"siteCA"`
 }
 
-func TestSiteNoteSaysWhereTheChainsWereReadFrom(t *testing.T) {
-	t.Parallel()
-	for name, tc := range map[string]struct {
-		own  []string
-		want string
-	}{
-		"inside the nodes' network":  {[]string{"10.0.0.5"}, "The Site CA was checked from the appliance at 10.0.0.5"},
-		"outside the nodes' network": {[]string{"192.168.9.5"}, "The Site CA was checked from the appliance at 192.168.9.5\nThe management nodes' network was not checked"},
-		"address unknown":            {nil, ""},
-	} {
-		a := &Appliance{SiteChains: fakeChains(nil), Addresses: func() ([]string, error) { return tc.own, nil }}
-		s := settings("pve1")
-		s.SiteCA = "x"
-		j := &Job{}
-		a.noteSite(j, s, nil)
-		if got := strings.Join(j.Log(), "\n"); got != tc.want {
-			t.Errorf("%s: log %q, want %q", name, got, tc.want)
-		}
-	}
-}
-
 // TestSiteBundleRefusesWhatTheRenamedRootsLimitsRefuse gives the nodes only renamed copies of the
 // pasted root, never a presented intermediate, so that Go still applies the root's path length, name
 // constraints and validity.
@@ -430,11 +418,11 @@ func TestSiteBundleRefusesWhatTheRenamedRootsLimitsRefuse(t *testing.T) {
 	}{
 		"path length": {
 			root: func(c *x509.Certificate) { c.MaxPathLen, c.MaxPathLenZero = 0, true },
-			want: `"CN=Inspect Root" allows fewer intermediates than the host presents`,
+			want: `"CN=Inspect Root" allows fewer intermediates than presented. Shorten the chain on the device.`,
 		},
 		"name constraints": {
 			root: func(c *x509.Certificate) { c.PermittedDNSDomains = []string{"corp.example"} },
-			want: `"CN=host.example" names a host its issuers may not sign for`,
+			want: `"CN=host.example" is outside its issuers' name constraints. Check them on the device.`,
 		},
 		"expired root": {
 			root: func(c *x509.Certificate) { c.NotAfter = time.Now().Add(-time.Minute) },
@@ -444,10 +432,20 @@ func TestSiteBundleRefusesWhatTheRenamedRootsLimitsRefuse(t *testing.T) {
 		root := newTestRoot(t, "Inspect Root", tc.root)
 		intermediate := root.issue(t, issuance{cn: "Inspect Intermediate", issuerTag: asn1.TagUTF8String})
 		leaf := intermediate.issue(t, issuance{cn: "host.example", leaf: true})
-		if _, err := bundleFor(root, leaf, intermediate); err == nil || !strings.Contains(err.Error(), tc.want) {
+		_, err := bundleFor(root, leaf, intermediate)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v, want it to hold %q", name, err, tc.want)
+		} else if words := faultWords(err.Error()); words > 16 {
+			t.Errorf("%s: %q has %d words", name, err, words)
 		}
 	}
+}
+
+// faultWords counts the words of a fault line as web/WRITING.md counts them: the label is two words
+// and the hosts one value.
+func faultWords(line string) int {
+	_, text, _ := strings.Cut(strings.TrimPrefix(line, siteCALabel+" "), ": ")
+	return 3 + len(strings.Fields(text))
 }
 
 func TestSiteBundleHoldsOnlyThePastedRootsAndTheirRenamedCopies(t *testing.T) {
@@ -518,9 +516,7 @@ func TestSiteChainErrorsGroupTheHostsAndStayShort(t *testing.T) {
 		t.Fatalf("faults %q, want %q", err, want)
 	}
 	for _, line := range faults {
-		_, text, _ := strings.Cut(strings.TrimPrefix(line, siteCALabel+" "), ": ")
-		// The label is two words and the hosts one value, as web/WRITING.md counts a value.
-		if words := 3 + len(strings.Fields(text)); words > 16 || strings.Contains(line, ";") {
+		if words := faultWords(line); words > 16 || strings.Contains(line, ";") {
 			t.Errorf("%q has %d words", line, words)
 		}
 	}
@@ -671,26 +667,6 @@ func TestSiteTrustForIsTheSavedBundleWhileTheSiteCAIsTheSame(t *testing.T) {
 	}
 	if got := a.SiteTrustFor("other\n"); got != "other\n" {
 		t.Errorf("another Site CA would give %q", got)
-	}
-}
-
-// TestSiteNoteReadsTheAppliancesOwnAddresses leaves Addresses unset, as serve does, so that the note
-// reads the machine's interfaces.
-func TestSiteNoteReadsTheAppliancesOwnAddresses(t *testing.T) {
-	t.Parallel()
-	a := &Appliance{SiteChains: fakeChains(nil)}
-	own, err := a.addresses()
-	if err != nil || len(own) == 0 {
-		t.Skipf("this machine has no address to check from: %v", err)
-	}
-	s := settings("pve1")
-	s.SiteCA = "x"
-	s.NodeAddresses, s.NodeAddressesIPv6 = []string{"203.0.113.11/24"}, nil
-	j := &Job{}
-	a.noteSite(j, s, nil)
-	want := "The Site CA was checked from the appliance at " + strings.Join(own, ", ") + "\nThe management nodes' network was not checked"
-	if got := strings.Join(j.Log(), "\n"); got != want {
-		t.Errorf("log %q, want %q", got, want)
 	}
 }
 
@@ -907,7 +883,7 @@ func TestSiteHostsAreTheOnesTheNodesReach(t *testing.T) {
 }
 
 // TestAnUnattendedRunKeepsTheLastBundleThroughAChainFault goes on with the bundle of the last run
-// and logs the fault once, where an Apply the owner starts refuses.
+// and logs the fault once.
 func TestAnUnattendedRunKeepsTheLastBundleThroughAChainFault(t *testing.T) {
 	t.Parallel()
 	c := newInspected(t)
@@ -945,12 +921,6 @@ func TestAnUnattendedRunKeepsTheLastBundleThroughAChainFault(t *testing.T) {
 	}
 	if n := strings.Count(strings.Join(j.Log, "\n"), fault); n != 1 {
 		t.Errorf("the automatic run logged the fault %d times: %q", n, j.Log)
-	}
-
-	again := settings("pve1")
-	again.SiteCA = c.root.pem()
-	if err := a.Apply(again, "correct horse battery staple", ticket(), func(context.Context, []byte) error { return nil }); err == nil || err.Error() != fault {
-		t.Errorf("an Apply with the fault gave %v", err)
 	}
 }
 
@@ -1028,8 +998,161 @@ func TestAFailedApplyNamesTheNodeTheHostAndTheIssuerOfARejectedCertificate(t *te
 		t.Fatal(err)
 	}
 	j := waitFor(t, a)
-	want := "node 10.0.0.11 rejected the certificate tuf-repo-cdn.sigstore.dev presents, issued by CN=Inspect Intermediate. Check the Site CA. The run failed:"
-	if j.State != StateFailed || !strings.Contains(j.Error, want) || strings.Contains(j.Error, "10.0.0.12") {
+	want := "Node 10.0.0.11 rejected the certificate tuf-repo-cdn.sigstore.dev presents, issued by CN=Inspect Intermediate, so check the Site CA. The run failed:"
+	if j.State != StateFailed || !strings.HasPrefix(j.Error, want) || strings.Contains(j.Error, "10.0.0.12") {
 		t.Errorf("job error %q, want it to hold %q", j.Error, want)
+	}
+}
+
+// TestSiteBundleKeepsANumericStringNameApartAsOpenSSLDoes gives no copy of a root in PrintableString
+// for an issuer named in NumericString, which OpenSSL compares by type and bytes.
+func TestSiteBundleKeepsANumericStringNameApartAsOpenSSLDoes(t *testing.T) {
+	t.Parallel()
+	root := newTestRoot(t, "12345")
+	intermediate := root.issue(t, issuance{cn: "Inspect Intermediate", issuerTag: asn1.TagNumericString})
+	leaf := intermediate.issue(t, issuance{cn: "host.example", leaf: true})
+	if bundle, err := bundleFor(root, leaf, intermediate); err == nil {
+		t.Errorf("a NumericString issuer was given a copy of the root: %q", bundle)
+	}
+}
+
+// TestSiteBundleCopiesARootNamedInBMPOrUniversalString accepts an issuer that names a PrintableString
+// root in the same characters in BMPString or UniversalString, as OpenSSL does.
+func TestSiteBundleCopiesARootNamedInBMPOrUniversalString(t *testing.T) {
+	t.Parallel()
+	for name, tag := range map[string]int{"BMPString": asn1.TagBMPString, "UniversalString": tagUniversalString} {
+		root := newTestRoot(t, "Inspect Root")
+		intermediate := root.issue(t, issuance{cn: "Inspect Intermediate", issuerTag: tag})
+		leaf := intermediate.issue(t, issuance{cn: "host.example", leaf: true})
+		bundle, err := bundleFor(root, leaf, intermediate)
+		if err != nil || goTrusts(certs(leaf, intermediate), bundle) != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// TestSiteFaultNamesAnIssuerInUniversalString names a missing intermediate whose name is in
+// UniversalString, which Go's own text of the name leaves out.
+func TestSiteFaultNamesAnIssuerInUniversalString(t *testing.T) {
+	t.Parallel()
+	root := newTestRoot(t, "Inspect Root")
+	intermediate := root.issue(t, issuance{cn: "Inspect Intermediate", tag: tagUniversalString})
+	leaf := intermediate.issue(t, issuance{cn: "host.example", leaf: true})
+	const want = `Site CA: host.example: "CN=Inspect Intermediate" is missing. Paste it with the root.`
+	if _, err := bundleFor(root, leaf); err == nil || err.Error() != want {
+		t.Errorf("got %v, want %q", err, want)
+	}
+}
+
+// TestASaveThatKeepsTheSiteCAGoesOnPastAChainFault changes another setting while one host presents
+// an expired intermediate: the run keeps the last bundle and shows the fault as a warning, as the
+// live check does.
+func TestASaveThatKeepsTheSiteCAGoesOnPastAChainFault(t *testing.T) {
+	t.Parallel()
+	c := newInspected(t)
+	old := c.root.issue(t, issuance{cn: "Inspect Old", issuerTag: asn1.TagUTF8String, notAfter: time.Now().Add(-time.Minute)})
+	a, ready := newAppliance(t)
+	a.sitePublic = x509.NewCertPool()
+	good := certs(c.leaf, c.intermediate)
+	a.SiteChains = fakeChains(map[string][]*x509.Certificate{"ghcr.io": good})
+	apply := func(s *Settings) *JobView {
+		t.Helper()
+		if err := a.Apply(s, "correct horse battery staple", ticket(), func(_ context.Context, k []byte) error { ready <- k; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		j := waitFor(t, a)
+		<-ready
+		return j
+	}
+	s := settings("pve1")
+	s.SiteCA = c.root.pem()
+	apply(s)
+	first := moduleSiteCAOf(t, a)
+	if goTrusts(good, first) != nil {
+		t.Fatalf("the first run gave the nodes %q", first)
+	}
+
+	a.SiteChains = fakeChains(map[string][]*x509.Certificate{"ghcr.io": good, "registry.k8s.io": certs(old.issue(t, issuance{cn: "host.example", leaf: true}), old)})
+	again := settings("pve1")
+	again.SiteCA, again.TimeZone = c.root.pem(), "Europe/Zurich"
+	fault := `Site CA: registry.k8s.io: "CN=Inspect Old" expired on ` + old.cert.NotAfter.UTC().Format(time.DateOnly) + ". Renew it on the device."
+	if errs, warnings := a.CheckSite(t.Context(), again); len(errs) != 0 || !slices.Equal(warnings, []string{fault}) {
+		t.Errorf("the live check gave errors %q and warnings %q, want the warning %q", errs, warnings, fault)
+	}
+	j := apply(again)
+	saved := a.SavedSettings()
+	if j.State != StateSucceeded || saved.TimeZone != "Europe/Zurich" || saved.SiteBundle != first || moduleSiteCAOf(t, a) != first {
+		t.Errorf("the run (%s) saved the time zone %q and gave the nodes another bundle", j.State, saved.TimeZone)
+	}
+	if n := strings.Count(strings.Join(j.Log, "\n"), fault); n != 1 {
+		t.Errorf("the run logged the fault %d times: %q", n, j.Log)
+	}
+}
+
+// TestASaveThatChangesTheSiteCARefusesAChainFault refuses a chain fault on the first save of a Site
+// CA and on a save that changes it.
+func TestASaveThatChangesTheSiteCARefusesAChainFault(t *testing.T) {
+	t.Parallel()
+	c := newInspected(t)
+	a, ready := newAppliance(t)
+	a.sitePublic = x509.NewCertPool()
+	missing := fakeChains(map[string][]*x509.Certificate{"ghcr.io": certs(c.leaf)})
+	const fault = `Site CA: ghcr.io: "CN=Inspect Intermediate" is missing. Paste it with the root.`
+	a.SiteChains = missing
+	first := settings("pve1")
+	first.SiteCA = c.root.pem()
+	if err := a.Apply(first, "correct horse battery staple", ticket(), func(context.Context, []byte) error { return nil }); err == nil || err.Error() != fault {
+		t.Errorf("a first save gave %v", err)
+	}
+
+	a.SiteChains = fakeChains(nil)
+	other := settings("pve1")
+	other.SiteCA = newTestRoot(t, "Other Root").pem()
+	if err := a.Apply(other, "correct horse battery staple", ticket(), func(_ context.Context, k []byte) error { ready <- k; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, a)
+	<-ready
+	a.SiteChains = missing
+	changed := settings("pve1")
+	changed.SiteCA = c.root.pem()
+	if errs, warnings := a.CheckSite(t.Context(), changed); !slices.Equal(errs, []string{fault}) || len(warnings) != 0 {
+		t.Errorf("the live check gave errors %q and warnings %q", errs, warnings)
+	}
+	if err := a.Apply(changed, "correct horse battery staple", ticket(), func(context.Context, []byte) error { return nil }); err == nil || err.Error() != fault {
+		t.Errorf("a changed Site CA gave %v", err)
+	}
+}
+
+// TestSiteCheckReadsThroughAnHTTPSProxyThatNeedsTheKeptCopy reads the hosts through an https proxy
+// whose own chain names the pasted root in other bytes, once the saved bundle holds the copy.
+func TestSiteCheckReadsThroughAnHTTPSProxyThatNeedsTheKeptCopy(t *testing.T) {
+	t.Parallel()
+	c := newInspected(t)
+	handler, asked := connectHandler(tlsHost(t, c.leaf, c.intermediate))
+	proxy := httptest.NewUnstartedServer(handler)
+	proxy.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{c.leaf.cert.Raw, c.intermediate.cert.Raw}, PrivateKey: c.leaf.key}}}
+	proxy.StartTLS()
+	t.Cleanup(proxy.Close)
+	renamed, err := withSubject(c.root.cert, c.intermediate.cert.RawIssuer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &Appliance{Dir: t.TempDir(), ProxmoxURL: "https://10.0.0.50:8006", sitePublic: x509.NewCertPool()}
+	a.SiteChains = a.DialChain
+	saved := &Settings{SiteCA: c.root.pem(), SiteBundle: c.root.pem() + string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: renamed.Raw}))}
+	if err = os.MkdirAll(a.workdir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err = writeJSONFile(filepath.Join(a.workdir(), "settings.json"), saved); err != nil {
+		t.Fatal(err)
+	}
+	s := &Settings{SiteCA: c.root.pem(), Proxy: &Proxy{URL: proxy.URL}}
+	unchecked, err := a.ResolveSite(t.Context(), s)
+	if err != nil || len(unchecked) != 0 || s.SiteBundle != saved.SiteBundle {
+		t.Errorf("unchecked %q, %v, bundle %q", unchecked, err, s.SiteBundle)
+	}
+	if got := asked(); len(got) != len(s.siteHosts()) {
+		t.Errorf("the proxy was asked %q", got)
 	}
 }

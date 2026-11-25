@@ -23,7 +23,8 @@ var rejectedAuthority = regexp.MustCompile(`candidate authority certificate "([^
 
 // explainCertificates names, after a failed run, each management node whose log says it could not
 // verify a host's certificate, with the host and the certificate's issuer, and tells the person to
-// check the Site CA. It returns err as it was where no node says so.
+// check the Site CA. The error names the first such node. It returns err as it was where no node
+// says so.
 func (a *Appliance) explainCertificates(ctx context.Context, j *Job, env []string, s *Settings, err error) error {
 	if a.TalosLogs == nil {
 		return err
@@ -46,7 +47,7 @@ func (a *Appliance) explainCertificates(ctx context.Context, j *Job, env []strin
 		if !found {
 			continue
 		}
-		said = append(said, fmt.Sprintf("node %s rejected the certificate %s presents, issued by %s", node, rejected.host, a.issuerOf(ctx, s, rejected.host, rejected.authority)))
+		said = append(said, fmt.Sprintf("Node %s rejected the certificate %s presents, issued by %s", node, rejected.host, a.issuerOf(ctx, s, rejected.host, rejected.authority)))
 	}
 	if len(said) == 0 {
 		return err
@@ -54,7 +55,8 @@ func (a *Appliance) explainCertificates(ctx context.Context, j *Job, env []strin
 	for _, line := range said {
 		j.Add(line + ". Check the Site CA.")
 	}
-	return fmt.Errorf("%s. Check the Site CA. The run failed: %w", strings.Join(said, ". "), err)
+	// The log names every node, so that the error stays two sentences.
+	return fmt.Errorf("%s, so check the Site CA. The run failed: %w", said[0], err)
 }
 
 // nodeLog is a node's kernel and Talos messages, or none where the node does not answer.
@@ -83,7 +85,7 @@ func (a *Appliance) issuerOf(ctx context.Context, s *Settings, host, logged stri
 		dial, cancel := context.WithTimeout(ctx, siteDialTimeout)
 		defer cancel()
 		if chain, err := a.SiteChains(dial, s, host); err == nil && len(chain) > 0 {
-			return chain[0].Issuer.String()
+			return issuerOf(chain[0])
 		}
 	}
 	return "an authority the node does not know"

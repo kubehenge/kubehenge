@@ -179,7 +179,9 @@ func (s *Server) setupCheck(w http.ResponseWriter, r *http.Request, u user) {
 		s.writeSetupError(w, r, err)
 		return
 	}
-	findings.Errors = append(findings.Errors, s.Appliance.CheckSite(r.Context(), &req.Settings)...)
+	errs, warnings := s.Appliance.CheckSite(r.Context(), &req.Settings)
+	findings.Errors = append(findings.Errors, errs...)
+	findings.Warnings = append(findings.Warnings, warnings...)
 	writeJSON(w, http.StatusOK, findings)
 }
 
