@@ -30,7 +30,7 @@ run "chart_mirrors_reach_the_controller_and_the_helm_provider" {
       p.name == "helm" &&
       length(p.spec.deployment.containers[0].env) == 1 &&
       p.spec.deployment.containers[0].env[0].name == "SSL_CERT_FILE" &&
-      strcontains(p.spec.patches[1].patch, "\"secretName\": \"kubehenge-proxy-addon\"")
+      strcontains(p.spec.patches[2].patch, "\"secretName\": \"kubehenge-proxy-addon\"")
     )])
     error_message = "the Add-on Provider for Helm trusts the mirrors' authority from the Secret beside it, with no proxy variables"
   }
@@ -1939,12 +1939,30 @@ run "proxy_reaches_every_downloader" {
       p.name == "helm" &&
       p.spec.deployment.containers[0].env[3].name == "SSL_CERT_FILE" &&
       p.spec.deployment.containers[0].env[3].value == "/etc/kubehenge/proxy/ca.crt" &&
-      length(p.spec.patches) == 2 &&
-      strcontains(p.spec.patches[1].patch, "\"secretName\": \"kubehenge-proxy-addon\"") &&
-      strcontains(p.spec.patches[1].patch, "\"mountPath\": \"/etc/kubehenge/proxy\"") &&
-      strcontains(p.spec.patches[1].patch, "\"name\": \"proxy-ca\"")
+      length(p.spec.patches) == 3 &&
+      strcontains(p.spec.patches[2].patch, "\"secretName\": \"kubehenge-proxy-addon\"") &&
+      strcontains(p.spec.patches[2].patch, "\"mountPath\": \"/etc/kubehenge/proxy\"") &&
+      strcontains(p.spec.patches[2].patch, "\"name\": \"proxy-ca\"")
     )])
     error_message = "the Add-on Provider for Helm mounts the authority from its Secret and points SSL_CERT_FILE at it"
+  }
+
+  assert {
+    condition = alltrue(flatten([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : [
+      for q in try(p.spec.patches, []) : can(yamldecode(q.patch)[0]) || !can(yamldecode(q.patch).spec.template.spec)
+    ]]))
+    error_message = "no provider's map patch holds the pod's spec, whose lists a JSON merge patch would replace with the image and volumes gone"
+  }
+
+  assert {
+    condition = anytrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : (
+      p.name == "helm" &&
+      [for op in yamldecode(p.spec.patches[2].patch) : [op.op, op.path]] == [
+        ["add", "/spec/template/spec/volumes/-"],
+        ["add", "/spec/template/spec/containers/0/volumeMounts/-"],
+      ]
+    )])
+    error_message = "the Add-on Provider for Helm's volume and mount are added to the manifest's lists, not put in their place"
   }
 
   assert {
@@ -2471,8 +2489,8 @@ run "site_ca_without_proxy_reaches_the_helm_addon_provider" {
     condition = anytrue([for p in yamldecode(helm_release.cluster_api_providers.values[0]).providers : (
       p.name == "helm" &&
       [for e in p.spec.deployment.containers[0].env : e.name] == ["SSL_CERT_FILE"] &&
-      length(p.spec.patches) == 2 &&
-      strcontains(p.spec.patches[1].patch, "\"secretName\": \"kubehenge-proxy-addon\"")
+      length(p.spec.patches) == 3 &&
+      strcontains(p.spec.patches[2].patch, "\"secretName\": \"kubehenge-proxy-addon\"")
     )])
     error_message = "the Add-on Provider for Helm trusts the site CA from its Secret and takes no proxy variable"
   }
