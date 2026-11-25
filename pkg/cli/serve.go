@@ -465,6 +465,14 @@ func (o *serveOptions) serve(ctx context.Context) error {
 			servers = append(servers, newPlainServer(o.httpListen, manager.HTTPHandler()))
 		}
 	}
+	// Every address is bound before any server runs, so one that cannot be bound is reported and no
+	// line claims it is served. The loops above are stopped and waited for as on any other exit.
+	listeners, err := listenAll(ctx, servers)
+	if err != nil {
+		cancel()
+		wg.Wait()
+		return fmt.Errorf("serving: %w", err)
+	}
 	wg.Go(func() {
 		<-ctx.Done()
 		shutdown, done := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
@@ -474,24 +482,41 @@ func (o *serveOptions) serve(ctx context.Context) error {
 		}
 	})
 	errs := make(chan error, len(servers))
-	for _, srv := range servers {
-		s.Log.Info("serving", "address", srv.Addr)
+	for i, srv := range servers {
+		s.Log.Info("serving", "address", listeners[i].Addr().String())
 		if o.certFile == "" || srv.TLSConfig == nil {
-			go func() { errs <- srv.ListenAndServe() }()
+			go func() { errs <- srv.Serve(listeners[i]) }()
 		} else {
-			go func() { errs <- srv.ListenAndServeTLS("", "") }()
+			go func() { errs <- srv.ServeTLS(listeners[i], "", "") }()
 		}
 	}
 	// The first to stop takes the others down with it. The process ends when serve returns, so it
 	// waits for the servers' shutdown, which lets the requests under way finish, and for the loops
 	// that write the appliance's files.
-	err := <-errs
+	err = <-errs
 	cancel()
 	wg.Wait()
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
 	return fmt.Errorf("serving: %w", err)
+}
+
+// listenAll binds each server's address, in order. When one fails it closes those already bound.
+func listenAll(ctx context.Context, servers []*http.Server) ([]net.Listener, error) {
+	var lc net.ListenConfig
+	listeners := make([]net.Listener, 0, len(servers))
+	for _, srv := range servers {
+		l, err := lc.Listen(ctx, "tcp", srv.Addr)
+		if err != nil {
+			for _, bound := range listeners {
+				_ = bound.Close()
+			}
+			return nil, fmt.Errorf("listening on %s: %w", srv.Addr, err)
+		}
+		listeners = append(listeners, l)
+	}
+	return listeners, nil
 }
 
 // httpsServers are the interface's server and, when Headlamp is set up, Headlamp's.
