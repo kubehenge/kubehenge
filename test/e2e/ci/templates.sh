@@ -91,10 +91,16 @@ baked() {
 # which under nested virtualisation slow them on Intel runners until a worker loses its API server.
 template() { # distribution [flags]
     : "${KUBEHENGE_E2E_NODE:?}" "${KUBEHENGE_E2E_ADDRESS:?}" "${KUBEHENGE_E2E_GATEWAY:?}" "${KUBEHENGE_E2E_DNS:?}"
-    "${repo}/dist/kubehenge" template create "$@" --cpu-type host --node "${KUBEHENGE_E2E_NODE}" \
-        --storage "${KUBEHENGE_E2E_SHARED_STORAGE:-local}" \
-        --build-address "${KUBEHENGE_E2E_ADDRESS}" --build-gateway "${KUBEHENGE_E2E_GATEWAY}" \
-        --build-dns "${KUBEHENGE_E2E_DNS}"
+    # The proxy and authority of a lane behind one (test/e2e/ci/egress.sh) reach the build as a user's
+    # environment does, and only the build: the rest of the lane's programs go direct.
+    (
+        # shellcheck source=/dev/null
+        [ -z "${KUBEHENGE_E2E_EGRESS_ENV:-}" ] || . "${KUBEHENGE_E2E_EGRESS_ENV}"
+        "${repo}/dist/kubehenge" template create "$@" --cpu-type host --node "${KUBEHENGE_E2E_NODE}" \
+            --storage "${KUBEHENGE_E2E_SHARED_STORAGE:-local}" \
+            --build-address "${KUBEHENGE_E2E_ADDRESS}" --build-gateway "${KUBEHENGE_E2E_GATEWAY}" \
+            --build-dns "${KUBEHENGE_E2E_DNS}"
+    )
 }
 
 # A baked template the Actions cache kept is restored into the pool from ${work}/vz/template-<n>,

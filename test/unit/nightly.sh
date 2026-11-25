@@ -61,6 +61,9 @@ dual_stack=kubeadm+calico+dual-stack
 # The recreations of the management cluster, from a bucket and from the backup volume, run nightly as
 # the appliance test with an option.
 recreates='appliance+recreate-bucket appliance+recreate-volume'
+# The lanes behind TLS inspection and behind proxies, as test/e2e/ci/egress.sh sets them up: the
+# option is on each test of a lane, and the test after the first is one a pull request runs too.
+egress_lanes='appliance+tls-inspection,k3s-addons-a+tls-inspection appliance+tls-inspection-recovery appliance+proxy,k3s-addons-a+proxy appliance+proxy-inspecting,k3s-addons-a+proxy-inspecting'
 queue=" ${lanes} management-cluster-upgrade rancher control-plane-ha two-nodes appliance-upgrade "
 all_lanes=" ${lanes_and_parts#*|}"
 node_oses=" $(jq -j '.available[] | . + " "' "${chart}/files/node-oses.json")"
@@ -85,7 +88,7 @@ while [ "${night}" -lt "${nights}" ]; do
             ;;
     esac
     tests=" ${parsed#* }"
-    for t in ${queue} ${dual_stack} ${recreates}; do
+    for t in ${queue} ${dual_stack} ${recreates} ${egress_lanes}; do
         case ${tests} in
             *" ${t} "*) ok ;;
             *) bad "night ${night} leaves ${t} out" ;;
@@ -94,7 +97,7 @@ while [ "${night}" -lt "${nights}" ]; do
     # Every lane is one a pull request runs, its tests without their options, or one of the
     # nightly run's own: none runs only at night by accident.
     for lane in ${tests}; do
-        case " ${recreates} " in
+        case " ${recreates} ${egress_lanes} " in
             *" ${lane} "*) continue ;;
             *) ;;
         esac
@@ -107,6 +110,7 @@ while [ "${night}" -lt "${nights}" ]; do
     for lane in ${tests}; do
         case ${lane} in
             "${dual_stack}" | appliance+recreate-*) continue ;;
+            appliance+tls-inspection* | appliance+proxy*) continue ;;
             *+*) ;;
             *) continue ;;
         esac
@@ -186,6 +190,23 @@ while [ "${night}" -lt "${nights}" ]; do
         esac
         if [ "${lifecycle}" = yes ]; then ok; else bad "${test} runs no lifecycle, whole or in halves"; fi
     done
+    # Each egress lane's tests read as the option they carry, and the lane's tests are ones a pull
+    # request runs.
+    for lane in ${egress_lanes}; do
+        rest=${lane},
+        while [ -n "${rest}" ]; do
+            name=${rest%%,*}
+            rest=${rest#*,}
+            option=${name#*+}
+            # shellcheck disable=SC2310 # its refusal is the failure reported.
+            variant_of "${name}"
+            if [ "${variant_status}" -eq 0 ] && [ "${settings}" = "export KUBEHENGE_E2E_EGRESS=${option}" ]; then ok; else bad "${name} reads as '${settings}', not the option ${option}"; fi
+            case ${all_lanes} in
+                *" ${name%%+*} "*) ok ;;
+                *) bad "the lane ${lane} runs ${name%%+*}, which a pull request does not" ;;
+            esac
+        done
+    done
     night=$((night + 1))
 done
 
@@ -259,6 +280,14 @@ refused control-plane-ha+dual-stack
 refused kubeadm+github-releases
 refused talos-addons-a+github-releases
 refused two-nodes+github-releases
+refused kubeadm+tls-inspection-recovery
+refused management-cluster+tls-inspection
+refused management-cluster-upgrade+proxy
+refused appliance-upgrade+proxy-inspecting
+refused appliance+proxy+tls-inspection
+refused appliance+proxy+proxy
+refused k3s+proxy+proxy-inspecting
+refused rancher+proxy
 # reads <name> <settings>: the settings the name carries, one per line.
 reads() {
     variant_of "$1"
@@ -278,6 +307,13 @@ export KUBEHENGE_E2E_RELEASES=github'
 reads rke2-machines+github-releases 'export KUBEHENGE_E2E_RELEASES=github'
 reads appliance+recreate-bucket 'export KUBEHENGE_E2E_RECREATE=bucket'
 reads appliance+recreate-volume 'export KUBEHENGE_E2E_RECREATE=volume'
+reads appliance+tls-inspection 'export KUBEHENGE_E2E_EGRESS=tls-inspection'
+reads appliance+tls-inspection-recovery 'export KUBEHENGE_E2E_EGRESS=tls-inspection-recovery'
+reads appliance+recreate-volume+proxy 'export KUBEHENGE_E2E_RECREATE=volume
+export KUBEHENGE_E2E_EGRESS=proxy'
+reads k3s-addons-a+proxy-inspecting+calico 'export KUBEHENGE_E2E_EGRESS=proxy-inspecting
+export KUBEHENGE_E2E_CNI=calico'
+reads talos+tls-inspection 'export KUBEHENGE_E2E_EGRESS=tls-inspection'
 # A test without options carries no settings.
 # shellcheck disable=SC2310 # a refusal is reported as the failure.
 variant_of control-plane-ha

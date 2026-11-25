@@ -308,22 +308,37 @@ CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e
 - One distribution's ClusterClass picks its own tests and those that install the chart.
 - Every test a rule names must be in the list of `nightly.sh`.
 - The nightly run's five extra tests join a pull request only for their own scripts and the code only they exercise (`scope.sh` names it). Rancher's also joins for a change to the chart's `addons.rancher` values.
+- The lane behind TLS inspection (`appliance+tls-inspection,k3s-addons-a+tls-inspection`) joins for the code that reads the proxy and the Site CA and for `egress.sh`, beside the lanes the path brings. That makes it a 21st lane after a change that brings the others, and it waits for a runner.
 
 ### The nightly run
 
-- The nightly run (`test/e2e/ci/nightly.sh`) runs every test and adds seven:
+- The nightly run (`test/e2e/ci/nightly.sh`) runs every test and adds these:
   - the management cluster's upgrade
   - Rancher
   - a control plane of three servers
   - a two-node Proxmox VE cluster
   - the upgrade from the latest published appliance
   - `appliance+recreate-bucket`, which deletes every management VM and recreates the cluster from the bucket's snapshot
-  - `appliance+recreate-volume`, which does the same from the backup volume.
+  - `appliance+recreate-volume`, which does the same from the backup volume
+  - the four lanes [behind TLS inspection and proxies](#behind-tls-inspection-and-proxies).
 - It runs kubeadm's test on IPv4 and IPv6 too, as `kubeadm+calico+dual-stack`.
 - It runs every part of each workload distribution's test once more on another CNI of its class and another node OS. The run drops CIS hardening every other night and rotates the combination.
 - In that rotation, RKE2's and k3s's nodes download their releases from GitHub (`+github-releases`). Every other lane serves them from the runner as a release mirror (`test/e2e/ci/releases.sh`).
 - `k3s-addons-b` gives its clusters that mirror as their own. The other lanes give it to the management cluster.
 - A dispatch of the workflow names the tests to run, or runs that night's set. With `fresh` it bakes every template from the mirrors, as the nightly run does.
+
+### Behind TLS inspection and proxies
+
+Four options put the guests behind mitmproxy (`test/e2e/ci/egress.sh`). The appliance and the workload tests take one each, after a `+`. The runner's rules touch only the guests' bridge, and they go when the test ends.
+
+- `+tls-inspection`: nft redirects the guests' port 443 to mitmproxy in transparent mode, which re-signs each connection. Its CA is the Site CA. Plain HTTP and DNS go as before.
+- `+tls-inspection-recovery`: the appliance's first setup lacks the Site CA and must fail with the interface naming a certificate a node rejected. The same setup with the CA then finishes with no node touched.
+- `+proxy`: nft drops the guests' direct egress, and the only way out is a CONNECT proxy that asks for credentials and only tunnels. Kubehenge's proxy setting names it.
+- `+proxy-inspecting`: the same with a proxy that re-signs TLS and asks for none. Its CA is the proxy's CA bundle.
+
+A test passes only if mitmproxy's log shows each guest of the path going through it: the appliance and the management nodes, the workload nodes and the template build. The proxy lanes also fail when the proxy was asked for an address inside the lab, which the exceptions leave out. They fail when the proxy's password is in a log. The log of a failed lane is in its artifacts as `egress-flows.log`.
+
+Proxmox VE's own downloads do not pass through the proxy, as the Site CA does not cover them either.
 
 ### Images and templates
 
@@ -370,6 +385,7 @@ test/e2e/ci/run.sh /tmp/e2e management-cluster-upgrade+management-3584   # any t
 test/e2e/ci/run.sh /tmp/e2e kubeadm+calico+dual-stack   # IPv4 and IPv6, IPv4 first, or +ipv6-first (up.sh then needs KUBEHENGE_E2E_IPV6=1)
 test/e2e/ci/run.sh /tmp/e2e k3s+github-releases   # RKE2 or k3s nodes download from GitHub, without the runner's release mirror
 test/e2e/ci/run.sh /tmp/e2e appliance+recreate-bucket   # the appliance test, its management cluster lost and recreated from the bucket, or +recreate-volume from the backup volume
+test/e2e/ci/run.sh /tmp/e2e k3s-addons-a+proxy   # behind TLS inspection (+tls-inspection) or a proxy (+proxy, +proxy-inspecting), needs sudo, nft and mitmdump
 ```
 
 The nightly rotation leaves both options out. `ipv6-first` runs on dispatch only.

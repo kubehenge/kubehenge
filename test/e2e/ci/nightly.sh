@@ -9,7 +9,9 @@
 # once more with options (variant.sh): a CNI of its class
 # other than the one its own test runs, a node OS other than the default, and every other night no
 # CIS hardening. The choice moves on each night, and from one distribution to the next, so that a
-# few nights cover every CNI and node OS of every class, each with hardening and without.
+# few nights cover every CNI and node OS of every class, each with hardening and without. The lanes
+# behind TLS inspection and behind proxies (test/e2e/ci/egress.sh) run every night with the same
+# option on each test of the lane.
 set -eu
 
 here=$(dirname "$0")
@@ -142,6 +144,6 @@ for distribution in kubeadm rke2 k3s talos; do
 done
 
 # shellcheck disable=SC2086 # one test per word
-jq -c '. + $ARGS.positional' --args management-cluster-upgrade rancher control-plane-ha two-nodes appliance-upgrade appliance+recreate-bucket appliance+recreate-volume kubeadm+calico+dual-stack ${variants} << EOF
+jq -c '. + $ARGS.positional' --args management-cluster-upgrade rancher control-plane-ha two-nodes appliance-upgrade appliance+recreate-bucket appliance+recreate-volume kubeadm+calico+dual-stack appliance+tls-inspection,k3s-addons-a+tls-inspection appliance+tls-inspection-recovery appliance+proxy,k3s-addons-a+proxy appliance+proxy-inspecting,k3s-addons-a+proxy-inspecting ${variants} << EOF
 ${lanes_json}
 EOF

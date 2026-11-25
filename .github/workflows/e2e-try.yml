@@ -462,6 +462,10 @@ jobs:
               pve pvesh get "/nodes/pve/tasks/$upid/log" --limit 500 --output-format json |
                 jq -r '.[].t'
             done > "$out/proxmox-failed-tasks.txt" 2>&1 || true
+          # What the proxy of a lane behind TLS inspection or a proxy saw (test/e2e/ci/egress.sh).
+          for flows in "$RUNNER_TEMP"/e2e/egress*/flows.log; do
+            if [ -f "$flows" ]; then cp "$flows" "$out/$(basename "$(dirname "$flows")")-flows.log"; fi
+          done
           cp "$RUNNER_TEMP"/e2e/apply*.log "$RUNNER_TEMP/vmstat.txt" "$RUNNER_TEMP/kvm.txt" \
             "$RUNNER_TEMP/guests.txt" "$RUNNER_TEMP/guests.txt.trims" \
             "$RUNNER_TEMP/guests-record.log" "$RUNNER_TEMP/guard.txt" \

@@ -108,6 +108,23 @@ variable "release_mirror" {
   default = {}
 }
 
+# The authority of a lane behind TLS inspection (test/e2e/ci/egress.sh).
+variable "site_ca" {
+  type    = string
+  default = ""
+}
+
+# The proxy of a lane behind one, with its credentials in the url.
+variable "proxy" {
+  type = object({
+    url       = optional(string, "")
+    no_proxy  = optional(string, "")
+    ca_bundle = optional(string, "")
+  })
+  default   = {}
+  sensitive = true
+}
+
 module "management_cluster" {
   # The whole repository, as a published module source would fetch it: the module reads ../charts.
   source = "${var.repository}//management-cluster"
@@ -143,6 +160,8 @@ module "management_cluster" {
   provider_manifests = var.provider_manifests
   backup_targets     = var.backup_targets
   release_mirror     = var.release_mirror
+  site_ca            = var.site_ca
+  proxy              = var.proxy
   # test/e2e/workload-cluster.sh restores each cluster's etcd through the guest agent.
   etcd_restore = true
   # The RKE2 and k3s tests hold their upgrade's first new server out long enough to see the roll

@@ -118,12 +118,12 @@
       "enabled": false
     },
     {
-      "description": "Go, Node, Helm and kubectl publish their downloads outside GitHub, where Renovate cannot find the new SHA-256 to write beside the new version. They come in a pull request of their own so that the Monday one is not held up by a checksum taken by hand; go.mod's Go comes with them, since CI builds with the Go scripts/tools.sh installs.",
+      "description": "Go, Node, Helm, kubectl and mitmproxy publish their downloads outside GitHub, where Renovate cannot find the new SHA-256 to write beside the new version. They come in a pull request of their own so that the Monday one is not held up by a checksum taken by hand; go.mod's Go comes with them, since CI builds with the Go scripts/tools.sh installs.",
       "matchFileNames": ["scripts/tools.sh", "go.mod"],
       "matchDatasources": ["github-releases", "golang-version", "node-version"],
-      "groupName": "Go, Node, Helm and kubectl",
+      "groupName": "Go, Node, Helm, kubectl and mitmproxy",
       "prBodyNotes": [
-        "Put the new SHA-256 on the line below each new version in `scripts/tools.sh`, from the checksum list published beside the download: `https://go.dev/dl/?mode=json` (`go<version>.linux-amd64.tar.gz`), `https://nodejs.org/dist/v<version>/SHASUMS256.txt` (`node-v<version>-linux-x64.tar.gz`), `https://get.helm.sh/helm-<tag>-linux-amd64.tar.gz.sha256sum` and `https://dl.k8s.io/release/<tag>/bin/linux/amd64/kubectl.sha256`."
+        "Put the new SHA-256 on the line below each new version in `scripts/tools.sh`, from the checksum list published beside the download: `https://go.dev/dl/?mode=json` (`go<version>.linux-amd64.tar.gz`), `https://nodejs.org/dist/v<version>/SHASUMS256.txt` (`node-v<version>-linux-x64.tar.gz`), `https://get.helm.sh/helm-<tag>-linux-amd64.tar.gz.sha256sum` and `https://dl.k8s.io/release/<tag>/bin/linux/amd64/kubectl.sha256`. mitmproxy publishes none: download `https://downloads.mitmproxy.org/<version>/mitmproxy-<version>-linux-x86_64.tar.gz` and take its `sha256sum`."
       ]
     },
     {
@@ -221,7 +221,7 @@
       ]
     },
     {
-      "description": "Any other version named in a comment on the line above it: the tested set in the management-cluster module and its providers' images, the Talos release templates are made from, the add-on charts published as OCI images, the images the add-ons run, the images and registry the end-to-end tests run, Go, Node, Helm and kubectl in scripts/tools.sh, ko and the Go it is built with in scripts/ko.sh, and the newest RKE2, k3s and Talos releases, which the release pins have to hold (`make release-pins` on the update's pull request). An image's digest moves with its tag.",
+      "description": "Any other version named in a comment on the line above it: the tested set in the management-cluster module and its providers' images, the Talos release templates are made from, the add-on charts published as OCI images, the images the add-ons run, the images and registry the end-to-end tests run, Go, Node, Helm, kubectl and mitmproxy in scripts/tools.sh, ko and the Go it is built with in scripts/ko.sh, and the newest RKE2, k3s and Talos releases, which the release pins have to hold (`make release-pins` on the update's pull request). An image's digest moves with its tag.",
       "customType": "regex",
       "managerFilePatterns": [
         "/^scripts/tools\\.sh$/",

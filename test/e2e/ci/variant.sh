@@ -9,8 +9,11 @@
 # with IPv6 first, and for RKE2 and k3s github-releases, which leaves the lane without the runner's
 # release mirror, as in kubeadm+calico+rocky-10+cis-off or rke2+cilium+dual-stack; the test
 # itself is the name before the first +. Every test run.sh applies a management cluster for takes
-# management-<MiB>, its node's memory, as in management-cluster-upgrade+management-3584. Refuses an
-# option it does not know, or one the test does not take.
+# management-<MiB>, its node's memory, as in management-cluster-upgrade+management-3584. The appliance
+# and the workload tests take one of tls-inspection (the guests' HTTPS goes through a proxy that
+# re-signs it), proxy (only a proxy that tunnels leads out) or proxy-inspecting (only a proxy that
+# re-signs leads out), and the appliance also tls-inspection-recovery (the first setup lacks the Site
+# CA), as in appliance+proxy. Refuses an option it does not know, or one the test does not take.
 variant() {
     variant_test=${1%%+*}
     [ "$1" != "${variant_test}" ] || return 0
@@ -23,6 +26,7 @@ variant() {
             ;;
         *) variant_workload=false ;;
     esac
+    variant_network=
     variant_ifs=${IFS}
     IFS=+
     # shellcheck disable=SC2086 # split on IFS, set to + for the options.
@@ -51,6 +55,26 @@ variant() {
                     return 2
                 fi
                 printf 'export KUBEHENGE_E2E_MANAGEMENT_MEMORY=%s\n' "${variant_option#management-}"
+                continue
+                ;;
+            *) ;;
+        esac
+        case ${variant_option} in
+            tls-inspection | tls-inspection-recovery | proxy | proxy-inspecting)
+                if [ "${variant_option}" = tls-inspection-recovery ] && [ "${variant_test}" != appliance ]; then
+                    echo "only the appliance sets the Site CA after a failed setup, so ${variant_test} takes no ${variant_option}" >&2
+                    return 2
+                fi
+                if [ "${variant_test}" != appliance ] && [ "${variant_workload}" = false ]; then
+                    echo "test ${variant_test} takes no ${variant_option}" >&2
+                    return 2
+                fi
+                if [ -n "${variant_network}" ]; then
+                    echo "option ${variant_option} of test ${variant_test} is a second way out, after ${variant_network}" >&2
+                    return 2
+                fi
+                variant_network=${variant_option}
+                printf 'export KUBEHENGE_E2E_EGRESS=%s\n' "${variant_option}"
                 continue
                 ;;
             *) ;;
