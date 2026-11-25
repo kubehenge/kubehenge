@@ -125,6 +125,12 @@ variable "proxy" {
   sensitive = true
 }
 
+# The time server of a lane where only the proxy leads out.
+variable "time_servers" {
+  type    = list(string)
+  default = []
+}
+
 module "management_cluster" {
   # The whole repository, as a published module source would fetch it: the module reads ../charts.
   source = "${var.repository}//management-cluster"
@@ -162,6 +168,7 @@ module "management_cluster" {
   release_mirror     = var.release_mirror
   site_ca            = var.site_ca
   proxy              = var.proxy
+  time_servers       = var.time_servers
   # test/e2e/workload-cluster.sh restores each cluster's etcd through the guest agent.
   etcd_restore = true
   # The RKE2 and k3s tests hold their upgrade's first new server out long enough to see the roll

@@ -22,6 +22,11 @@
 #   test/e2e/ci/egress.sh tunnelled <flow log> <source>...     # each opened a connection through the proxy
 #   test/e2e/ci/egress.sh internal <flow log>                  # none asked for an internal address
 #   test/e2e/ci/egress.sh leaks <secret file> <file>...        # none of the files holds the secret
+#   test/e2e/ci/egress.sh ready <host> <port> <seconds>        # something accepts connections on the port
+#
+# The tls-inspection kinds re-sign with an intermediate whose issuer field names its root in other
+# bytes than the root's own subject (test/e2e/tlsca), and the guests get only the root as the Site CA.
+# Where only the proxy leads out, the guests' time server is the runner (test/e2e/ntp).
 #
 # mitmproxy's log at flow detail 1 holds a line "<client>:<port>: <method> <URL> <version>" for each
 # request it read inside a connection it re-signed, and "[<time>][<client>:<port>] server connect
@@ -36,6 +41,7 @@ proxy_address=172.21.99.1
 transparent_port=8080
 proxy_port=3128
 proxy_user=e2e
+repo=$(cd "$(dirname "$0")/../../.." && pwd)
 # The exceptions the guests get: Proxmox VE, the networks of the lab and the management cluster's
 # default pod and service ranges.
 no_proxy='pve,localhost,127.0.0.1,.svc,.cluster.local,172.20.99.0/24,172.21.99.0/24,10.244.0.0/16,10.96.0.0/12'
@@ -153,9 +159,41 @@ nft_rules() {
     esac
 }
 
-# listening: whether mitmproxy listens and has made its authority.
+# listening: whether mitmproxy listens and has its authority.
 listening() {
-    grep -q 'listening at' "${dir}/flows.log" && [ -s "${dir}/conf/mitmproxy-ca-cert.pem" ]
+    grep -q 'listening at' "${dir}/flows.log" && [ -s "${dir}/conf/mitmproxy-ca.pem" ]
+}
+
+# ready <host> <port> <seconds>: waits until a TCP connection to the port succeeds, which speaks
+# nothing to what listens, and fails once the seconds have passed.
+ready() {
+    ready_waited=0
+    until timeout 3 bash -c 'exec 3<> "/dev/tcp/$0/$1"' "$1" "$2" 2> /dev/null; do
+        if [ "${ready_waited}" -ge "$3" ]; then
+            echo "nothing accepted a connection on $1:$2 within $3 s" >&2
+            return 1
+        fi
+        sleep 1
+        ready_waited=$((ready_waited + 1))
+    done
+}
+
+# time_server: answers NTP on the runner's side of the guests' bridge, and waits until a query
+# there gets an answer a client takes.
+time_server() {
+    (cd "${repo}" && go build -o "${dir}/ntp" ./test/e2e/ntp)
+    nohup sudo -n "${dir}/ntp" serve "${proxy_address}:123" > "${dir}/ntp.log" 2>&1 &
+    echo "$!" > "${dir}/ntp.pid"
+    time_waited=0
+    until "${dir}/ntp" ask "${proxy_address}:123" 2> "${dir}/ntp.ask"; do
+        if [ "${time_waited}" -ge 30 ]; then
+            cat "${dir}/ntp.ask" "${dir}/ntp.log" >&2
+            echo "the time server on ${proxy_address}:123 gave no usable answer in 30 s" >&2
+            exit 1
+        fi
+        sleep 1
+        time_waited=$((time_waited + 1))
+    done
 }
 
 start() {
@@ -170,8 +208,13 @@ start() {
     [ ! -d "${dir}" ] || mv "${dir}" "${dir}-previous"
     mkdir -p "${dir}"
     echo "${kind}" > "${dir}/kind"
+    port=${proxy_port}
     case ${kind} in
-        tls-inspection*) set -- --mode transparent --listen-host 0.0.0.0 --listen-port "${transparent_port}" ;;
+        tls-inspection*)
+            (cd "${repo}" && go run ./test/e2e/tlsca "${dir}/conf")
+            port=${transparent_port}
+            set -- --mode transparent --listen-host 0.0.0.0 --listen-port "${transparent_port}"
+            ;;
         proxy)
             head -c 18 /dev/urandom | base64 | tr -d '/+=\n' > "${dir}/secret"
             password=$(cat "${dir}/secret")
@@ -196,7 +239,18 @@ start() {
         sleep 1
         waited=$((waited + 1))
     done
-    cp "${dir}/conf/mitmproxy-ca-cert.pem" "${dir}/ca.pem"
+    # shellcheck disable=SC2310 # its failure is reported with mitmproxy's log
+    if ! ready "${proxy_address}" "${port}" 30; then
+        cat "${dir}/flows.log" >&2
+        exit 1
+    fi
+    case ${kind} in
+        tls-inspection*) cp "${dir}/conf/root.pem" "${dir}/ca.pem" ;;
+        *)
+            cp "${dir}/conf/mitmproxy-ca-cert.pem" "${dir}/ca.pem"
+            time_server
+            ;;
+    esac
     guest_nat -I
     nft_rules | sudo nft -f -
 
@@ -213,6 +267,7 @@ start() {
             *)
                 echo "export KUBEHENGE_E2E_PROXY_URL='http://${proxy_address}:${proxy_port}'"
                 echo "export KUBEHENGE_E2E_NO_PROXY='${no_proxy}'"
+                echo "export KUBEHENGE_E2E_TIME_SERVER='${proxy_address}'"
                 if [ "${kind}" = proxy ]; then
                     echo "export KUBEHENGE_E2E_PROXY_USER='${proxy_user}'"
                     echo "export KUBEHENGE_E2E_PROXY_PASSWORD_FILE='${dir}/secret'"
@@ -241,6 +296,8 @@ stop() {
     pid=$(cat "${dir}/pid")
     kill "${pid}" 2> /dev/null || true
     rm -f "${dir}/pid"
+    [ ! -s "${dir}/ntp.pid" ] || sudo -n kill "$(cat "${dir}/ntp.pid")" 2> /dev/null || true
+    rm -f "${dir}/ntp.pid"
 }
 
 check() {
@@ -262,7 +319,7 @@ check() {
 
 mode=${1:-}
 case ${mode} in
-    intercepted | tunnelled | internal | leaks)
+    intercepted | tunnelled | internal | leaks | ready)
         shift
         "${mode}" "$@"
         exit

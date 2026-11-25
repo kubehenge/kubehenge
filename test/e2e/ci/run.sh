@@ -130,6 +130,11 @@ if [ -n "${egress}" ]; then
             '{url: $u, no_proxy: $n, ca_bundle: $ca}')
         export TF_VAR_proxy
     fi
+    # Where only the proxy leads out, the nodes keep time by the runner, as a site's own time server.
+    if [ -n "${KUBEHENGE_E2E_TIME_SERVER:-}" ]; then
+        TF_VAR_time_servers=$(jq -cn --arg t "${KUBEHENGE_E2E_TIME_SERVER}" '[$t]')
+        export TF_VAR_time_servers
+    fi
 fi
 
 # shellcheck source=templates.sh
@@ -387,6 +392,10 @@ case "${test}" in
                     + (if $user != "" then {user: $user, password: $pw} else {} end)
                     + (if $ca != "" then {caBundle: $ca} else {} end))}' \
                 "${work}/appliance-settings.json" > "${work}/appliance-settings.new"
+            mv "${work}/appliance-settings.new" "${work}/appliance-settings.json"
+        fi
+        if [ -n "${KUBEHENGE_E2E_TIME_SERVER:-}" ]; then
+            jq --arg t "${KUBEHENGE_E2E_TIME_SERVER}" '. + {timeServers: [$t]}' "${work}/appliance-settings.json" > "${work}/appliance-settings.new"
             mv "${work}/appliance-settings.new" "${work}/appliance-settings.json"
         fi
         docker exec "${pve}" sh -c 'rm -rf /root/kubehenge && mkdir -p /root/kubehenge/test /root/kubehenge/scripts'
