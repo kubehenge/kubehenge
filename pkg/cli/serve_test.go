@@ -213,6 +213,29 @@ func captureLogs(o *serveOptions) *syncBuffer {
 
 var servedAddress = regexp.MustCompile(`msg=serving address=(\S+)`)
 
+// An empty address is the scheme's port, as net/http reads it, never a random one.
+func TestServeReadsAnEmptyAddressAsNetHTTPDoes(t *testing.T) {
+	t.Parallel()
+	secured := newServer("", nil, 0)
+	plain := newPlainServer("", nil)
+	for _, c := range []struct {
+		name     string
+		certFile string
+		srv      *http.Server
+		want     string
+	}{
+		{"TLS", "cert.pem", secured, ":https"},
+		{"plain beside TLS", "cert.pem", plain, ":http"},
+		{"a demo without a certificate", "", secured, ":http"},
+		{"an address given", "cert.pem", newServer("127.0.0.1:8443", nil, 0), "127.0.0.1:8443"},
+	} {
+		o := &serveOptions{certFile: c.certFile}
+		if got := o.address(c.srv); got != c.want {
+			t.Errorf("%s: an address of %q listens on %q, want %q", c.name, c.srv.Addr, got, c.want)
+		}
+	}
+}
+
 // servedAddresses waits for n "serving" lines and returns the addresses they name, in order.
 func servedAddresses(t *testing.T, logs *syncBuffer, n int) []string {
 	t.Helper()
@@ -300,13 +323,13 @@ func TestServeClosesTheListenersItBoundBeforeOneFailed(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = taken.Close() })
-	listeners, err := listenAll(t.Context(), []*http.Server{newPlainServer("127.0.0.1:0", nil)})
+	listeners, err := (&serveOptions{}).listenAll(t.Context(), []*http.Server{newPlainServer("127.0.0.1:0", nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	addr := listeners[0].Addr().String()
 	_ = listeners[0].Close()
-	if _, err = listenAll(t.Context(), []*http.Server{newPlainServer(addr, nil), newPlainServer(taken.Addr().String(), nil)}); err == nil {
+	if _, err = (&serveOptions{}).listenAll(t.Context(), []*http.Server{newPlainServer(addr, nil), newPlainServer(taken.Addr().String(), nil)}); err == nil {
 		t.Fatal("listenAll bound a taken address")
 	}
 	again, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", addr)

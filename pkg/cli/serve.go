@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -70,8 +71,10 @@ type serveOptions struct {
 	certFile     string
 	keyFile      string
 	logs         logOptions
-	demo         bool
-	demoTime     string
+	// stderr takes the logs in place of os.Stderr, for tests that read the bound address.
+	stderr   io.Writer
+	demo     bool
+	demoTime string
 	// listenChanged tells whether --listen was given, which the demo's own default yields to.
 	listenChanged bool
 
@@ -195,7 +198,7 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 	sources := templates.DefaultSources(provisioner.DefaultReleasePins().Talos())
 	sources.HTTP = savedProxyClient(o.a.Dir, conn.URL, sources.HTTP.Timeout)
 	s.TalosReleases = sources.TalosReleases
-	if s.Log, err = o.logs.slogLogger(os.Stderr); err != nil {
+	if s.Log, err = o.logs.slogLogger(o.logOutput()); err != nil {
 		return err
 	}
 	if err = o.loadCertificate(time.Now()); err != nil {
@@ -258,7 +261,7 @@ func (o *serveOptions) runDemo(ctx context.Context) error {
 		return errors.New("--demo takes no --headlamp-listen, --http-listen or --appliance-dir")
 	}
 	var err error
-	if o.s.Log, err = o.logs.slogLogger(os.Stderr); err != nil {
+	if o.s.Log, err = o.logs.slogLogger(o.logOutput()); err != nil {
 		return err
 	}
 	clock := time.Now
@@ -467,7 +470,7 @@ func (o *serveOptions) serve(ctx context.Context) error {
 	}
 	// Every address is bound before any server runs, so one that cannot be bound is reported and no
 	// line claims it is served. The loops above are stopped and waited for as on any other exit.
-	listeners, err := listenAll(ctx, servers)
+	listeners, err := o.listenAll(ctx, servers)
 	if err != nil {
 		// A stop during start-up is a clean stop, also when it cut short the lookup of a name.
 		stopped := ctx.Err() != nil
@@ -489,7 +492,7 @@ func (o *serveOptions) serve(ctx context.Context) error {
 	errs := make(chan error, len(servers))
 	for i, srv := range servers {
 		s.Log.Info("serving", "address", listeners[i].Addr().String())
-		if o.certFile == "" || srv.TLSConfig == nil {
+		if o.servesPlain(srv) {
 			go func() { errs <- srv.Serve(listeners[i]) }()
 		} else {
 			go func() { errs <- srv.ServeTLS(listeners[i], "", "") }()
@@ -508,20 +511,48 @@ func (o *serveOptions) serve(ctx context.Context) error {
 }
 
 // listenAll binds each server's address, in order. When one fails it closes those already bound.
-func listenAll(ctx context.Context, servers []*http.Server) ([]net.Listener, error) {
+func (o *serveOptions) listenAll(ctx context.Context, servers []*http.Server) ([]net.Listener, error) {
 	var lc net.ListenConfig
 	listeners := make([]net.Listener, 0, len(servers))
 	for _, srv := range servers {
-		l, err := lc.Listen(ctx, "tcp", srv.Addr)
+		addr := o.address(srv)
+		l, err := lc.Listen(ctx, "tcp", addr)
 		if err != nil {
 			for _, bound := range listeners {
 				_ = bound.Close()
 			}
-			return nil, fmt.Errorf("listening on %s: %w", srv.Addr, err)
+			return nil, fmt.Errorf("listening on %s: %w", addr, err)
 		}
 		listeners = append(listeners, l)
 	}
 	return listeners, nil
+}
+
+// address is where srv listens. An empty address is the scheme's port, as net/http's
+// ListenAndServe and ListenAndServeTLS read it, where a bare Listen would pick a random one.
+func (o *serveOptions) address(srv *http.Server) string {
+	switch {
+	case srv.Addr != "":
+		return srv.Addr
+	case o.servesPlain(srv):
+		return ":http"
+	default:
+		return ":https"
+	}
+}
+
+// servesPlain tells whether srv answers in plain HTTP: the ACME listener, and every server of a
+// demo without --tls-cert.
+func (o *serveOptions) servesPlain(srv *http.Server) bool {
+	return o.certFile == "" || srv.TLSConfig == nil
+}
+
+// logOutput is where the logs go.
+func (o *serveOptions) logOutput() io.Writer {
+	if o.stderr == nil {
+		return os.Stderr
+	}
+	return o.stderr
 }
 
 // httpsServers are the interface's server and, when Headlamp is set up, Headlamp's.

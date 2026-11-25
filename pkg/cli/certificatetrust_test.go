@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -201,57 +202,54 @@ func TestTheDemoServesTheCertificateOfTLSCert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The demo logs its address to stderr alone, so the test picks the port. Another test may take
-	// it before the demo binds it, which the demo reports at once, and then a new port is tried.
-	for range 3 {
-		got, err := demoCertificate(t, certFile, keyFile)
-		if err != nil && strings.Contains(err.Error(), "listening on") {
-			continue
-		}
-		if err != nil {
-			t.Errorf("the demo gave %v once its context ended", err)
-		}
-		if !bytes.Equal(got, want.Certificate[0]) {
-			t.Error("the demo does not serve the certificate of --tls-cert")
-		}
-		return
+	got, err := demoCertificate(t, certFile, keyFile)
+	if err != nil {
+		t.Errorf("the demo gave %v once its context ended", err)
 	}
-	t.Fatal("another listener took each port picked for the demo")
+	if !bytes.Equal(got, want.Certificate[0]) {
+		t.Error("the demo does not serve the certificate of --tls-cert")
+	}
 }
 
-// demoCertificate runs the demo with the certificate on a free port and returns the certificate it
-// presents, and what the demo returned.
+var demoServed = regexp.MustCompile(`"msg":"serving","address":"([^"]+)"`)
+
+// demoCertificate runs the demo with the certificate on a port it picks itself and returns the
+// certificate it presents, and what the demo returned.
 func demoCertificate(t *testing.T, certFile, keyFile string) ([]byte, error) {
 	t.Helper()
-	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := l.Addr().String()
-	_ = l.Close()
-	o := &serveOptions{demo: true, listen: address, certFile: certFile, keyFile: keyFile}
+	logs := &syncBuffer{}
+	o := &serveOptions{demo: true, listen: "127.0.0.1:0", listenChanged: true, certFile: certFile, keyFile: keyFile, stderr: logs}
 	o.logs.level = "info"
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- o.runDemo(ctx) }()
-	var got []byte
-	for range 100 {
-		select {
-		case err = <-done:
-			return nil, err
-		default:
-		}
-		conn, dialErr := (&tls.Dialer{Config: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}}).DialContext(ctx, "tcp", address) //nolint:gosec // only the presented certificate is read
-		if dialErr == nil {
-			if secured, ok := conn.(*tls.Conn); ok {
-				got = secured.ConnectionState().PeerCertificates[0].Raw
-			}
-			_ = conn.Close()
+	var address string
+	for range 200 {
+		if m := demoServed.FindStringSubmatch(logs.String()); m != nil {
+			address = m[1]
 			break
 		}
-		time.Sleep(50 * time.Millisecond)
+		select {
+		case err := <-done:
+			return nil, err
+		case <-time.After(25 * time.Millisecond):
+		}
 	}
+	if address == "" {
+		t.Fatalf("the demo logged no serving line: %s", logs.String())
+	}
+	dialer := &tls.Dialer{NetDialer: &net.Dialer{Timeout: 5 * time.Second}, Config: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}} //nolint:gosec // only the presented certificate is read
+	conn, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		t.Fatalf("the demo serves on %s but does not answer: %v", address, err)
+	}
+	defer func() { _ = conn.Close() }()
+	secured, ok := conn.(*tls.Conn)
+	if !ok {
+		t.Fatalf("the demo's connection is a %T", conn)
+	}
+	got := secured.ConnectionState().PeerCertificates[0].Raw
 	cancel()
 	return got, <-done
 }
