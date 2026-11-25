@@ -396,6 +396,25 @@ func TestFirstEtcdStartsAgainInTheRunAfterAGiveUp(t *testing.T) {
 	}
 }
 
+// A new run keeps each node's boots and whether its etcd ran, and counts its own starts.
+func TestFreshEtcdStartsKeepsTheBoots(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	if err := os.MkdirAll(a.workdir(), privateDir); err != nil {
+		t.Fatal(err)
+	}
+	saved := provisioner.EtcdStart{Boot: "1", Bootstrapped: "2", Repairs: 3, GaveUp: true, Ran: true}
+	if err := writeJSONFile(a.etcdStartsPath(), map[string]provisioner.EtcdStart{"10.0.0.11": saved}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.freshEtcdStarts(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := readStarts(t, a)["10.0.0.11"], (provisioner.EtcdStart{Boot: "1", Bootstrapped: "2", Ran: true}); got != want {
+		t.Errorf("kept %+v, want %+v", got, want)
+	}
+}
+
 // A removal forgets the starts, so that the next setup's cluster starts from none.
 func TestRemovalForgetsTheEtcdStarts(t *testing.T) {
 	t.Parallel()

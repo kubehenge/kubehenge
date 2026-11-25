@@ -173,9 +173,13 @@ func (m *ManagementTalos) Restore(ctx context.Context, admin []byte, nodes []str
 // EtcdStart is what StartFirstEtcd keeps of one node's etcd while a new management cluster starts.
 type EtcdStart struct {
 	// Boot is the node's boot of the last reboot, which is made once per boot.
-	Boot    string `json:"boot,omitempty"`
-	Repairs int    `json:"repairs,omitempty"`
-	GaveUp  bool   `json:"gaveUp,omitempty"`
+	Boot string `json:"boot,omitempty"`
+	// Bootstrapped is the boot the first node was bootstrapped in after a reboot, which is done once
+	// per boot. It is kept apart from Boot, so that a node failing again after that bootstrap is
+	// still rebooted in its boot.
+	Bootstrapped string `json:"bootstrapped,omitempty"`
+	Repairs      int    `json:"repairs,omitempty"`
+	GaveUp       bool   `json:"gaveUp,omitempty"`
 	// Ran is set once etcd was seen running on the node, which then holds data.
 	Ran bool `json:"ran,omitempty"`
 }
@@ -187,8 +191,9 @@ type EtcdStart struct {
 // is rebooted too, which also has its container runtime read the trust roots anew. nodes[0] is
 // bootstrapped again while etcd has run on no node, and once after a reboot into a newer boot.
 // Any other node, one whose kubelet is Failed, or one whose bootstrap Talos refuses, is rebooted. A
-// node is rebooted once per boot, started at most maxEtcdRepairs times, and never once its etcd
-// ran. starts holds the count by node,
+// node is rebooted once per boot and started at most maxEtcdRepairs times. Once its etcd ran it is
+// rebooted only for a Failed kubelet, since a reboot keeps etcd's data and without the kubelet
+// kube-apiserver never runs. starts holds the count by node,
 // and record writes it down before each start, so that an appliance that stops between the two
 // counts a start it never made rather than makes one twice. A reboot's boot is written down only
 // once the reboot was made, so that a reboot cut off is made on a later look. A node that does not
@@ -245,6 +250,15 @@ func rebootEtcd(ctx context.Context, t TalosNode, rebooted func() error) (string
 		return "", err //nolint:wrapcheck // the node's error names the node and the call
 	}
 	return ". Rebooted the node to start etcd again.", rebooted()
+}
+
+// rebootKubelet reboots a node whose etcd ran for its kubelet, as rebootEtcd does.
+func rebootKubelet(ctx context.Context, t TalosNode, rebooted func() error) (string, error) {
+	done, err := rebootEtcd(ctx, t, rebooted)
+	if done == "" {
+		return "", err
+	}
+	return ". Rebooted the node to start the kubelet again.", err
 }
 
 // unanswered reports whether a call ended before Talos answered it: the run stopped, or the call
@@ -310,20 +324,20 @@ func readNode(ctx context.Context, t TalosNode) (nodeLook, error) {
 // is bootstrapped where only etcd failed and it is the seed, and any other is rebooted.
 func startFirstEtcd(ctx context.Context, t TalosNode, address string, seat nodeRole, starts map[string]EtcdStart, record func() error, log func(string)) error {
 	s := starts[address]
-	if s.Ran || s.GaveUp {
+	if s.GaveUp {
 		return nil
 	}
 	seen, err := readNode(ctx, t)
-	if err != nil || seen.etcd.State == talosEtcdRunning {
+	if err != nil {
 		return nil //nolint:nilerr // a node not ready yet is looked at next time
 	}
 	boot, etcd, kubelet := seen.boot, seen.etcd, seen.kubelet
-	etcdFailed, kubeletFailed := etcd.State == talosEtcdFailed, kubelet.State == talosEtcdFailed
+	ran := s.Ran || etcd.State == talosEtcdRunning
+	etcdFailed, kubeletFailed := !ran && etcd.State == talosEtcdFailed, kubelet.State == talosEtcdFailed
 	if !etcdFailed && !kubeletFailed {
 		// Only a node rebooted into a newer boot waits for a bootstrap, so that none is made on an
 		// etcd that other starts are about to give one.
-		// An etcd that fails again after this bootstrap in the same boot is left to the next boot.
-		if seat == seed && etcd.State == talosEtcdPreparing && s.Boot != "" && boot != s.Boot {
+		if seat == seed && !ran && etcd.State == talosEtcdPreparing && s.Boot != "" && boot != s.Boot && boot != s.Bootstrapped {
 			return bootstrapAfterReboot(ctx, t, address, boot, starts, record, log)
 		}
 		return nil
@@ -332,7 +346,10 @@ func startFirstEtcd(ctx context.Context, t TalosNode, address string, seat nodeR
 		return nil
 	}
 	start := rebootEtcd
-	if seat == seed && !kubeletFailed {
+	switch {
+	case ran:
+		start = rebootKubelet
+	case seat == seed && !kubeletFailed:
 		start = bootstrapEtcd
 	}
 	note := "Talos left " + failedServices(etcdFailed, kubeletFailed) + " on " + address + " Failed"
@@ -353,7 +370,8 @@ func startFirstEtcd(ctx context.Context, t TalosNode, address string, seat nodeR
 		log(fmt.Sprintf("%s. Left it Failed after %d starts.", note, s.Repairs))
 		return nil
 	}
-	counted := EtcdStart{Boot: s.Boot, Repairs: s.Repairs + 1}
+	counted := s
+	counted.Repairs++
 	starts[address] = counted
 	if err = record(); err != nil {
 		return err
@@ -387,11 +405,12 @@ func failedServices(etcd, kubelet bool) string {
 
 // bootstrapAfterReboot bootstraps etcd on the first node, which a reboot of the watch's brought up
 // waiting, once in its boot. The boot is written down before the call, so that no look bootstraps
-// again in it. A bootstrap is no repair, since only a reboot, which is one, leads to it.
+// again in it. A bootstrap is no repair, since only a reboot, which is one, leads to it. A node not
+// ready for it is bootstrapped on a later look, as bootstrapEtcd leaves one, and says nothing.
 func bootstrapAfterReboot(ctx context.Context, t TalosNode, address, boot string, starts map[string]EtcdStart, record func() error, log func(string)) error {
 	s := starts[address]
 	marked := s
-	marked.Boot = boot
+	marked.Bootstrapped = boot
 	starts[address] = marked
 	if err := record(); err != nil {
 		return err
@@ -403,7 +422,7 @@ func bootstrapAfterReboot(ctx context.Context, t TalosNode, address, boot string
 		return nil
 	case errors.Is(err, errTalosNotReady), unanswered(ctx, err):
 		starts[address] = s
-		if recordErr := record(); recordErr != nil {
+		if recordErr := record(); recordErr != nil || errors.Is(err, errTalosNotReady) {
 			return recordErr
 		}
 		return err //nolint:wrapcheck // the node's error names the node and the call
