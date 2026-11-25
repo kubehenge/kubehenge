@@ -244,12 +244,14 @@ func demoCertificate(t *testing.T, certFile, keyFile string) ([]byte, error) {
 	if err != nil {
 		t.Fatalf("the demo serves on %s but does not answer: %v", address, err)
 	}
-	defer func() { _ = conn.Close() }()
 	secured, ok := conn.(*tls.Conn)
 	if !ok {
+		_ = conn.Close()
 		t.Fatalf("the demo's connection is a %T", conn)
 	}
 	got := secured.ConnectionState().PeerCertificates[0].Raw
+	// An open connection would hold the demo's shutdown for its whole timeout.
+	_ = conn.Close()
 	cancel()
 	return got, <-done
 }
