@@ -65,7 +65,7 @@ func (s *Settings) OutboundCA() string {
 		parts = append(parts, trust)
 	}
 	if s.Proxy.Enabled() && s.Proxy.CABundle != "" {
-		parts = append(parts, s.Proxy.CABundle)
+		parts = append(parts, s.Proxy.trust())
 	}
 	return strings.Join(parts, "\n")
 }

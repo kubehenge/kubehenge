@@ -2613,8 +2613,6 @@ function SetupWizard({
     ...(zoneProblem === undefined ? {} : { timeZone: zoneProblem }),
   };
   const problemsIn = (s: SetupStep): boolean => stepFields[s].some((k) => byField[k] !== undefined);
-  const shown = (k: SetupField): string | undefined =>
-    attempted.has(stepOf(k)) || touched.has(k) ? byField[k] : undefined;
   const index = setupSteps.indexOf(step);
   const following = setupSteps[index + 1];
   const previous = setupSteps[index - 1];
@@ -2624,6 +2622,9 @@ function SetupWizard({
   const complete = setupSteps.every((s) => !problemsIn(s));
   const reviewing = complete && (!stepped || following === undefined);
   const findings = usePreflight(complete, effective);
+  const siteFaults = siteCAFaultsOf(findings);
+  const shown = (k: SetupField): string | undefined =>
+    (attempted.has(stepOf(k)) || touched.has(k) ? byField[k] : undefined) ?? (k === "siteCA" ? siteFaults : undefined);
   const blocked = stopsRun(reviewing, findings);
   const blockedId = useId();
   const missing = {
@@ -2756,7 +2757,7 @@ function SetupWizard({
             ))}
           </>
         )}
-        <PreflightFindings findings={reviewing ? findings : undefined} />
+        <PreflightFindings findings={reviewing ? (stepped ? findings : withoutSiteCAFaults(findings)) : undefined} />
         <ErrorBox message={error} />
         {blocked && (
           <p id={blockedId} className="hint">
@@ -2845,6 +2846,18 @@ function usePreflight(complete: boolean, form: SetupForm): SetupFindings | undef
 
 // stopsRun tells whether the run would refuse these settings, on the last step, where errors are
 // listed. Warnings never stop it.
+// The faults of the hosts' chains against the Site CA show beside its field, without the label they
+// open with. Where every section shows at once, the list of errors leaves them out.
+const siteCAFault = "Site CA: ";
+
+const siteCAFaultsOf = (findings: SetupFindings | undefined): string | undefined => {
+  const faults = findings?.errors.filter((e) => e.startsWith(siteCAFault)).map((e) => e.slice(siteCAFault.length)) ?? [];
+  return faults.length > 0 ? faults.join(" ") : undefined;
+};
+
+const withoutSiteCAFaults = (findings: SetupFindings | undefined): SetupFindings | undefined =>
+  findings === undefined ? undefined : { ...findings, errors: findings.errors.filter((e) => !e.startsWith(siteCAFault)) };
+
 const stopsRun = (reviewing: boolean, findings: SetupFindings | undefined): boolean =>
   reviewing && (findings?.errors.length ?? 0) > 0;
 

@@ -382,7 +382,7 @@ func moduleProxy(s *Settings, proxmoxURL string) map[string]any {
 	}
 	out["url"] = s.Proxy.FullURL()
 	out["no_proxy"] = strings.Join(s.NoProxyList(proxmoxURL), ",")
-	out[moduleCABundle] = s.Proxy.CABundle
+	out[moduleCABundle] = s.Proxy.trust()
 	return out
 }
 

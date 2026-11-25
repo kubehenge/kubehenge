@@ -158,7 +158,8 @@ func setupAddresses(settings *appliance.Settings) []netip.Addr {
 }
 
 // setupCheck answers what the setup would run into, without starting it: errors that stop the run,
-// and warnings that do not.
+// and warnings that do not. The chains of the hosts the nodes reach are checked against the pasted
+// authorities as the save checks them.
 func (s *Server) setupCheck(w http.ResponseWriter, r *http.Request, u user) {
 	if s.Appliance == nil {
 		writeError(w, http.StatusNotFound, "this interface does not manage its management cluster")
@@ -178,6 +179,7 @@ func (s *Server) setupCheck(w http.ResponseWriter, r *http.Request, u user) {
 		s.writeSetupError(w, r, err)
 		return
 	}
+	findings.Errors = append(findings.Errors, s.Appliance.CheckSite(r.Context(), &req.Settings)...)
 	writeJSON(w, http.StatusOK, findings)
 }
 
