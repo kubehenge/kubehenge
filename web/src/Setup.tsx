@@ -2757,7 +2757,7 @@ function SetupWizard({
             ))}
           </>
         )}
-        <PreflightFindings findings={reviewing ? (stepped ? findings : withoutSiteCAFaults(findings)) : undefined} />
+        <PreflightFindings findings={reviewFindings(reviewing, stepped, findings)} />
         <ErrorBox message={error} />
         {blocked && (
           <p id={blockedId} className="hint">
@@ -2851,12 +2851,27 @@ function usePreflight(complete: boolean, form: SetupForm): SetupFindings | undef
 const siteCAFault = "Site CA: ";
 
 const siteCAFaultsOf = (findings: SetupFindings | undefined): string | undefined => {
-  const faults = findings?.errors.filter((e) => e.startsWith(siteCAFault)).map((e) => e.slice(siteCAFault.length)) ?? [];
+  const faults =
+    findings?.errors.filter((e) => e.startsWith(siteCAFault)).map((e) => e.slice(siteCAFault.length)) ?? [];
   return faults.length > 0 ? faults.join(" ") : undefined;
 };
 
 const withoutSiteCAFaults = (findings: SetupFindings | undefined): SetupFindings | undefined =>
-  findings === undefined ? undefined : { ...findings, errors: findings.errors.filter((e) => !e.startsWith(siteCAFault)) };
+  findings === undefined
+    ? undefined
+    : { ...findings, errors: findings.errors.filter((e) => !e.startsWith(siteCAFault)) };
+
+// The stepped setup keeps the Site CA's faults in the list, since its field sits on another step.
+const reviewFindings = (
+  reviewing: boolean,
+  stepped: boolean,
+  findings: SetupFindings | undefined,
+): SetupFindings | undefined => {
+  if (!reviewing) {
+    return undefined;
+  }
+  return stepped ? findings : withoutSiteCAFaults(findings);
+};
 
 const stopsRun = (reviewing: boolean, findings: SetupFindings | undefined): boolean =>
   reviewing && (findings?.errors.length ?? 0) > 0;
