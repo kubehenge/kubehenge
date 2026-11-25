@@ -21,6 +21,9 @@ import (
 const (
 	// talosRestorePoll is how often a Talos restore looks at the nodes it waits for.
 	talosRestorePoll = 5 * time.Second
+	// talosServiceEtcd and talosServiceKubelet are the names Talos gives those services.
+	talosServiceEtcd    = "etcd"
+	talosServiceKubelet = "kubelet"
 	// talosEtcdRunning, talosEtcdPreparing and talosEtcdFailed are states Talos gives its etcd
 	// service: running, waiting for a cluster to join or to be bootstrapped, as it does after a
 	// wipe, and given up after a start that failed.
@@ -34,7 +37,7 @@ const (
 // image's signature, and never starts it again by itself. A pull a little later usually works, so
 // a Failed etcd gets the snapshot again from upload and is bootstrapped once more.
 func talosEtcdStarted(ctx context.Context, t TalosNode, upload func(context.Context, TalosNode) error) (bool, error) {
-	etcd, err := t.Etcd(ctx)
+	etcd, err := t.Service(ctx, talosServiceEtcd)
 	if err != nil || etcd.State != talosEtcdFailed {
 		return etcd.State == talosEtcdRunning && etcd.Healthy, err //nolint:wrapcheck // the wait names the node and what it was doing
 	}
@@ -59,7 +62,7 @@ func talosEtcdTakesSnapshot(state string) bool {
 // so it is rebooted instead, which starts etcd again to join. from is the boot it was last
 // rebooted from, as a node still shutting down reads Failed too.
 func talosEtcdJoined(ctx context.Context, t TalosNode, from *string, reboot func(context.Context, TalosNode) error) (bool, error) {
-	etcd, err := t.Etcd(ctx)
+	etcd, err := t.Service(ctx, talosServiceEtcd)
 	if err != nil || etcd.State != talosEtcdFailed {
 		return etcd.State == talosEtcdRunning && etcd.Healthy, err //nolint:wrapcheck // the wait names the node and what it was doing
 	}
@@ -349,7 +352,7 @@ func (run *restoreRun) wipeTalos(ctx context.Context) error {
 func (run *restoreRun) recoverTalosEtcd(ctx context.Context) error {
 	first := run.nodes[0]
 	err := run.waitTalos(ctx, first, "uploading the snapshot", func(ctx context.Context, t TalosNode) (bool, error) {
-		etcd, err := t.Etcd(ctx)
+		etcd, err := t.Service(ctx, talosServiceEtcd)
 		if err != nil || !talosEtcdTakesSnapshot(etcd.State) {
 			return false, err //nolint:wrapcheck // onTalos names the machine, and the node's error the call
 		}

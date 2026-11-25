@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -478,5 +479,172 @@ func TestStartFirstEtcdStartsNothingUncounted(t *testing.T) {
 	log := firstStart(f, map[string]EtcdStart{}, func() error { return errors.New("disk full") })
 	if len(f.rebooted) != 0 || !slices.Equal(log, []string{"Starting etcd again on 10.0.0.22 failed: disk full"}) {
 		t.Errorf("rebooted %v, log %q", f.rebooted, log)
+	}
+}
+
+var kubeletFailed = TalosService{State: talosEtcdFailed, Event: "Failed to run pre stage: failed to pull image \"registry.k8s.io/kubelet\": signature not found"}
+
+// The first node whose etcd and kubelet Talos both left Failed is rebooted rather than
+// bootstrapped, since the kubelet starts again only with a boot.
+func TestStartFirstEtcdRebootsTheFirstNodeWithAFailedKubelet(t *testing.T) {
+	t.Parallel()
+	f := &fakeTalos{
+		service: map[string]TalosService{"10.0.0.21": firstFailed, "10.0.0.22": {State: talosEtcdPreparing}},
+		kubelet: map[string]TalosService{"10.0.0.21": kubeletFailed},
+	}
+	starts := map[string]EtcdStart{}
+	log := firstStart(f, starts, nil)
+	if !slices.Equal(f.rebooted, []string{"10.0.0.21"}) || len(f.restoreCalls()) != 0 || starts["10.0.0.21"] != (EtcdStart{Boot: "0", Repairs: 1}) {
+		t.Errorf("rebooted %v, calls %v, counted %+v", f.rebooted, f.restoreCalls(), starts["10.0.0.21"])
+	}
+	if want := []string{"Talos left etcd and the kubelet on 10.0.0.21 Failed: " + fakePullFailure + ". Rebooted the node to start etcd again."}; !slices.Equal(log, want) {
+		t.Errorf("log %q, want %q", log, want)
+	}
+}
+
+// The first node, back in a newer boot than its reboot's with etcd waiting and etcd running on no
+// node, is bootstrapped once. A node nothing rebooted, or one beside a running etcd, is not.
+func TestStartFirstEtcdBootstrapsTheFirstNodeOnceAfterItsReboot(t *testing.T) {
+	t.Parallel()
+	f := &fakeTalos{
+		service: map[string]TalosService{"10.0.0.21": {State: talosEtcdPreparing}, "10.0.0.22": {State: talosEtcdPreparing}},
+		boots:   map[string]int{"10.0.0.21": 1},
+	}
+	starts := map[string]EtcdStart{"10.0.0.21": {Boot: "0", Repairs: 1}}
+	log := firstStart(f, starts, nil)
+	firstStart(f, starts, nil)
+	if got := f.restoreCalls(); !slices.Equal(got, []string{"10.0.0.21 plain bootstrap"}) || len(f.rebooted) != 0 {
+		t.Errorf("calls %v, rebooted %v", got, f.rebooted)
+	}
+	if want := []string{"Bootstrapped etcd on 10.0.0.21 after its reboot."}; !slices.Equal(log, want) || starts["10.0.0.21"] != (EtcdStart{Boot: "1", Repairs: 1}) {
+		t.Errorf("log %q, counted %+v", log, starts["10.0.0.21"])
+	}
+
+	same := &fakeTalos{service: f.service}
+	firstStart(same, map[string]EtcdStart{"10.0.0.21": {Boot: "0", Repairs: 1}}, nil)
+	firstStart(same, map[string]EtcdStart{}, nil)
+	beside := &fakeTalos{service: map[string]TalosService{"10.0.0.21": {State: talosEtcdPreparing}, "10.0.0.22": firstRunning}, boots: f.boots}
+	firstStart(beside, map[string]EtcdStart{"10.0.0.21": {Boot: "0", Repairs: 1}}, nil)
+	if len(same.restoreCalls()) != 0 || len(beside.restoreCalls()) != 0 {
+		t.Errorf("bootstrapped in the boot of the reboot or never rebooted: %v, beside a running etcd: %v", same.restoreCalls(), beside.restoreCalls())
+	}
+}
+
+// A node whose kubelet is Failed and whose etcd waits is rebooted once per boot.
+func TestStartFirstEtcdRebootsAFailedKubeletOncePerBoot(t *testing.T) {
+	t.Parallel()
+	f := &fakeTalos{
+		service: map[string]TalosService{"10.0.0.22": {State: talosEtcdPreparing}},
+		kubelet: map[string]TalosService{"10.0.0.22": kubeletFailed},
+		boots:   map[string]int{},
+	}
+	starts := map[string]EtcdStart{}
+	log := firstStart(f, starts, nil)
+	log = append(log, firstStart(f, starts, nil)...)
+	if !slices.Equal(f.rebooted, []string{"10.0.0.22"}) || len(f.restoreCalls()) != 0 {
+		t.Errorf("rebooted %v in one boot, calls %v", f.rebooted, f.restoreCalls())
+	}
+	if want := []string{"Talos left the kubelet on 10.0.0.22 Failed: " + kubeletFailed.Event + ". Rebooted the node to start etcd again."}; !slices.Equal(log, want) {
+		t.Errorf("log %q, want %q", log, want)
+	}
+	f.boots["10.0.0.22"] = 1
+	firstStart(f, starts, nil)
+	if !slices.Equal(f.rebooted, []string{"10.0.0.22", "10.0.0.22"}) {
+		t.Errorf("rebooted %v after the next boot", f.rebooted)
+	}
+}
+
+// A Failed kubelet is rebooted at most maxEtcdRepairs times, across looks and across a watch that
+// starts from the saved counts.
+func TestStartFirstEtcdCapsTheRebootsOfAFailedKubelet(t *testing.T) {
+	t.Parallel()
+	f := &fakeTalos{
+		service: map[string]TalosService{"10.0.0.22": {State: talosEtcdPreparing}},
+		kubelet: map[string]TalosService{"10.0.0.22": kubeletFailed},
+		boots:   map[string]int{},
+	}
+	starts := map[string]EtcdStart{}
+	log := make([]string, 0, maxEtcdRepairs+2)
+	for boot := range maxEtcdRepairs + 2 {
+		f.boots["10.0.0.22"] = boot
+		saved, err := json.Marshal(starts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		starts = map[string]EtcdStart{}
+		if err = json.Unmarshal(saved, &starts); err != nil {
+			t.Fatal(err)
+		}
+		log = append(log, firstStart(f, starts, nil)...)
+	}
+	if len(f.rebooted) != maxEtcdRepairs || !starts["10.0.0.22"].GaveUp {
+		t.Errorf("rebooted %v, counted %+v", f.rebooted, starts["10.0.0.22"])
+	}
+	if len(log) != maxEtcdRepairs+1 || !strings.HasSuffix(log[maxEtcdRepairs], ". Left it Failed after 3 starts.") {
+		t.Errorf("log %q", log)
+	}
+}
+
+// A node whose etcd runs holds data, so it is never rebooted, whatever its kubelet says.
+func TestStartFirstEtcdNeverRebootsARunningEtcdForItsKubelet(t *testing.T) {
+	t.Parallel()
+	f := &fakeTalos{
+		service: map[string]TalosService{"10.0.0.21": {State: talosEtcdPreparing}, "10.0.0.22": firstRunning},
+		kubelet: map[string]TalosService{"10.0.0.22": kubeletFailed},
+	}
+	starts := map[string]EtcdStart{}
+	firstStart(f, starts, nil)
+	firstStart(f, starts, nil)
+	if len(f.rebooted) != 0 || !starts["10.0.0.22"].Ran {
+		t.Errorf("rebooted %v, counted %+v", f.rebooted, starts["10.0.0.22"])
+	}
+}
+
+// A node the operator rebooted since the look began is not rebooted for the failure it had before,
+// nor in the look after, once its services read fresh.
+func TestStartFirstEtcdLeavesANodeTheOperatorRebooted(t *testing.T) {
+	t.Parallel()
+	f := &fakeTalos{
+		service: map[string]TalosService{"10.0.0.22": firstFailed},
+		kubelet: map[string]TalosService{"10.0.0.22": kubeletFailed},
+		boots:   map[string]int{},
+	}
+	f.fail = func(address, call string) error {
+		if address == "10.0.0.22" && call == "kubelet" {
+			f.boots[address]++ // the operator reboots it between the reads
+		}
+		return nil
+	}
+	starts := map[string]EtcdStart{}
+	firstStart(f, starts, nil)
+	if len(f.rebooted) != 0 || starts["10.0.0.22"] != (EtcdStart{}) {
+		t.Errorf("rebooted %v for the old boot's failure, counted %+v", f.rebooted, starts["10.0.0.22"])
+	}
+	f.fail = nil
+	f.service["10.0.0.22"], f.kubelet = TalosService{State: talosEtcdPreparing}, nil
+	firstStart(f, starts, nil)
+	if len(f.rebooted) != 0 {
+		t.Errorf("rebooted %v after the operator's reboot", f.rebooted)
+	}
+}
+
+// A node whose kubelet cannot be read is passed by, however etcd reads, and started once it can.
+func TestStartFirstEtcdPassesByANodeWhoseKubeletDoesNotAnswer(t *testing.T) {
+	t.Parallel()
+	f := &fakeTalos{service: map[string]TalosService{"10.0.0.21": firstFailed, "10.0.0.22": firstFailed}}
+	f.fail = func(_, call string) error {
+		if call == "kubelet" {
+			return errors.New("connection refused")
+		}
+		return nil
+	}
+	starts := map[string]EtcdStart{}
+	if log := firstStart(f, starts, nil); len(log) != 0 || len(f.rebooted) != 0 || len(f.restoreCalls()) != 0 || len(starts) != 0 {
+		t.Fatalf("log %q, rebooted %v, calls %v, counted %+v", log, f.rebooted, f.restoreCalls(), starts)
+	}
+	f.fail = nil
+	firstStart(f, starts, nil)
+	if !slices.Equal(f.restoreCalls(), []string{"10.0.0.21 plain bootstrap"}) || !slices.Equal(f.rebooted, []string{"10.0.0.22"}) {
+		t.Errorf("calls %v, rebooted %v", f.restoreCalls(), f.rebooted)
 	}
 }

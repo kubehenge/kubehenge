@@ -41,8 +41,8 @@ type TalosNode interface {
 	// WipeEtcd resets the node without leaving etcd first, wiping its EPHEMERAL partition and etcd's
 	// data with it, and reboots it. Its machine configuration stays.
 	WipeEtcd(ctx context.Context) error
-	// Etcd is the state of the node's etcd service.
-	Etcd(ctx context.Context) (TalosService, error)
+	// Service is the state of one of the node's services, by its Talos name ("etcd", "kubelet").
+	Service(ctx context.Context, name string) (TalosService, error)
 	// UploadEtcdSnapshot hands the node the snapshot BootstrapRecovered restores etcd from.
 	UploadEtcdSnapshot(ctx context.Context, snapshot io.Reader) error
 	// BootstrapRecovered starts etcd on the node as a cluster of one from the uploaded snapshot, a
@@ -239,21 +239,21 @@ func (n *talosNode) WipeEtcd(ctx context.Context) error {
 	return nil
 }
 
-func (n *talosNode) Etcd(ctx context.Context) (TalosService, error) {
-	services, err := n.c.ServiceInfo(ctx, "etcd")
+func (n *talosNode) Service(ctx context.Context, name string) (TalosService, error) {
+	services, err := n.c.ServiceInfo(ctx, name)
 	if err != nil {
-		return TalosService{}, fmt.Errorf("%s: reading etcd's state: %w", n.address, notReady(err))
+		return TalosService{}, fmt.Errorf("%s: reading %s's state: %w", n.address, name, notReady(err))
 	}
 	if len(services) == 0 {
-		return TalosService{}, fmt.Errorf("%s: %w: etcd is not among its services", n.address, errTalosNotReady)
+		return TalosService{}, fmt.Errorf("%s: %w: %s is not among its services", n.address, errTalosNotReady, name)
 	}
 	s := services[0].Service
-	etcd := TalosService{State: s.GetState(), Healthy: s.GetHealth().GetHealthy()}
+	state := TalosService{State: s.GetState(), Healthy: s.GetHealth().GetHealthy()}
 	if events := s.GetEvents().GetEvents(); len(events) > 0 {
 		// Talos's message can span lines, such as an image pull's, while a restore's status is one.
-		etcd.Event, _, _ = strings.Cut(strings.TrimSpace(events[len(events)-1].GetMsg()), "\n")
+		state.Event, _, _ = strings.Cut(strings.TrimSpace(events[len(events)-1].GetMsg()), "\n")
 	}
-	return etcd, nil
+	return state, nil
 }
 
 func (n *talosNode) UploadEtcdSnapshot(ctx context.Context, snapshot io.Reader) error {

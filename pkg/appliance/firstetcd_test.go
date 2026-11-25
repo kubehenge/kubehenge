@@ -65,7 +65,10 @@ type firstNode struct {
 	address string
 }
 
-func (n *firstNode) Etcd(ctx context.Context) (provisioner.TalosService, error) {
+func (n *firstNode) Service(ctx context.Context, name string) (provisioner.TalosService, error) {
+	if name == "kubelet" {
+		return provisioner.TalosService{State: "Running", Healthy: true}, nil
+	}
 	// As the Talos API, an ended context reaches no node.
 	if err := ctx.Err(); err != nil {
 		return provisioner.TalosService{}, err

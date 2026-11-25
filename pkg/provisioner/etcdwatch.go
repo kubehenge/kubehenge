@@ -330,7 +330,7 @@ func (w *EtcdWatch) talosMember(ctx context.Context, c *clusterv1.Cluster, m *cl
 		return "its Talos API does not answer: " + err.Error()
 	}
 	defer func() { _ = node.Close() }()
-	etcd, err := node.Etcd(ctx)
+	etcd, err := node.Service(ctx, talosServiceEtcd)
 	switch {
 	case err != nil:
 	case etcd.State == talosEtcdFailed:

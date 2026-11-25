@@ -4,6 +4,10 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
+### Fixed
+
+- A first setup that failed behind TLS inspection now finishes on the next Apply once the Site CA is set. The appliance reboots the nodes whose etcd or kubelet gave up pulling their images.
+
 ## [0.5.6] - 2026-11-23
 
 ### Highlights
