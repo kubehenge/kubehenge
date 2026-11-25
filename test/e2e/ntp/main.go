@@ -40,15 +40,22 @@ const (
 	maxOffset   = 5 * time.Second
 	askTimeout  = 2 * time.Second
 	receiveSize = 512
+	// The fraction bits of NTP's 32.32 timestamps and of its 16.16 short format.
+	fractionBits      = 32
+	shortFractionBits = 16
+	fractionMask      = 1<<fractionBits - 1
+	// The program's name, a command and an address.
+	argCount  = 3
+	exitUsage = 2
 )
 
 // ntpEpoch is where NTP's timestamps count from.
 var ntpEpoch = time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC)
 
 func main() {
-	if len(os.Args) != 3 {
+	if len(os.Args) != argCount {
 		fmt.Fprintln(os.Stderr, "usage: ntp serve <address> | ntp ask <address>")
-		os.Exit(2)
+		os.Exit(exitUsage)
 	}
 	var err error
 	switch os.Args[1] {
@@ -58,7 +65,7 @@ func main() {
 		err = ask(os.Args[2], time.Now)
 	default:
 		fmt.Fprintln(os.Stderr, "usage: ntp serve <address> | ntp ask <address>")
-		os.Exit(2)
+		os.Exit(exitUsage)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ntp:", err)
@@ -72,7 +79,7 @@ func listenAndServe(address string) error {
 	if err != nil {
 		return fmt.Errorf("listening on %s: %w", address, err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	fmt.Fprintf(os.Stderr, "answering NTP queries on %s\n", conn.LocalAddr())
 	return serve(conn, time.Now)
 }
@@ -131,16 +138,16 @@ func ask(address string, now func() time.Time) error {
 	if err != nil {
 		return fmt.Errorf("reaching %s: %w", address, err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	deadline, _ := ctx.Deadline()
-	if err := conn.SetDeadline(deadline); err != nil {
+	if err = conn.SetDeadline(deadline); err != nil {
 		return fmt.Errorf("asking %s: %w", address, err)
 	}
 	query := make([]byte, packetSize)
 	query[0] = clientQuery
 	sent := ntpTime(now())
 	binary.BigEndian.PutUint64(query[40:], sent)
-	if _, err := conn.Write(query); err != nil {
+	if _, err = conn.Write(query); err != nil {
 		return fmt.Errorf("asking %s: %w", address, err)
 	}
 	reply := make([]byte, receiveSize)
@@ -148,10 +155,12 @@ func ask(address string, now func() time.Time) error {
 	if err != nil {
 		return fmt.Errorf("%s gave no answer: %w", address, err)
 	}
-	if err := usable(reply[:n], sent, now()); err != nil {
+	if err = usable(reply[:n], sent, now()); err != nil {
 		return fmt.Errorf("%s answered, but %w", address, err)
 	}
-	fmt.Fprintf(os.Stdout, "%s answers NTP queries\n", address)
+	if _, err = fmt.Fprintf(os.Stdout, "%s answers NTP queries\n", address); err != nil {
+		return fmt.Errorf("writing the outcome: %w", err)
+	}
 	return nil
 }
 
@@ -190,17 +199,15 @@ func usable(reply []byte, sent uint64, now time.Time) error {
 func ntpTime(t time.Time) uint64 {
 	since := t.Sub(ntpEpoch)
 	//nolint:gosec // every time this program reads is after 1900, so the duration is positive.
-	return uint64(since/time.Second)<<32 | uint64(since%time.Second)<<32/uint64(time.Second)
+	return uint64(since/time.Second)<<fractionBits | uint64(since%time.Second)<<fractionBits/uint64(time.Second)
 }
 
 // goTime is the time of an NTP 32.32 fixed point timestamp.
 func goTime(v uint64) time.Time {
-	//nolint:gosec // the seconds of a timestamp before 2036 and a fraction fit a Duration.
-	return ntpEpoch.Add(time.Duration(v>>32)*time.Second + time.Duration((v&0xffffffff)*uint64(time.Second)>>32))
+	return ntpEpoch.Add(time.Duration(v>>fractionBits)*time.Second + time.Duration((v&fractionMask)*uint64(time.Second)>>fractionBits))
 }
 
 // shortDuration is the duration of NTP's 16.16 fixed point seconds.
 func shortDuration(v uint32) time.Duration {
-	//nolint:gosec // 65536 s in nanoseconds fits a Duration.
-	return time.Duration(uint64(v) * uint64(time.Second) >> 16)
+	return time.Duration(uint64(v) * uint64(time.Second) >> shortFractionBits)
 }

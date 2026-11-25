@@ -464,7 +464,8 @@ jobs:
             done > "$out/proxmox-failed-tasks.txt" 2>&1 || true
           # What the proxy of a lane behind TLS inspection or a proxy saw (test/e2e/ci/egress.sh).
           for flows in "$RUNNER_TEMP"/e2e/egress*/flows.log; do
-            if [ -f "$flows" ]; then cp "$flows" "$out/$(basename "$(dirname "$flows")")-flows.log"; fi
+            [ ! -f "$flows" ] ||
+              cp "$flows" "$out/$(basename "$(dirname "$flows")")-flows.log"
           done
           cp "$RUNNER_TEMP"/e2e/apply*.log "$RUNNER_TEMP/vmstat.txt" "$RUNNER_TEMP/kvm.txt" \
             "$RUNNER_TEMP/guests.txt" "$RUNNER_TEMP/guests.txt.trims" \
@@ -484,14 +485,29 @@ jobs:
             (umask 077 && tofu -chdir="$e2e/mgmt" output -raw kubeconfig \
               > "$e2e/kubeconfig.yaml") || rm -f "$e2e/kubeconfig.yaml"
           fi
+          # Where the appliance made the cluster, its test kept the kubeconfig in the Proxmox VE
+          # container once the setup ended, failed or not (test/e2e/ci/guests.sh).
+          if [ ! -s "$e2e/kubeconfig.yaml" ] && [ ! -f "$e2e/mgmt/terraform.tfstate" ]; then
+            (umask 077 && timeout -k 10 60 docker exec kubehenge-e2e-pve \
+              cat /root/kubehenge/management/kubeconfig < /dev/null > "$e2e/kubeconfig.yaml") ||
+              rm -f "$e2e/kubeconfig.yaml"
+          fi
           if [ -s "$RUNNER_TEMP/e2e/kubeconfig.yaml" ]; then
             export KUBECONFIG="$RUNNER_TEMP/e2e/kubeconfig.yaml"
             kubectl get clusters,machines,pods -A -o wide \
               > "$out/management-cluster.txt" 2>&1 || true
-            # The operator's conditions say why a provider is not ready.
-            kinds=coreproviders,bootstrapproviders,controlplaneproviders
-            kinds=$kinds,infrastructureproviders,ipamproviders,addonproviders
-            kubectl get "$kinds" -A -o yaml > "$out/providers.yaml" 2>&1 || true
+            # The operator's conditions say why a provider is not ready, for every kind it serves.
+            kinds=$(timeout 60 kubectl api-resources --api-group=operator.cluster.x-k8s.io \
+              -o name 2>/dev/null | paste -sd, -) || true
+            if [ -z "$kinds" ]; then
+              kinds=coreproviders,bootstrapproviders,controlplaneproviders
+              kinds=$kinds,infrastructureproviders,ipamproviders,addonproviders
+            fi
+            timeout 120 kubectl get "$kinds" -A -o yaml 2>&1 | head -c 20000000 \
+              > "$out/providers.yaml" || true
+            # The Job that waits for the providers says which one it gave up on.
+            timeout 60 kubectl logs -A -l job-name=wait-for-providers --all-containers --prefix \
+              --tail=-1 2>&1 | head -c 20000000 > "$out/wait-for-providers.log" || true
             # A HelmReleaseProxy's conditions say why Helm did not install or upgrade an add-on,
             # also when it never touched the release in the cluster.
             kubectl get helmchartproxies,helmreleaseproxies -A -o yaml \

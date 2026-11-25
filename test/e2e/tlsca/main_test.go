@@ -73,10 +73,10 @@ func TestWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(t.TempDir(), "conf")
-	if err := a.write(dir); err != nil {
+	if err = a.write(dir); err != nil {
 		t.Fatal(err)
 	}
-	store, err := os.ReadFile(filepath.Join(dir, "mitmproxy-ca.pem"))
+	store, err := os.ReadFile(filepath.Join(dir, "mitmproxy-ca.pem")) //nolint:gosec // the test's own directory
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestWrite(t *testing.T) {
 	if err != nil || !a.key.Equal(key) {
 		t.Errorf("mitmproxy-ca.pem's key is not the intermediate's: %v", err)
 	}
-	root, err := os.ReadFile(filepath.Join(dir, "root.pem"))
+	root, err := os.ReadFile(filepath.Join(dir, "root.pem")) //nolint:gosec // the test's own directory
 	if err != nil {
 		t.Fatal(err)
 	}

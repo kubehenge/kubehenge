@@ -107,13 +107,17 @@ need=
             ;;
         *_test.go) ;;
         # What reads the proxy and the Site CA, which the lane behind TLS inspection runs alone.
-        test/e2e/ci/egress.sh) need="${need} tls-inspection" ;;
-        pkg/appliance/proxy.go) need="${need} appliance tls-inspection" ;;
+        test/e2e/ci/egress.sh | test/e2e/tlsca/* | test/e2e/ntp/*) need="${need} tls-inspection" ;;
+        pkg/appliance/proxy.go | pkg/appliance/sitebundle.go | pkg/appliance/sitefailure.go | pkg/appliance/sitedefaults.go)
+            need="${need} appliance tls-inspection"
+            ;;
         pkg/ui/sitecaroll.go) need="${need} ${interface_users} tls-inspection" ;;
-        pkg/provisioner/egress.go | pkg/provisioner/siteca*.go | pkg/templates/proxy.go | pkg/templates/sitecache.go | pkg/cli/proxyclient.go)
+        pkg/provisioner/egress.go | pkg/provisioner/siteca*.go | pkg/templates/proxy.go | pkg/templates/sitecache.go | pkg/cli/proxyclient.go | \
+            charts/kubehenge/templates/_nodesite.tpl | charts/kubehenge/files/node-site.sh.tpl)
             need="${need} ${all} tls-inspection"
             ;;
-        management-cluster/proxy.tf | management-cluster/charts/proxy/*) need="${need} ${all} management-cluster-upgrade tls-inspection" ;;
+        # cluster-api.tf patches the Site CA into the Add-on Provider for Helm.
+        management-cluster/proxy.tf | management-cluster/charts/proxy/* | management-cluster/cluster-api.tf) need="${need} ${all} management-cluster-upgrade tls-inspection" ;;
         # The interface, the appliance's commands and what installs the appliance. The interface is
         # also what `kubehenge cluster` reaches, in the one workload test that runs it.
         pkg/ui/* | pkg/cli/serve.go | pkg/cli/cluster.go) need="${need} ${interface_users}" ;;

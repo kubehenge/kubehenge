@@ -33,6 +33,13 @@ const (
 	skew     = time.Hour
 	// The serial numbers' bits, as RFC 5280 allows at most 20 bytes.
 	serialBits = 120
+	// The program's name and the directory.
+	argCount  = 2
+	exitUsage = 2
+	pemCert   = "CERTIFICATE"
+	// The key is the inspection's, so only its owner reads it.
+	dirMode  = 0o700
+	fileMode = 0o600
 )
 
 // authority is the root and the intermediate it signed, with the intermediate's key.
@@ -42,9 +49,9 @@ type authority struct {
 }
 
 func main() {
-	if len(os.Args) != 2 {
+	if len(os.Args) != argCount {
 		fmt.Fprintln(os.Stderr, "usage: tlsca <directory>")
-		os.Exit(2)
+		os.Exit(exitUsage)
 	}
 	a, err := newAuthority(time.Now())
 	if err == nil {
@@ -148,19 +155,21 @@ func (a *authority) write(dir string) error {
 	var store bytes.Buffer
 	for _, block := range []*pem.Block{
 		{Type: "PRIVATE KEY", Bytes: key},
-		{Type: "CERTIFICATE", Bytes: a.intermediate.Raw},
-		{Type: "CERTIFICATE", Bytes: a.root.Raw},
+		{Type: pemCert, Bytes: a.intermediate.Raw},
+		{Type: pemCert, Bytes: a.root.Raw},
 	} {
 		if err := pem.Encode(&store, block); err != nil {
 			return fmt.Errorf("encoding: %w", err)
 		}
 	}
-	root := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: a.root.Raw})
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	root := pem.EncodeToMemory(&pem.Block{Type: pemCert, Bytes: a.root.Raw})
+	//nolint:gosec // the directory is the one the caller names.
+	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return fmt.Errorf("making %s: %w", dir, err)
 	}
 	for name, content := range map[string][]byte{"mitmproxy-ca.pem": store.Bytes(), "root.pem": root} {
-		if err := os.WriteFile(filepath.Join(dir, name), content, 0o600); err != nil {
+		//nolint:gosec // a fixed name in the directory the caller names.
+		if err := os.WriteFile(filepath.Join(dir, name), content, fileMode); err != nil {
 			return fmt.Errorf("writing %s: %w", name, err)
 		}
 	}

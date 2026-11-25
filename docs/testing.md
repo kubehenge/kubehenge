@@ -331,12 +331,12 @@ CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e
 
 Four options put the guests behind mitmproxy (`test/e2e/ci/egress.sh`). The appliance and the workload tests take one each, after a `+`. The runner's rules touch only the guests' bridge, and they go when the test ends.
 
-- `+tls-inspection`: nft redirects the guests' port 443 to mitmproxy in transparent mode, which re-signs each connection. Its CA is the Site CA. Plain HTTP and DNS go as before.
+- `+tls-inspection`: nft redirects the guests' port 443 to mitmproxy in transparent mode, which re-signs each connection with an intermediate and sends it in the chain. The Site CA is the root alone, whose name the intermediate gives in another string encoding (`test/e2e/tlsca`). Plain HTTP and DNS go as before.
 - `+tls-inspection-recovery`: the appliance's first setup lacks the Site CA and must fail with the interface naming a certificate a node rejected. The same setup with the CA then finishes with no node touched.
-- `+proxy`: nft drops the guests' direct egress, and the only way out is a CONNECT proxy that asks for credentials and only tunnels. Kubehenge's proxy setting names it.
+- `+proxy`: nft drops the guests' direct egress, and the only way out is a CONNECT proxy that asks for credentials and only tunnels. Kubehenge's proxy setting names it. Its time server setting names the runner's NTP server on the bridge (`test/e2e/ntp`), since the default one is out of reach.
 - `+proxy-inspecting`: the same with a proxy that re-signs TLS and asks for none. Its CA is the proxy's CA bundle.
 
-A test passes only if mitmproxy's log shows each guest of the path going through it: the appliance and the management nodes, the workload nodes and the template build. The proxy lanes also fail when the proxy was asked for an address inside the lab, which the exceptions leave out. They fail when the proxy's password is in a log. The log of a failed lane is in its artifacts as `egress-flows.log`.
+A test passes only if mitmproxy's log shows each guest of the path going through it: the appliance and the management nodes, the workload nodes and the template build. The proxy lanes also fail when the proxy was asked for an address inside the lab, which the exceptions leave out. They fail when the proxy's password is in a log. The log of a failed lane is in its artifacts as `egress-flows.log`. Every failed lane also keeps the operator's providers and the log of the Job that waits for them.
 
 Proxmox VE's own downloads do not pass through the proxy, as the Site CA does not cover them either.
 

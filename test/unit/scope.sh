@@ -176,6 +176,22 @@ for path in pkg/provisioner/egress.go pkg/provisioner/siteca.go pkg/provisioner/
     expect_lanes "${path}" "${want_all%]},${tls_lane}]"
 done
 expect_each management-cluster/proxy.tf yes appliance kubeadm talos management-cluster-upgrade
+# The module file that patches the Site CA into the Helm provider brings what proxy.tf brings.
+lanes_for management-cluster/proxy.tf
+compact
+expect_lanes management-cluster/cluster-api.tf "${list}"
+expect_each management-cluster/cluster-api.tf yes appliance+tls-inspection
+expect_lanes test/e2e/tlsca/main.go "[${tls_lane}]"
+expect_lanes test/e2e/ntp/main.go "[${tls_lane}]"
+expect_lanes test/e2e/tlsca/main_test.go '[]'
+expect_lanes test/e2e/ntp/main_test.go '[]'
+for path in pkg/appliance/sitebundle.go pkg/appliance/sitefailure.go pkg/appliance/sitedefaults.go; do
+    expect_lanes "${path}" "[${appliance_lane},${tls_lane}]"
+done
+expect_lanes pkg/appliance/sitebundle_test.go '[]'
+for path in charts/kubehenge/templates/_nodesite.tpl charts/kubehenge/files/node-site.sh.tpl; do
+    expect_lanes "${path}" "${want_all%]},${tls_lane}]"
+done
 expect_lanes test/e2e/ci/run.sh "${want_all}"
 
 # The web interface runs in the appliance alone, and its tests and tooling in no lane.

@@ -22,7 +22,7 @@ func TestServeAnswersAsAClientAccepts(t *testing.T) {
 	if err := ask(conn.LocalAddr().String(), time.Now); err != nil {
 		t.Errorf("ask: %v", err)
 	}
-	conn.Close()
+	_ = conn.Close()
 	if err := <-done; err != nil {
 		t.Errorf("serve: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestAskWithoutServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if err := ask(conn.LocalAddr().String(), time.Now); err == nil {
 		t.Error("a silent address answered")
 	}

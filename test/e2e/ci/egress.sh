@@ -168,6 +168,7 @@ listening() {
 # nothing to what listens, and fails once the seconds have passed.
 ready() {
     ready_waited=0
+    # shellcheck disable=SC2016 # the inner shell expands its own arguments.
     until timeout 3 bash -c 'exec 3<> "/dev/tcp/$0/$1"' "$1" "$2" 2> /dev/null; do
         if [ "${ready_waited}" -ge "$3" ]; then
             echo "nothing accepted a connection on $1:$2 within $3 s" >&2
