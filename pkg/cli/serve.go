@@ -344,6 +344,7 @@ func (o *serveOptions) setUpAppliance(conn *pve.Config) error {
 		a.NextID = s.Accounts.NextID
 	}
 	a.Talos = &provisioner.ManagementTalos{}
+	a.TalosLogs, a.SiteChains = provisioner.DialTalosLogs, a.DialChain
 	if err = a.CleanUp(); err != nil {
 		return fmt.Errorf("clearing what the last run left: %w", err)
 	}

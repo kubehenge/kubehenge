@@ -107,7 +107,8 @@ func (c *settingsChange) apply(ctx context.Context, s *applianceSession) error {
 		return err
 	}
 	if c.setCA {
-		settings.SiteCA = c.siteCA
+		// The interface derives the bundle from the pasted authority on every save.
+		settings.SiteCA, settings.SiteBundle = c.siteCA, ""
 	}
 	if c.setZone {
 		settings.TimeZone = c.zone

@@ -311,7 +311,7 @@ func (t *SavedTransport) current() (http.RoundTripper, error) {
 		if err = saved.ReleaseMirror.Mirror().Trust(transport); err != nil {
 			return nil, fmt.Errorf("the saved release mirror: %w", err)
 		}
-		if err = trustSiteCA(transport, saved.SiteCA); err != nil {
+		if err = trustSiteCA(transport, saved.siteTrust()); err != nil {
 			return nil, fmt.Errorf("the saved site CA: %w", err)
 		}
 	}

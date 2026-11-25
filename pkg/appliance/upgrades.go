@@ -320,6 +320,11 @@ func (a *Appliance) ApplyUnattended(ready func(ctx context.Context, kubeconfig [
 		if err := s.ValidateAgainst(s); err != nil {
 			return err
 		}
+		unchecked, err := a.ResolveSite(ctx, s)
+		if err != nil {
+			return err
+		}
+		a.noteSite(j, s, unchecked)
 		if a.ReleasesHA(s) {
 			return errors.New("switching Proxmox VE HA off has not got through yet, and only an administrator's session can finish it: apply again from the Administration page")
 		}

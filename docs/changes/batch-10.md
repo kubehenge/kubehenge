@@ -1,5 +1,8 @@
 ### Fixed
 
+- A Site CA of just a TLS inspection root now works for the management nodes. The save adds the intermediates the nodes need and names a missing, expired or SHA-1 certificate.
+- A failed run names the node, host and issuer of a rejected certificate.
+
 - A first setup that failed behind TLS inspection now finishes on the next Apply once the Site CA is set. The appliance reboots the nodes whose etcd or kubelet gave up pulling their images.
 
 ### Internal

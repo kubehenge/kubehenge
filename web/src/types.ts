@@ -844,6 +844,8 @@ export interface ManagementSettings {
    * The PEM authority of the site's private CA. Every connection that names none of its own trusts it.
    */
   siteCA?: string;
+  /** Derived by the server from siteCA, with the intermediates the nodes need. Read only. */
+  siteBundle?: string;
   /** The IANA time zone of schedules that name none. Empty, UTC. */
   timeZone?: string;
   /** The VM IDs of new clusters' VMs and the VM templates, both ends included. Unset, the next free ID. */
