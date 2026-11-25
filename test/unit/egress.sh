@@ -109,6 +109,9 @@ fails_on "a log with the password" "${work}/dirty.log holds the proxy's password
     leaks "${work}/secret" "${work}/clean.log" "${work}/dirty.log"
 passes_on "no password at all" leaks "${work}/nothing" "${work}/dirty.log"
 
+# The wait for the proxy gives up within its bound when nothing listens, and says where it waited.
+fails_on "a proxy that never answers" 'nothing accepted a connection on 127.0.0.1:1 within 1 s' ready 127.0.0.1 1 1
+
 # The kind is one of the four, and the run's directory holds the flow log check reads.
 fails_on "an unknown kind" 'unknown kind tls' check "${work}" tls '172\.20\.99\.11'
 fails_on "no arguments" 'usage:' start
