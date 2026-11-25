@@ -196,24 +196,52 @@ func TestARequestSaysTheTypeOfItsBody(t *testing.T) {
 // The demo given --tls-cert serves that certificate, not the demo's own.
 func TestTheDemoServesTheCertificateOfTLSCert(t *testing.T) {
 	t.Parallel()
+	certFile, keyFile := writeCertificate(t, t.TempDir())
+	want, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The demo logs its address to stderr alone, so the test picks the port. Another test may take
+	// it before the demo binds it, which the demo reports at once, and then a new port is tried.
+	for range 3 {
+		got, err := demoCertificate(t, certFile, keyFile)
+		if err != nil && strings.Contains(err.Error(), "listening on") {
+			continue
+		}
+		if err != nil {
+			t.Errorf("the demo gave %v once its context ended", err)
+		}
+		if !bytes.Equal(got, want.Certificate[0]) {
+			t.Error("the demo does not serve the certificate of --tls-cert")
+		}
+		return
+	}
+	t.Fatal("another listener took each port picked for the demo")
+}
+
+// demoCertificate runs the demo with the certificate on a free port and returns the certificate it
+// presents, and what the demo returned.
+func demoCertificate(t *testing.T, certFile, keyFile string) ([]byte, error) {
+	t.Helper()
 	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	address := l.Addr().String()
 	_ = l.Close()
-	o := &serveOptions{demo: true, listen: address}
+	o := &serveOptions{demo: true, listen: address, certFile: certFile, keyFile: keyFile}
 	o.logs.level = "info"
-	o.certFile, o.keyFile = writeCertificate(t, t.TempDir())
-	want, err := tls.LoadX509KeyPair(o.certFile, o.keyFile)
-	if err != nil {
-		t.Fatal(err)
-	}
 	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- o.runDemo(ctx) }()
 	var got []byte
 	for range 100 {
+		select {
+		case err = <-done:
+			return nil, err
+		default:
+		}
 		conn, dialErr := (&tls.Dialer{Config: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}}).DialContext(ctx, "tcp", address) //nolint:gosec // only the presented certificate is read
 		if dialErr == nil {
 			if secured, ok := conn.(*tls.Conn); ok {
@@ -225,12 +253,7 @@ func TestTheDemoServesTheCertificateOfTLSCert(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	cancel()
-	if err := <-done; err != nil {
-		t.Errorf("the demo gave %v once its context ended", err)
-	}
-	if !bytes.Equal(got, want.Certificate[0]) {
-		t.Error("the demo does not serve the certificate of --tls-cert")
-	}
+	return got, <-done
 }
 
 // The certificate's table says when it is self-signed, when its chain lacks an issuer and whether

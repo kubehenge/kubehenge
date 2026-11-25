@@ -469,8 +469,13 @@ func (o *serveOptions) serve(ctx context.Context) error {
 	// line claims it is served. The loops above are stopped and waited for as on any other exit.
 	listeners, err := listenAll(ctx, servers)
 	if err != nil {
+		// A stop during start-up is a clean stop, also when it cut short the lookup of a name.
+		stopped := ctx.Err() != nil
 		cancel()
 		wg.Wait()
+		if stopped {
+			return nil
+		}
 		return fmt.Errorf("serving: %w", err)
 	}
 	wg.Go(func() {

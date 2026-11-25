@@ -10,8 +10,8 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
-	"net"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -300,14 +300,13 @@ func TestServeClosesTheListenersItBoundBeforeOneFailed(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = taken.Close() })
-	first := &http.Server{Addr: "127.0.0.1:0"}
-	listeners, err := listenAll(t.Context(), []*http.Server{first})
+	listeners, err := listenAll(t.Context(), []*http.Server{newPlainServer("127.0.0.1:0", nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	addr := listeners[0].Addr().String()
 	_ = listeners[0].Close()
-	if _, err = listenAll(t.Context(), []*http.Server{{Addr: addr}, {Addr: taken.Addr().String()}}); err == nil {
+	if _, err = listenAll(t.Context(), []*http.Server{newPlainServer(addr, nil), newPlainServer(taken.Addr().String(), nil)}); err == nil {
 		t.Fatal("listenAll bound a taken address")
 	}
 	again, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", addr)
@@ -315,6 +314,28 @@ func TestServeClosesTheListenersItBoundBeforeOneFailed(t *testing.T) {
 		t.Fatalf("the listener bound before the failure stayed open: %v", err)
 	}
 	_ = again.Close()
+}
+
+// A stop that comes before the addresses are bound is a clean stop, a name to look up included.
+func TestServeStoppedBeforeItBindsStopsCleanly(t *testing.T) {
+	t.Parallel()
+	for _, addr := range []string{"127.0.0.1:0", "localhost:0"} {
+		t.Run(addr, func(t *testing.T) {
+			t.Parallel()
+			o, _ := serveOptionsIn(t, t.TempDir())
+			o.a.Dir = ""
+			o.listen = addr
+			o.s.Certificate = ui.NewInterfaceCertificate("", o.certFile, o.keyFile)
+			if err := o.s.Certificate.Load(time.Now(), nil); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			if err := o.serve(ctx); err != nil {
+				t.Errorf("serve gave %v once its context had ended", err)
+			}
+		})
+	}
 }
 
 // The interface and Headlamp take the certificate they present from the one holder, which serve
