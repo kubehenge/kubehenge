@@ -472,6 +472,152 @@ func TestStartFirstEtcdLogsARebootItCouldNotRecord(t *testing.T) {
 	}
 }
 
+// afterReboot is a first node back in a newer boot than its reboot's with etcd waiting, which is
+// bootstrapped once, and a joiner waiting beside it.
+func afterReboot() *fakeTalos {
+	return &fakeTalos{
+		service: map[string]TalosService{"10.0.0.21": {State: talosEtcdPreparing}, "10.0.0.22": {State: talosEtcdPreparing}},
+		boots:   map[string]int{"10.0.0.21": 1},
+	}
+}
+
+// A bootstrap after the reboot that Talos refuses is logged and left, since the boot is written
+// down and no later look in it bootstraps again. One cut off before Talos answered writes the boot
+// off, says why when the run goes on, and is made again on the next look.
+func TestStartFirstEtcdOnABootstrapAfterARebootThatFails(t *testing.T) {
+	t.Parallel()
+	before := EtcdStart{Boot: "0", Repairs: 1}
+	for name, tc := range map[string]struct {
+		err      error
+		stop     bool
+		wantLog  []string
+		wantSave EtcdStart
+		again    int
+	}{
+		"refused": {
+			err:      errors.New("etcd data directory is not empty"),
+			wantLog:  []string{"Talos refused to bootstrap etcd on 10.0.0.21 after its reboot: etcd data directory is not empty"},
+			wantSave: EtcdStart{Boot: "0", Bootstrapped: "1", Repairs: 1},
+			again:    1,
+		},
+		"out of time": {
+			err:      status.Error(codes.DeadlineExceeded, context.DeadlineExceeded.Error()),
+			wantLog:  []string{"Starting etcd again on 10.0.0.21 failed: rpc error: code = DeadlineExceeded desc = context deadline exceeded"},
+			wantSave: before,
+			again:    2,
+		},
+		"stopped": {
+			err:      status.Error(codes.Canceled, context.Canceled.Error()),
+			stop:     true,
+			wantSave: before,
+			again:    2,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			f := afterReboot()
+			f.fail = func(_, call string) error {
+				if call != "plain bootstrap" {
+					return nil
+				}
+				if tc.stop {
+					cancel()
+				}
+				return tc.err
+			}
+			starts := map[string]EtcdStart{"10.0.0.21": before}
+			var saved []EtcdStart
+			record := func() error {
+				saved = append(saved, starts["10.0.0.21"])
+				return nil
+			}
+			log := firstStartIn(ctx, f, starts, record)
+			if !slices.Equal(log, tc.wantLog) || starts["10.0.0.21"] != tc.wantSave || len(f.rebooted) != 0 {
+				t.Errorf("log %q, counted %+v, rebooted %v", log, starts["10.0.0.21"], f.rebooted)
+			}
+			marked := EtcdStart{Boot: "0", Bootstrapped: "1", Repairs: 1}
+			wantSaved := []EtcdStart{marked}
+			if tc.wantSave != marked {
+				wantSaved = append(wantSaved, tc.wantSave)
+			}
+			if !slices.Equal(saved, wantSaved) {
+				t.Errorf("saved %+v, want %+v", saved, wantSaved)
+			}
+			f.fail = nil
+			firstStart(f, starts, nil)
+			if got := len(f.restoreCalls()); got != tc.again {
+				t.Errorf("%d bootstraps over two looks, want %d: %v", got, tc.again, f.restoreCalls())
+			}
+		})
+	}
+}
+
+// A boot that cannot be written down before the bootstrap after a reboot stops it, and so does a
+// failure to write it off after a bootstrap cut off. The log says each once.
+func TestStartFirstEtcdOnABootstrapAfterARebootItCouldNotRecord(t *testing.T) {
+	t.Parallel()
+	t.Run("before the bootstrap", func(t *testing.T) {
+		t.Parallel()
+		f := afterReboot()
+		log := firstStart(f, map[string]EtcdStart{"10.0.0.21": {Boot: "0", Repairs: 1}}, func() error { return errors.New("disk full") })
+		if want := []string{"Starting etcd again on 10.0.0.21 failed: disk full"}; !slices.Equal(log, want) || len(f.restoreCalls()) != 0 {
+			t.Errorf("log %q, calls %v", log, f.restoreCalls())
+		}
+	})
+	t.Run("after a cut off bootstrap", func(t *testing.T) {
+		t.Parallel()
+		f := afterReboot()
+		f.fail = func(_, call string) error {
+			if call == "plain bootstrap" {
+				return status.Error(codes.DeadlineExceeded, context.DeadlineExceeded.Error())
+			}
+			return nil
+		}
+		records := 0
+		log := firstStart(f, map[string]EtcdStart{"10.0.0.21": {Boot: "0", Repairs: 1}}, func() error {
+			records++
+			if records > 1 {
+				return errors.New("disk full")
+			}
+			return nil
+		})
+		if want := []string{"Starting etcd again on 10.0.0.21 failed: disk full"}; !slices.Equal(log, want) || records != 2 || !slices.Equal(f.restoreCalls(), []string{"10.0.0.21 plain bootstrap"}) {
+			t.Errorf("log %q, records %d, calls %v", log, records, f.restoreCalls())
+		}
+	})
+}
+
+// A reboot of the first node whose boot cannot be written down after it is logged before the
+// failure, as a joiner's is, with the count written down once before the reboot.
+func TestStartFirstEtcdLogsAFirstNodeRebootItCouldNotRecord(t *testing.T) {
+	t.Parallel()
+	f := &fakeTalos{
+		service: map[string]TalosService{"10.0.0.21": firstFailed, "10.0.0.22": {State: talosEtcdPreparing}},
+		kubelet: map[string]TalosService{"10.0.0.21": kubeletFailed},
+	}
+	starts := map[string]EtcdStart{}
+	var saved []EtcdStart
+	log := firstStart(f, starts, func() error {
+		saved = append(saved, starts["10.0.0.21"])
+		if len(saved) > 1 {
+			return errors.New("disk full")
+		}
+		return nil
+	})
+	want := []string{
+		"Talos left etcd and the kubelet on 10.0.0.21 Failed: " + fakePullFailure + ". Rebooted the node to start etcd again.",
+		"Starting etcd again on 10.0.0.21 failed: disk full",
+	}
+	if !slices.Equal(f.rebooted, []string{"10.0.0.21"}) || len(f.restoreCalls()) != 0 || !slices.Equal(log, want) {
+		t.Errorf("rebooted %v, calls %v, log %q", f.rebooted, f.restoreCalls(), log)
+	}
+	if wantSaved := []EtcdStart{{Repairs: 1}, {Boot: "0", Repairs: 1}}; !slices.Equal(saved, wantSaved) {
+		t.Errorf("saved %+v, want %+v", saved, wantSaved)
+	}
+}
+
 // A count that cannot be written stops the start, which the log says.
 func TestStartFirstEtcdStartsNothingUncounted(t *testing.T) {
 	t.Parallel()
