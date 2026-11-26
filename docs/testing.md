@@ -560,7 +560,7 @@ The management cluster's talosconfig comes from the module's state. In the appli
 
 ### The Proxmox VE container
 
-`up.sh` builds `test/e2e/pve`, a one-node Proxmox VE on Debian 13 that runs on the machine's own kernel and starts VMs on its KVM. Like every node it runs an SSH server and reaches itself over SSH as root, which `up.sh` checks. Proxmox VE copies a volume, such as a CSI volume snapshot, through SSH even within one node.
+`up.sh` builds `test/e2e/pve`, a one-node Proxmox VE on Debian 13 that runs on the machine's own kernel and starts VMs on its KVM. The build installs the newest pve-manager of Proxmox VE's repository (`scripts/pve-version.sh`) and fails unless `pveversion` reports it. The cached image's key holds that version, so a release made since it was built gets a new image, and `up.sh` prints the version each lane runs on. Like every node it runs an SSH server and reaches itself over SSH as root, which `up.sh` checks. Proxmox VE copies a volume, such as a CSI volume snapshot, through SSH even within one node.
 
 `up.sh` gives the VMs the bridge 172.20.99.0/24 with a name server that asks this machine's own, so they need no public one. It gives the containers 172.21.99.0/24, routes this machine to the bridge (with `sudo`) and writes the settings `run.sh` reads.
 
