@@ -21,8 +21,10 @@ const (
 	// volumeReasonMax bounds the plugin's reason in a waiting line.
 	volumeReasonMax = 200
 
-	// prometheusNameLabel names the Prometheus whose StatefulSet's claims the operator labels.
-	prometheusNameLabel = "operator.prometheus.io/name"
+	// prometheusNameLabel and alertmanagerNameLabel name the Prometheus and the Alertmanager whose
+	// StatefulSet's claims the operator labels.
+	prometheusNameLabel   = "operator.prometheus.io/name"
+	alertmanagerNameLabel = "alertmanager"
 
 	// The plugin's held release reads a storage it may not see as one of these. Its client turns
 	// every 403 into "not authorized to access endpoint", whatever Proxmox VE or the proxy said.
@@ -31,13 +33,15 @@ const (
 )
 
 // addonClaims are, by add-on, where the claims Kubehenge's releases of the add-ons switched on make
-// are, and how each is known: Prometheus's by the operator's label for the release's Prometheus,
-// Loki's by the release that applies it.
+// are, and how each is known: Prometheus's and Alertmanager's by the operator's labels for the
+// release's own instances, Loki's by the release that applies it. No other add-on's chart makes a
+// claim with the values Kubehenge gives it.
 func addonClaims(addons *Addons) []addonClaim {
 	var claims []addonClaim
 	if addons.Monitoring.Enabled {
 		claims = append(claims, addonClaim{monitoringAddon, monitoringAddon, func(c *corev1.PersistentVolumeClaim) bool {
-			return c.Labels[prometheusNameLabel] == monitoringRelease+"-prometheus"
+			return c.Labels[prometheusNameLabel] == monitoringRelease+"-prometheus" ||
+				c.Labels[alertmanagerNameLabel] == monitoringRelease+"-alertmanager"
 		}})
 	}
 	if addons.logsOn() {

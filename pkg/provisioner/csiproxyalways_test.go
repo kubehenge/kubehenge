@@ -153,6 +153,36 @@ func TestPendingAddonClaimShowsAsAWaitingLine(t *testing.T) {
 	}
 }
 
+// Alertmanager's claim is monitoring's too: the operator labels it with the release's Alertmanager.
+func TestPendingAlertmanagerClaimShowsAsAWaitingLine(t *testing.T) {
+	t.Parallel()
+	web := withAddons(storedCluster("team-a", "web", "shared-lvm"), map[string]string{"monitoring": formMonitoring})
+	r, _ := newReconciler(t, &fakeCloud{}, web)
+	claim := &corev1.PersistentVolumeClaim{
+		Namespace: monitoringAddon, Name: "alertmanager-kube-prometheus-stack-alertmanager-db-alertmanager-kube-prometheus-stack-alertmanager-0",
+		Labels: map[string]string{
+			"alertmanager": "kube-prometheus-stack-alertmanager", "app.kubernetes.io/name": "alertmanager",
+			"app.kubernetes.io/instance": "kube-prometheus-stack-alertmanager", "app.kubernetes.io/managed-by": "prometheus-operator",
+		},
+		Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
+	}
+	event := &corev1.Event{
+		Namespace: monitoringAddon, Name: "failed",
+		InvolvedObject: corev1.ObjectReference{Kind: "PersistentVolumeClaim", Namespace: monitoringAddon, Name: claim.Name},
+		Reason:         provisioningFailed, Message: "rpc error: code = Internal desc = failed to get proxmox storage config: not found", LastTimestamp: metav1.Now(),
+	}
+	workload := fake.NewClientBuilder().WithScheme(remoteScheme).WithObjects(claim, event).Build()
+	r.Remotes = &Remotes{byCluster: map[string]remote{remoteKey(web): {client: workload, until: time.Now().Add(time.Hour)}}}
+	addons, err := addonsOf(web)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "monitoring has no volume: storage shared-lvm is not shown to the cluster's token, which needs Datastore.Audit on /storage/shared-lvm, or it does not exist"
+	if lines := r.addonVolumeWaits(context.Background(), web, &addons); !slices.Equal(lines, []string{want}) {
+		t.Errorf("lines %q, want %q", lines, want)
+	}
+}
+
 // Add-ons switched off say nothing of claims in their namespaces, whoever made them.
 func TestClaimsOfAddonsSwitchedOffShowNoLine(t *testing.T) {
 	t.Parallel()

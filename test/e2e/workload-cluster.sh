@@ -1658,19 +1658,20 @@ if [ "${KUBEHENGE_E2E_DATASTORE_ALLOCATE:-}" = 1 ]; then
 fi
 
 if [ "${KUBEHENGE_E2E_VOLUME_SNAPSHOTS:-}" = 1 ]; then
-    # csi_controller_is <Secret> <true|false>: the CSI plugin's controller is rolled out reading its
-    # configuration from the Secret, with the snapshot sidecar and the copy proxy beside it, or
-    # without either.
+    # csi_controller_is <true|false>: the CSI plugin's controller is rolled out reading its
+    # configuration through the proxy, with the snapshot sidecar beside it or without, and the proxy
+    # making copies or reaching Proxmox VE directly.
     csi_controller_is() {
         # shellcheck disable=SC2310 # polled; a failed read is a no.
         deployments=$(wl -n kube-system get deployments -o json) || return 1
-        printf '%s' "${deployments}" | jq -e --arg s "$1" --argjson snap "$2" '
+        printf '%s' "${deployments}" | jq -e --argjson snap "$1" '
             [.items[] | select(any(.spec.template.spec.volumes[]?; .name == "cloud-config" and .secret.items[0].key == "csi.yaml"))] |
             length == 1 and all(
-                ([.spec.template.spec.volumes[] | select(.name == "cloud-config") | .secret.secretName][0] == $s) and
+                ([.spec.template.spec.volumes[] | select(.name == "cloud-config") | .secret.secretName][0] == "kubehenge-proxmox-proxied") and
                 (any(.spec.template.spec.containers[]; .name == "csi-snapshotter") == $snap) and
-                (any(.spec.template.spec.initContainers[]?; .name == "kubehenge-csi-proxy" and .restartPolicy == "Always" and
-                    (.image | test("@sha256:[0-9a-f]{64}$"))) == $snap) and
+                any(.spec.template.spec.initContainers[]?; .name == "kubehenge-csi-proxy" and .restartPolicy == "Always" and
+                    (.image | test("@sha256:[0-9a-f]{64}$")) and
+                    ([.args[]?] | index("--copies=\($snap)") != null and index("--find-copies=\($snap)") != null)) and
                 (.status.observedGeneration // 0) >= .metadata.generation and
                 (.status.updatedReplicas // 0) == .spec.replicas and (.status.readyReplicas // 0) == .spec.replicas and
                 (.status.replicas // 0) == .spec.replicas)' > /dev/null
@@ -1812,7 +1813,7 @@ EOF
     step "volume snapshots, with the copies made with the cluster's own token"
     set_variable csi '{"volumeSnapshots":true}'
     until_true 300 "the CSI plugin's configuration through the proxy, with the cluster's token" proxied
-    until_true 900 "the CSI plugin's controller with the snapshot sidecar and the copy proxy" csi_controller_is kubehenge-proxmox-proxied true
+    until_true 900 "the CSI plugin's controller with the snapshot sidecar and the copy proxy" csi_controller_is true
     until_true 300 "the copies' namespace" wl get namespace kubehenge-volume-copies
     until_true 300 "the cluster's holder VMs, stopped" holders_ready
     # shellcheck disable=SC2310 # a failed read fails the test with the reason.
@@ -1931,10 +1932,11 @@ EOF
     until_true 300 "no copy left on the holder VMs" holds 0
     until_true 300 "the copies' records deleted" none_of -n kubehenge-volume-copies configmaps -l kubehenge.dev/volume-copy
 
-    step "the CSI plugin reaching Proxmox VE directly again, without volume snapshots"
+    step "the CSI plugin reaching Proxmox VE through the proxy directly, without volume snapshots"
     set_variable csi '{"volumeSnapshots":false}'
-    until_true 900 "the CSI plugin's controller without the snapshot sidecar and the proxy, with the cluster's token" csi_controller_is kubehenge-proxmox false
-    until_true 300 "the CSI plugin's configuration through the proxy deleted" not_found -n kube-system secret kubehenge-proxmox-proxied
+    until_true 900 "the CSI plugin's controller without the snapshot sidecar, with the proxy reaching Proxmox VE directly" csi_controller_is false
+    until_true 300 "the CSI plugin's configuration through the proxy" proxied
+    until_true 300 "the proxy's Role deleted" not_found -n kube-system role kubehenge-csi-proxy
     until_true 300 "the copies' namespace deleted" not_found namespace kubehenge-volume-copies
     until_true 300 "the empty holder VMs removed" no_holders
     until_true 600 "the VolumeSnapshotClass removed" not_found volumesnapshotclass proxmox

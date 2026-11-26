@@ -850,7 +850,7 @@ Rancher, monitoring and the logs add-on install only once Kubehenge's cert-manag
 
 ### Add-ons wait for a volume
 
-A claim of monitoring's Prometheus or of the logs add-on's Loki stays Pending because the CSI plugin cannot make its volume. The Cluster has the condition `AddonsWaiting` with the reason `VolumeMissing`, and the **Health** page lists it. Each line reads `<add-on> has no volume: <reason>`, and goes once the claim is bound.
+A claim of monitoring's Prometheus or Alertmanager, or of the logs add-on's Loki, stays Pending because the CSI plugin cannot make its volume. The Cluster has the condition `AddonsWaiting` with the reason `VolumeMissing`, and the **Health** page lists it. Each line reads `<add-on> has no volume: <reason>`, and goes once the claim is bound.
 
 - **The claim's event**, in `kubectl describe pvc -n <namespace> <claim>`, gives the plugin's own words. For a storage the cluster's token cannot see, the default release says only `failed to get proxmox storage config: not authorized to access endpoint` or `failed to get proxmox storage config: not found`.
 - **The cluster's line** names the cause for those two: the storage, and `Datastore.Audit` on `/storage/<storage>`, which the token needs to see it. Check that the cluster's `storage` variable names a storage that exists, and that the cluster's token holds that privilege there.
