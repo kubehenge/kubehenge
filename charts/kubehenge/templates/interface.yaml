@@ -66,6 +66,15 @@ metadata:
   name: kubehenge-appliance-addresses
   namespace: {{ .Release.Namespace }}
 ---
+# The release pins administrators add in the interface. The chart holds no data, so an upgrade leaves
+# them as they are. It makes the ConfigMap so that the interface needs no right to create one,
+# which RBAC cannot limit to a name.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubehenge-release-pins
+  namespace: {{ .Release.Namespace }}
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -142,11 +151,19 @@ rules:
     resources: [serviceaccounts/token]
     resourceNames: [{{ $name }}]
     verbs: [create]
-  # Whether the controller reaches the Proxmox VE API, which the management cluster's health shows.
+  # Whether the controller reaches the Proxmox VE API, which of the management cluster's etcd members
+  # the controller finds healthy, and the VMs no cluster owns: what the Administration page and the
+  # reboot check show.
   - apiGroups: [""]
     resources: [configmaps]
-    resourceNames: [kubehenge-proxmox-reach]
+    resourceNames: [kubehenge-proxmox-reach, kubehenge-etcd-health, kubehenge-unowned-vms]
     verbs: [get]
+  # The release pins administrators add, which they list, add and remove. A pin is a line of the
+  # file the ConfigMap holds, so adding and removing both update it.
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [kubehenge-release-pins]
+    verbs: [get, update]
   # The appliance's own addresses, which it alone writes, for the clusters' firewalls.
   - apiGroups: [""]
     resources: [configmaps]
@@ -207,6 +224,11 @@ rules:
   - apiGroups: [""]
     resources: [secrets]
     verbs: [get, create, update, delete]
+  # A cluster's spec, as the interface stores it with the management backups and hands it out, holds
+  # the ConfigMaps and Secrets labelled for the cluster, which RBAC cannot find without listing.
+  - apiGroups: [""]
+    resources: [configmaps, secrets]
+    verbs: [list]
   # What a cluster's support bundle holds: every object of Cluster API and its providers here,
   # never a Secret, and the boot logs the controller reads into <cluster>-boot-logs.
   - apiGroups:
@@ -236,6 +258,32 @@ subjects:
     name: {{ $name }}
     namespace: {{ $.Release.Namespace }}
 {{- end }}
+---
+# The management cluster's etcd members, which the Administration page and the reboot check judge by
+# their kube-apiserver pods.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-apiservers
+  namespace: kube-system
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-apiservers
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}-apiservers
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ $.Release.Namespace }}
 {{- /*
 The logs of capmox and the Add-on Provider for Helm, of which a cluster's support bundle carries the
 lines naming the cluster's objects. With apiAuditLog, the API server's in kube-system too, which

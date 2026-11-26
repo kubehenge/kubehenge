@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Release pins on the VM templates page work on an appliance: the interface's account may read and update the pins, and the other pages it could not read now answer too.
 - Setup refuses a Site CA that lacks the root a host's chain ends at, also when the appliance itself trusts that root. It names the root with its fingerprint and offers to add it.
 - After a restart the appliance's interface answers at once, without waiting for the container to send traffic first.
 - `pct exec <ctid> -- kubehenge` finds the command.

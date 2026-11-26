@@ -427,6 +427,9 @@ expected_namespaces=$(jq -c '["clusters"] + (.extraClusterNamespaces // [])' "${
 expect 200 "the session" request "${work}/admin.jar" "${ui}/api/session"
 body_is ".namespace == \"clusters\" and .namespaces == ${expected_namespaces}" "the interface does not offer the namespaces ${expected_namespaces}"
 
+expect 200 "the release pins, as the interface's own account reads them" request "${work}/admin.jar" "${ui}/api/release-pins"
+body_is '.pins == []' "the release pins are not an empty list after the setup"
+
 step "an HA rule offered to a cluster creator without Sys.Audit on /, by its name and nodes alone"
 expect 200 "the HA rules for a user who may place no cluster" request "${work}/user.jar" "${ui}/api/proxmox/ha-rules"
 body_is '(.readable | not) and .rules == []' "a user who may place no cluster is offered the HA rules"
