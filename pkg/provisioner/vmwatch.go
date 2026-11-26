@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -117,6 +118,10 @@ type VMWatch struct {
 	Events    events.EventRecorder
 	Interval  time.Duration
 	Now       func() time.Time
+	// Files reads files in the VMs through their guest agents. Set where the controller's token
+	// may read them (node_boot_logs), it also has the watch ask a machine's VM for its addresses
+	// (watchAddresses).
+	Files GuestFiles
 
 	// seen is when each VM was first found in the state it is in, while that is not running.
 	seen map[int64]vmSeen
@@ -127,6 +132,8 @@ type VMWatch struct {
 	// reported is the last warning told on a Cluster for each VM and reason, so that a retry that
 	// fails the same way says nothing again.
 	reported map[reportKey]string
+	// addresses is what the address check found for each machine whose node has not joined.
+	addresses map[types.NamespacedName]addressLook
 	// haErr is the last failure of reading the HA manager's status, so that a failure that goes on
 	// is logged once.
 	haErr string
@@ -282,6 +289,7 @@ func (w *VMWatch) watch(ctx context.Context, c *clusterv1.Cluster, look *vmLook)
 		lostErr,
 		w.keepIdentity(ctx, c, vms, look),
 		w.mark(ctx, c, VMsCondition, vmsCondition(vms, look), "VMsRunning", "every VM of the cluster runs"),
+		w.watchAddresses(ctx, c, look),
 	)
 	storage, _, err := optionalVariable[string](c, "storage")
 	ceiling, graceErr := hostOutageGrace(c)

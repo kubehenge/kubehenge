@@ -68,7 +68,7 @@ copy() {
 }
 
 code=0
-UNITS="kubelet rke2-server" PATH="${bin}:${PATH}" sh "${script}" "${dir}" || code=$?
+UNITS="kubelet rke2-server NetworkManager" PATH="${bin}:${PATH}" sh "${script}" "${dir}" || code=$?
 truth "the copy is written" [ "${code}" = 0 ]
 first=$(head -n 1 "${dir}/boot.log")
 truth "cloud-init's journal comes first" [ "${first}" = "--- kubehenge boot log: journal of cloud-init" ]
@@ -76,6 +76,7 @@ has "of every stage of cloud-init" "journalctl --boot --unit cloud-init* --unit 
 has "kubelet's journal is copied" "--- kubehenge boot log: journal of kubelet"
 has "from this boot" "journalctl --boot --unit kubelet --lines 200"
 has "RKE2's server's journal is copied" "journal of rke2-server"
+has "NetworkManager's journal, which says an address is taken, is copied" "journal of NetworkManager"
 lacks "a unit the node lacks is left out" "journal of k3s"
 lacks "containerd, which RKE2 runs inside itself, is left out" "journal of containerd"
 longer=$(LC_ALL=C awk 'length > 1024' "${dir}/boot.log")

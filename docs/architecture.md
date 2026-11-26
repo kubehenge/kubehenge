@@ -175,7 +175,7 @@ Cluster API sees a VM only through its node. A paused VM keeps its machine ready
 
 Kubehenge's controller therefore reads Proxmox VE's resource list every 15 seconds, with `VM.Audit` on the workload pool and `Datastore.Audit` on the clusters' storages. For a started VM, the list gives the state QEMU reports, such as paused or a disk error.
 
-The controller sets `VMsNotRunning` on a Cluster whose joined machine's VM has been stopped, paused or crashed for 3 minutes. It sets `StorageNearlyFull` while the cluster's storage is 85% full on a node its VMs run on ([troubleshooting.md](troubleshooting.md#vms-that-do-not-run-storage-nearly-full)). Resuming, starting or replacing a VM is the administrator's call.
+The controller sets `VMsNotRunning` on a Cluster whose joined machine's VM has been stopped, paused or crashed for 3 minutes. It sets `AddressUnavailable` on a Machine whose VM has run for 5 minutes without its node joining and shows none of the addresses it was given on its network card, read through the guest agent. It sets `StorageNearlyFull` while the cluster's storage is 85% full on a node its VMs run on ([troubleshooting.md](troubleshooting.md#vms-that-do-not-run-storage-nearly-full)). Resuming, starting or replacing a VM is the administrator's call.
 
 #### Names and zones set back
 
@@ -1463,7 +1463,7 @@ Kubehenge's admission webhook and BeforeClusterCreate hook refuse these:
 - addresses outside the nodes' network in layer 2. In BGP mode they let routed addresses and API address through.
 - an invalid AS number or router, a router that is also an announced address, kube-vip as the load balancer and Talos
 - the gateway, the network's own or broadcast address, and the API and node addresses
-- other clusters' addresses on the same bridge and VLAN
+- other clusters' addresses, and those of the management cluster's nodes and API and of the appliance, on the same bridge and VLAN
 
 The controller frees a Service of an address outside the range, which kube-vip and MetalLB would otherwise keep. The load balancer gives the Service a new one.
 

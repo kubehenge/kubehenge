@@ -41,7 +41,7 @@ One Terraform/OpenTofu apply creates Kubehenge's management cluster on Proxmox V
 - **`cluster_sys_audit`**, on by default, adds a group holding `Sys.Audit` on `/`, unpropagated.
   - The controller adds a cluster's user to it for its nodes' HA rule labels, unless the cluster switches them off. The controller's token holds `User.Modify` on the group to do so ([clusters](../docs/clusters.md#machines)).
   - The cluster's token can then read the Proxmox VE cluster's own configuration (firewall rules, backup jobs, HA, the corosync configuration). It sees nothing of its guests, storages or nodes.
-- **`node_boot_logs`**, on by default, gives the controller's token `VM.GuestAgent.FileRead` on the workload pool.
+- **`node_boot_logs`**, on by default, gives the controller's token `VM.GuestAgent.FileRead` and `VM.GuestAgent.Audit` on the workload pool.
   - With it the controller reads the boot logs of kubeadm, RKE2 and k3s nodes through their guest agents. It reads only the files the node's agent policy opens ([install settings](../docs/install-settings.md#nodes-boot-logs)).
 - **`etcd_restore`** adds a user and API token for etcd restores.
   - It holds `VM.Audit` and `VM.GuestAgent.Unrestricted` on the workload pool, which together amount to a root shell in every cluster's VMs.

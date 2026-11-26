@@ -106,7 +106,7 @@ Where a node reports the bridge's network, the wizard fills in the API address a
 - the gateway, the node and every other cluster's addresses on the bridge
 - any address where a host answers the management cluster's ping, or its connection on port 22, 80, 443, 6443, 8006 or 50000
 
-Addresses you type are probed the same way and marked **In use** where a host answers. A host that answers no probe looks free, so the probe is only advice. The controller refuses only addresses another cluster holds.
+Addresses you type are probed the same way and marked **In use** where a host answers. A host that answers no probe looks free, so the probe is only advice. The controller refuses addresses another cluster holds and, on the management cluster's bridge and VLAN, the management cluster's nodes' and API's and the appliance's.
 
 The interface's pod pings without privileges through the `net.ipv4.ping_group_range` sysctl. Without it, only the connections are tried.
 
@@ -190,7 +190,7 @@ With one, each such Service takes its own address from the load-balancer address
 
 ##### Load-balancer addresses
 
-In layer 2, the addresses must be unused and on the nodes' network. Kubehenge refuses the node addresses, the API address, the gateway and the network's own and broadcast addresses (on IPv6, its first). It also refuses another cluster's addresses on the same bridge and VLAN, on creation and on every change.
+In layer 2, the addresses must be unused and on the nodes' network. Kubehenge refuses the node addresses, the API address, the gateway and the network's own and broadcast addresses (on IPv6, its first). It also refuses another cluster's addresses, and the management cluster's and the appliance's, on the same bridge and VLAN, on creation and on every change.
 
 On k3s, a load balancer switches servicelb off. The load balancer can be switched or given other addresses later ([below](#change-settings)). Services outside the new range then take new addresses. A switch from MetalLB to kube-vip gives every Service a new address.
 
@@ -2150,7 +2150,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
   - 1, 3, 5 or 7 control-plane nodes, and 0 to 100 workers in each pool.
   - Enough node addresses for every machine at once plus one for a rollout.
   - Node addresses and a control-plane endpoint on the gateway's network, with the endpoint outside the node addresses.
-  - None of another cluster's addresses on the same bridge and VLAN.
+  - None of another cluster's, the management cluster's or the appliance's addresses on the same bridge and VLAN.
 
 ### Namespaces and ranges
 

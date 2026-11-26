@@ -113,6 +113,15 @@ func (a *Appliance) addresses() ([]string, error) {
 	return sourceAddresses(addrs), nil
 }
 
+// OwnAddresses are the addresses the appliance holds now, none where they cannot be read.
+func (a *Appliance) OwnAddresses() []string {
+	own, err := a.addresses()
+	if err != nil {
+		return nil
+	}
+	return own
+}
+
 // sourceAddresses are the addresses among addrs that traffic to another network leaves from: no
 // loopback or link-local ones. IPv4 come first, and each comes once.
 func sourceAddresses(addrs []net.Addr) []string {

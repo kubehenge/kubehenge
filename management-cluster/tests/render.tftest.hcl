@@ -617,6 +617,7 @@ run "controller_and_clusters_are_least_privilege" {
       managementEndpoint = "https://192.0.2.10:6443"
       # Every workload cluster's firewall accepts these.
       managementAddresses = ["192.0.2.11", "192.0.2.12", "192.0.2.13"]
+      managementNetwork   = { bridge = var.bridge, vlan = 0 }
     }
     error_message = "the Kubehenge chart's values differ"
   }
@@ -819,7 +820,8 @@ run "node_boot_logs" {
   assert {
     condition = (
       contains(proxmox_virtual_environment_role.provisioner_pools.privileges, "VM.GuestAgent.FileRead") &&
-      length([for p in proxmox_virtual_environment_role.provisioner_pools.privileges : p if startswith(p, "VM.GuestAgent.") && p != "VM.GuestAgent.FileRead"]) == 0 &&
+      contains(proxmox_virtual_environment_role.provisioner_pools.privileges, "VM.GuestAgent.Audit") &&
+      length([for p in proxmox_virtual_environment_role.provisioner_pools.privileges : p if startswith(p, "VM.GuestAgent.") && !contains(["VM.GuestAgent.FileRead", "VM.GuestAgent.Audit"], p)]) == 0 &&
       proxmox_acl.provisioner["/pool/${var.workload_pool} kubehenge-provisioner-pools"].propagate &&
       yamldecode(helm_release.kubehenge.values[0]).proxmox.bootLogs
     )

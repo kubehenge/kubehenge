@@ -224,6 +224,15 @@
       "type": "string",
       "pattern": "^(https://[^\\s/]+)?$"
     },
+    "managementNetwork": {
+      "description": "The bridge and VLAN the management cluster's nodes are on, whose addresses no cluster on them may take.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bridge": { "type": "string", "pattern": "^(([A-Za-z][A-Za-z0-9-]*/)?[A-Za-z0-9][A-Za-z0-9._-]*)?$" },
+        "vlan": { "type": "integer", "minimum": 0, "maximum": 4094 }
+      }
+    },
     "managementAddresses": {
       "description": "The management cluster's node addresses, which a workload cluster's firewall accepts.",
       "type": "array",

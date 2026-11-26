@@ -477,8 +477,10 @@ resource "helm_release" "kubehenge" {
       # A workload cluster's firewall accepts the management cluster's traffic, which leaves from
       # the nodes' addresses. The appliance records its own, which change on DHCP renewal.
       managementAddresses = [for a in concat(var.node_addresses, var.node_addresses_ipv6) : split("/", a)[0]]
-      talos               = { imageSignatures = local.image_signatures }
-      watch               = { stallMinutes = var.watch.stall_minutes }
+      # No cluster on this network may take the nodes', the API's or the appliance's address.
+      managementNetwork = { bridge = var.bridge, vlan = coalesce(var.vlan_id, 0) }
+      talos             = { imageSignatures = local.image_signatures }
+      watch             = { stallMinutes = var.watch.stall_minutes }
       interface = {
         extraNamespaces = var.extra_cluster_namespaces
         offerHARules    = var.offer_ha_rules

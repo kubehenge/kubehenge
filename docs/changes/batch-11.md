@@ -9,6 +9,7 @@
 - After a restart the appliance's interface answers at once, without waiting for the container to send traffic first.
 - `pct exec <ctid> -- kubehenge` finds the command.
 - Template builds retry a dropped connection to Sigstore instead of failing.
+- A cluster can no longer be given the management cluster's, its API's or the appliance's address, and a machine whose VM lacks its address after boot says so.
 
 ### Internal
 

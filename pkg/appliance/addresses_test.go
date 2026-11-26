@@ -175,3 +175,15 @@ func TestRecordAddressesNeedsTheConfigMap(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestOwnAddressesAreTheAppliancesOwn(t *testing.T) {
+	t.Parallel()
+	a := &Appliance{Addresses: func() ([]string, error) { return []string{"192.0.2.31", "2001:db8::31"}, nil }}
+	if got := a.OwnAddresses(); !slices.Equal(got, []string{"192.0.2.31", "2001:db8::31"}) {
+		t.Errorf("OwnAddresses = %v", got)
+	}
+	a.Addresses = func() ([]string, error) { return nil, errors.New("no netlink") }
+	if got := a.OwnAddresses(); got != nil {
+		t.Errorf("an unreadable list gave %v", got)
+	}
+}

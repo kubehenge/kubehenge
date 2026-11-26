@@ -70,7 +70,7 @@ The parts Kubehenge adds to every cluster run their projects' own builds, which 
 
 The guest agent runs the commands Proxmox VE sends it (guest-exec) as root unconfined, as a root shell would. Cluster API's Proxmox VE provider asks cloud-init through it whether a node has booted. The controller's etcd restore runs through it. Proxmox VE lets only holders of `VM.GuestAgent.Unrestricted` send them, who could run anything in the VM anyway.
 
-The agent also hands out the node's boot log to holders of `VM.GuestAgent.FileRead`. The log is cloud-init's output and a copy of its boot's journals (cloud-init, containerd, the kubelet, RKE2 or k3s). A timer writes the copy into `/var/log/kubehenge` every 15 seconds from 5 seconds after boot, the last 200 lines of each. It is readable by root alone.
+The agent also hands out the node's boot log to holders of `VM.GuestAgent.FileRead`. The log is cloud-init's output and a copy of its boot's journals (cloud-init, NetworkManager, containerd, the kubelet, RKE2 or k3s). A timer writes the copy into `/var/log/kubehenge` every 15 seconds from 5 seconds after boot, the last 200 lines of each. It is readable by root alone.
 
 The node's SELinux policy lets the agent read those files and no others of `/var/log`. Every build proves through Proxmox VE that it hands them out ([troubleshooting.md](troubleshooting.md#a-nodes-boot-log)).
 

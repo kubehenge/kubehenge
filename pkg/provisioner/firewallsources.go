@@ -77,7 +77,13 @@ type FirewallSources struct {
 	Namespace string
 	// Management are the management cluster's node addresses, which its module sets.
 	Management []string
-	Interval   time.Duration
+	// API is the management cluster's API as workload clusters reach it, such as
+	// https://192.0.2.10:6443, and Bridge and VLAN the network the management cluster's nodes are
+	// on. Without a bridge, no cluster is held off the management side's addresses (Held).
+	API      string
+	Bridge   string
+	VLAN     int
+	Interval time.Duration
 	// Datacenter reads whether Proxmox VE's datacenter firewall is on. Nil, no condition is kept.
 	Datacenter APIReach
 	// unreached counts the runs in a row whose read of the datacenter firewall got no answer.
@@ -112,17 +118,32 @@ func (f *FirewallSources) Start(ctx context.Context) error {
 // for them too, so that it holds the same addresses the firewall keeps.
 func (f *FirewallSources) Addresses(ctx context.Context) ([]string, error) {
 	sources := slices.Clone(f.Management)
+	own, err := f.applianceAddresses(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, address := range own {
+		if !slices.Contains(sources, address) {
+			sources = append(sources, address)
+		}
+	}
+	return sources, nil
+}
+
+// applianceAddresses are the addresses the appliance recorded for itself, none while it has not.
+func (f *FirewallSources) applianceAddresses(ctx context.Context) ([]string, error) {
 	cm := &corev1.ConfigMap{}
 	err := f.Reader.Get(ctx, client.ObjectKey{Namespace: f.Namespace, Name: ApplianceAddressesName}, cm)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("reading the appliance's addresses: %w", err)
 	}
+	var own []string
 	for address := range strings.SplitSeq(cm.Data[ApplianceAddressesKey], ",") {
-		if address = strings.TrimSpace(address); address != "" && !slices.Contains(sources, address) {
-			sources = append(sources, address)
+		if address = strings.TrimSpace(address); address != "" {
+			own = append(own, address)
 		}
 	}
-	return sources, nil
+	return own, nil
 }
 
 func (f *FirewallSources) runOnce(ctx context.Context) error {

@@ -588,7 +588,7 @@ variable "cluster_sys_audit" {
 }
 
 variable "node_boot_logs" {
-  description = "Let Kubehenge's controller read the boot logs of kubeadm, RKE2 and k3s nodes when asked, with its own token holding VM.GuestAgent.FileRead on the workload pool. Through the guest agent it can then read any file of a cluster's VMs that the agent's policy in the VM lets it open, which Kubehenge's node templates limit to cloud-init's output and the node's copy of its boot's journals; it runs no commands. Off, the token holds no guest agent privilege, and only Talos nodes' boot logs, read through their Talos API, are offered."
+  description = "Let Kubehenge's controller read the boot logs of kubeadm, RKE2 and k3s nodes when asked, with its own token holding VM.GuestAgent.FileRead and VM.GuestAgent.Audit on the workload pool. The second lets it ask the VM of a machine whose node never joined for its addresses, to say that another host holds the address it was given. Through the guest agent it can then read any file of a cluster's VMs that the agent's policy in the VM lets it open, which Kubehenge's node templates limit to cloud-init's output and the node's copy of its boot's journals; it runs no commands. Off, the token holds no guest agent privilege, and only Talos nodes' boot logs, read through their Talos API, are offered."
   type        = bool
   default     = true
   nullable    = false

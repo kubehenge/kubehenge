@@ -113,6 +113,8 @@ type controllerOptions struct {
 	// is every interface.
 	extensionHost     string
 	managementAddrs   []string
+	managementBridge  string
+	managementVLAN    int
 	certDir           string
 	healthAddr        string
 	metricsAddr       string
@@ -223,6 +225,8 @@ chart's PodTemplate, the only pod that mounts that token.`,
 	f.StringVar(&o.podSecurityExempt, "pod-security-exempt", "{}", "namespaces exempt from pod security, in Kyverno's policies and the ClusterClasses' Pod Security Admission alike, as a JSON object of lists keyed by what runs there: always, calico, monitoring, logs, backups, istio, metallb, rancher, rancherAgent")
 	f.StringArrayVar(&o.classProviders, "class-providers", nil, "namespaces of the Cluster API providers that only one ClusterClass's clusters use, as <class>=<namespace>,<namespace>. They run only while such a cluster exists (repeatable)")
 	f.BoolVar(&o.offerHARules, "offer-ha-rules", false, "offer Proxmox VE's HA node-affinity rules, their names and nodes only, to those who may create a cluster but not read the rules, through the ConfigMap "+provisioner.HARulesName)
+	f.StringVar(&o.managementBridge, "management-bridge", "", "the bridge the management cluster's nodes are on, as the network variable names it. With it, no cluster's addresses on that bridge and VLAN may be the management cluster's, its API's or the appliance's")
+	f.IntVar(&o.managementVLAN, "management-vlan", 0, "the VLAN tag of the management cluster's nodes, 0 for none")
 	f.StringSliceVar(&o.managementAddrs, "management-addresses", nil, "the management cluster's node addresses, which the firewall of every firewalled cluster accepts beside the appliance's (comma-separated)")
 	f.StringSliceVar(&o.headlampSignIn, "headlamp-sign-in-namespaces", nil, "the interface's namespaces whose clusters the appliance's shared Headlamp signs users in to as cluster-admin, if they may download the admin kubeconfig (comma-separated). Empty signs nobody in and removes the identities")
 	f.DurationVar(&o.upgradeInterval, "upgrade-interval", defaultUpgradeInterval, "how often clusters are checked for an automatic upgrade due in their window")
@@ -240,7 +244,7 @@ chart's PodTemplate, the only pod that mounts that token.`,
 	f.StringVar(&o.healthAddr, "health-address", ":8081", "address of the liveness and readiness probes")
 	f.StringVar(&o.metricsAddr, "metrics-address", ":8443", "address of the Prometheus metrics, served over HTTPS to callers the API server authorises for /metrics, or 0 for none")
 	o.logs.addFlags(f, "log in development mode, with stack traces from warnings up and a panic on what should never happen. Lines stay in JSON")
-	f.BoolVar(&o.bootLogs, "boot-logs", true, "read the boot logs of kubeadm, RKE2 and k3s nodes through their guest agents with this controller's token, which then needs VM.GuestAgent.FileRead on the workload pool")
+	f.BoolVar(&o.bootLogs, "boot-logs", true, "read the boot logs of kubeadm, RKE2 and k3s nodes through their guest agents with this controller's token, which then needs VM.GuestAgent.FileRead and VM.GuestAgent.Audit on the workload pool. The second has it say which machines' VMs have no address")
 	f.BoolVar(&o.leaderElect, "leader-elect", true, "elect one active controller among replicas")
 	return cmd
 }
@@ -429,6 +433,7 @@ func (o *controllerOptions) newHooks(mgr ctrl.Manager, registrar *provisioner.Re
 		Endpoint:          o.r.Endpoint.URL,
 		Management: &provisioner.FirewallSources{
 			Reader: mgr.GetAPIReader(), Namespace: o.r.ClassNamespace, Management: o.managementAddrs,
+			API: o.autoscaler.Management.Server, Bridge: o.managementBridge, VLAN: o.managementVLAN,
 		},
 		DatastoreAllocate: o.r.DatastoreAllocate,
 		SysAuditGroup:     o.r.SysAuditGroup,
@@ -1057,6 +1062,9 @@ func (o *controllerOptions) addWatches(mgr manager.Manager, remotes *provisioner
 		Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), ClassNamespace: o.r.ClassNamespace, WorkloadPool: o.r.WorkloadPool,
 		Proxmox: c, Workloads: remotes, Events: mgr.GetEventRecorder("kubehenge"),
 		Interval: vmWatchInterval,
+	}
+	if o.bootLogs {
+		vms.Files = &provisioner.ProxmoxGuestFiles{Client: c}
 	}
 	if err := mgr.Add(vms); err != nil {
 		return fmt.Errorf("the VM watch: %w", err)

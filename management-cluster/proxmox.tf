@@ -201,11 +201,13 @@ resource "proxmox_acl" "clusters_audit" {
 # its machine's name when someone renames it, and sets and lifts the owner VM's protection flag,
 # which Proxmox VE requires for deleting a disk of a protected VM or the VM itself.
 # VM.GuestAgent.FileRead reads nodes' boot logs, files only, through the guest agent.
+# VM.GuestAgent.Audit asks the guest agent of a VM whose node never joined for its addresses, which
+# says that another host holds the address the VM was given.
 resource "proxmox_virtual_environment_role" "provisioner_pools" {
   role_id = "${var.cluster_name}-provisioner-pools"
   privileges = concat(
     ["Pool.Allocate", "Pool.Audit", "Permissions.Modify", "VM.Allocate", "VM.Audit", "VM.Config.Disk", "VM.Config.Options", "VM.Migrate"],
-    var.node_boot_logs ? ["VM.GuestAgent.FileRead"] : [],
+    var.node_boot_logs ? ["VM.GuestAgent.Audit", "VM.GuestAgent.FileRead"] : [],
   )
 }
 

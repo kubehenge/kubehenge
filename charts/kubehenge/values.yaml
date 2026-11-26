@@ -268,6 +268,13 @@ managementEndpoint: ""
 # each cluster's ProxmoxCluster, so a change replaces no node.
 managementAddresses: []
 
+# The bridge and VLAN tag (0 for none) the management cluster's nodes are on; the management
+# cluster's module sets them. No cluster on that bridge and VLAN may take the nodes', the
+# management cluster's API or the appliance's address. Without a bridge, none is held off them.
+managementNetwork:
+  bridge: ""
+  vlan: 0
+
 # What Kubehenge's controller watches for on its own, and how long it gives each before it says
 # so on the Cluster (a condition and an event) and on the interface's Health page.
 watch:
