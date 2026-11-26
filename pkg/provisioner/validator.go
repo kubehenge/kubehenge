@@ -134,9 +134,9 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	errs = append(errs, validateUpgradeWindow(old, c)...)
 	errs = append(errs, validateAddonSettings(c)...)
 	errs = append(errs, v.validateNodeCustomisation(ctx, old, c)...)
-	errs = append(errs, validateAutoscaling(c, v.Hooks.ManagementAPI)...)
+	errs = append(errs, validateAutoscaling(old, c, v.Hooks.ManagementAPI)...)
 	errs = append(errs, validateHostOutageGrace(c)...)
-	errs = append(errs, validateEtcd(old, c, class)...)
+	errs = append(errs, validateEtcd(old, c, class, v.Hooks.now())...)
 	if err := checkNodeAddresses(old, c); err != nil {
 		errs = append(errs, field.Forbidden(topology.Child("variables").Key(networkVariable), err.Error()))
 	}

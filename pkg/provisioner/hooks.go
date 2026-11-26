@@ -230,7 +230,7 @@ func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.Bef
 		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
 		return
 	}
-	if errs := validateAutoscaling(cluster, h.ManagementAPI); len(errs) > 0 {
+	if errs := validateAutoscaling(nil, cluster, h.ManagementAPI); len(errs) > 0 {
 		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, errs.ToAggregate().Error()
 		return
 	}

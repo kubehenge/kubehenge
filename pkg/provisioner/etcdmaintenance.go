@@ -55,6 +55,9 @@ const (
 	etcdMemberTimeout = 2 * time.Minute
 	// etcdReadTimeout bounds reading every member, which are asked in turn.
 	etcdReadTimeout = 2 * etcdMemberTimeout
+	// etcdStatusFresh is how old a recorded read may be and still be trusted: one interval and its
+	// read, with one more read's time to spare.
+	etcdStatusFresh = etcdReadInterval + 2*etcdReadTimeout
 	// etcdDefragMemberTimeout bounds the defragmentation of one member, which takes far longer than
 	// reading it.
 	etcdDefragMemberTimeout = 5 * etcdMemberTimeout
@@ -139,8 +142,8 @@ type EtcdStatus struct {
 }
 
 // validateEtcd holds a cluster's etcd limit and its etcd snapshots to their rules.
-func validateEtcd(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) field.ErrorList {
-	errs := validateEtcdQuota(old, c)
+func validateEtcd(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass, now time.Time) field.ErrorList {
+	errs := validateEtcdQuota(old, c, now)
 	if err := checkEtcdSnapshots(old, c, class); err != nil {
 		errs = append(errs, field.Invalid(field.NewPath("spec", "topology", "variables").Key(etcdSnapshotsVariable), etcdSnapshotsVariable, err.Error()))
 	}
@@ -151,9 +154,9 @@ func validateEtcd(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) fiel
 const percentOf = 100
 
 // validateEtcdQuota refuses a lower etcd limit unless every member's database stays under EtcdWarnPercent
-// of it, as the controller last read them. A database above the limit stops accepting writes. With no
-// sizes read yet, lowering is refused.
-func validateEtcdQuota(old, c *clusterv1.Cluster) field.ErrorList {
+// of it, as the controller last read them. A database above the limit stops accepting writes. Without a
+// recent read of every member, lowering is refused.
+func validateEtcdQuota(old, c *clusterv1.Cluster, at time.Time) field.ErrorList {
 	if old == nil {
 		return nil
 	}
@@ -164,8 +167,8 @@ func validateEtcdQuota(old, c *clusterv1.Cluster) field.ErrorList {
 	}
 	path := field.NewPath("spec", "topology", "variables").Key(etcdVariable)
 	status, ok := LastEtcdStatus(old)
-	if !ok || len(status.Members) == 0 {
-		return field.ErrorList{field.Forbidden(path, "the etcd limit cannot be lowered until the controller has read the members' database sizes, since a database above it stops accepting writes")}
+	if reason := etcdSizesUntrusted(old, &status, ok, at); reason != "" {
+		return field.ErrorList{field.Forbidden(path, "the etcd limit cannot be lowered until the controller has read every member's database size again, since a database above it stops accepting writes: "+reason)}
 	}
 	var errs field.ErrorList
 	for i := range status.Members {
@@ -176,6 +179,22 @@ func validateEtcdQuota(old, c *clusterv1.Cluster) field.ErrorList {
 		}
 	}
 	return errs
+}
+
+// etcdSizesUntrusted says why the recorded sizes cannot be trusted to lower the limit, or is "": none
+// recorded, a member unread or missing, or a read older than etcdStatusFresh.
+func etcdSizesUntrusted(c *clusterv1.Cluster, status *EtcdStatus, recorded bool, now time.Time) string {
+	switch replicas := c.Spec.Topology.ControlPlane.Replicas; {
+	case !recorded || len(status.Members) == 0:
+		return "none is recorded"
+	case status.Error != "":
+		return "the last read failed: " + status.Error
+	case replicas != nil && len(status.Members) < int(*replicas):
+		return fmt.Sprintf("%d of %d members were read", len(status.Members), *replicas)
+	case now.Sub(status.At) > etcdStatusFresh:
+		return "the last read is from " + status.At.UTC().Format(time.RFC3339)
+	}
+	return ""
 }
 
 // LastEtcdStatus reads a cluster's recorded etcd status.

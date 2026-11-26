@@ -230,6 +230,26 @@ describe("the autoscaler's options", () => {
     expect(within(dialog).getByRole("option", { name: "Management cluster (recommended)" })).toBeInTheDocument();
   });
 
+  it("keeps the placement in the cluster for a cluster already there", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web/options");
+    const inCluster: Cluster = {
+      ...autoscaled,
+      variables: { ...autoscaled.variables, autoscaler: { placement: "workload" } },
+    };
+    const calls = fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": { body: inCluster },
+      "GET /api/classes": { body: [k3s({})] },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Edit the autoscaler" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit autoscaler" });
+    await waitFor(() => expect(calls.map((c) => c.key)).toContain("GET /api/classes"));
+    expect(within(dialog).getByLabelText("Runs")).toHaveValue("workload");
+    expect(within(dialog).getByRole("option", { name: "Cluster's control planes" })).toBeInTheDocument();
+  });
+
   it("tunes the autoscaler and moves it into the cluster", async () => {
     window.history.replaceState(null, "", "/clusters/default/web/options");
     const calls = fakeServer({

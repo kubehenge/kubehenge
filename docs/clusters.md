@@ -836,7 +836,7 @@ A cluster runs the cluster autoscaler release of its Kubernetes minor version, s
 
 By default each cluster's autoscaler runs in the management cluster, in the `kubehenge-autoscaler` namespace. It reaches its cluster with a token of its own there. The cluster holds no credential of the management cluster. Each autoscaler asks for 64 MiB of memory, with a limit of 512 MiB.
 
-Setting **Runs** to **Cluster's control planes** (under **Options**, **Edit** beside Autoscaler) moves it into the cluster. That spares the management cluster the memory. The management cluster's API must then be reachable from the cluster's nodes.
+Setting **Runs** to **Cluster's control planes** (under **Options**, **Edit** beside Autoscaler) moves it into the cluster. The option appears only when Kubehenge was installed with `managementEndpoint`. That spares the management cluster the memory. The management cluster's API must then be reachable from the cluster's nodes.
 
 Without the management cluster's address, set by its module, the autoscaler stays out with an `AutoscalerNotPlaced` event.
 
@@ -1694,7 +1694,7 @@ A copy the proxy refuses or that fails shows as a `VolumeCopyFailed` event on th
 
 Every cluster gives etcd a database limit and periodic compaction. At its limit etcd refuses every write while the API server still answers reads.
 
-The `etcd` variable sets the limit as `quotaGiB`, from 2 to 8 GiB, default 8. It can be raised, and lowered while every member's database stays under 60% of the new limit. A change replaces the control-plane nodes one at a time. The wizard sets it under **etcd** on the Machines step, and Options under Maintenance changes it. With the CLI, `kubehenge cluster etcd set NAME --quota-gib 6`.
+The `etcd` variable sets the limit as `quotaGiB`, from 2 to 8 GiB, default 8. It can be raised, and lowered while every member's database stays under 60% of the new limit. Lowering needs a read of every member from the last 18 minutes. A change replaces the control-plane nodes one at a time. The wizard sets it under **etcd** on the Machines step, and Options under Maintenance changes it. With the CLI, `kubehenge cluster etcd set NAME --quota-gib 6`.
 
 Every ten minutes the controller reads each member's database size and the part in use. The **etcd size** section of the Backups view shows them with the limit. The Health view warns above 60 percent of the limit and when a member has a `NOSPACE` alarm. An `EtcdDatabaseLarge` event says the same.
 
