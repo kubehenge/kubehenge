@@ -336,12 +336,14 @@ func TestCertManagerWaitsForACompleteRead(t *testing.T) {
 func TestCertManagerSwitchAppliesItsUsersAgain(t *testing.T) {
 	t.Parallel()
 	m := newClusterOwnCertManager(nil)
-	r, kube, workload := certManagerUserCluster(t, m.objects()...)
-	c := certManagerUser()
+	c := withAddons(certManagerUser(), map[string]string{"rancher": `{"install":true,"hostname":"rancher.example.org"}`})
+	r, kube := newReconciler(t, &fakeCloud{}, c)
+	workload := fake.NewClientBuilder().WithScheme(remoteScheme).WithObjects(m.objects()...).WithStatusSubresource(&appsv1.Deployment{}).Build()
+	r.Remotes = &Remotes{byCluster: map[string]remote{remoteKey(c): {client: workload, until: time.Now().Add(time.Hour)}}}
 	if err := reconcile(t, r, c); err != nil {
 		t.Fatal(err)
 	}
-	users := []string{monitoringProxy(c), lokiProxy(c), alloyProxy(c), alloyNodeProxy(c)}
+	users := certManagerUsers(c)
 	own := map[string]string{}
 	for _, p := range users {
 		own[p] = storedValues(t, kube, c, p)

@@ -336,7 +336,10 @@ func rancherValues(r Rancher, base map[string]any) map[string]any {
 		"hostname":     r.Hostname,
 		"replicas":     replicas,
 		"agentTLSMode": "strict",
-		ingressKey:     map[string]any{"tls": map[string]any{"source": "rancher"}},
+		// Rancher's chart labels its Issuer only with its own labels. The mark goes on the Ingress
+		// that asks for its certificate instead, so a switch of cert-manager still applies the
+		// release again and brings the Issuer back.
+		ingressKey:     map[string]any{"tls": map[string]any{"source": "rancher"}, "extraAnnotations": servedBy()},
 		"extraEnv":     append(env, map[string]any{"name": "CATTLE_SERVER_URL", valueKey: "https://" + r.Hostname}),
 		"startupProbe": map[string]any{"timeoutSeconds": probeTimeout, "periodSeconds": probePeriod, "failureThreshold": probeFailures},
 		"resources":    reserved("50m", "128Mi"),

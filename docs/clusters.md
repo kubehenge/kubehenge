@@ -1971,7 +1971,7 @@ The certificates add-on sets these only on Kubehenge's own cert-manager. Set the
 
 While certificates is on, `AddonConflict` with the reason `SettingsNotApplied` names the first three, those it would set.
 
-A cert-manager that does not work holds its users back. `AddonConflict` names what is wrong and the add-ons that wait, such as definitions left without a controller after an uninstall, a webhook that is not Available, a version too old or one that cannot be read. Make it work, or remove it and Kubehenge installs its own. Either takes effect on the next look, within ten minutes. When the cert-manager in use changes, monitoring and logs are applied again, so their certificates and issuers come back.
+A cert-manager that does not work holds its users back. `AddonConflict` names what is wrong and the add-ons that wait, such as definitions left without a controller after an uninstall, a webhook that is not Available, a version too old or one that cannot be read. Make it work, or remove it and Kubehenge installs its own. Either takes effect on the next look, within ten minutes. When the cert-manager in use changes, Rancher, monitoring and logs are applied again, so their certificates and issuers come back.
 
 Only Kubehenge's own release labels its objects `kubehenge.dev/addon=cert-manager`. That one keeps getting Kubehenge's upgrades.
 
