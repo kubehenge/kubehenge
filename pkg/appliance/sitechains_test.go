@@ -984,7 +984,7 @@ func (fakeNodeLogs) ServiceLog(context.Context, string) ([]string, error) { retu
 
 func (fakeNodeLogs) Close() error { return nil }
 
-func TestAFailedApplyNamesTheNodeTheHostAndTheIssuerOfARejectedCertificate(t *testing.T) {
+func TestAFailedApplyNamesTheNodeAndTheHostOfARejectedCertificate(t *testing.T) {
 	t.Parallel()
 	c := newInspected(t)
 	a, _ := newAppliance(t)
@@ -1002,7 +1002,7 @@ func TestAFailedApplyNamesTheNodeTheHostAndTheIssuerOfARejectedCertificate(t *te
 		t.Fatal(err)
 	}
 	j := waitFor(t, a)
-	want := "Node 10.0.0.11 refused tuf-repo-cdn.sigstore.dev's certificate. Add \"CN=Inspect Root\" to the Site CA. The run failed:"
+	want := "Node 10.0.0.11 refused tuf-repo-cdn.sigstore.dev's certificate: certificate signed by unknown authority. Check the Site CA. The run failed:"
 	if j.State != StateFailed || !strings.HasPrefix(j.Error, want) || strings.Contains(j.Error, "10.0.0.12") {
 		t.Errorf("job error %q, want it to hold %q", j.Error, want)
 	}

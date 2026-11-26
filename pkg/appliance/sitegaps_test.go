@@ -2,7 +2,9 @@ package appliance
 
 import (
 	"cmp"
+	"crypto/rand"
 	"crypto/x509"
+	"math/big"
 	"slices"
 	"strings"
 	"testing"
@@ -226,6 +228,56 @@ func TestAFailedRunLineReadsThePlainAndTheJSONForm(t *testing.T) {
 			t.Fatalf("%s: no rejection found", name)
 		}
 		if got := (&Appliance{}).refusalLine(t.Context(), &Settings{}, "10.0.0.11", r); got != tc.want {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, tc.want)
+		}
+	}
+}
+
+// TestAFailedRunLineCountsOnlyWhatTheNodesTrust says to check the Site CA where the Site CA or the
+// proxy's CA holds the presented root under another name, or an intermediate of the chain, and to
+// name the root where only a proxy that is switched off holds it.
+func TestAFailedRunLineCountsOnlyWhatTheNodesTrust(t *testing.T) {
+	t.Parallel()
+	const host = "tuf-repo-cdn.sigstore.dev"
+	device := newTestRoot(t, "Device Root")
+	deviceLeaf := device.issue(t, issuance{cn: "host.example", leaf: true})
+	renamed := &x509.Certificate{
+		SerialNumber: big.NewInt(3), RawSubject: nameDER(t, "Renamed Root", device.tag), SubjectKeyId: []byte("Renamed Root"),
+		NotBefore: device.cert.NotBefore, NotAfter: device.cert.NotAfter, IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, renamed, renamed, &device.key.PublicKey, device.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameKeyPEM := (&testAuthority{cert: &x509.Certificate{Raw: der}}).pem()
+	corp := newTestRoot(t, "Corp Root")
+	inspect := corp.issue(t, issuance{cn: "Corp Inspect"})
+	corpLeaf := inspect.issue(t, issuance{cn: "host.example", leaf: true})
+	other := newTestRoot(t, "Internal-R2").pem()
+	enabled := func(bundle string) *Proxy { return &Proxy{URL: "http://proxy.example:3128", CABundle: bundle} }
+	unknown := `[talos] controller failed {"controller": "security.TUFTrustedRootController", "error": "Get \"https://` + host + `/root.json\": tls: failed to verify certificate: x509: certificate signed by unknown authority"}`
+	check := "Node 10.0.0.11 refused " + host + "'s certificate: certificate signed by unknown authority. Check the Site CA."
+	add := func(root *testAuthority) string {
+		return "Node 10.0.0.11 refused " + host + "'s certificate. Add its root \"" + subjectOf(root.cert) + "\" (SHA-256 " + Fingerprint(root.cert) + ") to the Site CA."
+	}
+	for name, tc := range map[string]struct {
+		settings *Settings
+		chain    []*x509.Certificate
+		want     string
+	}{
+		"a switched-off proxy's CA holds the root":         {&Settings{SiteCA: other, Proxy: &Proxy{CABundle: device.pem()}}, certs(deviceLeaf, device), add(device)},
+		"the Site CA holds the root under another name":    {&Settings{SiteCA: sameKeyPEM}, certs(deviceLeaf, device), check},
+		"the proxy's CA holds the root under another name": {&Settings{SiteCA: other, Proxy: enabled(sameKeyPEM)}, certs(deviceLeaf, device), check},
+		"the Site CA holds an intermediate":                {&Settings{SiteCA: inspect.pem()}, certs(corpLeaf, inspect, corp), check},
+		"the proxy's CA holds an intermediate":             {&Settings{SiteCA: other, Proxy: enabled(inspect.pem())}, certs(corpLeaf, inspect, corp), check},
+		"nothing holds the intermediate":                   {&Settings{SiteCA: other}, certs(corpLeaf, inspect, corp), add(corp)},
+	} {
+		a := &Appliance{sitePublic: x509.NewCertPool(), SiteChains: fakeChains(map[string][]*x509.Certificate{host: tc.chain})}
+		r, found := rejectedCertificate([]string{unknown})
+		if !found {
+			t.Fatalf("%s: no rejection found", name)
+		}
+		if got := a.refusalLine(t.Context(), tc.settings, "10.0.0.11", r); got != tc.want {
 			t.Errorf("%s:\n got %q\nwant %q", name, got, tc.want)
 		}
 	}
