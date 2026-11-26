@@ -106,7 +106,7 @@ Where a node reports the bridge's network, the wizard fills in the API address a
 - the gateway, the node and every other cluster's addresses on the bridge
 - any address where a host answers the management cluster's ping, or its connection on port 22, 80, 443, 6443, 8006 or 50000
 
-Addresses you type are probed the same way and marked **In use** where a host answers. A host that answers no probe looks free, so the probe is only advice. The controller refuses addresses another cluster holds and, on the management cluster's bridge and VLAN, the management cluster's nodes' and API's and the appliance's.
+Addresses you type are probed the same way and marked **In use** where a host answers. A host that answers no probe looks free, so the probe is only advice. The controller refuses addresses another cluster holds and, the management cluster's nodes' and API's on its bridge and VLAN, and the appliance's on the bridge and VLAN of each of its network cards.
 
 The interface's pod pings without privileges through the `net.ipv4.ping_group_range` sysctl. Without it, only the connections are tried.
 
