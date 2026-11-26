@@ -836,7 +836,6 @@ The Cluster has the condition `AddonConflict`. The add-on's HelmChartProxy does 
 
 - **cert-manager.** The message also names a cert-manager controller Deployment that no Kubehenge release owns, and the add-ons that wait for Kubehenge's cert-manager. Remove the cluster's own cert-manager.
 - **Kyverno and monitoring.** Remove the cluster's own install, or switch the add-on off.
-- **`<add-on> has no volume: <reason>`.** A PersistentVolumeClaim of monitoring, logs, Rancher or Argo CD stays Pending, and the message gives the CSI plugin's reason. `storage <name> is not shown to the cluster's token` means the storage is not one the cluster's token may list. Check the cluster's `storage` variable. The line goes once the claim is bound.
 
 `kubectl get crd <name> -o yaml` shows who owns a definition in its `meta.helm.sh/release-name` annotation. Kubehenge installs the add-on on its next look, within ten minutes, once the definition is gone or is its own. [clusters.md](clusters.md#installs-that-collide) lists the definitions it checks.
 
@@ -848,6 +847,14 @@ Rancher, monitoring and the logs add-on install only once Kubehenge's cert-manag
 | --- | --- |
 | `WaitingForCertManager` | cert-manager is installing, or waits for the cluster's Gateway API definitions. On RKE2 and k3s these come from the chart `rke2-traefik-crd` or `traefik-crd`. Nothing to do: the add-ons follow once cert-manager is deployed. |
 | `GatewayAPIMissing` | The distribution's chart is deployed, yet the controller has recorded no Gateway API definitions 10 minutes after the control plane came up. Check that `kubectl get crd gateways.gateway.networking.k8s.io` answers in the cluster, and read the controller's log. |
+
+### Add-ons wait for a volume
+
+A claim of monitoring's Prometheus or of the logs add-on's Loki stays Pending because the CSI plugin cannot make its volume. The Cluster has the condition `AddonsWaiting` with the reason `VolumeMissing`, and the **Health** page lists it. Each line reads `<add-on> has no volume: <reason>`, and goes once the claim is bound.
+
+- **The claim's event**, in `kubectl describe pvc -n <namespace> <claim>`, gives the plugin's own words. For a storage the cluster's token cannot see, the default release says only `failed to get proxmox storage config: not authorized to access endpoint` or `failed to get proxmox storage config: not found`.
+- **The cluster's line** names the cause for those two: the storage, and `Datastore.Audit` on `/storage/<storage>`, which the token needs to see it. Check that the cluster's `storage` variable names a storage that exists, and that the cluster's token holds that privilege there.
+- **Any other reason** is the plugin's, as the claim's event gives it.
 
 A Helm error "no matches for kind … cert-manager.io" in an add-on's message means the cluster lacks cert-manager's definitions. The add-on installs once they exist.
 

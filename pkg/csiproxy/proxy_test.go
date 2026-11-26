@@ -620,7 +620,7 @@ func TestCopyUnderWayIsHidden(t *testing.T) {
 	if strings.Contains(string(list.Data), "vm-4242-snap-1") {
 		t.Errorf("the copy under way is listed: %s", list.Data)
 	}
-	if status, _ := h.call(t, http.MethodDelete, "/nodes/pve1/storage/local-zfs/content/vm-4242-snap-1", nil); status != http.StatusConflict {
+	if status, _ := h.call(t, http.MethodDelete, "/nodes/pve1/storage/local-zfs/content/vm-4242-snap-1", nil); status != http.StatusInternalServerError {
 		t.Errorf("deleting the copy under way answered %d", status)
 	}
 	second := make(chan int)

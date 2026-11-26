@@ -226,15 +226,11 @@ func (r *Reconciler) reconcileAddons(ctx context.Context, cluster *clusterv1.Clu
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	conflicts, err := r.recordCertManagerWait(ctx, cluster, &addons)
+	volumeWaits := r.addonVolumeWaits(ctx, cluster, &addons)
+	conflicts, err := r.recordAddonsWaiting(ctx, cluster, &addons, volumeWaits)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	volumeWaits, err := r.addonVolumeWaits(ctx, cluster)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	conflicts = append(conflicts, volumeWaits...)
 	if err = errors.Join(r.recordAddonChanges(ctx, cluster, &addons), r.recordAddonConflicts(ctx, cluster, conflicts)); err != nil {
 		return ctrl.Result{}, err
 	}

@@ -13,7 +13,8 @@ import (
 )
 
 const (
-	// AddonsWaitingCondition on a Cluster says that add-ons wait for cert-manager, and why.
+	// AddonsWaitingCondition on a Cluster says that add-ons wait, for cert-manager or for a volume,
+	// and why.
 	AddonsWaitingCondition = "AddonsWaiting"
 	// AddonsWaitingForCertManager is its reason while cert-manager installs or waits for the
 	// cluster's Gateway API.
@@ -21,6 +22,8 @@ const (
 	// AddonsWaitingGatewayAPIMissing is its reason once the distribution's chart has installed the
 	// Gateway API and the controller has still not recorded it after gatewayAPIOverdue.
 	AddonsWaitingGatewayAPIMissing = "GatewayAPIMissing"
+	// AddonsWaitingVolumeMissing is its reason while only add-ons whose volume cannot be made wait.
+	AddonsWaitingVolumeMissing = "VolumeMissing"
 
 	// gatewayAPIOverdue is how long after the control plane is initialised the Gateway API may go
 	// unrecorded before the wait says so.
@@ -49,10 +52,10 @@ func (r *Reconciler) certManagerWaits(ctx context.Context, cluster *clusterv1.Cl
 	return true, nil
 }
 
-// recordCertManagerWait sets the cluster's AddonsWaiting condition to the add-ons that wait for
-// cert-manager and why, or takes it off. It returns the add-on conflicts to record, cert-manager's
-// with the add-ons it holds back, so that a conflict is said once.
-func (r *Reconciler) recordCertManagerWait(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons) ([]string, error) {
+// recordAddonsWaiting sets the cluster's AddonsWaiting condition to the add-ons that wait for
+// cert-manager and why, then the volume lines, or takes it off. It returns the add-on conflicts to
+// record, cert-manager's with the add-ons it holds back, so that a conflict is said once.
+func (r *Reconciler) recordAddonsWaiting(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons, volumes []string) ([]string, error) {
 	conflicts, waiting := addons.conflicts, andJoined(addons.certManagerWaiting)
 	var cond *metav1.Condition
 	switch {
@@ -66,6 +69,15 @@ func (r *Reconciler) recordCertManagerWait(ctx context.Context, cluster *cluster
 			return nil, err
 		}
 		cond = &metav1.Condition{Type: AddonsWaitingCondition, Status: metav1.ConditionTrue, Reason: reason, Message: waiting + " wait for cert-manager" + why}
+	}
+	if len(volumes) > 0 {
+		if cond == nil {
+			cond = &metav1.Condition{Type: AddonsWaitingCondition, Status: metav1.ConditionTrue, Reason: AddonsWaitingVolumeMissing}
+		}
+		if cond.Message != "" {
+			volumes = append([]string{cond.Message}, volumes...)
+		}
+		cond.Message = strings.Join(volumes, ". ")
 	}
 	found := meta.FindStatusCondition(cluster.Status.Conditions, AddonsWaitingCondition)
 	switch {

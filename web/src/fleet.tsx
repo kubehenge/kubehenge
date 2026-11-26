@@ -251,6 +251,10 @@ function held(c: Cluster): Standing | undefined {
 /** The condition Kubehenge sets while an add-on is not installed because the cluster already holds that software. */
 export const addonConflictCondition = "AddonConflict";
 
+/** The condition Kubehenge sets while add-ons wait, and its reason when only a volume they need is missing. */
+export const addonsWaitingCondition = "AddonsWaiting";
+export const volumeMissingReason = "VolumeMissing";
+
 /** The condition Kubehenge sets while add-on chart changes wait for the upgrade window. */
 export const addonChangesPendingCondition = "AddonChangesPending";
 
@@ -264,11 +268,18 @@ export const windowTime = (iso: string): string =>
 const windowShort = (iso: string): string =>
   new Date(iso).toLocaleString(undefined, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 
-// addonStanding is what the add-ons hold up: a conflict that needs someone. Changes that wait for the
-// upgrade window leave the cluster as it is, since nothing runs until the window opens.
+// addonStanding is what the add-ons hold up: a conflict, or a volume an add-on cannot get, which
+// needs someone. Changes that wait for the upgrade window leave the cluster as it is, since nothing
+// runs until the window opens.
 function addonStanding(c: Cluster): Standing | undefined {
-  return isTrue(c, addonConflictCondition)
-    ? { group: "needs", state: "warning", reason: "Add-on conflict", view: "", verdict: "Add-on conflict" }
+  if (isTrue(c, addonConflictCondition)) {
+    return { group: "needs", state: "warning", reason: "Add-on conflict", view: "", verdict: "Add-on conflict" };
+  }
+  const waiting = c.conditions.some(
+    (x) => x.type === addonsWaitingCondition && x.status === "True" && x.reason === volumeMissingReason,
+  );
+  return waiting
+    ? { group: "needs", state: "warning", reason: "Add-ons wait for a volume", view: "health", verdict: "Waiting" }
     : undefined;
 }
 

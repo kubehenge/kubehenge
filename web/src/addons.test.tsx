@@ -4,7 +4,14 @@ import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
 import { applyStaged, fakeServer, reads } from "./fake-server";
-import { addonChangesPendingCondition, addonConflictCondition, standing, windowTime } from "./fleet";
+import {
+  addonChangesPendingCondition,
+  addonConflictCondition,
+  addonsWaitingCondition,
+  standing,
+  volumeMissingReason,
+  windowTime,
+} from "./fleet";
 import { labelsLines, labelsText, maxLabelValue, maxNamespaceLabels, parseLabels } from "./namespace-labels";
 import type { Cluster, ClusterClass } from "./types";
 import { abnormal } from "./ui";
@@ -185,6 +192,20 @@ describe("the add-on conditions", () => {
       state: "warning",
       reason: "Add-on conflict",
       verdict: "Add-on conflict",
+    });
+  });
+
+  it("stands for an add-on volume that cannot be made as a wait, not a conflict", () => {
+    const volume: Cluster = {
+      ...web,
+      conditions: [{ type: addonsWaitingCondition, status: "True", reason: volumeMissingReason, since: opens }],
+    };
+    expect(standing(volume)).toMatchObject({
+      group: "needs",
+      state: "warning",
+      reason: "Add-ons wait for a volume",
+      view: "health",
+      verdict: "Waiting",
     });
   });
 

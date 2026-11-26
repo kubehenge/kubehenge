@@ -243,17 +243,17 @@ A cluster's `csi` variable can ask for snapshots on node-local storage. They bri
 
 The admission webhook and `BeforeClusterCreate` allow them only on a node-local storage of a type the plugin copies on (`kubehenge.dev/snapshot-storages` on the ClusterClasses). The controller checks again on every reconcile. A failed check leaves the plugin reaching Proxmox VE directly, with a `VolumeSnapshotsRefused` event.
 
-Switching snapshots off removes those releases. The proxy stays, and the empty holder VMs go once no copy is left. The CustomResourceDefinitions stay, so VolumeSnapshots left behind keep their volumes.
+Switching snapshots off removes those releases. The proxy stays. Once no copy is left, the empty holder VMs go, and so do the copies' namespace and the proxy's rights in the workload cluster. The CustomResourceDefinitions stay, so VolumeSnapshots left behind keep their volumes.
 
 #### The copy proxy
 
 Beside the plugin's controller of every cluster, as a native sidecar, the controller runs `kubehenge csi-proxy` from Kubehenge's own image, pinned by digest. The plugin's configuration for it, `kube-system/kubehenge-proxmox-proxied`, holds the cluster's own token and points at the proxy on `127.0.0.1:8006`.
 
-With snapshots, the plugin runs its newest release with the snapshotter sidecar, and the proxy makes copies. Without them it only finds copies made before. The proxy passes every call on to Proxmox VE with that token. It verifies Proxmox VE's certificate against the cluster's CA. It answers three kinds of call itself:
+With snapshots, the plugin runs its newest release with the snapshotter sidecar, and the proxy makes copies. Without them it only finds copies made before. Once none is left it reads no records and answers only a storage's configuration itself. A call it cannot do gets status 500, which both of the plugin's releases take as a failure. The default release reads most other statuses as an empty success. The proxy passes every call on to Proxmox VE with that token. It verifies Proxmox VE's certificate against the cluster's CA. It answers three kinds of call itself:
 
 - **A copy**, made with the cluster's token in the steps below.
 - **Deleting a copy**, through the holder (`delete=unusedN`), as the token may not delete storage content.
-- **A storage's configuration**, from the storage list. Proxmox VE shows it singly only to `Datastore.Allocate`. A storage the list does not show gets a refusal that names the storage and `Datastore.Audit`.
+- **A storage's configuration**, from the storage list. Proxmox VE shows it singly only to `Datastore.Allocate`. A storage the list does not show gets a refusal that names the storage and `Datastore.Audit`. Only the newest release shows that text. The default release says `not found` or `not authorized to access endpoint`, so the cluster's waiting line names the cause.
 
 #### How a copy is made
 

@@ -79,8 +79,8 @@ type VolumeSnapshots struct {
 }
 
 // copyProxy is the proxy beside the CSI plugin's controller: whether it runs, whether it makes
-// copies or only finds those made before, whether copies are made or left (copied), and what it
-// runs with.
+// copies, whether copies are made or left (copied), which it then finds through their records, and
+// what it runs with. Without copied it reads no records and needs no rights in the workload cluster.
 type copyProxy struct {
 	on, copies, copied bool
 	image              string
@@ -160,8 +160,11 @@ func (h *Hooks) checkVolumeSnapshots(cluster *clusterv1.Cluster, class *clusterv
 // Datastore.Allocate, which the cluster's token lacks, and the proxy answers it from the storage
 // list. It makes copies, and the cluster gets holder VMs on the nodes its volumes may be on, while
 // the cluster takes volume snapshots. Once they are switched off it only finds the copies made
-// before, which keep the plugin's newest release (copied), until none is left and the empty holder
-// VMs go. Without the image, or a volume owner, the plugin reaches Proxmox VE directly.
+// before, which keep the plugin's newest release (copied), until none is left. Then the empty
+// holder VMs go, and the copies' namespace and the proxy's rights before the ClusterResourceSet
+// drops them, so that a failure is tried again. Only a cluster whose set still applies them is
+// asked for its copies. Without the image, or a volume owner, the plugin reaches Proxmox VE
+// directly.
 func (r *Reconciler) copyProxyFor(ctx context.Context, cluster *clusterv1.Cluster, creds Credentials, addons *Addons) (copyProxy, error) {
 	names, err := NamesFor(r.WorkloadPool, cluster.Namespace, cluster.Name)
 	if err != nil {
@@ -185,13 +188,54 @@ func (r *Reconciler) copyProxyFor(ctx context.Context, cluster *clusterv1.Cluste
 	if !proxy.on {
 		return proxy, nil
 	}
+	had, err := r.copyRecordsApplied(ctx, cluster)
+	if err != nil || !had {
+		return proxy, err
+	}
 	if proxy.copied, err = r.copiesRemain(ctx, cluster); err != nil || proxy.copied {
 		return proxy, err
 	}
 	if err = r.Cloud.RemoveEmptyVolumeHolders(ctx, names); err != nil {
 		return proxy, fmt.Errorf("removing the cluster's empty holder VMs: %w", err)
 	}
-	return proxy, nil
+	return proxy, r.removeCopyRecords(ctx, cluster)
+}
+
+// copyRecordsApplied reports whether the cluster's ClusterResourceSet applies the copies' namespace
+// and the proxy's rights, as it does while copies are made or left.
+func (r *Reconciler) copyRecordsApplied(ctx context.Context, cluster *clusterv1.Cluster) (bool, error) {
+	s := &corev1.Secret{}
+	err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: cluster.Name + "-proxmox"}, s)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("reading the cluster's ClusterResourceSet Secret: %w", err)
+	}
+	_, applied := s.Data[csiproxy.Namespace+".yaml"]
+	return applied, nil
+}
+
+// removeCopyRecords deletes from the workload cluster what the ClusterResourceSet applied for the
+// copies, which it never deletes itself: the proxy's rights for its events, and the namespace of
+// the copies' records with its rights there. The proxied configuration stays.
+func (r *Reconciler) removeCopyRecords(ctx context.Context, cluster *clusterv1.Cluster) error {
+	workload, found, err := r.Remotes.get(ctx, cluster)
+	if err != nil || !found {
+		// Without a kubeconfig, nothing was ever applied to the cluster.
+		return err
+	}
+	for _, o := range []client.Object{
+		&rbacv1.RoleBinding{Namespace: metav1.NamespaceSystem, Name: csiProxyName},
+		&rbacv1.Role{Namespace: metav1.NamespaceSystem, Name: csiProxyName},
+		&corev1.Namespace{Name: csiproxy.Namespace},
+	} {
+		if err := client.IgnoreNotFound(workload.client.Delete(ctx, o)); err != nil {
+			r.Remotes.forget(cluster)
+			return fmt.Errorf("deleting the copies' namespace from the cluster: %w", err)
+		}
+	}
+	return nil
 }
 
 // holderNodes are the nodes the cluster's volumes may be on, which hold its copies: those its VMs
@@ -303,9 +347,10 @@ func (r *Reconciler) removeVolumeSnapshots(ctx context.Context, cluster *cluster
 }
 
 // copyProxyManifests are, for the ClusterResourceSet, the CSI plugin's configuration that reaches
-// Proxmox VE through the proxy, the namespace of the copies' records (which only the plugin's
-// controller, and with it the proxy, may write), and its right to record events in kube-system.
-func copyProxyManifests(c Credentials) (map[string][]byte, error) {
+// Proxmox VE through the proxy, and while copies are made or left, the namespace of the copies'
+// records (which only the plugin's controller, and with it the proxy, may write) and its right to
+// record events in kube-system.
+func copyProxyManifests(c Credentials, proxy *copyProxy) (map[string][]byte, error) {
 	csi, err := csiConfig(c, &proxmoxCluster{URL: "http://" + csiProxyAddress + "/api2/json", TokenID: c.TokenID, TokenSecret: c.TokenSecret, Region: c.Region})
 	if err != nil {
 		return nil, err
@@ -313,6 +358,9 @@ func copyProxyManifests(c Credentials) (map[string][]byte, error) {
 	config, err := workloadManifest(proxiedWorkloadSecret, map[string]string{csiConfigKey: csi})
 	if err != nil {
 		return nil, err
+	}
+	if !proxy.copied {
+		return map[string][]byte{proxiedWorkloadSecret + ".yaml": config}, nil
 	}
 	role := func(namespace string, rule rbacv1.PolicyRule) []any {
 		return []any{
@@ -355,7 +403,7 @@ func csiProxyContainer(proxy *copyProxy) map[string]any {
 			"csi-proxy", "--listen=" + csiProxyAddress, "--proxmox-url=" + proxy.endpoint.URL, "--proxmox-ca=" + csiProxyCA,
 			"--proxmox-insecure=" + strconv.FormatBool(proxy.endpoint.Insecure),
 			"--volume-owner=" + strconv.Itoa(proxy.owner), "--pool=" + proxy.pool, "--holders=" + proxy.holders,
-			"--copies=" + strconv.FormatBool(proxy.copies),
+			"--copies=" + strconv.FormatBool(proxy.copies), "--find-copies=" + strconv.FormatBool(proxy.copied),
 		},
 		"env":          []any{fieldEnv("POD_NAME", "metadata.name"), fieldEnv("POD_NAMESPACE", "metadata.namespace")},
 		"resources":    map[string]any{requestsKey: map[string]any{cpuKey: cpu10m, memoryKey: "32Mi"}},

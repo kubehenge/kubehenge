@@ -468,7 +468,7 @@ func resourceSetSecret(cluster *clusterv1.Cluster, endpoint Endpoint, c Credenti
 	}
 	data := map[string][]byte{workloadSecret + ".yaml": manifest}
 	if addons.copyProxy.on {
-		proxied, err := copyProxyManifests(c)
+		proxied, err := copyProxyManifests(c, &addons.copyProxy)
 		if err != nil {
 			return nil, err
 		}

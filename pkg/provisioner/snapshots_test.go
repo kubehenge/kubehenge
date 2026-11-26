@@ -114,7 +114,7 @@ func TestVolumeSnapshotsRefusedAtAdmissionAndCreation(t *testing.T) {
 func TestResourceSetSecretProxiesTheCSIPlugin(t *testing.T) {
 	t.Parallel()
 	creds := Credentials{TokenID: "kubehenge.team-a.web@pve!cluster", TokenSecret: "s3cret", VolumeOwner: 4242, Region: "lab"} //nolint:gosec // test data
-	s, err := resourceSetSecret(cluster(), Endpoint{URL: "https://pve.example.org:8006", CA: "PEM"}, creds, &Addons{VolumeSnapshots: true, copyProxy: copyProxy{on: true, copies: true}})
+	s, err := resourceSetSecret(cluster(), Endpoint{URL: "https://pve.example.org:8006", CA: "PEM"}, creds, &Addons{VolumeSnapshots: true, copyProxy: copyProxy{on: true, copies: true, copied: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,13 +311,10 @@ func TestReconcileSwitchesVolumeSnapshotsOnAndOff(t *testing.T) {
 	if err := kube.Get(ctx, client.ObjectKeyFromObject(wrapper), wrapper); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := wrapper.Data["kubehenge-proxmox-proxied.yaml"]; !ok {
-		t.Errorf("the proxy went with the last copy, which also reads the storage's configuration: %v", slices.Sorted(maps.Keys(wrapper.Data)))
-	}
-	for _, o := range applied {
-		if err := workload.Get(ctx, client.ObjectKeyFromObject(o), o); err != nil {
-			t.Errorf("the workload cluster lost %T %s: %v", o, o.GetName(), err)
-		}
+	checkCopiesGone(t, wrapper, workload, applied)
+	// Once done, the cluster is no longer asked for copies, nor Proxmox VE for empty holders.
+	if err := reconcile(t, r, web); err != nil {
+		t.Fatal(err)
 	}
 	if cloud.emptied != 1 {
 		t.Errorf("empty holder VMs removed %d times, want once", cloud.emptied)
@@ -326,6 +323,21 @@ func TestReconcileSwitchesVolumeSnapshotsOnAndOff(t *testing.T) {
 	for _, name := range []string{"web-snapshot-class", "web-snapshot-controller"} {
 		if _, _, ok := proxyOf(t, kube, name); ok {
 			t.Errorf("%s is still there", name)
+		}
+	}
+}
+
+// checkCopiesGone checks that once the last copy is gone, the resource set applies only the proxied
+// configuration, and the copies' namespace and the proxy's rights are gone from the workload cluster.
+func checkCopiesGone(t *testing.T, wrapper *corev1.Secret, workload client.Client, applied []client.Object) {
+	t.Helper()
+	if keys := slices.Sorted(maps.Keys(wrapper.Data)); !slices.Equal(keys, []string{"kubehenge-proxmox-proxied.yaml", "kubehenge-proxmox.yaml"}) {
+		t.Errorf("with the last copy gone the resource set applies %v, want the proxied configuration without the copies' namespace and rights", keys)
+	}
+	for _, o := range applied {
+		err := workload.Get(context.Background(), client.ObjectKeyFromObject(o), o)
+		if _, config := o.(*corev1.Secret); config != (err == nil) {
+			t.Errorf("%T %s in the workload cluster: %v", o, o.GetName(), err)
 		}
 	}
 }
@@ -351,7 +363,7 @@ func checkProxiedCSI(t *testing.T, kube client.Client, copies bool) { //nolint:r
 	want := []string{
 		"csi-proxy", "--listen=127.0.0.1:8006", "--proxmox-url=https://pve.example.org:8006", "--proxmox-ca=/etc/kubehenge/proxmox/ca.crt",
 		"--proxmox-insecure=false", "--volume-owner=4242", "--pool=" + names.Pool, "--holders=" + names.VolumeHolders(),
-		"--copies=" + strconv.FormatBool(copies),
+		"--copies=" + strconv.FormatBool(copies), "--find-copies=true",
 	}
 	given := lookup[[]any](t, csi, "initContainers", 0, "args")
 	args := make([]string, 0, len(given))

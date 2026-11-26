@@ -11,7 +11,8 @@ import (
 )
 
 // The add-ons the controller holds back are on the page as kubectl shows them: a conflict and a
-// Gateway API that never came are warnings, a wait for cert-manager to install is under way.
+// Gateway API that never came are warnings, as is a volume that cannot be made, and a wait for
+// cert-manager to install is under way.
 func TestHealthSaysWhatHoldsAddonsBack(t *testing.T) {
 	t.Parallel()
 	const conflict = "cert-manager is not installed: the cluster already runs its Deployment security/cert-manager, which no Kubehenge release owns. Remove it. Until then monitoring and loki wait"
@@ -22,6 +23,7 @@ func TestHealthSaysWhatHoldsAddonsBack(t *testing.T) {
 		{provisioner.AddonConflictCondition, provisioner.AddonConflictReason, conflict, attentionView{Severity: severityWarning, Section: sectionAddons, What: "Add-on conflict", Message: conflict}},
 		{provisioner.AddonsWaitingCondition, provisioner.AddonsWaitingForCertManager, "monitoring wait for cert-manager to be deployed", attentionView{Severity: severityProgress, Section: sectionAddons, What: "Add-ons wait for cert-manager", Message: "monitoring wait for cert-manager to be deployed"}},
 		{provisioner.AddonsWaitingCondition, provisioner.AddonsWaitingGatewayAPIMissing, "monitoring wait for cert-manager, gone", attentionView{Severity: severityWarning, Section: sectionAddons, What: "Add-ons wait for cert-manager", Message: "monitoring wait for cert-manager, gone"}},
+		{provisioner.AddonsWaitingCondition, provisioner.AddonsWaitingVolumeMissing, "logs has no volume: full", attentionView{Severity: severityWarning, Section: sectionAddons, What: "Add-ons wait for a volume", Message: "logs has no volume: full"}},
 	} {
 		c := &clusterv1.Cluster{Name: "web", Status: clusterv1.ClusterStatus{Conditions: []metav1.Condition{{
 			Type: tc.condType, Status: metav1.ConditionTrue, Reason: tc.reason, Message: tc.message,
