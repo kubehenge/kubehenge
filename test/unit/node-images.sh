@@ -111,9 +111,14 @@ cat > "${tmp}/bin/mktemp" << 'EOF'
 mkdir "${STUB_TMP}/work.$$"
 echo "${STUB_TMP}/work.$$"
 EOF
-for tool in sed systemctl; do
-    printf '#!/bin/sh\necho "%s $*" >> "${CALLS}"\n' "${tool}" > "${tmp}/bin/${tool}"
-done
+cat > "${tmp}/bin/sed" << 'EOF'
+#!/bin/sh
+echo "sed $*" >> "${CALLS}"
+EOF
+cat > "${tmp}/bin/systemctl" << 'EOF'
+#!/bin/sh
+echo "systemctl $*" >> "${CALLS}"
+EOF
 chmod +x "${tmp}/bin/"* "${tmp}/stub/cosign"
 
 # run: the script's output in out, its status in status and the stubs' calls in calls.
