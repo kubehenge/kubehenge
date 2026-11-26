@@ -38,12 +38,12 @@ RUN : "${PVE_VERSION:?build with --build-arg PVE_VERSION=<version>, as scripts/p
     # it goes to, this node too; e2fsprogs, which every full Debian has and pve-container leaves
     # undeclared, formats a container's disk on directory storage; ifupdown2 brings up the VMs'
     # bridge and dnsmasq answers their name lookups there; openssl for the appliance's installer and
-    # jq for its test, which run on the node. proxmox-firewall, which pve-manager only recommends, is
+    # jq and tcpdump for its test, which run on the node. proxmox-firewall, which pve-manager only recommends, is
     # the firewall on nftables: pve-firewall needs the legacy iptables tables and br_netfilter, which
     # runner kernels lack, and then applies no rule at all (test/e2e/ci/up.sh turns it on).
     && apt-get install -y -qq --no-install-recommends systemd systemd-sysv dbus kmod procps iproute2 \
         ifupdown2 iptables dnsmasq "pve-manager=${PVE_VERSION}" qemu-server pve-container pve-cluster postfix socat \
-        openssh-server e2fsprogs openssl jq proxmox-firewall \
+        openssh-server e2fsprogs openssl jq tcpdump proxmox-firewall \
     # The version the cache key names, or the image would be cached under a key it does not match.
     && test "$(pveversion | cut -d/ -f1-2)" = "pve-manager/${PVE_VERSION}" \
     # Installing pve-manager adds the subscription-only repository, which answers 401 without a

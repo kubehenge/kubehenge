@@ -4,6 +4,7 @@ package appliance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -14,7 +15,10 @@ import (
 )
 
 // systemAnnouncer sends the frames over raw sockets, which need CAP_NET_RAW, and learns of added
-// addresses from the kernel's address notifications.
+// addresses from the kernel's address notifications. The arp_notify and ndisc_notify settings cannot
+// replace them. Both act when a device comes up or changes its hardware address, ndisc_notify also
+// when duplicate address detection ends, and a restart of the service alone does none of these. The
+// service cannot set them either, with its kernel tunables read-only.
 func systemAnnouncer(ctx context.Context, log *slog.Logger) *Announcer {
 	n := &Announcer{Log: log, List: announceable, Send: sendAnnouncement}
 	changes, err := watchAddresses(ctx)
@@ -113,13 +117,23 @@ func sendNA(a Announcement) error {
 		return fmt.Errorf("choose %s: %w", a.Interface, err)
 	}
 	if err = unix.Bind(fd, &unix.SockaddrInet6{Addr: a.IP.As16()}); err != nil {
-		return fmt.Errorf("use %s as the sender: %w", a.IP, err)
+		return senderError(a.IP, err)
 	}
 	all := netip.MustParseAddr("ff02::1").As16()
 	if err = unix.Sendto(fd, unsolicitedNA(a.MAC, a.IP), 0, &unix.SockaddrInet6{Addr: all, ZoneId: uint32(a.Index)}); err != nil { //nolint:gosec // an interface index is small and positive
 		return fmt.Errorf("send on %s: %w", a.Interface, err)
 	}
 	return nil
+}
+
+// senderError is why the address cannot be the sender. The kernel refuses a tentative address
+// (EADDRNOTAVAIL), so an address in duplicate address detection is not ready yet. When detection
+// ends the kernel reports the address again, and the watcher has it announced then.
+func senderError(ip netip.Addr, err error) error {
+	if errors.Is(err, unix.EADDRNOTAVAIL) {
+		return fmt.Errorf("use %s as the sender: %w: %w", ip, errAddressNotReady, err)
+	}
+	return fmt.Errorf("use %s as the sender: %w", ip, err)
 }
 
 // ndHopLimit is the hop limit of neighbour discovery messages, which hosts check to know they came

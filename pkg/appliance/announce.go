@@ -3,6 +3,7 @@ package appliance
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -12,8 +13,10 @@ import (
 
 // An address is announced announceRepeat times, announceEvery apart. The first frame can leave
 // before the uplink forwards the container's traffic again, so a later one is what the switch learns
-// from. RFC 4861 section 10 caps unsolicited neighbour advertisements at three
-// and section 7.2.6 spaces them by the retransmission timer, one second. RFC 5227 section 1.1 asks for at least two ARP announcements, which three also meet.
+// from. RFC 4861 section 10 caps unsolicited neighbour advertisements at three, and section 7.2.6
+// spaces them by the retransmission timer, one second. IPv4 follows the same schedule, which is
+// arping -U's one-second spacing. RFC 5227 section 2.3 has a host that starts using an address send
+// two ARP announcements two seconds apart, so three a second apart reach the network as early.
 const (
 	announceRepeat = 3
 	announceEvery  = time.Second
@@ -48,6 +51,10 @@ type Announcer struct {
 	warn sync.Once
 }
 
+// errAddressNotReady is a Send failure that is no fault: the address cannot send yet, as an IPv6
+// address in duplicate address detection cannot. The kernel reports the address again once it can.
+var errAddressNotReady = errors.New("the address cannot send yet")
+
 // AnnounceAddresses announces the appliance's addresses when it starts and whenever one is added,
 // until ctx ends. A failure is logged once and never stops the appliance.
 func (a *Appliance) AnnounceAddresses(ctx context.Context) {
@@ -67,6 +74,10 @@ func (n *Announcer) Run(ctx context.Context) {
 			return
 		case _, ok := <-changes:
 			if !ok {
+				// The watcher closes the channel when ctx ends too, which is a stop and no fault.
+				if ctx.Err() != nil {
+					return
+				}
 				n.warnOnce("watching for added addresses stopped, so ones added later are not announced", nil)
 				changes = nil
 			}
@@ -75,8 +86,8 @@ func (n *Announcer) Run(ctx context.Context) {
 }
 
 // announceNew announces the addresses not in announced and returns the set that was announced. An
-// address whose first frame failed is left out, so the next change tries it again: an IPv6 address
-// still in duplicate address detection cannot send yet.
+// address whose first frame failed is left out, so the next change tries it again. One that cannot
+// send yet is left out without a warning, since the change that makes it ready comes next.
 func (n *Announcer) announceNew(ctx context.Context, announced map[string]bool) map[string]bool {
 	all, err := n.List()
 	if err != nil {
@@ -96,20 +107,29 @@ func (n *Announcer) announceNew(ctx context.Context, announced map[string]bool) 
 		if i > 0 && !n.pause(ctx) {
 			return now
 		}
-		var sent []Announcement
-		for _, a := range fresh {
-			if err := n.Send(a); err != nil {
-				n.warnOnce("announcing "+a.IP.String()+" on "+a.Interface, err)
-				continue
-			}
-			if i == 0 {
+		fresh = n.sendEach(fresh)
+		if i == 0 {
+			for _, a := range fresh {
 				now[a.key()] = true
 			}
-			sent = append(sent, a)
 		}
-		fresh = sent
 	}
 	return now
+}
+
+// sendEach sends one frame for each address and returns those it went out for.
+func (n *Announcer) sendEach(addrs []Announcement) []Announcement {
+	var sent []Announcement
+	for _, a := range addrs {
+		if err := n.Send(a); err != nil {
+			if !errors.Is(err, errAddressNotReady) {
+				n.warnOnce("announcing "+a.IP.String()+" on "+a.Interface, err)
+			}
+			continue
+		}
+		sent = append(sent, a)
+	}
+	return sent
 }
 
 func (n *Announcer) pause(ctx context.Context) bool {

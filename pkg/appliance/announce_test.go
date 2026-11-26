@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -57,6 +58,9 @@ type announceRun struct {
 	sent   []string
 	waits  []time.Duration
 	failOn error
+	// fail, when set, decides each send's error instead of failOn.
+	fail  func(Announcement) error
+	calls int
 }
 
 func (r *announceRun) announcer(log *slog.Logger) *Announcer {
@@ -70,7 +74,12 @@ func (r *announceRun) announcer(log *slog.Logger) *Announcer {
 		Send: func(a Announcement) error {
 			r.mu.Lock()
 			defer r.mu.Unlock()
-			if r.failOn != nil {
+			r.calls++
+			if r.fail != nil {
+				if err := r.fail(a); err != nil {
+					return err
+				}
+			} else if r.failOn != nil {
 				return r.failOn
 			}
 			r.sent = append(r.sent, a.IP.String())
@@ -177,12 +186,83 @@ func TestAnnounceWithoutPermissionWarnsOnceAndKeepsRunning(t *testing.T) {
 	changes <- struct{}{}
 	cancel()
 	<-done
+	r.mu.Lock()
+	calls := r.calls
+	r.mu.Unlock()
+	// Two addresses tried at start and after each of the two changes: the failure stopped nothing.
+	if calls < 6 {
+		t.Errorf("sends tried = %d, want the start and both changes to try both addresses", calls)
+	}
 	got := h.lines()
 	if len(got) != 1 {
 		t.Fatalf("warnings = %q, want exactly one", got)
 	}
 	if !strings.Contains(got[0], "could not announce") {
 		t.Errorf("warning = %q", got[0])
+	}
+}
+
+func TestAnnounceSkipsAnAddressNotReadyWithoutWarning(t *testing.T) {
+	t.Parallel()
+	h := &warnings{}
+	other := Announcement{Interface: "eth1", Index: 3, MAC: announceMAC, IP: netip.MustParseAddr("10.16.249.5")}
+	r := &announceRun{list: []Announcement{announcementOf(announceV6), other}, fail: func(a Announcement) error {
+		if a.IP == announceV6 {
+			return fmt.Errorf("use %s as the sender: %w", a.IP, errAddressNotReady)
+		}
+		return errors.New("operation not permitted")
+	}}
+	r.announcer(slog.New(slog.NewTextHandler(h, nil))).announceNew(t.Context(), map[string]bool{})
+	got := h.lines()
+	if len(got) != 1 || !strings.Contains(got[0], "eth1") {
+		t.Errorf("warnings = %q, want one, for the failure on eth1", got)
+	}
+}
+
+func TestAnnounceAnAddressOnceItIsReady(t *testing.T) {
+	t.Parallel()
+	h := &warnings{}
+	ready := false
+	r := &announceRun{list: []Announcement{announcementOf(announceV6)}}
+	r.fail = func(Announcement) error {
+		if !ready {
+			return errAddressNotReady
+		}
+		return nil
+	}
+	n := r.announcer(slog.New(slog.NewTextHandler(h, nil)))
+	announced := n.announceNew(t.Context(), map[string]bool{})
+	if got := r.sentSoFar(); len(got) != 0 {
+		t.Fatalf("sent %v before the address was ready", got)
+	}
+	r.mu.Lock()
+	ready = true
+	r.mu.Unlock()
+	n.announceNew(t.Context(), announced)
+	if got := r.sentSoFar(); len(got) != announceRepeat {
+		t.Errorf("sent %v once ready, want %d advertisements", got, announceRepeat)
+	}
+	if got := h.lines(); len(got) != 0 {
+		t.Errorf("warnings = %q, want none", got)
+	}
+}
+
+func TestAnnounceStoppedWithItsWatchWarnsNothing(t *testing.T) {
+	t.Parallel()
+	h := &warnings{}
+	r := &announceRun{}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	closed := make(chan struct{})
+	close(closed)
+	// Both the stop and the closed watch are ready, and select picks either, so many runs see both.
+	for range 200 {
+		n := r.announcer(slog.New(slog.NewTextHandler(h, nil)))
+		n.Changes = closed
+		n.Run(ctx)
+	}
+	if got := h.lines(); len(got) != 0 {
+		t.Errorf("warnings = %q, want none for a stop", got)
 	}
 }
 
