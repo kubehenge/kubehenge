@@ -2332,7 +2332,7 @@ export function SiteFields({ form, set, shown }: FieldsProps): JSX.Element {
         label="Site CA"
         hint={
           <>
-            The root in PEM is enough.
+            PEM, root only.
             <SiteCARollNote siteCA={form.siteCA} />
           </>
         }
