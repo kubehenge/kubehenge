@@ -86,10 +86,10 @@ func (a *Appliance) nodeLog(ctx context.Context, admin []byte, node string) []st
 // refusalLine says that the node refused the host's certificate, and what to do about it. The
 // node's own log decides first: a reason other than an unknown authority, or a candidate authority
 // that is one of the nodes' public roots, is no matter of the Site CA. A candidate the Site CA
-// holds signs no longer, as a device's root made again does. With no candidate logged, the chain
-// the host presents now names the root to add. Where a public root or the Site CA already signs
-// that chain, or holds the root it names, nothing is to add, since the node may meet another device
-// than the appliance does.
+// holds signs no longer, as a device's root made again does. With no candidate logged, a root to
+// add is named only where the host presents it, self-signed, and nothing the nodes trust signs the
+// chain or holds that root. Every other case says to check the Site CA, since the node may meet
+// another device than the appliance does, and an issuer the host leaves out may be any root.
 func (a *Appliance) refusalLine(ctx context.Context, s *Settings, node string, r rejection) string {
 	refused := fmt.Sprintf("Node %s refused %s's certificate", node, r.host)
 	plain := fmt.Sprintf("%s: %s.", refused, r.reason)
@@ -99,36 +99,40 @@ func (a *Appliance) refusalLine(ctx context.Context, s *Settings, node string, r
 	case r.authority != "":
 		return fmt.Sprintf("%s, signed by a new %q. Paste the new root.", refused, r.authority)
 	}
+	check := plain + " Check the Site CA."
 	chain := a.liveChain(ctx, s, r.host)
-	public, now := a.publicRoots(), a.now()
-	if chain == nil || verifyChain(chain, public, now) == nil || siteCAHolds(s, chain, now) {
-		return plain + " Check the Site CA."
+	if chain == nil {
+		return check
 	}
 	top, presented := endOf(chain)
+	public, now := a.publicRoots(), a.now()
 	switch {
-	case presented && isPublicRoot(top, public, now):
+	case !presented || verifyChain(chain, public, now) == nil || nodesTrust(s, chain, top, now):
+		return check
+	case isPublicRoot(top, public, now):
 		return plain
-	case presented:
-		return fmt.Sprintf("%s. Add its root %q (SHA-256 %s) to the Site CA.", refused, subjectOf(top), Fingerprint(top))
 	}
-	return fmt.Sprintf("%s. Add %q to the Site CA.", refused, issuerOf(top))
+	return fmt.Sprintf("%s. Add its root %q (SHA-256 %s) to the Site CA.", refused, subjectOf(top), Fingerprint(top))
 }
 
-// siteCAHolds says whether the saved Site CA signs chain, or holds the root it ends at or names.
-func siteCAHolds(s *Settings, chain []*x509.Certificate, now time.Time) bool {
-	site, err := parseCertificates(s.SiteCA)
-	if err != nil {
+// nodesTrust says whether the authorities the nodes trust beside the public roots, the saved Site CA
+// and the proxy's CA, sign chain or hold the root top it ends at.
+func nodesTrust(s *Settings, chain []*x509.Certificate, top *x509.Certificate, now time.Time) bool {
+	var trusted []*x509.Certificate
+	bundles := []string{s.SiteCA}
+	if s.Proxy.Enabled() {
+		bundles = append(bundles, s.Proxy.CABundle)
+	}
+	for _, bundle := range bundles {
+		if certs, err := parseCertificates(bundle); err == nil {
+			trusted = append(trusted, certs...)
+		}
+	}
+	if len(trusted) == 0 {
 		return false
 	}
-	if verifyChain(chain, poolOf(site), now) == nil {
-		return true
-	}
-	top, presented := endOf(chain)
-	return slices.ContainsFunc(site, func(c *x509.Certificate) bool {
-		if presented {
-			return c.Equal(top) || sameKey(top)(c)
-		}
-		return canonicalName(c.RawSubject) == canonicalName(top.RawIssuer)
+	return verifyChain(chain, poolOf(trusted), now) == nil || slices.ContainsFunc(trusted, func(c *x509.Certificate) bool {
+		return c.Equal(top) || sameKey(top)(c)
 	})
 }
 

@@ -1448,7 +1448,7 @@ func TestAFailedRunLineFollowsTheNodesLog(t *testing.T) {
 		},
 		"no candidate, the root not presented": {
 			unknown, certs(c.leaf, c.intermediate), nil,
-			`Node 10.0.0.11 refused ` + host + `'s certificate. Add "CN=Inspect Root" to the Site CA.`,
+			`Node 10.0.0.11 refused ` + host + `'s certificate: certificate signed by unknown authority. Check the Site CA.`,
 		},
 	} {
 		a := &Appliance{sitePublic: tc.public}

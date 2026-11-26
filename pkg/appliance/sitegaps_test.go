@@ -1,10 +1,12 @@
 package appliance
 
 import (
+	"cmp"
 	"crypto/x509"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestSiteCheckNamesWhatAChainLacksByWhatIsMissing names the first issuer that neither the host nor
@@ -161,6 +163,45 @@ func TestAFailedRunLineNeverAsksToAddARootTheSiteCAHolds(t *testing.T) {
 		}
 		if got := a.refusalLine(t.Context(), &Settings{SiteCA: tc.siteCA}, "10.0.0.11", r); got != tc.want {
 			t.Errorf("%s:\n got %q\nwant %q", name, got, tc.want)
+		}
+	}
+}
+
+// TestAFailedRunLineNamesARootOnlyWhereTheHostPresentsOneTheNodesLack says to check the Site CA
+// where the proxy's CA holds the root, where the host leaves out the issuer, which may be a public
+// root, and where the Site CA holds the presented root of a chain that fails for another reason.
+func TestAFailedRunLineNamesARootOnlyWhereTheHostPresentsOneTheNodesLack(t *testing.T) {
+	t.Parallel()
+	const host = "tuf-repo-cdn.sigstore.dev"
+	proxyRoot := newTestRoot(t, "Proxy Root")
+	proxyIssuing := proxyRoot.issue(t, issuance{cn: "Proxy Issuing"})
+	proxyLeaf := proxyIssuing.issue(t, issuance{cn: "host.example", leaf: true})
+	public := newTestRoot(t, "Public Test Root")
+	clientOnly := public.issue(t, issuance{cn: "host.example", leaf: true, clientOnly: true})
+	corp := newTestRoot(t, "Corp Root")
+	expired := corp.issue(t, issuance{cn: "Corp Inspect", notAfter: time.Now().Add(-time.Minute)})
+	underExpired := expired.issue(t, issuance{cn: "host.example", leaf: true})
+	other := newTestRoot(t, "Internal-R2").pem()
+	withProxy := &Settings{SiteCA: other, Proxy: &Proxy{URL: "http://proxy.example:3128", CABundle: proxyRoot.pem()}}
+	unknown := `[talos] controller failed {"controller": "security.TUFTrustedRootController", "error": "Get \"https://` + host + `/root.json\": tls: failed to verify certificate: x509: certificate signed by unknown authority"}`
+	check := "Node 10.0.0.11 refused " + host + "'s certificate: certificate signed by unknown authority. Check the Site CA."
+	for name, tc := range map[string]struct {
+		settings *Settings
+		chain    []*x509.Certificate
+		public   *x509.CertPool
+	}{
+		"the proxy's CA holds the presented root":        {withProxy, certs(proxyLeaf, proxyIssuing, proxyRoot), nil},
+		"the proxy's CA holds the root left out":         {withProxy, certs(proxyLeaf, proxyIssuing), nil},
+		"a public root left out":                         {&Settings{SiteCA: other}, certs(clientOnly), poolOf(certs(public))},
+		"the Site CA holds the root above an expired CA": {&Settings{SiteCA: corp.pem()}, certs(underExpired, expired, corp), nil},
+	} {
+		a := &Appliance{sitePublic: cmp.Or(tc.public, x509.NewCertPool()), SiteChains: fakeChains(map[string][]*x509.Certificate{host: tc.chain})}
+		r, found := rejectedCertificate([]string{unknown})
+		if !found {
+			t.Fatalf("%s: no rejection found", name)
+		}
+		if got := a.refusalLine(t.Context(), tc.settings, "10.0.0.11", r); got != check {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, check)
 		}
 	}
 }
