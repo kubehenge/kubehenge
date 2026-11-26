@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -53,9 +54,10 @@ func (a *Appliance) logAddressesOutcome(failing string, err error) string {
 	return ""
 }
 
-// recordAddresses writes the appliance's addresses into provisioner.ApplianceAddressesName where
-// they differ from what it holds, through kube, or when nil, a client made from the interface's
-// kubeconfig. Without a management cluster there is nothing to write to.
+// recordAddresses writes the appliance's addresses and its network into
+// provisioner.ApplianceAddressesName where they differ from what it holds, through kube, or when
+// nil, a client made from the interface's kubeconfig. Without a management cluster there is nothing
+// to write to.
 func (a *Appliance) recordAddresses(ctx context.Context, kube kubernetes.Interface) error {
 	if !a.Ready() {
 		return nil
@@ -74,19 +76,34 @@ func (a *Appliance) recordAddresses(ctx context.Context, kube kubernetes.Interfa
 	if err != nil {
 		return fmt.Errorf("reading %s/%s: %w", interfaceNamespace, provisioner.ApplianceAddressesName, err)
 	}
-	want := strings.Join(own, ",")
-	if got, ok := held.Data[provisioner.ApplianceAddressesKey]; ok && got == want {
+	want := map[string]string{provisioner.ApplianceAddressesKey: strings.Join(own, ","), provisioner.ApplianceBridgeKey: a.Bridge, provisioner.ApplianceVLANKey: ""}
+	if a.Bridge != "" {
+		want[provisioner.ApplianceVLANKey] = strconv.Itoa(a.VLAN)
+	}
+	if holds(held.Data, want) {
 		return nil
 	}
-	patch, err := json.Marshal(map[string]any{"data": map[string]string{provisioner.ApplianceAddressesKey: want}})
+	patch, err := json.Marshal(map[string]any{"data": want})
 	if err != nil {
 		return fmt.Errorf("the appliance's addresses: %w", err)
 	}
 	if _, err := configMaps.Patch(ctx, provisioner.ApplianceAddressesName, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
 		return fmt.Errorf("writing %s/%s: %w", interfaceNamespace, provisioner.ApplianceAddressesName, err)
 	}
-	a.Log.Info("recorded the appliance's addresses for the clusters' firewalls", "addresses", want)
+	a.Log.Info("recorded the appliance's addresses for the clusters' firewalls", "addresses", want[provisioner.ApplianceAddressesKey], "bridge", a.Bridge)
 	return nil
+}
+
+// holds tells whether data holds every key of want with its value. An empty value counts as held by
+// a key that is missing, as a ConfigMap written before the key was.
+func holds(data, want map[string]string) bool {
+	for key, value := range want {
+		got, ok := data[key]
+		if got != value || !ok && key == provisioner.ApplianceAddressesKey {
+			return false
+		}
+	}
+	return true
 }
 
 // addresses are the appliance's own addresses, which the workload clusters' firewalls accept: its

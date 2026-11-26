@@ -158,6 +158,45 @@ func TestRecordAddresses(t *testing.T) {
 	}
 }
 
+// The appliance records its network beside its addresses, and a ConfigMap written before it did
+// is written once more.
+func TestRecordAddressesRecordsTheNetwork(t *testing.T) {
+	t.Parallel()
+	a := &Appliance{Dir: t.TempDir(), Log: slog.New(slog.DiscardHandler), Bridge: "vmbr1", VLAN: 30}
+	a.Addresses = func() ([]string, error) { return []string{"192.0.2.5"}, nil }
+	if err := os.MkdirAll(filepath.Dir(a.KubeconfigPath()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(a.KubeconfigPath(), []byte("ready"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	kube := fake.NewClientset(&corev1.ConfigMap{
+		Name: provisioner.ApplianceAddressesName, Namespace: interfaceNamespace,
+		Data: map[string]string{provisioner.ApplianceAddressesKey: "192.0.2.5"},
+	})
+	for range 2 {
+		if err := a.recordAddresses(t.Context(), kube); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cm, err := kube.CoreV1().ConfigMaps(interfaceNamespace).Get(t.Context(), provisioner.ApplianceAddressesName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cm.Data[provisioner.ApplianceBridgeKey] != "vmbr1" || cm.Data[provisioner.ApplianceVLANKey] != "30" {
+		t.Errorf("the ConfigMap holds %v", cm.Data)
+	}
+	patches := 0
+	for _, action := range kube.Actions() {
+		if action.GetVerb() == "patch" {
+			patches++
+		}
+	}
+	if patches != 1 {
+		t.Errorf("%d writes, want 1", patches)
+	}
+}
+
 // A ConfigMap the chart has not made yet is an error to retry, never one the appliance makes: the
 // interface may not create ConfigMaps.
 func TestRecordAddressesNeedsTheConfigMap(t *testing.T) {
