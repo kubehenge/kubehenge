@@ -47,8 +47,8 @@ while read -r release imager installer extensions agent; do
     printf '%s guest-agent ghcr.io/siderolabs/qemu-guest-agent@%s\n' "${release}" "${agent#*@}"
 done < "${work}/talos" > "${work}/jobs"
 
-# Every verify reads this one file, so none dials Sigstore's TUF server. Its fetch is retried, and
-# says so when Sigstore stays unreachable.
+# Every verify reads this one file, so none dials Sigstore's TUF server. Its fetch is retried on a
+# failed connection, and says so when Sigstore stays unreachable.
 trusted_root=${work}/trusted_root.json
 "$(dirname "$0")/sigstore-root.sh" "${trusted_root}" || fail "could not fetch Sigstore's trust root"
 

@@ -60,6 +60,7 @@ jobs:
           sparse-checkout: |
             scripts/tools.sh
             scripts/fetch.sh
+            scripts/sigstore-root.sh
           sparse-checkout-cone-mode: false
       - name: cosign
         env:
@@ -109,6 +110,8 @@ jobs:
         run: |
           set -eu
           echo "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          # One trusted root for every cosign verify, so none dials Sigstore's TUF server.
+          scripts/sigstore-root.sh "$RUNNER_TEMP/trusted_root.json"
           verify() {
             gh attestation verify "$@" --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER" \
               --source-ref "$GITHUB_REF" --deny-self-hosted-runners
@@ -119,7 +122,8 @@ jobs:
             "ghcr.io/kubehenge/proxmox-csi-controller@$PROXMOX_CSI"; do
             verify "oci://$image"
             verify "oci://$image" --predicate-type https://spdx.dev/Document/v2.3
-            cosign verify "$image" --certificate-identity "https://github.com/$SIGNER@$GITHUB_REF" \
+            cosign verify "$image" --trusted-root "$RUNNER_TEMP/trusted_root.json" \
+              --certificate-identity "https://github.com/$SIGNER@$GITHUB_REF" \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
           done
 

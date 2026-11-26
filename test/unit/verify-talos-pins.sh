@@ -44,10 +44,16 @@ lacks() {
     esac
 }
 
-# The stub appends a line to ${CALLS} for each call. It refuses a verify whose arguments hold
-# ${STUB_REFUSE}, fails the first ${STUB_INIT_FAIL} fetches of the trust root, and writes the root
-# where cosign does, under a directory named for the mirror.
+# The stubs append a line to ${CALLS} for each call. cosign refuses a verify whose arguments hold
+# ${STUB_REFUSE}, fails the first ${STUB_INIT_FAIL} fetches of the trust root with
+# ${STUB_INIT_ERROR} (a dropped connection by default), and writes the root where cosign does, under
+# a directory named for the mirror. sleep returns at once.
 mkdir "${tmp}/bin"
+cat > "${tmp}/bin/sleep" << 'EOF'
+#!/bin/sh
+echo "sleep $*" >> "${CALLS}"
+EOF
+chmod +x "${tmp}/bin/sleep"
 cat > "${tmp}/bin/cosign" << 'EOF'
 #!/bin/sh
 case $1 in
@@ -55,7 +61,7 @@ case $1 in
         echo "trust-root" >> "${CALLS}"
         done=$(grep -c '^trust-root$' "${CALLS}")
         if [ "${done}" -le "${STUB_INIT_FAIL:-0}" ]; then
-            echo "tuf refresh failed: dial tcp: i/o timeout" >&2
+            echo "${STUB_INIT_ERROR:-tuf refresh failed: dial tcp 34.117.62.14:443: i/o timeout}" >&2
             exit 1
         fi
         mkdir -p "${TUF_ROOT}/mirror/targets"
@@ -108,7 +114,7 @@ write_pins "${pins}"
 run() {
     : > "${tmp}/calls"
     status=0
-    out=$(PATH="${tmp}/bin:${PATH}" CALLS="${tmp}/calls" SIGSTORE_ROOT_WAIT=0 sh "${script}" "$@" 2>&1) || status=$?
+    out=$(PATH="${tmp}/bin:${PATH}" CALLS="${tmp}/calls" sh "${script}" "$@" 2>&1) || status=$?
     calls=$(cat "${tmp}/calls")
 }
 
@@ -137,9 +143,8 @@ STUB_REFUSE="installer-base@sha256:${d6}" run "${pins}"
 same "a refusal exits 1, not xargs's 123" 1 "${status}"
 mentions "a refusal names its image and release" "cosign refused installer-base of v1.13.9" "${out}"
 mentions "a refusal prints cosign's log" "no matching signatures" "${out}"
-
-STUB_REFUSE="installer-base@sha256:${d6}" run "${pins}"
-same "a refused signature is not retried: one trust-root fetch" 1 "$(grep -c '^trust-root$' "${tmp}/calls" || true)"
+same "a refused signature is not retried" 1 "$(grep -c -F "installer-base@sha256:${d6}" "${tmp}/calls" || true)"
+same "a refusal fetches the trust root once" 1 "$(grep -c '^trust-root$' "${tmp}/calls" || true)"
 
 STUB_INIT_FAIL=1 run "${pins}"
 same "a dropped first fetch of the trust root passes" 0 "${status}"
@@ -151,7 +156,16 @@ same "an unreachable Sigstore exits 1" 1 "${status}"
 mentions "it names Sigstore as unreachable" "Sigstore is unreachable" "${out}"
 mentions "it says the fetch failed" "could not fetch Sigstore's trust root" "${out}"
 same "the fetch is capped at five attempts" 5 "$(grep -c '^trust-root$' "${tmp}/calls" || true)"
+same "a wait between attempts" 4 "$(grep -c '^sleep ' "${tmp}/calls" || true)"
 lacks "no verify after a failed trust-root fetch" "verify " "${calls}"
+
+STUB_INIT_FAIL=99 STUB_INIT_ERROR="tuf: failed to decode root.json: expired at 2025-08-19 14:33:09 +0000 UTC" run "${pins}"
+same "a trust root TUF refuses exits 1" 1 "${status}"
+same "a trust root TUF refuses is fetched once" 1 "$(grep -c '^trust-root$' "${tmp}/calls" || true)"
+mentions "it prints cosign's message" "expired at 2025-08-19" "${out}"
+mentions "it says cosign refused the root" "cosign refused Sigstore's trusted root" "${out}"
+lacks "it does not call Sigstore unreachable" "unreachable" "${out}"
+lacks "no verify after a refused trust root" "verify " "${calls}"
 
 four=${tmp}/four.txt
 write_pins "${four}" "v1.12.1 sha256:${d1} sha256:${d2} sha256:${d3}"
