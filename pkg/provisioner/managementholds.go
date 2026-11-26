@@ -13,13 +13,22 @@ import (
 
 // The holders of the addresses the management side keeps, as an address's refusal names them.
 const (
-	holderManagementNode = "a management node's"
-	holderManagementAPI  = "the management cluster's API"
-	holderAppliance      = "the appliance's"
+	holderManagementNode = "a management node's address"
+	holderManagementAPI  = "the management cluster's API address"
+	holderAppliance      = "the appliance's address"
 )
 
+// nodeHolder names a management node, or says only that the address is a management node's where
+// the node's name is not known.
+func nodeHolder(name string) string {
+	if name == "" {
+		return holderManagementNode
+	}
+	return "management node " + name
+}
+
 // HeldAddress is an address of the management side and who holds it, in the words of a refusal:
-// "a management node's", "the management cluster's API" or "the appliance's".
+// "management node <name>", "the management cluster's API address" or "the appliance's address".
 type HeldAddress struct {
 	Address netip.Addr
 	Holder  string
@@ -48,7 +57,7 @@ func (f *FirewallSources) Held(ctx context.Context) (string, []HeldAddress, erro
 		}
 	}
 	for _, a := range f.Management {
-		add(a, holderManagementNode)
+		add(a, nodeHolder(f.Nodes[a]))
 	}
 	if u, err := url.Parse(f.API); err == nil && u.Hostname() != "" {
 		add(u.Hostname(), holderManagementAPI)
@@ -81,15 +90,15 @@ func checkManagementAddresses(cluster *clusterv1.Cluster, segment string, held [
 		a := addressSpan{h.Address, h.Address}
 		for _, m := range own.machines {
 			if m.overlaps(a) {
-				problems = append(problems, fmt.Sprintf("node addresses %s include %s, which is %s address", m, h.Address, h.Holder))
+				problems = append(problems, fmt.Sprintf("node addresses %s include %s, which is %s", m, h.Address, h.Holder))
 			}
 		}
 		if own.endpoint.overlaps(a) {
-			problems = append(problems, fmt.Sprintf("control-plane endpoint %s is %s address", own.endpoint, h.Holder))
+			problems = append(problems, fmt.Sprintf("control-plane endpoint %s is %s", own.endpoint, h.Holder))
 		}
 		for _, s := range own.services {
 			if s.overlaps(a) {
-				problems = append(problems, fmt.Sprintf("load-balancer addresses %s include %s, which is %s address", s, h.Address, h.Holder))
+				problems = append(problems, fmt.Sprintf("load-balancer addresses %s include %s, which is %s", s, h.Address, h.Holder))
 			}
 		}
 	}

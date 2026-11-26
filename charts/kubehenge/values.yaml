@@ -274,6 +274,8 @@ managementAddresses: []
 managementNetwork:
   bridge: ""
   vlan: 0
+  # The nodes' names by address, which a refusal names the holder by.
+  nodes: {}
 
 # What Kubehenge's controller watches for on its own, and how long it gives each before it says
 # so on the Cluster (a condition and an event) and on the interface's Health page.

@@ -20,6 +20,7 @@ func managementSide(t *testing.T) *FirewallSources {
 	return &FirewallSources{
 		Reader: kube, Namespace: "kubehenge-system", Management: []string{"10.0.0.11", "2001:db8::11"},
 		API: "https://10.0.0.10:6443", Bridge: "vmbr0",
+		Nodes: map[string]string{"10.0.0.11": "kubehenge-cp-0"},
 	}
 }
 
@@ -34,7 +35,7 @@ func TestManagementHeldAddressesNameTheirHolders(t *testing.T) {
 		got[h.Address.String()] = h.Holder
 	}
 	want := map[string]string{
-		"10.0.0.11": holderManagementNode, "2001:db8::11": holderManagementNode,
+		"10.0.0.11": "management node kubehenge-cp-0", "2001:db8::11": holderManagementNode,
 		"10.0.0.10": holderManagementAPI, "10.0.0.31": holderAppliance, "2001:db8::31": holderAppliance,
 	}
 	if len(got) != len(want) {
@@ -64,7 +65,7 @@ func TestManagementAddressesAreRefused(t *testing.T) {
 		"beside everything": {cluster: web(0, "10.0.0.100-10.0.0.110", "10.0.0.99", onAt(`"10.0.0.120-10.0.0.130"`))},
 		"a node range with a management node": {
 			cluster: web(0, "10.0.0.9-10.0.0.19", "10.0.0.99", ""),
-			want:    "node addresses 10.0.0.9-10.0.0.19 include 10.0.0.11, which is a management node's address",
+			want:    "node addresses 10.0.0.9-10.0.0.19 include 10.0.0.11, which is management node kubehenge-cp-0",
 		},
 		"the management API as the endpoint": {
 			cluster: web(0, "10.0.0.100-10.0.0.110", "10.0.0.10", ""),
@@ -76,7 +77,7 @@ func TestManagementAddressesAreRefused(t *testing.T) {
 		},
 		"a management node as a single node address": {
 			cluster: web(0, "10.0.0.11", "10.0.0.99", ""),
-			want:    "10.0.0.11, which is a management node's address",
+			want:    "10.0.0.11, which is management node kubehenge-cp-0",
 		},
 		"another VLAN": {cluster: web(7, "10.0.0.9-10.0.0.19", "10.0.0.10", onAt(`"10.0.0.30-10.0.0.40"`))},
 	} {
@@ -106,7 +107,7 @@ func TestHooksRefuseManagementAddresses(t *testing.T) {
 	web := lbCluster("web", 0, "10.0.0.11-10.0.0.19", "10.0.0.10", "")
 	h := &Hooks{Reader: kube, Management: managementSide(t)}
 	err := h.checkAddresses(t.Context(), web)
-	if err == nil || !strings.Contains(err.Error(), "a management node's address") || !strings.Contains(err.Error(), "the management cluster's API address") {
+	if err == nil || !strings.Contains(err.Error(), "10.0.0.11, which is management node kubehenge-cp-0") || !strings.Contains(err.Error(), "the management cluster's API address") {
 		t.Errorf("got %v", err)
 	}
 	clash := lbCluster("web", 0, "10.0.0.50-10.0.0.60", "10.0.0.10", "")

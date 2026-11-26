@@ -113,6 +113,7 @@ type controllerOptions struct {
 	// is every interface.
 	extensionHost     string
 	managementAddrs   []string
+	managementNodes   map[string]string
 	managementBridge  string
 	managementVLAN    int
 	certDir           string
@@ -227,6 +228,7 @@ chart's PodTemplate, the only pod that mounts that token.`,
 	f.BoolVar(&o.offerHARules, "offer-ha-rules", false, "offer Proxmox VE's HA node-affinity rules, their names and nodes only, to those who may create a cluster but not read the rules, through the ConfigMap "+provisioner.HARulesName)
 	f.StringVar(&o.managementBridge, "management-bridge", "", "the bridge the management cluster's nodes are on, as the network variable names it. With it, no cluster's addresses on that bridge and VLAN may be the management cluster's, its API's or the appliance's")
 	f.IntVar(&o.managementVLAN, "management-vlan", 0, "the VLAN tag of the management cluster's nodes, 0 for none")
+	f.StringToStringVar(&o.managementNodes, "management-nodes", nil, "the management cluster's nodes' names by address, as <address>=<name>, for the refusal of an address one of them holds (comma-separated)")
 	f.StringSliceVar(&o.managementAddrs, "management-addresses", nil, "the management cluster's node addresses, which the firewall of every firewalled cluster accepts beside the appliance's (comma-separated)")
 	f.StringSliceVar(&o.headlampSignIn, "headlamp-sign-in-namespaces", nil, "the interface's namespaces whose clusters the appliance's shared Headlamp signs users in to as cluster-admin, if they may download the admin kubeconfig (comma-separated). Empty signs nobody in and removes the identities")
 	f.DurationVar(&o.upgradeInterval, "upgrade-interval", defaultUpgradeInterval, "how often clusters are checked for an automatic upgrade due in their window")
@@ -433,7 +435,7 @@ func (o *controllerOptions) newHooks(mgr ctrl.Manager, registrar *provisioner.Re
 		Endpoint:          o.r.Endpoint.URL,
 		Management: &provisioner.FirewallSources{
 			Reader: mgr.GetAPIReader(), Namespace: o.r.ClassNamespace, Management: o.managementAddrs,
-			API: o.autoscaler.Management.Server, Bridge: o.managementBridge, VLAN: o.managementVLAN,
+			API: o.autoscaler.Management.Server, Bridge: o.managementBridge, VLAN: o.managementVLAN, Nodes: o.managementNodes,
 		},
 		DatastoreAllocate: o.r.DatastoreAllocate,
 		SysAuditGroup:     o.r.SysAuditGroup,

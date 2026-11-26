@@ -617,7 +617,11 @@ run "controller_and_clusters_are_least_privilege" {
       managementEndpoint = "https://192.0.2.10:6443"
       # Every workload cluster's firewall accepts these.
       managementAddresses = ["192.0.2.11", "192.0.2.12", "192.0.2.13"]
-      managementNetwork   = { bridge = var.bridge, vlan = 0 }
+      managementNetwork = {
+        bridge = var.bridge
+        vlan   = 0
+        nodes  = { "192.0.2.11" = "kubehenge-cp-0", "192.0.2.12" = "kubehenge-cp-1", "192.0.2.13" = "kubehenge-cp-2" }
+      }
     }
     error_message = "the Kubehenge chart's values differ"
   }

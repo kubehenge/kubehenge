@@ -10,6 +10,7 @@
 - `pct exec <ctid> -- kubehenge` finds the command.
 - Template builds retry a dropped connection to Sigstore instead of failing.
 - A cluster can no longer be given the management cluster's, its API's or the appliance's address, and a machine whose VM lacks its address after boot says so.
+- The refusal of a management node's address names the node. Existing installs need the management cluster's module applied again.
 
 ### Internal
 

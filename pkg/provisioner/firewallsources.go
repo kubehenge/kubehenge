@@ -80,9 +80,11 @@ type FirewallSources struct {
 	// API is the management cluster's API as workload clusters reach it, such as
 	// https://192.0.2.10:6443, and Bridge and VLAN the network the management cluster's nodes are
 	// on. Without a bridge, no cluster is held off the management side's addresses (Held).
-	API      string
-	Bridge   string
-	VLAN     int
+	API    string
+	Bridge string
+	VLAN   int
+	// Nodes names the management nodes by address, for the refusal of an address one of them holds.
+	Nodes    map[string]string
 	Interval time.Duration
 	// Datacenter reads whether Proxmox VE's datacenter firewall is on. Nil, no condition is kept.
 	Datacenter APIReach

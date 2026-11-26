@@ -444,6 +444,13 @@ spec:
             {{- with .Values.managementNetwork.bridge }}
             - --management-bridge={{ . }}
             - --management-vlan={{ $.Values.managementNetwork.vlan }}
+            {{- with $.Values.managementNetwork.nodes }}
+            {{- $pairs := list }}
+            {{- range $address, $name := . }}
+            {{- $pairs = append $pairs (printf "%s=%s" $address $name) }}
+            {{- end }}
+            - --management-nodes={{ join "," $pairs }}
+            {{- end }}
             {{- end }}
             - {{ printf "--pod-security-exempt=%s" (toJson .Values.podSecurityExempt) | quote }}
             - --proxmox-ca=/etc/kubehenge/proxmox/ca.crt
