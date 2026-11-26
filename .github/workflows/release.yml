@@ -60,7 +60,7 @@ jobs:
           sparse-checkout: |
             scripts/tools.sh
             scripts/fetch.sh
-            scripts/sigstore-root.sh
+            pkg/templates/node/sigstore-root.sh
           sparse-checkout-cone-mode: false
       - name: cosign
         env:
@@ -68,6 +68,9 @@ jobs:
         run: |
           scripts/tools.sh "$RUNNER_TEMP/bin" cosign
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      # One trusted root for every gh and cosign verify below, so none dials Sigstore's TUF server.
+      - name: Sigstore's trusted root
+        run: pkg/templates/node/sigstore-root.sh "$RUNNER_TEMP/trusted_root.json"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-files
@@ -94,7 +97,8 @@ jobs:
           verify() {
             gh attestation verify "$@" --bundle "dist/kubehenge_${VERSION}.intoto.jsonl" \
               --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER" \
-              --source-ref "$GITHUB_REF" --deny-self-hosted-runners
+              --source-ref "$GITHUB_REF" --deny-self-hosted-runners \
+              --custom-trusted-root "$RUNNER_TEMP/trusted_root.json"
           }
           archive=dist/kubehenge_${VERSION}_linux_amd64.tar.gz
           for file in "$archive" "dist/kubehenge_${VERSION}_SHA256SUMS" dist/install.sh \
@@ -110,11 +114,10 @@ jobs:
         run: |
           set -eu
           echo "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          # One trusted root for every cosign verify, so none dials Sigstore's TUF server.
-          scripts/sigstore-root.sh "$RUNNER_TEMP/trusted_root.json"
           verify() {
             gh attestation verify "$@" --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER" \
-              --source-ref "$GITHUB_REF" --deny-self-hosted-runners
+              --source-ref "$GITHUB_REF" --deny-self-hosted-runners \
+              --custom-trusted-root "$RUNNER_TEMP/trusted_root.json"
           }
           for image in "ghcr.io/kubehenge/kubehenge@$CONTROLLER" \
             "ghcr.io/kubehenge/cluster-api-provider-proxmox@$CAPMOX" \

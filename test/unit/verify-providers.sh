@@ -43,8 +43,9 @@ lacks() {
 }
 
 # A copy of the repository's layout, so that the script's fetch.sh is the stub.
-mkdir -p "${tmp}/repo/scripts" "${tmp}/repo/management-cluster" "${tmp}/bin"
-cp "${root}/scripts/verify-providers.sh" "${root}/scripts/sigstore-root.sh" "${tmp}/repo/scripts/"
+mkdir -p "${tmp}/repo/scripts" "${tmp}/repo/pkg/templates/node" "${tmp}/repo/management-cluster" "${tmp}/bin"
+cp "${root}/scripts/verify-providers.sh" "${tmp}/repo/scripts/"
+cp "${root}/pkg/templates/node/sigstore-root.sh" "${tmp}/repo/pkg/templates/node/"
 cp "${root}/management-cluster/versions.tf" "${tmp}/repo/management-cluster/"
 script=${tmp}/repo/scripts/verify-providers.sh
 
@@ -95,7 +96,7 @@ cat > "${tmp}/bin/sleep" << 'EOF'
 #!/bin/sh
 echo "sleep $*" >> "${CALLS}"
 EOF
-chmod +x "${tmp}/bin/"* "${tmp}/repo/scripts/"*.sh
+chmod +x "${tmp}/bin/"* "${tmp}/repo/scripts/"*.sh "${tmp}/repo/pkg/templates/node/"*.sh
 
 # run: the script's output in out, its status in status and the stubs' calls in calls.
 run() {
@@ -114,6 +115,10 @@ same "one verify for each fork" 2 "$(grep -c -e '^verify ' "${tmp}/calls" || tru
 roots=$(printf '%s\n' "${calls}" | grep '^verify ' | sed -n 's/.* --trusted-root \([^ ]*\) .*/\1/p' | sort -u)
 same "every verify reads the one trusted root file" 1 "$(printf '%s\n' "${roots}" | grep -c . || true)"
 same "each verify names a trusted root" 2 "$(grep -c -e ' --trusted-root ' "${tmp}/calls" || true)"
+same "six gh checks of provenance, files and image of each fork" 6 "$(grep -c -e '^gh attestation[ ]verify ' "${tmp}/calls" || true)"
+same "each gh check names a trusted root" 6 "$(grep -c -e '^gh attestation verify .* --custom-trusted-root ' "${tmp}/calls" || true)"
+roots=$(printf '%s\n' "${calls}" | sed -n -e 's/.* --trusted-root \([^ ]*\) .*/\1/p' -e 's/.* --custom-trusted-root \([^ ]*\).*/\1/p' | sort -u)
+same "gh and cosign read the one trusted root file" 1 "$(printf '%s\n' "${roots}" | grep -c . || true)"
 mentions "the signer of the fork's release workflow" "--certificate-identity https://github.com/kubehenge/cluster-api-bootstrap-provider-talos/.github/workflows/release.yaml@refs/tags/v" "${calls}"
 mentions "GitHub's issuer" "--certificate-oidc-issuer https://token.actions.githubusercontent.com" "${calls}"
 mentions "a fork's line" "files, image and signatures verified" "${out}"

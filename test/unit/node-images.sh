@@ -1,7 +1,8 @@
 #!/bin/sh
-# Unit test of the Sigstore steps of pkg/templates/node/images.sh, with stubs on PATH for curl (which
-# hands over a stub cosign), sha256sum, kubeadm, crictl, mktemp, sed, systemctl and sleep, each recording its
-# calls. Needs no network and touches nothing outside its own directory.
+# Unit test of the Sigstore steps of pkg/templates/node/images.sh and the trust-root fetch beside it
+# that it runs. Stubs on PATH for curl (which hands over a stub cosign), sha256sum, kubeadm, crictl,
+# mktemp, sed, systemctl and sleep record their calls. Needs no network and touches nothing outside
+# its own directory.
 #
 #   test/unit/node-images.sh
 set -eu
@@ -145,7 +146,8 @@ same "both verifies still ran" 2 "$(grep -c -e '^verify ' "${tmp}/calls" || true
 
 STUB_INIT_FAIL=99 run
 same "an unreachable Sigstore exits 1" 1 "${status}"
-mentions "it names Sigstore as unreachable" "kubehenge-images: Sigstore is unreachable" "${out}"
+mentions "it names Sigstore as unreachable" "sigstore-root: Sigstore is unreachable" "${out}"
+mentions "it says the fetch failed" "kubehenge-images: could not fetch Sigstore's trusted root" "${out}"
 same "the fetch is capped at five attempts" 5 "$(grep -c -e '^trust-root$' "${tmp}/calls" || true)"
 lacks "no signature is called missing" "has no signature" "${out}"
 same "no image is pulled or deleted" 0 "$(grep -c -e '^crictl ' "${tmp}/calls" || true)"
@@ -154,7 +156,7 @@ STUB_INIT_FAIL=99 STUB_INIT_ERROR="tuf: failed to decode root.json: expired at 2
 same "a trust root TUF refuses exits 1" 1 "${status}"
 same "a trust root TUF refuses is fetched once" 1 "$(grep -c -e '^trust-root$' "${tmp}/calls" || true)"
 mentions "it prints cosign's message" "expired at 2025-08-19" "${out}"
-mentions "it says cosign refused the root" "kubehenge-images: cosign refused Sigstore's trusted root" "${out}"
+mentions "it says cosign refused the root" "sigstore-root: cosign refused Sigstore's trusted root" "${out}"
 lacks "it does not call Sigstore unreachable" "unreachable" "${out}"
 same "no image is pulled" 0 "$(grep -c -e '^crictl ' "${tmp}/calls" || true)"
 
@@ -163,6 +165,13 @@ same "a refusal exits 1" 1 "${status}"
 mentions "a refusal names the image" "kube-apiserver@sha256:1111111111111111111111111111111111111111111111111111111111111111 has no signature" "${out}"
 same "a refused signature is not retried" 1 "$(grep -c -e '^verify .*kube-apiserver@sha256' "${tmp}/calls" || true)"
 same "the refused image is deleted" 1 "$(grep -c -e '^crictl rmi ' "${tmp}/calls" || true)"
+
+# The node runs the fetch from beside the installed script, as the test runs it from the repository.
+kubeadm=$(cat "${here}/../../pkg/templates/node/kubeadm.sh")
+# shellcheck disable=SC2016 # kubeadm.sh's own text, which the node's shell expands.
+mentions "kubeadm installs the script" 'install -D -m 0755 "${files}/node/images.sh" /usr/libexec/kubehenge/images' "${kubeadm}"
+# shellcheck disable=SC2016 # the same.
+mentions "kubeadm installs the fetch beside it" 'install -D -m 0755 "${files}/node/sigstore-root.sh" /usr/libexec/kubehenge/sigstore-root.sh' "${kubeadm}"
 
 printf '%d passed, %d failed\n' "${passes}" "${failures}"
 [ "${failures}" -eq 0 ]

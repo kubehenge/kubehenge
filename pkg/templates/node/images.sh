@@ -36,25 +36,10 @@ chmod 0755 "${work}/cosign"
 
 # Sigstore's trusted root is fetched once, before any pull, and every verify reads it from disk. A
 # dropped connection to Sigstore is then never read as a missing signature and never costs a pulled
-# image. Only a failed connection is retried, since an answer TUF refuses is refused every time.
-attempt=1
-until HOME="${work}" TUF_ROOT="${work}/tuf" "${work}/cosign" initialize > "${work}/tuf.log" 2>&1; do
-    cat "${work}/tuf.log" >&2
-    grep -q -E 'dial tcp|i/o timeout|connection refused|connection reset|no such host|network is unreachable|TLS handshake timeout|Client\.Timeout|unexpected EOF|proxyconnect|http status code: (429|5[0-9][0-9])' "${work}/tuf.log" || {
-        echo "kubehenge-images: cosign refused Sigstore's trusted root" >&2
-        exit 1
-    }
-    [ "${attempt}" -lt 5 ] || {
-        echo "kubehenge-images: Sigstore is unreachable: no trusted root after 5 attempts" >&2
-        exit 1
-    }
-    attempt=$((attempt + 1))
-    rm -rf "${work}/tuf"
-    sleep 5
-done
-trusted_root=$(find "${work}/tuf" -name trusted_root.json | head -n 1)
-[ -n "${trusted_root}" ] || {
-    echo "kubehenge-images: cosign initialize wrote no trusted_root.json" >&2
+# image.
+trusted_root=${work}/trusted_root.json
+HOME="${work}" PATH="${work}:${PATH}" "$(dirname "$0")/sigstore-root.sh" "${trusted_root}" || {
+    echo "kubehenge-images: could not fetch Sigstore's trusted root" >&2
     exit 1
 }
 

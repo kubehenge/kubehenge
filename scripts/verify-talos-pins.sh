@@ -50,7 +50,7 @@ done < "${work}/talos" > "${work}/jobs"
 # Every verify reads this one file, so none dials Sigstore's TUF server. Its fetch is retried on a
 # failed connection, and says so when Sigstore stays unreachable.
 trusted_root=${work}/trusted_root.json
-"$(dirname "$0")/sigstore-root.sh" "${trusted_root}" || fail "could not fetch Sigstore's trust root"
+"${root}/pkg/templates/node/sigstore-root.sh" "${trusted_root}" || fail "could not fetch Sigstore's trust root"
 
 # A refusal of a signature exits 1 at once and is never retried. The text is for the shell xargs
 # starts, which expands it.

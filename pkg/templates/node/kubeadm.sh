@@ -26,6 +26,7 @@ grep -q 'enable_selinux = true' /etc/containerd/config.toml
 printf 'runtime-endpoint: unix:///run/containerd/containerd.sock\nimage-endpoint: unix:///run/containerd/containerd.sock\n' \
     > /etc/crictl.yaml
 install -D -m 0755 "${files}/node/images.sh" /usr/libexec/kubehenge/images
+install -D -m 0755 "${files}/node/sigstore-root.sh" /usr/libexec/kubehenge/sigstore-root.sh
 
 # The control plane's static pods read the cluster's keys and kubeconfigs in /etc/kubernetes and
 # keep etcd's data in /var/lib/etcd, which the policy gives types no confined container may touch,
