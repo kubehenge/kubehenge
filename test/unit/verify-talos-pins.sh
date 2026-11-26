@@ -45,21 +45,25 @@ lacks() {
 }
 
 # The stub appends a line to ${CALLS} for each call. It refuses a verify whose arguments hold
-# ${STUB_REFUSE}, and fails the trust root's fetch when STUB_INIT_FAIL is set.
+# ${STUB_REFUSE}, fails the first ${STUB_INIT_FAIL} fetches of the trust root, and writes the root
+# where cosign does, under a directory named for the mirror.
 mkdir "${tmp}/bin"
 cat > "${tmp}/bin/cosign" << 'EOF'
 #!/bin/sh
 case $1 in
     initialize)
         echo "trust-root" >> "${CALLS}"
-        if [ -n "${STUB_INIT_FAIL:-}" ]; then
-            echo "no route to the TUF root" >&2
+        done=$(grep -c '^trust-root$' "${CALLS}")
+        if [ "${done}" -le "${STUB_INIT_FAIL:-0}" ]; then
+            echo "tuf refresh failed: dial tcp: i/o timeout" >&2
             exit 1
         fi
+        mkdir -p "${TUF_ROOT}/mirror/targets"
+        echo '{}' > "${TUF_ROOT}/mirror/targets/trusted_root.json"
         ;;
     verify)
         shift
-        echo "verify $* TUF=${TUF_ROOT}" >> "${CALLS}"
+        echo "verify $*" >> "${CALLS}"
         case "$*" in
             *"${STUB_REFUSE:-@none@}"*)
                 echo "no matching signatures" >&2
@@ -104,7 +108,7 @@ write_pins "${pins}"
 run() {
     : > "${tmp}/calls"
     status=0
-    out=$(PATH="${tmp}/bin:${PATH}" CALLS="${tmp}/calls" sh "${script}" "$@" 2>&1) || status=$?
+    out=$(PATH="${tmp}/bin:${PATH}" CALLS="${tmp}/calls" SIGSTORE_ROOT_WAIT=0 sh "${script}" "$@" 2>&1) || status=$?
     calls=$(cat "${tmp}/calls")
 }
 
@@ -117,13 +121,13 @@ same "one trust-root fetch" 1 "$(grep -c '^trust-root$' "${tmp}/calls" || true)"
 same "eight verifies, four for each Talos pin" 8 "$(grep -c '^verify ' "${tmp}/calls" || true)"
 lacks "no header word is read as a pin" "imager@to" "${calls}"
 lacks "the RKE2 pin is not verified" "${da}" "${calls}"
-tufs=$(printf '%s\n' "${calls}" | sed -n 's/.* TUF=//p' | sort | uniq -d)
-same "no two verifies share a cache" "" "${tufs}"
-same "each verify has a cache" 8 "$(grep -c ' TUF=/' "${tmp}/calls" || true)"
+roots=$(printf '%s\n' "${calls}" | grep '^verify ' | sed -n 's/.* --trusted-root \([^ ]*\) .*/\1/p' | sort -u)
+same "every verify reads the one trusted root file" 1 "$(printf '%s\n' "${roots}" | grep -c . || true)"
+same "each verify names a trusted root" 8 "$(grep -c -e ' --trusted-root ' "${tmp}/calls" || true)"
 flags=$(printf '%s\n' "${calls}" | grep '^verify ' | grep -o -e ' --[a-z-]*' | sort -u | tr -d '\n')
-same "only the issuer and the identity regex" " --certificate-identity-regexp --certificate-oidc-issuer" "${flags}"
+same "the trusted root, the issuer and the identity regex" " --certificate-identity-regexp --certificate-oidc-issuer --trusted-root" "${flags}"
 mentions "the issuer of talos.tf" "--certificate-oidc-issuer https://accounts.google.com " "${calls}"
-mentions "the regex of talos.tf, its backslashes single" '--certificate-identity-regexp ^(releasemgr-svc@talos-production\.iam\.gserviceaccount\.com|[^@]+@siderolabs\.com)$ ' "${calls}"
+mentions "the regex of talos.tf, its backslashes single" '--certificate-identity-regexp ^(releasemgr-svc@talos-production\.iam\.gserviceaccount\.com|[^@]+@siderolabs\.com)$' "${calls}"
 mentions "the agent by its digest alone" "verify ghcr.io/siderolabs/qemu-guest-agent@sha256:${d4} " "${calls}"
 lacks "no agent tag" "qemu-guest-agent:" "${calls}"
 mentions "the imager by digest" "verify ghcr.io/siderolabs/imager@sha256:${d1} " "${calls}"
@@ -134,9 +138,19 @@ same "a refusal exits 1, not xargs's 123" 1 "${status}"
 mentions "a refusal names its image and release" "cosign refused installer-base of v1.13.9" "${out}"
 mentions "a refusal prints cosign's log" "no matching signatures" "${out}"
 
+STUB_REFUSE="installer-base@sha256:${d6}" run "${pins}"
+same "a refused signature is not retried: one trust-root fetch" 1 "$(grep -c '^trust-root$' "${tmp}/calls" || true)"
+
 STUB_INIT_FAIL=1 run "${pins}"
-same "a failed trust-root fetch exits 1" 1 "${status}"
-mentions "a failed trust-root fetch says so" "could not fetch Sigstore's trust root" "${out}"
+same "a dropped first fetch of the trust root passes" 0 "${status}"
+same "the fetch was retried once" 2 "$(grep -c '^trust-root$' "${tmp}/calls" || true)"
+same "all eight verifies still ran, on the one root" 8 "$(grep -c '^verify ' "${tmp}/calls" || true)"
+
+STUB_INIT_FAIL=99 run "${pins}"
+same "an unreachable Sigstore exits 1" 1 "${status}"
+mentions "it names Sigstore as unreachable" "Sigstore is unreachable" "${out}"
+mentions "it says the fetch failed" "could not fetch Sigstore's trust root" "${out}"
+same "the fetch is capped at five attempts" 5 "$(grep -c '^trust-root$' "${tmp}/calls" || true)"
 lacks "no verify after a failed trust-root fetch" "verify " "${calls}"
 
 four=${tmp}/four.txt
@@ -163,7 +177,7 @@ same "two signers, no cosign call" "" "${calls}"
 
 # A PATH with the script's other tools and no cosign.
 mkdir "${tmp}/tools"
-for tool in sh grep sed awk xargs cat mktemp rm dirname cp tr; do
+for tool in sh grep sed awk xargs cat mktemp rm dirname cp tr find head sleep; do
     target=$(command -v "${tool}")
     ln -s "${target}" "${tmp}/tools/${tool}"
 done

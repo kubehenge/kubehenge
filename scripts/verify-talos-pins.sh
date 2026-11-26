@@ -4,7 +4,8 @@
 # cosign verifies each digest against the signer management-cluster/talos.tf trusts for
 # ghcr.io/siderolabs/*. cosign reads a digest and ignores any tag beside it, so every reference
 # here is a digest alone. Sidero's tags move, which is why a signature is required. Needs cosign
-# (scripts/tools.sh installs it) and the network, for Sigstore's trust root and transparency log.
+# (scripts/tools.sh installs it) and the network, for Sigstore's trust root (fetched once, with
+# retries) and its transparency log.
 #
 #   scripts/verify-talos-pins.sh [<pins file> [<talos.tf>]]
 set -eu
@@ -46,29 +47,24 @@ while read -r release imager installer extensions agent; do
     printf '%s guest-agent ghcr.io/siderolabs/qemu-guest-agent@%s\n' "${release}" "${agent#*@}"
 done < "${work}/talos" > "${work}/jobs"
 
-tuf=$(mktemp -d "${work}/tuf.XXXXXX")
-TUF_ROOT=${tuf} cosign initialize > "${work}/trust-root.log" 2>&1 || {
-    cat "${work}/trust-root.log" >&2
-    fail "cosign could not fetch Sigstore's trust root"
-}
+# Every verify reads this one file, so none dials Sigstore's TUF server. Its fetch is retried, and
+# says so when Sigstore stays unreachable.
+trusted_root=${work}/trusted_root.json
+"$(dirname "$0")/sigstore-root.sh" "${trusted_root}" || fail "could not fetch Sigstore's trust root"
 
-# Each call gets a copy of the trust root of its own, so that no two share a cache. A refusal exits
-# 1, which cosign also does for an unreachable Sigstore, so the log says which it was. The text is
-# for the shell xargs starts, which expands it.
+# A refusal of a signature exits 1 at once and is never retried. The text is for the shell xargs
+# starts, which expands it.
 # shellcheck disable=SC2016
 verify_one='
 release=$1 name=$2 ref=$3
 log=${work}/${release}-${name}.log
-TUF_ROOT=$(mktemp -d "${work}/tuf.XXXXXX")
-export TUF_ROOT
-cp -R "${tuf}/." "${TUF_ROOT}/"
-cosign verify "${ref}" --certificate-oidc-issuer "${issuer}" --certificate-identity-regexp "${regex}" > "${log}" 2>&1 || {
+cosign verify "${ref}" --trusted-root "${trusted_root}" --certificate-oidc-issuer "${issuer}" --certificate-identity-regexp "${regex}" > "${log}" 2>&1 || {
     cat "${log}" >&2
     echo "verify-talos-pins: cosign refused ${name} of ${release}" >&2
     exit 1
 }
 '
-export work tuf issuer regex
+export work trusted_root issuer regex
 xargs -n 3 -P 8 sh -c "${verify_one}" verify < "${work}/jobs" || fail "cosign refused an image of ${pins}, or Sigstore could not be reached"
 
 awk '{ print $1 ": imager, installer base, extensions and agent signed" }' "${work}/talos"
