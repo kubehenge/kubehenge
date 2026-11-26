@@ -130,7 +130,7 @@ systemctl restart kubehenge.service
 # The next visit starts the new Headlamp.
 systemctl stop kubehenge-headlamp.service
 
-if reason=$("${bin}/kubehenge" appliance health --cert "${R}/etc/kubehenge/tls.crt" 2>&1); then
+if reason=$("${bin}/kubehenge" appliance health --quiet --cert "${R}/etc/kubehenge/tls.crt" 2>&1); then
     rm -rf "${aside}"
     exit 0
 fi

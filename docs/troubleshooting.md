@@ -40,7 +40,18 @@ For more in the journal, add `KUBEHENGE_LOG_LEVEL=debug` to `/etc/kubehenge/appl
   - Each run is a Job of the CronJob of that name. Read the full run with `kubectl -n kubehenge-system logs job/<name>`.
   - "no API token" means the Secret `kubehenge-template-builder` is missing. A management cluster installed from the chart alone needs it made, or `templateRefresh.enabled` set to false.
 - **The last upgrade** shows on the Administration page, and with `kubehenge appliance upgrades` in the appliance's shell ([upgrading.md](upgrading.md#from-the-appliances-shell)). The updater keeps it in `/var/lib/kubehenge-update/status.json`.
-- **Whether the interface serves.** `pct exec <ctid> -- kubehenge appliance health` runs the upgrades' check. It passes when the interface answers over HTTPS within 2 minutes, then runs 20 seconds without a restart.
+- **Whether the interface serves.** `pct exec <ctid> -- kubehenge appliance health` runs the upgrades' check. It passes when the interface answers over HTTPS within 2 minutes on the expected certificate, then stays up for 20 seconds. It shows each stage on standard error, with the time left, and prints the verdict on standard output:
+
+  ```text
+  Connecting to 127.0.0.1:443, waiting up to 2 min
+  Certificate matches /etc/kubehenge/tls.crt
+  Answered after 4 s
+  Staying up for 20 s
+  Stayed up for 20 s
+  Healthy: Kubehenge 0.5.7 answers on 127.0.0.1:443
+  ```
+
+  A failure names the cause and one step, such as `not healthy: the interface at 127.0.0.1:443 did not answer within 2 min: ...`. `--quiet` prints nothing, for scripts, and `--json` prints the verdict as one object. The exit status is 0 only when the interface is healthy.
 - **For a monitor.** `https://<appliance>/healthz` answers `ok` without a sign-in.
 
 ### The management cluster

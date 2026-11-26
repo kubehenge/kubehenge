@@ -4,6 +4,10 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
+### Changed
+
+- `kubehenge appliance health` shows each stage as it runs: the connection with the time left, the certificate, the answer and the settle time. It ends on a verdict, or on the cause and the step to take. `--quiet` keeps it silent and `--json` prints the verdict as one object.
+
 ## [0.5.7] - 2026-11-26
 
 ### Highlights

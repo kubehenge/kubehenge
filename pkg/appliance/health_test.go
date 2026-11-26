@@ -177,3 +177,34 @@ func TestServiceCheckTakesACertificateDeliveredMeanwhile(t *testing.T) {
 		t.Errorf("a certificate delivered while the check settled: %v", err)
 	}
 }
+
+// A restart is reported with how far into the settle time it was seen, on a clock that waits for no one.
+func TestServiceCheckSaysWhenItWasRestarted(t *testing.T) {
+	t.Parallel()
+	c := healthServer(t, func() int { return http.StatusNoContent })
+	at := time.Unix(0, 0)
+	c.Now = func() time.Time { return at }
+	c.After = func(d time.Duration) <-chan time.Time {
+		at = at.Add(d)
+		ch := make(chan time.Time, 1)
+		ch <- at
+		return ch
+	}
+	c.Settle = 20 * time.Second
+	var n atomic.Int32
+	c.Restarts = func(context.Context) (int, error) {
+		if n.Add(1) >= 5 {
+			return 1, nil
+		}
+		return 0, nil
+	}
+	var events []HealthEvent
+	c.Report = func(e HealthEvent) { events = append(events, e) }
+	err := c.Healthy(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "restarted 1 times, 4s into the 20s it had to stay up") {
+		t.Fatalf("restarting: %v", err)
+	}
+	if last := events[len(events)-1]; last.Stage != StageSettling || last.Left != 17*time.Second {
+		t.Errorf("last report %+v", last)
+	}
+}
