@@ -1,5 +1,6 @@
-// Package csiproxy stands between a workload cluster's Proxmox VE CSI plugin and the Proxmox VE API
-// in the clusters that take volume snapshots. The plugin copies a volume for a snapshot, a restore
+// Package csiproxy stands between a workload cluster's Proxmox VE CSI plugin and the Proxmox VE API.
+// It reads a storage's configuration for a token that may only see it in the storage list, and in
+// the clusters that take volume snapshots it makes the copies. The plugin copies a volume for a snapshot, a restore
 // or a clone through a Proxmox VE method only root@pam may call. The proxy makes the copy itself
 // with the cluster's own token instead: it imports the volume into a new disk of one of the
 // cluster's holder VMs, detaches it, and records under which name the plugin knows it. Every other

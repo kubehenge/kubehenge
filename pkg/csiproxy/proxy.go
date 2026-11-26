@@ -46,7 +46,8 @@ var (
 //     returns once the copy is done, as the plugin would have waited for Proxmox VE's task.
 //   - Deleting a copy, which the token may not through the storage, it does through the holder.
 //   - A storage's configuration, which Proxmox VE shows singly only to Datastore.Allocate, it reads
-//     from the list of storages, which shows it to a token that may use the storage.
+//     from the list of storages, which shows it to a token that may use the storage. For a storage
+//     the list does not show, it refuses and names the right the token lacks.
 //
 // Everything else goes on as it came, but for the copies' names: Proxmox VE chooses a copy's name
 // itself, vm-<holder>-disk-<n>, so the proxy turns the plugin's name of each copy into the real
@@ -294,8 +295,9 @@ func isJSON(h http.Header) bool {
 	return err == nil && (t == "application/json" || strings.HasSuffix(t, "+json"))
 }
 
-// storageConfig answers with the storage's entry of the storage list, or passes the call on when
-// the list does not show it.
+// storageConfig answers with the storage's entry of the storage list. A storage the list does not
+// show is one the token holds neither Datastore.Audit nor Datastore.AllocateSpace on, or that does
+// not exist, which the answer says. A list that cannot be read passes the call on.
 func (p *Proxy) storageConfig(w http.ResponseWriter, r *http.Request, storage string, forward http.Handler) {
 	var list []json.RawMessage
 	if err := p.pveFor(r).call(r.Context(), http.MethodGet, "/storage", nil, &list); err != nil {
@@ -312,7 +314,7 @@ func (p *Proxy) storageConfig(w http.ResponseWriter, r *http.Request, storage st
 			return
 		}
 	}
-	forward.ServeHTTP(w, r)
+	writeErrors(w, http.StatusForbidden, map[string]string{"storage": "storage " + storage + " is not shown to the cluster's token: it needs Datastore.Audit on /storage/" + storage + ", or the storage does not exist"})
 }
 
 // writeData answers as Proxmox VE does, with the data in an envelope.

@@ -311,18 +311,18 @@ func TestReconcileSwitchesVolumeSnapshotsOnAndOff(t *testing.T) {
 	if err := kube.Get(ctx, client.ObjectKeyFromObject(wrapper), wrapper); err != nil {
 		t.Fatal(err)
 	}
-	if keys := slices.Sorted(maps.Keys(wrapper.Data)); !slices.Equal(keys, []string{"kubehenge-proxmox.yaml"}) {
-		t.Errorf("the resource set still carries the proxy's manifests: %v", keys)
+	if _, ok := wrapper.Data["kubehenge-proxmox-proxied.yaml"]; !ok {
+		t.Errorf("the proxy went with the last copy, which also reads the storage's configuration: %v", slices.Sorted(maps.Keys(wrapper.Data)))
 	}
 	for _, o := range applied {
-		if err := workload.Get(ctx, client.ObjectKeyFromObject(o), o); err == nil {
-			t.Errorf("the workload cluster still holds %T %s", o, o.GetName())
+		if err := workload.Get(ctx, client.ObjectKeyFromObject(o), o); err != nil {
+			t.Errorf("the workload cluster lost %T %s: %v", o, o.GetName(), err)
 		}
 	}
 	if cloud.emptied != 1 {
 		t.Errorf("empty holder VMs removed %d times, want once", cloud.emptied)
 	}
-	checkDirectCSI(t, kube)
+	checkHeldCSIBehindTheProxy(t, kube)
 	for _, name := range []string{"web-snapshot-class", "web-snapshot-controller"} {
 		if _, _, ok := proxyOf(t, kube, name); ok {
 			t.Errorf("%s is still there", name)
@@ -369,19 +369,21 @@ func checkProxiedCSI(t *testing.T, kube client.Client, copies bool) { //nolint:r
 	}
 }
 
-// checkDirectCSI checks that web's CSI plugin is its held release again, reaching Proxmox VE
-// directly with the cluster's token, without the snapshot sidecar, the proxy or the longer timeout.
-func checkDirectCSI(t *testing.T, kube client.Client) {
+// checkHeldCSIBehindTheProxy checks that web's CSI plugin is its held release again, still reaching
+// Proxmox VE through the proxy, which only finds copies, without the snapshot sidecar or the longer
+// timeout.
+func checkHeldCSIBehindTheProxy(t *testing.T, kube client.Client) {
 	t.Helper()
 	version, csi, _ := proxyOf(t, kube, "web-proxmox-csi")
 	_, snapshots := lookup[map[string]any](t, csi, "controller", "snapshotter")["enabled"]
-	if !strings.HasPrefix(version, testCharts.CSI.Version+"@") || lookup[string](t, csi, "existingConfigSecret") != "kubehenge-proxmox" || snapshots {
-		t.Errorf("the CSI plugin did not go back to its token: %s %v", version, csi)
+	if !strings.HasPrefix(version, testCharts.CSI.Version+"@") || lookup[string](t, csi, "existingConfigSecret") != "kubehenge-proxmox-proxied" || snapshots {
+		t.Errorf("the CSI plugin did not go back to its held release behind the proxy: %s %v", version, csi)
 	}
-	for _, key := range []string{"timeout", "initContainers"} {
-		if _, has := csi[key]; has {
-			t.Errorf("the CSI plugin keeps its %s: %v", key, csi[key])
-		}
+	if _, has := csi["timeout"]; has {
+		t.Errorf("the CSI plugin keeps its copy timeout: %v", csi["timeout"])
+	}
+	if lookup[string](t, csi, "initContainers", 0, "name") != "kubehenge-csi-proxy" {
+		t.Errorf("the proxy is gone from the CSI plugin: %v", csi["initContainers"])
 	}
 }
 

@@ -73,6 +73,20 @@ func newFakePVE() *fakePVE {
 	}
 }
 
+func isStorageConfig(path string) bool {
+	return strings.Count(path, "/") == 2 && strings.HasPrefix(path, "/storage/")
+}
+
+// storages answers the storage list. A storage's own configuration is for Datastore.Allocate, which
+// the cluster's token lacks.
+func storages(w http.ResponseWriter, path string) {
+	if path != "/storage" {
+		writeErrors(w, http.StatusForbidden, map[string]string{"permission": "not authorized to access endpoint"})
+		return
+	}
+	writeData(w, []map[string]any{{"storage": "local", "type": "dir"}, {"storage": "local-zfs", "type": "zfspool", "sparse": 1}, {"storage": "shared-lvm", "type": "lvm", "shared": 1}})
+}
+
 func (f *fakePVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -89,8 +103,8 @@ func (f *fakePVE) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.auth = append(f.auth, r.Header.Get("Authorization"))
 	seg := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	switch {
-	case path == "/storage":
-		writeData(w, []map[string]any{{"storage": "local", "type": "dir"}, {"storage": "local-zfs", "type": "zfspool", "sparse": 1}})
+	case path == "/storage" || isStorageConfig(path):
+		storages(w, path)
 	case path == "/cluster/resources":
 		// Proxmox VE names a VM's pool only to Pool.Audit on it, which the cluster's token lacks.
 		// VM 302 is in a pool whose Pool.Audit it holds.
@@ -714,6 +728,31 @@ func TestStorageConfigurationIsReadFromTheList(t *testing.T) {
 	}
 	if got := h.pve.seen("GET /storage"); len(got) != 1 || got[0] != "GET /storage" {
 		t.Errorf("calls %v", got)
+	}
+}
+
+func TestSharedStorageConfigurationNeedsOnlyTheList(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, newFakePVE())
+	status, a := h.call(t, http.MethodGet, "/storage/shared-lvm", nil)
+	if status != http.StatusOK || !strings.Contains(string(a.Data), `"shared":1`) {
+		t.Errorf("answered %d %s %v", status, a.Data, a.Errors)
+	}
+	if got := h.pve.seen("GET /storage/shared-lvm"); len(got) != 0 {
+		t.Errorf("the storage's own configuration was asked for: %v", got)
+	}
+}
+
+func TestStorageTheTokenCannotSeeIsRefusedByName(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, newFakePVE())
+	status, a := h.call(t, http.MethodGet, "/storage/hidden-store", nil)
+	message := a.Errors["storage"]
+	if status != http.StatusForbidden || !strings.Contains(message, "hidden-store") || !strings.Contains(message, "Datastore.Audit") {
+		t.Errorf("answered %d %v, want a refusal naming the storage and Datastore.Audit", status, a.Errors)
+	}
+	if got := h.pve.seen("GET /storage/hidden-store"); len(got) != 0 {
+		t.Errorf("the call went on to Proxmox VE: %v", got)
 	}
 }
 

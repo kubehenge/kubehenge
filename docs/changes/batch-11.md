@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Persistent volumes work on shared storage such as LVM on iSCSI. A Pending add-on claim shows as `<add-on> has no volume: <reason>`.
 - Monitoring, logs and Rancher install only once cert-manager is deployed, so their add-ons no longer fail on a missing Certificate kind.
 - Release pins on the VM templates page work on an appliance: the interface's account may read and update the pins, and the other pages it could not read now answer too.
 - Setup refuses a Site CA that lacks the root a host's chain ends at, also when the appliance itself trusts that root. It names the root with its fingerprint and offers to add it.

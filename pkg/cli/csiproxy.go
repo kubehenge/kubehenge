@@ -34,10 +34,9 @@ func newCSIProxyCommand(conn *pve.Config) *cobra.Command {
 	var o csiProxyOptions
 	cmd := &cobra.Command{
 		Use:   "csi-proxy",
-		Short: "Proxy a workload cluster's CSI plugin to the Proxmox VE API, for volume snapshots",
+		Short: "Proxy a workload cluster's CSI plugin to the Proxmox VE API",
 		Long: `Proxy a workload cluster's Proxmox VE CSI plugin to the Proxmox VE API. It runs in the workload
-cluster beside the plugin's controller, with the plugin's service account, in clusters that take
-volume snapshots.
+cluster beside the plugin's controller, with the plugin's service account.
 
 Every call goes on to the API with the cluster's own token, which the call carries. Proxmox VE lets
 only root@pam copy a volume, so the proxy makes the copy with that token instead. It imports the

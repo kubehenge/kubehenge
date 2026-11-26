@@ -230,6 +230,11 @@ func (r *Reconciler) reconcileAddons(ctx context.Context, cluster *clusterv1.Clu
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	volumeWaits, err := r.addonVolumeWaits(ctx, cluster)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	conflicts = append(conflicts, volumeWaits...)
 	if err = errors.Join(r.recordAddonChanges(ctx, cluster, &addons), r.recordAddonConflicts(ctx, cluster, conflicts)); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -249,7 +254,7 @@ func (r *Reconciler) reconcileAddons(ctx context.Context, cluster *clusterv1.Clu
 		return ctrl.Result{}, err
 	}
 	// Nothing the waits are on changes the Cluster, so only a requeue looks again.
-	if addonWaiting || othersWaiting {
+	if addonWaiting || othersWaiting || len(volumeWaits) > 0 {
 		return ctrl.Result{RequeueAfter: waitInterval}, nil
 	}
 	return ctrl.Result{RequeueAfter: r.lookAgainIn(&addons, siteCAAgain)}, nil
@@ -270,7 +275,7 @@ func (r *Reconciler) lookAgainIn(addons *Addons, siteCAAgain time.Duration) time
 // afterTheRest does what waits on other clusters or on the workload cluster's own API, however long
 // that takes, so that nothing else of this cluster waits with it: removing Rancher, which waits on
 // every cluster registered with it, removing Istio, which waits on the cluster's workloads,
-// removing volume snapshots, which deletes the CSI plugin's proxy in the cluster, linking the
+// removing volume snapshots, which deletes their classes and controller in the cluster, linking the
 // cluster's Cluster Mesh peers, what its certificates and its load balancer need in the cluster,
 // its GitOps engine's repository and removal, and the target its RKE2 or k3s servers upload their
 // own etcd snapshots to. It reports whether any of it waits.

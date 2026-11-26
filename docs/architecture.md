@@ -213,7 +213,7 @@ Kubehenge's controller instead deletes each released persistent volume's volume 
 
 ### The CSI plugin's release
 
-Every cluster runs the plugin's last release that works with `Datastore.AllocateSpace`. Its newer releases read the storage's configuration, which takes `Datastore.Allocate`.
+Every cluster runs the plugin's last release that works with `Datastore.AllocateSpace`. Its newer releases read the storage's configuration, which takes `Datastore.Allocate`. So does the held release for a shared storage, which the cluster's proxy answers from the storage list ([the copy proxy](#the-copy-proxy)).
 
 Where the management cluster allows it (`cluster_datastore_allocate`), a cluster's `csi` variable can choose the newest release. The controller then grants the cluster's user a role on `/storage/<storage>`, unpropagated. The role holds `Datastore.Allocate`, `Datastore.AllocateSpace` and `Datastore.Audit`. It takes the role back when the variable is switched off.
 
@@ -243,17 +243,17 @@ A cluster's `csi` variable can ask for snapshots on node-local storage. They bri
 
 The admission webhook and `BeforeClusterCreate` allow them only on a node-local storage of a type the plugin copies on (`kubehenge.dev/snapshot-storages` on the ClusterClasses). The controller checks again on every reconcile. A failed check leaves the plugin reaching Proxmox VE directly, with a `VolumeSnapshotsRefused` event.
 
-Switching snapshots off removes those releases, then the proxy, its configuration and the copies' namespace once no copy is left. The CustomResourceDefinitions stay, so VolumeSnapshots left behind keep their volumes.
+Switching snapshots off removes those releases. The proxy stays, and the empty holder VMs go once no copy is left. The CustomResourceDefinitions stay, so VolumeSnapshots left behind keep their volumes.
 
 #### The copy proxy
 
-The controller runs the plugin's newest release with its snapshotter sidecar. Beside the plugin's controller, as a native sidecar, it runs `kubehenge csi-proxy` from Kubehenge's own image, pinned by digest. The plugin's configuration for it, `kube-system/kubehenge-proxmox-proxied`, holds the cluster's own token and points at the proxy on `127.0.0.1:8006`.
+Beside the plugin's controller of every cluster, as a native sidecar, the controller runs `kubehenge csi-proxy` from Kubehenge's own image, pinned by digest. The plugin's configuration for it, `kube-system/kubehenge-proxmox-proxied`, holds the cluster's own token and points at the proxy on `127.0.0.1:8006`.
 
-The proxy passes every call on to Proxmox VE with that token. It verifies Proxmox VE's certificate against the cluster's CA. It answers three kinds of call itself:
+With snapshots, the plugin runs its newest release with the snapshotter sidecar, and the proxy makes copies. Without them it only finds copies made before. The proxy passes every call on to Proxmox VE with that token. It verifies Proxmox VE's certificate against the cluster's CA. It answers three kinds of call itself:
 
 - **A copy**, made with the cluster's token in the steps below.
 - **Deleting a copy**, through the holder (`delete=unusedN`), as the token may not delete storage content.
-- **A storage's configuration**, from the storage list. Proxmox VE shows it singly only to `Datastore.Allocate`.
+- **A storage's configuration**, from the storage list. Proxmox VE shows it singly only to `Datastore.Allocate`. A storage the list does not show gets a refusal that names the storage and `Datastore.Audit`.
 
 #### How a copy is made
 

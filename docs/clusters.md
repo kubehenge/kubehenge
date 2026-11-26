@@ -1479,6 +1479,10 @@ The create wizard and the change checks warn when a cluster has fewer workers th
 
 By default a cluster runs the last release of the Proxmox VE CSI plugin that needs no more than `Datastore.AllocateSpace` on the cluster's storage. Its newer releases read the storage's configuration and need `Datastore.Allocate` there. That lets the cluster's token delete any volume on that storage and change the storage's definition.
 
+Both releases read a shared storage's configuration when they create a volume, which Proxmox VE shows singly only to `Datastore.Allocate`. The proxy beside the plugin, `kubehenge-csi-proxy` ([volume snapshots](#how-copies-are-made)), answers that read from the storage list, which the token may read with `Datastore.Audit` or `Datastore.AllocateSpace`. Every cluster runs it, so none needs `Datastore.Allocate` for it. A storage the token cannot see is refused with a message that names the storage and `Datastore.Audit`.
+
+A claim of an add-on that stays Pending because its volume cannot be made shows on the cluster as `<add-on> has no volume: <the plugin's reason>` ([troubleshooting.md](troubleshooting.md#an-add-on-is-not-installed-over-an-existing-install)).
+
 Where the administrator lets clusters choose it ([install-settings.md](install-settings.md#csi-plugin)), a cluster can run the newest release instead. Choose it with **Newest CSI plugin release**, or the `csi` variable's `datastoreAllocate`. Its token then gets `Datastore.Allocate` on the cluster's storage. It loses it again when switched off.
 
 ### Where the newest release is refused
@@ -1676,8 +1680,8 @@ A copy takes as long as Proxmox VE needs, up to a day.
 
 Switching it off removes the sidecar, the VolumeSnapshotClass and the snapshot controller.
 
-- The proxy stays while any copy is left, since only it knows their names. It makes no copies.
-- Once the last restored or cloned claim and snapshot is deleted, the proxy goes with its namespace and the empty holder VMs. The plugin reaches Proxmox VE directly with the cluster's token again.
+- The proxy stays, as it does for every cluster, and makes no copies. While any copy is left, only it knows their names, and the plugin keeps its newest release.
+- Once the last restored or cloned claim and snapshot is deleted, the empty holder VMs go. The plugin returns to the earlier release unless the cluster chose the newest.
 - The CustomResourceDefinitions stay, so VolumeSnapshots still in the cluster keep their copies. Delete them while the option is on, or they go when the cluster is deleted.
 
 #### When it is refused

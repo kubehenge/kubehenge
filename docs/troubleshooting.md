@@ -836,6 +836,7 @@ The Cluster has the condition `AddonConflict`. The add-on's HelmChartProxy does 
 
 - **cert-manager.** Create the cluster with `useExisting.certManager`, which uses yours, or remove yours first. A cluster that exists cannot switch, since removing Kubehenge's cert-manager deletes the definitions and with them every certificate.
 - **Kyverno and monitoring.** Remove the cluster's own install, or switch the add-on off.
+- **`<add-on> has no volume: <reason>`.** A PersistentVolumeClaim of monitoring, logs, Rancher or Argo CD stays Pending, and the message gives the CSI plugin's reason. `storage <name> is not shown to the cluster's token` means the storage is not one the cluster's token may list. Check the cluster's `storage` variable. The line goes once the claim is bound.
 
 `kubectl get crd <name> -o yaml` shows who owns a definition in its `meta.helm.sh/release-name` annotation. Kubehenge installs the add-on on its next look, within ten minutes, once the definition is gone or is its own. [clusters.md](clusters.md#installs-that-collide) lists the definitions it checks.
 

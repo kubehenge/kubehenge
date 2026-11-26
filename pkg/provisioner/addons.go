@@ -208,8 +208,8 @@ type Addons struct {
 	// beside it, once nothing stands in the way of what the cluster's csi variable asks.
 	VolumeSnapshots bool
 
-	// copyProxy is the proxy the CSI plugin reaches Proxmox VE through: with VolumeSnapshots, and
-	// after them while a copy made for them is left.
+	// copyProxy is the proxy the CSI plugin reaches Proxmox VE through: for every cluster, making
+	// copies with VolumeSnapshots, and finding them while one made for them is left.
 	copyProxy copyProxy
 	// backupTarget is the target the backups name, found in the cluster's class. Nil while it is
 	// not, when Velero is neither installed nor removed.
@@ -449,7 +449,7 @@ type proxmoxCluster struct {
 }
 
 // resourceSetSecret wraps the workload cluster's Secrets for a ClusterResourceSet, which applies
-// every key of its Secret as a manifest: workloadSecret, and with the copy proxy the proxied
+// every key of its Secret as a manifest: workloadSecret, and with the proxy the proxied
 // configuration of the CSI plugin and the proxy's namespace and rights (copyProxyManifests).
 func resourceSetSecret(cluster *clusterv1.Cluster, endpoint Endpoint, c Credentials, addons *Addons) (*corev1.Secret, error) {
 	pve := proxmoxCluster{URL: endpoint.URL + "/api2/json", Insecure: endpoint.Insecure, TokenID: c.TokenID, TokenSecret: c.TokenSecret, Region: c.Region}
@@ -1073,7 +1073,9 @@ func proxmoxValues(storage string, addons *Addons) (map[string]any, map[string]a
 	}
 	if addons.copyProxy.on {
 		config = proxiedWorkloadSecret
-		csi["timeout"] = csiCopyTimeout
+		if addons.copyProxy.copied {
+			csi["timeout"] = csiCopyTimeout
+		}
 		csi["initContainers"] = []any{csiProxyContainer(&addons.copyProxy)}
 	}
 	csi["existingConfigSecret"] = config
@@ -1088,11 +1090,11 @@ func proxmoxValues(storage string, addons *Addons) (map[string]any, map[string]a
 func proxmoxCharts(charts *Charts, distribution templates.Distribution, storage string, addons *Addons) []chartProxy {
 	ccm, csi := proxmoxValues(storage, addons)
 	csiChart := charts.CSI
-	// The proxy answers the newest release's read of the storage's configuration from what the
-	// cluster's token may see and deletes the copies through their holders, and the controller the
-	// plugin's other volumes through the owner VM as for the held release, so the token needs
-	// nothing more for it.
-	if addons.CSINewest || addons.copyProxy.on {
+	// The proxy answers either release's read of the storage's configuration from what the
+	// cluster's token may see. The newest release also makes and finds copies, which the proxy
+	// makes and deletes through their holders, and the controller the plugin's other volumes
+	// through the owner VM as for the held release, so the token needs nothing more for it.
+	if addons.CSINewest || addons.copyProxy.copied {
 		csiChart = charts.CSINewest
 	}
 	wanted := []chartProxy{
