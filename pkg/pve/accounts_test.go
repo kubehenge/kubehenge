@@ -303,12 +303,15 @@ func TestApplianceIDByItsMAC(t *testing.T) {
 		{"the recorded ID among copies with the same MAC", 182, []string{"bc:24:11:00:00:01"}, 182},
 		{"a recorded ID that is another guest", 150, []string{"bc:24:11:00:00:02"}, 181},
 	} {
-		got, err := a.ApplianceID(context.Background(), tk, tc.hint, tc.macs)
+		got, config, err := a.ApplianceID(context.Background(), tk, tc.hint, tc.macs)
 		if err != nil || got != tc.want {
 			t.Errorf("%s: ApplianceID = %d, %v; want %d", tc.name, got, err, tc.want)
 		}
+		if !strings.HasPrefix(config["net0"], "name=eth0,bridge=vmbr0,hwaddr=") || config["hostname"] != "kubehenge" {
+			t.Errorf("%s: the configuration of the guest found is %v", tc.name, config)
+		}
 	}
-	if got, err := a.ApplianceID(context.Background(), tk, 180, []string{"bc:24:11:00:00:99"}); !errors.Is(err, ErrNoAppliance) {
+	if got, _, err := a.ApplianceID(context.Background(), tk, 180, []string{"bc:24:11:00:00:99"}); !errors.Is(err, ErrNoAppliance) {
 		t.Errorf("ApplianceID with no MAC of the appliance's = %d, %v; want ErrNoAppliance", got, err)
 	}
 }

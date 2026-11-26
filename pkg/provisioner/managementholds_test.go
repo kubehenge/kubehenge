@@ -1,6 +1,8 @@
 package provisioner
 
 import (
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -101,8 +103,9 @@ func TestManagementAddressesAreRefused(t *testing.T) {
 	}
 }
 
-// An appliance on a network of its own holds its addresses there, and on no other, also where the
-// management cluster's bridge is not known.
+// An appliance with two cards holds each address on the network of its own card, and on no other,
+// also where the management cluster's bridge is not known. An address it recorded no network for
+// is held on the management cluster's.
 func TestApplianceAddressesAreHeldOnItsOwnNetwork(t *testing.T) {
 	t.Parallel()
 	for name, bridge := range map[string]string{"management on vmbr0": "vmbr0", "management bridge not known": ""} {
@@ -110,24 +113,52 @@ func TestApplianceAddressesAreHeldOnItsOwnNetwork(t *testing.T) {
 			t.Parallel()
 			appliance := &corev1.ConfigMap{
 				Name: ApplianceAddressesName, Namespace: "kubehenge-system",
-				Data: map[string]string{ApplianceAddressesKey: "10.0.0.31", ApplianceBridgeKey: "vmbr0", ApplianceVLANKey: "7"},
+				Data: map[string]string{
+					ApplianceAddressesKey: "10.0.0.31,10.0.0.35,10.0.0.36", ApplianceNetworksKey: "10.0.0.31=vmbr0/7, 10.0.0.35=vmbr1/0",
+				},
 			}
 			f := managementSide(t)
 			f.Reader = fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(appliance).Build()
 			f.Bridge = bridge
-			held, err := f.Held(t.Context())
-			if err != nil {
-				t.Fatal(err)
-			}
-			err = checkManagementAddresses(lbCluster("web", 7, "10.0.0.100-10.0.0.110", "10.0.0.99", onAt(`"10.0.0.30-10.0.0.40"`)), held)
-			if err == nil || !strings.Contains(err.Error(), "include 10.0.0.31, which is the appliance's address") {
-				t.Errorf("on the appliance's network: %v", err)
-			}
-			if err := checkManagementAddresses(lbCluster("web", 0, "10.0.0.100-10.0.0.110", "10.0.0.99", onAt(`"10.0.0.30-10.0.0.40"`)), held); err != nil {
-				t.Errorf("on another network than the appliance's: %v", err)
+			h, _ := hooksFor(t)
+			h.Management = f
+			v := &ClusterValidator{Hooks: h}
+			lb := onAt(`"10.0.0.30-10.0.0.40"`)
+			for _, tc := range []struct {
+				network string
+				cluster *clusterv1.Cluster
+				held    []string
+			}{
+				{"vmbr0/7", lbCluster("web", 7, "10.0.0.100-10.0.0.110", "10.0.0.99", lb), []string{"10.0.0.31"}},
+				{"vmbr1/0", onBridge(lbCluster("web", 0, "10.0.0.100-10.0.0.110", "10.0.0.99", lb), "vmbr1"), []string{"10.0.0.35"}},
+				{"vmbr0/0", lbCluster("web", 0, "10.0.0.100-10.0.0.110", "10.0.0.99", lb), map[bool][]string{true: {"10.0.0.36"}}[bridge != ""]},
+				{"vmbr1/7", onBridge(lbCluster("web", 7, "10.0.0.100-10.0.0.110", "10.0.0.99", lb), "vmbr1"), nil},
+			} {
+				_, err := v.ValidateCreate(t.Context(), tc.cluster)
+				beside := changedVariable(tc.cluster, loadBalancerVariable, onAt(`"10.0.0.120-10.0.0.130"`))
+				_, updateErr := v.ValidateUpdate(t.Context(), beside, tc.cluster)
+				for _, address := range []string{"10.0.0.31", "10.0.0.35", "10.0.0.36"} {
+					want := slices.Contains(tc.held, address)
+					for what, err := range map[string]error{"create": err, "update": updateErr} {
+						if got := err != nil && strings.Contains(err.Error(), "include "+address+", which is the appliance's address"); got != want {
+							t.Errorf("%s on %s: %s refused %v, want %v: %v", what, tc.network, address, got, want, err)
+						}
+					}
+				}
 			}
 		})
 	}
+}
+
+// onBridge is the cluster with its network on another bridge.
+func onBridge(c *clusterv1.Cluster, bridge string) *clusterv1.Cluster {
+	for i := range c.Spec.Topology.Variables {
+		if c.Spec.Topology.Variables[i].Name == "network" {
+			raw := string(c.Spec.Topology.Variables[i].Value.Raw)
+			c.Spec.Topology.Variables[i].Value.Raw = []byte(strings.Replace(raw, `"vmbr0"`, strconv.Quote(bridge), 1))
+		}
+	}
+	return c
 }
 
 // The hooks that admission and the BeforeClusterCreate hook share refuse the management side's

@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
+	"net/netip"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -54,15 +55,19 @@ func (a *Appliance) logAddressesOutcome(failing string, err error) string {
 	return ""
 }
 
-// recordAddresses writes the appliance's addresses and its network into
-// provisioner.ApplianceAddressesName where they differ from what it holds, through kube, or when
-// nil, a client made from the interface's kubeconfig. Without a management cluster there is nothing
-// to write to.
+// recordAddresses writes the appliance's addresses, and the network of each that NetworkFile
+// names, into provisioner.ApplianceAddressesName where they differ from what it holds, through
+// kube, or when nil, a client made from the interface's kubeconfig. Without a management cluster
+// there is nothing to write to.
 func (a *Appliance) recordAddresses(ctx context.Context, kube kubernetes.Interface) error {
 	if !a.Ready() {
 		return nil
 	}
-	own, err := a.addresses()
+	own, holders, err := a.addresses()
+	if err != nil {
+		return err
+	}
+	segments, err := a.segments()
 	if err != nil {
 		return err
 	}
@@ -76,9 +81,16 @@ func (a *Appliance) recordAddresses(ctx context.Context, kube kubernetes.Interfa
 	if err != nil {
 		return fmt.Errorf("reading %s/%s: %w", interfaceNamespace, provisioner.ApplianceAddressesName, err)
 	}
-	want := map[string]string{provisioner.ApplianceAddressesKey: strings.Join(own, ","), provisioner.ApplianceBridgeKey: a.Bridge, provisioner.ApplianceVLANKey: ""}
-	if a.Bridge != "" {
-		want[provisioner.ApplianceVLANKey] = strconv.Itoa(a.VLAN)
+	want := map[string]string{provisioner.ApplianceAddressesKey: strings.Join(own, ",")}
+	var networks []string
+	for _, address := range own {
+		if segment := segments[holders[address]]; segment != "" {
+			networks = append(networks, address+"="+segment)
+		}
+	}
+	// Without a network of its own the appliance leaves the one it recorded before.
+	if len(networks) > 0 {
+		want[provisioner.ApplianceNetworksKey] = strings.Join(networks, ",")
 	}
 	if holds(held.Data, want) {
 		return nil
@@ -90,16 +102,14 @@ func (a *Appliance) recordAddresses(ctx context.Context, kube kubernetes.Interfa
 	if _, err := configMaps.Patch(ctx, provisioner.ApplianceAddressesName, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
 		return fmt.Errorf("writing %s/%s: %w", interfaceNamespace, provisioner.ApplianceAddressesName, err)
 	}
-	a.Log.Info("recorded the appliance's addresses for the clusters' firewalls", "addresses", want[provisioner.ApplianceAddressesKey], "bridge", a.Bridge)
+	a.Log.Info("recorded the appliance's addresses for the clusters' firewalls", "addresses", want[provisioner.ApplianceAddressesKey], "networks", want[provisioner.ApplianceNetworksKey])
 	return nil
 }
 
-// holds tells whether data holds every key of want with its value. An empty value counts as held by
-// a key that is missing, as a ConfigMap written before the key was.
+// holds tells whether data holds every key of want with its value.
 func holds(data, want map[string]string) bool {
 	for key, value := range want {
-		got, ok := data[key]
-		if got != value || !ok && key == provisioner.ApplianceAddressesKey {
+		if got, ok := data[key]; !ok || got != value {
 			return false
 		}
 	}
@@ -107,16 +117,45 @@ func holds(data, want map[string]string) bool {
 }
 
 // addresses are the appliance's own addresses, which the workload clusters' firewalls accept: its
-// interface and its Headlamp reach their API servers directly.
-func (a *Appliance) addresses() ([]string, error) {
-	if a.Addresses != nil {
-		return a.Addresses()
+// interface and its Headlamp reach their API servers directly. IPv4 come first, and each comes
+// once. Beside them it gives the name of the interface that holds each.
+func (a *Appliance) addresses() ([]string, map[string]string, error) {
+	read := a.Addresses
+	if read == nil {
+		read = interfaceAddresses
 	}
+	byInterface, err := read()
+	if err != nil {
+		return nil, nil, err
+	}
+	// The module takes no null for a list.
+	v4, v6 := []string{}, []string{}
+	holders := map[string]string{}
+	for _, name := range slices.Sorted(maps.Keys(byInterface)) {
+		for _, address := range byInterface[name] {
+			ip, err := netip.ParseAddr(address)
+			if _, held := holders[address]; held || err != nil {
+				continue
+			}
+			holders[address] = name
+			if ip.Is4() {
+				v4 = append(v4, address)
+			} else {
+				v6 = append(v6, address)
+			}
+		}
+	}
+	return append(v4, v6...), holders, nil
+}
+
+// interfaceAddresses are the source addresses of the container's network interfaces that are up,
+// by the interface's name.
+func interfaceAddresses() (map[string][]string, error) {
 	interfaces, err := net.Interfaces()
 	if err != nil {
 		return nil, fmt.Errorf("listing the appliance's network interfaces: %w", err)
 	}
-	var addrs []net.Addr
+	byInterface := map[string][]string{}
 	for i := range interfaces {
 		if interfaces[i].Flags&net.FlagUp == 0 || interfaces[i].Flags&net.FlagLoopback != 0 {
 			continue
@@ -125,14 +164,14 @@ func (a *Appliance) addresses() ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("reading the addresses of %s: %w", interfaces[i].Name, err)
 		}
-		addrs = append(addrs, own...)
+		byInterface[interfaces[i].Name] = sourceAddresses(own)
 	}
-	return sourceAddresses(addrs), nil
+	return byInterface, nil
 }
 
 // OwnAddresses are the addresses the appliance holds now, none where they cannot be read.
 func (a *Appliance) OwnAddresses() []string {
-	own, err := a.addresses()
+	own, _, err := a.addresses()
 	if err != nil {
 		return nil
 	}

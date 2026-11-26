@@ -156,8 +156,11 @@ mkdir -p "${root}/usr/local/share/kubehenge"
 echo half > "${root}/usr/local/share/kubehenge/VERSION"
 printf '#!/bin/sh\necho half\n' > "${root}/usr/local/bin/kubehenge"
 : > "${aside}/shell-pending"
+mkdir -p "${root}/var/lib/kubehenge"
+echo "net0: name=eth0,bridge=vmbr1,tag=30" > "${root}/var/lib/kubehenge/network"
 upgrade "${root}"
 check "the release that fails afterwards is rolled back (status ${status})" [ "${status}" -eq 76 ]
+check "the appliance's network stays" grep -qx "net0: name=eth0,bridge=vmbr1,tag=30" "${root}/var/lib/kubehenge/network"
 check "to the old binary, not the half-upgraded one" grep -qx 'echo old' "${root}/usr/local/bin/kubehenge"
 check "and the old share directory" grep -qx 0.1.0 "${root}/usr/local/share/kubehenge/VERSION"
 

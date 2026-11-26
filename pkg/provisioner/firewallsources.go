@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -31,11 +30,10 @@ const (
 	ApplianceAddressesName = "kubehenge-appliance-addresses"
 	// ApplianceAddressesKey holds the appliance's addresses, comma-separated.
 	ApplianceAddressesKey = "addresses"
-	// ApplianceBridgeKey holds the bridge, or VNet by its name, the appliance is on, empty where it
-	// does not know it.
-	ApplianceBridgeKey = "bridge"
-	// ApplianceVLANKey holds the VLAN tag of the appliance's network, 0 for none.
-	ApplianceVLANKey = "vlan"
+	// ApplianceNetworksKey holds the network each of the appliance's addresses is on, as
+	// comma-separated "<address>=<bridge>/<vlan>", with a VNet by its name and 0 for no VLAN. An
+	// address it does not name is on a network the appliance does not know.
+	ApplianceNetworksKey = "networks"
 	// FirewallSourcesAnnotation names, on the ProxmoxCluster of a firewalled cluster, the addresses
 	// beside the cluster's own that Kubehenge's capmox build keeps in each node's IPSet kubehenge:
 	// the management cluster's nodes, the appliance and the nodes and pods of the clusters it is
@@ -144,13 +142,13 @@ func (f *FirewallSources) applianceAddresses(ctx context.Context) ([]string, err
 	return own, err
 }
 
-// appliance is what the appliance recorded of itself: its addresses, and its network as
-// "<bridge>/<vlan>", empty where it recorded no bridge.
-func (f *FirewallSources) appliance(ctx context.Context) ([]string, string, error) {
+// appliance is what the appliance recorded of itself: its addresses, and the network of each as
+// "<bridge>/<vlan>" by the address, where it recorded one.
+func (f *FirewallSources) appliance(ctx context.Context) ([]string, map[string]string, error) {
 	cm := &corev1.ConfigMap{}
 	err := f.Reader.Get(ctx, client.ObjectKey{Namespace: f.Namespace, Name: ApplianceAddressesName}, cm)
 	if err != nil && !apierrors.IsNotFound(err) {
-		return nil, "", fmt.Errorf("reading the appliance's addresses: %w", err)
+		return nil, nil, fmt.Errorf("reading the appliance's addresses: %w", err)
 	}
 	var own []string
 	for address := range strings.SplitSeq(cm.Data[ApplianceAddressesKey], ",") {
@@ -158,12 +156,13 @@ func (f *FirewallSources) appliance(ctx context.Context) ([]string, string, erro
 			own = append(own, address)
 		}
 	}
-	segment := ""
-	if bridge := strings.TrimSpace(cm.Data[ApplianceBridgeKey]); bridge != "" {
-		vlan, _ := strconv.Atoi(strings.TrimSpace(cm.Data[ApplianceVLANKey]))
-		segment = fmt.Sprintf("%s/%d", bridge, vlan)
+	segments := map[string]string{}
+	for entry := range strings.SplitSeq(cm.Data[ApplianceNetworksKey], ",") {
+		if address, segment, ok := strings.Cut(strings.TrimSpace(entry), "="); ok && address != "" && segment != "" {
+			segments[address] = segment
+		}
 	}
-	return own, segment, nil
+	return own, segments, nil
 }
 
 func (f *FirewallSources) runOnce(ctx context.Context) error {

@@ -383,15 +383,20 @@ func (f *fakeAccounts) BackupCovers(_ context.Context, _ *pve.Ticket, vmid int) 
 	return vmid == 150, nil
 }
 
-// ApplianceID knows the appliance as guest 150, with the MAC address bc:24:11:00:01:50.
-func (f *fakeAccounts) ApplianceID(_ context.Context, _ *pve.Ticket, _ int, macs []string) (int, error) {
+// ApplianceID knows the appliance as guest 150, with the MAC address bc:24:11:00:01:50 on its first
+// card and a second card on vmbr0.
+func (f *fakeAccounts) ApplianceID(_ context.Context, _ *pve.Ticket, _ int, macs []string) (int, map[string]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.applianceLookups++
 	if slices.Contains(macs, "bc:24:11:00:01:50") {
-		return 150, nil
+		return 150, map[string]string{
+			"hostname": "kubehenge",
+			"net0":     "name=eth0,bridge=vmbr1,hwaddr=BC:24:11:00:01:50,ip=dhcp,tag=30,type=veth",
+			"net1":     "name=eth1,bridge=vmbr0,hwaddr=BC:24:11:00:01:51,ip=dhcp,type=veth",
+		}, nil
 	}
-	return 0, pve.ErrNoAppliance
+	return 0, nil, pve.ErrNoAppliance
 }
 
 // Network knows two SDN VNets: tenants in the evpn zone and corp in the VLAN zone vlanz.

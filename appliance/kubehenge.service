@@ -10,8 +10,7 @@ User=kubehenge
 Group=kubehenge
 # Reads its own journal for clusters' support bundles, the lines that name the cluster.
 SupplementaryGroups=systemd-journal
-# KUBEHENGE_PROXMOX_URL, KUBEHENGE_PUBLIC_URL, KUBEHENGE_APPLIANCE_VMID, the container's
-# network as KUBEHENGE_APPLIANCE_BRIDGE and KUBEHENGE_APPLIANCE_VLAN and, with
+# KUBEHENGE_PROXMOX_URL, KUBEHENGE_PUBLIC_URL, KUBEHENGE_APPLIANCE_VMID and, with
 # --proxmox-insecure, KUBEHENGE_PROXMOX_INSECURE and, with --trusted-proxy,
 # KUBEHENGE_TRUSTED_PROXIES, written by the installer; KUBEHENGE_LOG_LEVEL
 # (debug, info, warn, error) and KUBEHENGE_LOG_DEVELOPMENT=true, added by hand when the journal

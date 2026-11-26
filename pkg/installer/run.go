@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kubehenge/kubehenge/pkg/appliance"
 )
 
 // StepState is where a step of the run stands.
@@ -126,6 +128,9 @@ type Runner struct {
 
 const keyDir = "/var/lib/kubehenge-keys"
 
+// stateDir is the interface's state directory in the container.
+const stateDir = "/var/lib/kubehenge"
+
 // aptTimeouts cuts each try at a mirror an air-gapped or filtered network drops without an answer
 // to 20 seconds, from apt's default of 120. Apt keeps its 3 retries with a backoff of 1, 2 and 4
 // seconds, so such a mirror still costs about 90 seconds per index file.
@@ -225,10 +230,8 @@ func urlHost(h string) string {
 }
 
 var (
-	cfgIP4RE    = regexp.MustCompile(`(?m)^net0: (?:.*,)?ip=([0-9.]+)/`)
-	cfgIP6RE    = regexp.MustCompile(`(?m)^net0: (?:.*,)?ip6=([0-9A-Fa-f:]+)/`)
-	cfgBridgeRE = regexp.MustCompile(`(?m)^net0: (?:.*,)?bridge=([^,\s]+)`)
-	cfgTagRE    = regexp.MustCompile(`(?m)^net0: (?:.*,)?tag=(\d+)`)
+	cfgIP4RE = regexp.MustCompile(`(?m)^net0: (?:.*,)?ip=([0-9.]+)/`)
+	cfgIP6RE = regexp.MustCompile(`(?m)^net0: (?:.*,)?ip6=([0-9A-Fa-f:]+)/`)
 )
 
 var gatewayRE = regexp.MustCompile(`(?m)^default via (\S+)`)
@@ -1000,9 +1003,7 @@ func (r *Runner) stepInstall(ctx context.Context) error {
 		}
 	}
 	public := urlHost(r.public())
-	bridge, vlan := r.containerNetwork(ctx)
-	env := fmt.Sprintf("KUBEHENGE_PROXMOX_URL=%s\nKUBEHENGE_PUBLIC_URL=https://%s\nKUBEHENGE_APPLIANCE_VMID=%s\nKUBEHENGE_APPLIANCE_BRIDGE=%s\nKUBEHENGE_APPLIANCE_VLAN=%s\n",
-		c.ProxmoxURL, public, c.CTID, bridge, vlan)
+	env := fmt.Sprintf("KUBEHENGE_PROXMOX_URL=%s\nKUBEHENGE_PUBLIC_URL=https://%s\nKUBEHENGE_APPLIANCE_VMID=%s\n", c.ProxmoxURL, public, c.CTID)
 	if c.Insecure {
 		env += "KUBEHENGE_PROXMOX_INSECURE=true\n"
 	}
@@ -1026,6 +1027,9 @@ func (r *Runner) stepService(ctx context.Context) error {
 		return r.serviceFailure(ctx, "the service did not start")
 	}
 	r.started = true
+	if err := r.recordNetwork(ctx); err != nil {
+		return userErr("recording container "+c.CTID+"'s network failed", "See "+r.LogPath+" for the command's message")
+	}
 	r.Sleep(stepPause)
 	if _, err := r.inCT(ctx, "systemctl", "is-active", "--quiet", "kubehenge.service"); err != nil {
 		return r.serviceFailure(ctx, "the service did not start")
@@ -1208,33 +1212,33 @@ func tarDir(dir, dest string) error {
 	return nil
 }
 
-// containerNetwork is the bridge, or VNet by its name, and the VLAN tag of the container's network
-// as Proxmox VE has it, each empty where its configuration names none.
-func (r *Runner) containerNetwork(ctx context.Context) (string, string) {
-	conf, _ := r.pct(ctx, "config", r.S.Cfg.CTID)
-	var bridge, vlan string
-	if m := cfgBridgeRE.FindStringSubmatch(conf); m != nil {
-		bridge = m[1]
+// recordNetwork writes the network cards Proxmox VE configures for the container into the
+// appliance's appliance.NetworkFile, where it reads the bridge and VLAN each of its addresses is
+// on. A configuration that cannot be read, or holds no card, leaves the file as it is.
+func (r *Runner) recordNetwork(ctx context.Context) error {
+	conf, err := r.pct(ctx, "config", r.S.Cfg.CTID)
+	if err != nil {
+		return nil //nolint:nilerr // what was recorded stays, and the interface records it again
 	}
-	if m := cfgTagRE.FindStringSubmatch(conf); m != nil {
-		vlan = m[1]
+	cards := appliance.NetworkCards(configEntries(conf))
+	if len(cards) == 0 {
+		return nil
 	}
-	return bridge, vlan
+	return r.pushData(ctx, appliance.NetworkFile, cards, stateDir+"/"+appliance.NetworkFile, "0644")
 }
 
-// recordNetworkScript puts the container's bridge ($1) and VLAN tag ($2) into the appliance's
-// environment, in place of what it held.
-const recordNetworkScript = `
-set -e
-env=/etc/kubehenge/appliance.env
-{ grep -v -e "^KUBEHENGE_APPLIANCE_BRIDGE=" -e "^KUBEHENGE_APPLIANCE_VLAN=" "$env" || true; echo "KUBEHENGE_APPLIANCE_BRIDGE=$1"; echo "KUBEHENGE_APPLIANCE_VLAN=$2"; } > "$env.new"
-chmod 0644 "$env.new" && mv "$env.new" "$env"
-`
-
-// recordNetwork tells an installed appliance the network its container is on now, which it starts
-// with.
-func (r *Runner) recordNetwork(ctx context.Context) error {
-	bridge, vlan := r.containerNetwork(ctx)
-	_, err := r.inCT(ctx, "sh", "-c", recordNetworkScript, "sh", bridge, vlan)
-	return err
+// configEntries are the keys and values of a guest's configuration as pct config prints it. The
+// snapshots' sections after it are not the guest's.
+func configEntries(conf string) map[string]string {
+	entries := map[string]string{}
+	for line := range strings.Lines(conf) {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") {
+			break
+		}
+		if key, value, ok := strings.Cut(line, ": "); ok {
+			entries[key] = value
+		}
+	}
+	return entries
 }

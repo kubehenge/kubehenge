@@ -13,7 +13,7 @@
 - Template builds retry a dropped connection to Sigstore instead of failing.
 - A cluster can no longer be given the management cluster's, its API's or the appliance's address, and a machine whose VM lacks its address after boot says so.
 - The refusal of a management node's address names the node. Existing installs need the management cluster's module applied again.
-- The appliance's address is refused on its own bridge and VLAN. Existing appliances need `install.sh --upgrade` to record their network.
+- Each of the appliance's addresses is refused on the bridge and VLAN of its own network card. Existing appliances learn theirs at the next `install.sh --upgrade` or once an administrator signs in.
 
 ### Internal
 

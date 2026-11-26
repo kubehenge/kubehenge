@@ -46,9 +46,9 @@ type ManagementHolds interface {
 var _ ManagementHolds = &FirewallSources{}
 
 // Held implements ManagementHolds: the management cluster's nodes and its API on the management
-// cluster's bridge and VLAN, and the appliance on the network it recorded for itself. An appliance
-// that recorded none is taken to be on the management cluster's. What is on a network that is not
-// known is not held.
+// cluster's bridge and VLAN, and each of the appliance's addresses on the network it recorded for
+// that address. An address with none is taken to be on the management cluster's. What is on a
+// network that is not known is not held.
 func (f *FirewallSources) Held(ctx context.Context) ([]HeldAddress, error) {
 	management := ""
 	if f.Bridge != "" {
@@ -66,14 +66,15 @@ func (f *FirewallSources) Held(ctx context.Context) ([]HeldAddress, error) {
 	if u, err := url.Parse(f.API); err == nil && u.Hostname() != "" {
 		add(u.Hostname(), holderManagementAPI, management)
 	}
-	own, segment, err := f.appliance(ctx)
+	own, segments, err := f.appliance(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if segment == "" {
-		segment = management
-	}
 	for _, a := range own {
+		segment, ok := segments[a]
+		if !ok {
+			segment = management
+		}
 		add(a, holderAppliance, segment)
 	}
 	return held, nil
