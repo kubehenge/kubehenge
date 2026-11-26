@@ -39,8 +39,12 @@ func certManagerUsers(cluster *clusterv1.Cluster) []string {
 
 // certManagerWaits reports whether the proxy named waits for cert-manager's release to be deployed,
 // and records it in addons.certManagerWaiting. The Add-on Provider for Helm puts each install after
-// a failed one further off. A proxy already installed stays while cert-manager is upgraded.
+// a failed one further off. A proxy already installed stays while cert-manager is upgraded, and none
+// waits where the cluster's own cert-manager works.
 func (r *Reconciler) certManagerWaits(ctx context.Context, cluster *clusterv1.Cluster, name string, addons *Addons) (bool, error) {
+	if addons.clusterCertManager {
+		return false, nil
+	}
 	installed, err := r.anyProxy(ctx, cluster, name)
 	if err != nil || installed {
 		return false, err

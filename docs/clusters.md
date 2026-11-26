@@ -412,7 +412,7 @@ Every cluster can also be opened in the appliance's shared Headlamp, without thi
 
 #### Monitoring
 
-Prometheus, Alertmanager and Grafana, with kube-prometheus-stack's dashboards and alerts for every node and control-plane component. It installs cert-manager too, and installs once cert-manager is deployed. It takes about 1.5 GiB of the workers' memory ([Machines](#machines)) and a 20 GiB volume.
+Prometheus, Alertmanager and Grafana, with kube-prometheus-stack's dashboards and alerts for every node and control-plane component. It installs cert-manager too, unless the cluster runs a working one of its own ([below](#a-cert-manager-the-cluster-runs-already)). It installs once cert-manager is deployed. It takes about 1.5 GiB of the workers' memory ([Machines](#machines)) and a 20 GiB volume.
 
 - Each component is scraped over verified, authenticated TLS ([architecture.md](architecture.md#add-ons)).
 - Grafana's `admin` password is in the `kube-prometheus-stack-grafana` Secret of the `monitoring` namespace.
@@ -1922,7 +1922,7 @@ Change the labels under **Options**, with `kubehenge cluster namespace-labels NA
 
 ### Installs that collide
 
-Helm refuses to install over objects that another release or tool owns. An add-on therefore cannot share its custom resource definitions with the cluster's own install of the same software. Before it installs cert-manager, Kyverno or monitoring, Kubehenge asks the cluster for the definitions in the last column below. If one exists and no Kubehenge release owns it, the add-on is not installed. The cluster's `AddonConflict` condition names the definition and what to do.
+Helm refuses to install over objects that another release or tool owns. An add-on therefore cannot share its custom resource definitions with the cluster's own install of the same software. Before it installs cert-manager, Kyverno or monitoring, Kubehenge asks the cluster for the definitions in the last column below. If one exists and no Kubehenge release owns it, the add-on is not installed. The cluster's `AddonConflict` condition names the definition and what to do. A working cert-manager is used instead ([below](#a-cert-manager-the-cluster-runs-already)).
 
 <!-- addon-owned:start -->
 
@@ -1954,7 +1954,13 @@ Helm refuses to install over objects that another release or tool owns. An add-o
 
 ### A cert-manager the cluster runs already
 
-Kubehenge always installs its own cert-manager for the certificates add-on, monitoring, logs and Rancher. A cert-manager the cluster runs already, found by its definitions or its controller's Deployment, holds them back. That holds also for one installed under Kubehenge's release name `cert-manager`, since only Kubehenge's release labels its objects `kubehenge.dev/addon=cert-manager`. `AddonConflict` names what was found and the add-ons that wait. Remove it, and Kubehenge installs its own on its next look.
+Kubehenge installs cert-manager for the certificates add-on, monitoring, logs and Rancher, unless the cluster already runs one that works. That one is used as it is, from the static manifest, a Helm release of your own or any other install. Kubehenge never installs, upgrades, changes or deletes it.
+
+It works when it serves `cert-manager.io/v1` and its controller and webhook Deployments are Available. It must also be v1.15.0 or newer, Rancher's minimum, and keep cluster issuers' Secrets in the `cert-manager` namespace. The certificates add-on's `acme-http01` also needs it to serve the Gateway API.
+
+A cert-manager that does not work holds its users back. `AddonConflict` names what is wrong and the add-ons that wait, such as definitions left without a controller after an uninstall, a webhook that is not Available or a version too old. Make it work, or remove it and Kubehenge installs its own. Either takes effect on the next look, within ten minutes.
+
+Only Kubehenge's own release labels its objects `kubehenge.dev/addon=cert-manager`. That one keeps getting Kubehenge's upgrades.
 
 For Kyverno and the Prometheus Operator, remove the cluster's own install, or switch the add-on off.
 

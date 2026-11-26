@@ -228,9 +228,11 @@ type Addons struct {
 	// conflicts are the add-ons left out because the cluster holds an install of their software.
 	// certManagerConflict is cert-manager's, and certManagerWaiting the add-ons that wait for its
 	// release.
+	// clusterCertManager is set where the cluster's own cert-manager works and serves them instead.
 	conflicts           []addonConflict
 	certManagerConflict addonConflict
 	certManagerWaiting  []string
+	clusterCertManager  bool
 	// talosServing is set when every controller manager and scheduler of a Talos cluster serves a
 	// certificate of the cluster CA (talosServesControlPlaneMetrics), so that their metrics are
 	// scraped as on the other distributions.

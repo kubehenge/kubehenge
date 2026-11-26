@@ -834,14 +834,14 @@ Changes that never apply mean the window never opens. Check the `upgrades` varia
 
 The Cluster has the condition `AddonConflict` with the reason `CRDsExist`. The add-on's HelmChartProxy does not exist. The message names the custom resource definition the cluster already holds, which no Kubehenge release owns. Helm refuses to install over it.
 
-- **cert-manager.** The message also names the add-ons that wait for Kubehenge's cert-manager. A cert-manager controller Deployment with no definitions gives the reason `DeploymentExists` and names the Deployment. Kubehenge's release labels its objects `kubehenge.dev/addon=cert-manager`. A cert-manager without that label is the cluster's own, also under the release name `cert-manager`. Remove it.
+- **cert-manager.** A cert-manager of the cluster's own is used when it works ([clusters.md](clusters.md#a-cert-manager-the-cluster-runs-already)). The message says what does not work and names the add-ons that wait. That is definitions without a controller, a controller or webhook that is not Available, a version older than v1.15.0, or cluster issuers' Secrets outside `cert-manager`. A controller Deployment with no definitions gives the reason `DeploymentExists`. Make it work, or remove it. Kubehenge's own release labels its objects `kubehenge.dev/addon=cert-manager`.
 - **Kyverno and monitoring.** Remove the cluster's own install, or switch the add-on off.
 
 `kubectl get crd <name> -o yaml` shows who owns a definition in its `meta.helm.sh/release-name` annotation. Kubehenge installs the add-on on its next look, within ten minutes, once the definition is gone or is its own. [clusters.md](clusters.md#installs-that-collide) lists the definitions it checks.
 
 ### Add-ons wait for cert-manager
 
-Rancher, monitoring and the logs add-on install only once Kubehenge's cert-manager is deployed. Until then the Cluster has the condition `AddonsWaiting`, and the **Health** page lists it. The message names the add-ons that wait and what cert-manager waits for.
+Rancher, monitoring and the logs add-on install only once Kubehenge's cert-manager is deployed, where the cluster runs no working cert-manager of its own. Until then the Cluster has the condition `AddonsWaiting`, and the **Health** page lists it. The message names the add-ons that wait and what cert-manager waits for.
 
 | Reason | Cause and fix |
 | --- | --- |

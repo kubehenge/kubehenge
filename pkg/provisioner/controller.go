@@ -707,7 +707,7 @@ func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluste
 		return false, err
 	}
 	addons.rollout, addons.pending, addons.conflicts = gate, nil, nil
-	addons.certManagerConflict, addons.certManagerWaiting = addonConflict{}, nil
+	addons.certManagerConflict, addons.certManagerWaiting, addons.clusterCertManager = addonConflict{}, nil, false
 	labels := proxyNamespaces(proxies)
 	labelsWait, err := r.applyNamespaceLabels(ctx, cluster, labels, addons.NamespaceLabels)
 	if err != nil {
@@ -750,12 +750,15 @@ const (
 )
 
 // proxyState decides what the proxy does. A conflict is recorded in addons.conflicts, cert-manager's
-// in addons.certManagerConflict.
+// in addons.certManagerConflict. cert-manager is left out too where the cluster's own works.
 func (r *Reconciler) proxyState(ctx context.Context, cluster *clusterv1.Cluster, p *unstructured.Unstructured, addons *Addons) (proxyStates, error) {
 	conflict, err := r.conflictOf(ctx, cluster, p)
 	switch {
 	case err != nil:
 		return proxyReady, err
+	case conflict.clusterOwn:
+		addons.clusterCertManager = true
+		return proxyConflicts, nil
 	case conflict.message != "" && p.GetName() == certManagerProxy(cluster):
 		addons.certManagerConflict = conflict
 		return proxyConflicts, nil
