@@ -141,7 +141,7 @@ func TestSetupCheckNamesTheFaultsOfTheSiteCAChainAsTheSaveDoes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = `Site CA: factory.talos.dev, ghcr.io, registry.k8s.io, tuf-repo-cdn.sigstore.dev: Intermediate "CN=Inspect Intermediate" is not presented. Have the device send it.`
+	const want = `Site CA: factory.talos.dev, ghcr.io, registry.k8s.io, tuf-repo-cdn.sigstore.dev: Add "CN=Inspect Intermediate" to the Site CA.`
 	check, err := json.Marshal(map[string]any{"settings": settings["settings"]})
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +151,7 @@ func TestSetupCheckNamesTheFaultsOfTheSiteCAChainAsTheSaveDoes(t *testing.T) {
 		t.Errorf("the live check gave %q, want %q", f.Errors, want)
 	}
 	rec := b.do("POST", "/api/setup", string(raw))
-	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "Have the device send it.") || h.server.Appliance.Current() != nil {
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), `Add \"CN=Inspect Intermediate\" to the Site CA.`) || h.server.Appliance.Current() != nil {
 		t.Errorf("the save answered %d %s", rec.Code, rec.Body.String())
 	}
 }
@@ -245,7 +245,7 @@ func TestSetupCheckWarnsOfAChainFaultWhileTheSiteCAIsTheSaved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = `Site CA: factory.talos.dev, ghcr.io, registry.k8s.io, tuf-repo-cdn.sigstore.dev: Intermediate "CN=Inspect Intermediate" is not presented. Have the device send it.`
+	const want = `Site CA: factory.talos.dev, ghcr.io, registry.k8s.io, tuf-repo-cdn.sigstore.dev: Add "CN=Inspect Intermediate" to the Site CA.`
 	f := checkSettings(t, b, string(check))
 	if slices.Contains(f.Errors, want) || !slices.Contains(f.Warnings, want) {
 		t.Errorf("the live check gave errors %q and warnings %q, want the warning %q", f.Errors, f.Warnings, want)

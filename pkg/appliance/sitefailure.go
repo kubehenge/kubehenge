@@ -87,8 +87,9 @@ func (a *Appliance) nodeLog(ctx context.Context, admin []byte, node string) []st
 // node's own log decides first: a reason other than an unknown authority, or a candidate authority
 // that is one of the nodes' public roots, is no matter of the Site CA. A candidate the Site CA
 // holds signs no longer, as a device's root made again does. With no candidate logged, the chain
-// the host presents now names the root to add, unless a public root signs it, since the node may
-// meet another device than the appliance does.
+// the host presents now names the root to add. Where a public root or the Site CA already signs
+// that chain, or holds the root it names, nothing is to add, since the node may meet another device
+// than the appliance does.
 func (a *Appliance) refusalLine(ctx context.Context, s *Settings, node string, r rejection) string {
 	refused := fmt.Sprintf("Node %s refused %s's certificate", node, r.host)
 	plain := fmt.Sprintf("%s: %s.", refused, r.reason)
@@ -99,14 +100,36 @@ func (a *Appliance) refusalLine(ctx context.Context, s *Settings, node string, r
 		return fmt.Sprintf("%s, signed by a new %q. Paste the new root.", refused, r.authority)
 	}
 	chain := a.liveChain(ctx, s, r.host)
-	if chain == nil || verifyChain(chain, a.publicRoots(), a.now()) == nil {
+	public, now := a.publicRoots(), a.now()
+	if chain == nil || verifyChain(chain, public, now) == nil || siteCAHolds(s, chain, now) {
 		return plain + " Check the Site CA."
 	}
 	top, presented := endOf(chain)
-	if presented {
+	switch {
+	case presented && isPublicRoot(top, public, now):
+		return plain
+	case presented:
 		return fmt.Sprintf("%s. Add its root %q (SHA-256 %s) to the Site CA.", refused, subjectOf(top), Fingerprint(top))
 	}
 	return fmt.Sprintf("%s. Add %q to the Site CA.", refused, issuerOf(top))
+}
+
+// siteCAHolds says whether the saved Site CA signs chain, or holds the root it ends at or names.
+func siteCAHolds(s *Settings, chain []*x509.Certificate, now time.Time) bool {
+	site, err := parseCertificates(s.SiteCA)
+	if err != nil {
+		return false
+	}
+	if verifyChain(chain, poolOf(site), now) == nil {
+		return true
+	}
+	top, presented := endOf(chain)
+	return slices.ContainsFunc(site, func(c *x509.Certificate) bool {
+		if presented {
+			return c.Equal(top) || sameKey(top)(c)
+		}
+		return canonicalName(c.RawSubject) == canonicalName(top.RawIssuer)
+	})
 }
 
 // liveChain is the chain the host presents now, or none where it cannot be read.

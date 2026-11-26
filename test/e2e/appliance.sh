@@ -388,11 +388,11 @@ if [ -n "${KUBEHENGE_E2E_SITE_CA_LATER:-}" ]; then
         -keyout "${work}/other-root.key" -out "${work}/other-root.pem" 2> /dev/null
     other_check=$(jq -c --rawfile ca "${work}/other-root.pem" '{settings: (. + {siteCA: $ca})}' "${work}/settings.json")
     expect 200 "the check of a Site CA of another root" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup/check" "${other_check}"
-    body_is '.errors | any(test("Add that root to the Site CA"))' "the check does not tell the Site CA lacks the root the chain ends at"
+    body_is '.errors | any(test("Add .* to the Site CA"))' "the check does not tell the Site CA lacks the root the chain ends at"
     body_is '.errors | any(test("Kubehenge e2e inspection root"))' "the check does not name the root the chain ends at"
     other_setup=$(jq -c --arg p "${passphrase}" --rawfile ca "${work}/other-root.pem" '{passphrase: $p, settings: (. + {siteCA: $ca})}' "${work}/settings.json")
     expect 422 "a setup with a Site CA of another root" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup" "${other_setup}"
-    body_is '.error | test("Add that root to the Site CA")' "the refused setup does not tell the Site CA lacks the root"
+    body_is '.error | test("Add .* to the Site CA")' "the refused setup does not tell the Site CA lacks the root"
     setup_status
     body_is '.job == null' "the refused setup started a run"
     # The rest of the lane runs with the container's store as installed.

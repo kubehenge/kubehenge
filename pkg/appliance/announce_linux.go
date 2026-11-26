@@ -110,7 +110,7 @@ func sendNA(a Announcement) error {
 		return fmt.Errorf("open an ICMPv6 socket: %w", err)
 	}
 	defer func() { _ = unix.Close(fd) }()
-	if err = unix.SetsockoptInt(fd, unix.IPPROTO_IPV6, unix.IPV6_MULTICAST_HOPS, ndHopLimit); err != nil {
+	if err = unix.SetsockoptInt(fd, unix.IPPROTO_IPV6, unix.IPV6_MULTICAST_HOPS, neighbourHopLimit); err != nil {
 		return fmt.Errorf("set the hop limit: %w", err)
 	}
 	if err = unix.SetsockoptInt(fd, unix.IPPROTO_IPV6, unix.IPV6_MULTICAST_IF, a.Index); err != nil {
@@ -136,8 +136,8 @@ func senderError(ip netip.Addr, err error) error {
 	return fmt.Errorf("use %s as the sender: %w", ip, err)
 }
 
-// ndHopLimit is the hop limit of neighbour discovery messages, which hosts check to know they came
+// neighbourHopLimit is the hop limit of neighbour discovery messages, which hosts check to know they came
 // from the link.
-const ndHopLimit = 255
+const neighbourHopLimit = 255
 
 func htons(v uint16) uint16 { return v<<8 | v>>8 }

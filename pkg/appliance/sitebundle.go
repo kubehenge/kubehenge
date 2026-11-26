@@ -442,7 +442,8 @@ type hostChain struct {
 // judgeChains adds to the authorities the renamed roots that make Go's verifier, as the nodes run
 // it, accept each chain that no public authority signs. Go then checks the roots' path length, name
 // constraints and validity itself. A chain it still refuses is a fault, and the hosts with the same
-// fault share its line. A fault that is a presented root the Site CA lacks also hands that root over.
+// fault share its line. A fault that is a presented root the Site CA lacks also hands that root
+// over, unless it is a public root, which the nodes hold already.
 func judgeChains(authorities []*siteAuthority, public *x509.CertPool, chains []hostChain, now time.Time) error {
 	type labelled struct{ label, fault string }
 	var faults []labelled
@@ -452,7 +453,7 @@ func judgeChains(authorities []*siteAuthority, public *x509.CertPool, chains []h
 		if verifyChain(hc.chain, public, now) == nil {
 			continue
 		}
-		if fault := judgeChain(authorities, hc.chain, now); fault.text != "" {
+		if fault := nodesRefusal(authorities, public, hc.chain, now); fault.text != "" {
 			label := authorityOf(authorities, hc.chain).label
 			key := labelled{label, fault.text}
 			if _, seen := hosts[key]; !seen {
@@ -471,10 +472,49 @@ func judgeChains(authorities []*siteAuthority, public *x509.CertPool, chains []h
 	for _, key := range faults {
 		out.Lines = append(out.Lines, key.label+" "+strings.Join(hosts[key], ", ")+": "+key.fault)
 	}
+	out.Roots = missingRoots(roots)
+	return out
+}
+
+// missingRoots are the roots to hand over, each named for a button or a prompt. The start of the
+// fingerprint tells apart two roots of one name.
+func missingRoots(roots []*x509.Certificate) []MissingRoot {
+	out := make([]MissingRoot, 0, len(roots))
 	for _, r := range roots {
-		out.Roots = append(out.Roots, MissingRoot{Name: shortName(r), PEM: string(pem.EncodeToMemory(&pem.Block{Type: pemCertificate, Bytes: r.Raw}))})
+		name := shortName(r)
+		if slices.ContainsFunc(roots, func(o *x509.Certificate) bool { return !o.Equal(r) && shortName(o) == name }) {
+			name += " (" + Fingerprint(r)[:11] + ")"
+		}
+		out = append(out, MissingRoot{Name: name, PEM: string(pem.EncodeToMemory(&pem.Block{Type: pemCertificate, Bytes: r.Raw}))})
 	}
 	return out
+}
+
+// nodesRefusal is what keeps the nodes from trusting chain (judgeChain), where the root it ends at
+// is no public root, which the nodes hold already.
+func nodesRefusal(authorities []*siteAuthority, public *x509.CertPool, chain []*x509.Certificate, now time.Time) refusal {
+	fault := judgeChain(authorities, chain, now)
+	if fault.root != nil && isPublicRoot(fault.root, public, now) {
+		return publicRefusal(chain, public, now)
+	}
+	return fault
+}
+
+// isPublicRoot says whether root is one of the nodes' public roots.
+func isPublicRoot(root *x509.Certificate, public *x509.CertPool, now time.Time) bool {
+	_, err := root.Verify(x509.VerifyOptions{Roots: public, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}})
+	return err == nil
+}
+
+// publicRefusal says why the nodes refuse a chain that ends at one of their public roots, which
+// adding that root to the Site CA would not change.
+func publicRefusal(chain []*x509.Certificate, public *x509.CertPool, now time.Time) refusal {
+	if invalid, ok := errors.AsType[x509.CertificateInvalidError](verifyChain(chain, public, now)); ok {
+		if fault := verifyFault(invalid); fault != "" {
+			return refusal{text: fault}
+		}
+	}
+	return refusal{text: fmt.Sprintf("the nodes refuse %q. Check the chain on the device.", subjectOf(chain[0]))}
 }
 
 // authorityOf is the authority a refused chain is about: the one whose root a certificate of the
@@ -514,16 +554,23 @@ func (s *siteAuthority) lackingRoot(root *x509.Certificate) refusal {
 }
 
 // lackingIssuer says that nothing the host presented or the authority holds signs top, the
-// topmost certificate of the path. Where the path reaches every certificate the host presented,
-// and one of them is an intermediate, top's issuer is the root the authority lacks. Where the host
-// presented no intermediate, or some the path does not reach, an intermediate is missing below the
-// root, and the device has to send it.
-func (s *siteAuthority) lackingIssuer(top *x509.Certificate, presented, path []*x509.Certificate) refusal {
-	offPath := slices.ContainsFunc(presented, func(p *x509.Certificate) bool { return !slices.ContainsFunc(path, p.Equal) })
-	if len(path) == 1 || offPath {
-		return refusal{text: fmt.Sprintf("Intermediate %q is not presented. Have the device send it.", issuerOf(top))}
+// topmost certificate of the path. Where a presented certificate the path does not reach leads to
+// a pasted root, the issuer is an intermediate between the two, which the device can send. Else
+// nothing tells a root from an intermediate the device leaves out, and adding either to the
+// authority makes the nodes accept the chain.
+func (s *siteAuthority) lackingIssuer(top *x509.Certificate, anchors, presented, path []*x509.Certificate, now time.Time) refusal {
+	roots, intermediates := poolOf(anchors), poolOf(presented)
+	above := slices.ContainsFunc(presented, func(p *x509.Certificate) bool {
+		if slices.ContainsFunc(path, p.Equal) {
+			return false
+		}
+		_, err := p.Verify(x509.VerifyOptions{Roots: roots, Intermediates: intermediates, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}})
+		return err == nil
+	})
+	if above {
+		return refusal{text: fmt.Sprintf("Have the device send %q, or add it to %s.", issuerOf(top), s.field())}
 	}
-	return refusal{text: fmt.Sprintf("Issuer %q is not presented. Add that root to %s.", issuerOf(top), s.field())}
+	return refusal{text: fmt.Sprintf("Add %q to %s.", issuerOf(top), s.field())}
 }
 
 // judgeChain adds the renamed roots that make Go accept one chain, or names what keeps it from
@@ -613,7 +660,7 @@ func chainFault(chain, anchors []*x509.Certificate, auth *siteAuthority, verifyE
 		if slices.ContainsFunc(anchors, cur.Equal) {
 			break
 		}
-		parent, fault := issuerIn(cur, anchors, chain[1:], path, auth)
+		parent, fault := issuerIn(cur, anchors, chain[1:], path, auth, now)
 		if fault.text != "" {
 			return fault
 		}
@@ -666,7 +713,7 @@ func presentedFault(cur, parent *x509.Certificate, anchors []*x509.Certificate, 
 
 // issuerIn finds the certificate that signs cur among the anchors and the presented certificates,
 // those already on the path left out, or says why none does.
-func issuerIn(cur *x509.Certificate, anchors, presented, path []*x509.Certificate, auth *siteAuthority) (*x509.Certificate, refusal) {
+func issuerIn(cur *x509.Certificate, anchors, presented, path []*x509.Certificate, auth *siteAuthority, now time.Time) (*x509.Certificate, refusal) {
 	if bytes.Equal(cur.RawIssuer, cur.RawSubject) {
 		return nil, auth.lackingRoot(cur)
 	}
@@ -693,7 +740,7 @@ func issuerIn(cur *x509.Certificate, anchors, presented, path []*x509.Certificat
 		}
 	}
 	if fault == "" {
-		return nil, auth.lackingIssuer(cur, presented, path)
+		return nil, auth.lackingIssuer(cur, anchors, presented, path, now)
 	}
 	return nil, refusal{text: fault}
 }

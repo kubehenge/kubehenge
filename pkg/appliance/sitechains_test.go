@@ -275,7 +275,7 @@ func TestSiteBundleNamesAnIntermediateTheHostDoesNotPresent(t *testing.T) {
 	t.Parallel()
 	c := newInspected(t)
 	_, err := bundleFor(c.root, c.leaf)
-	if err == nil || err.Error() != `Site CA: host.example: Intermediate "CN=Inspect Intermediate" is not presented. Have the device send it.` {
+	if err == nil || err.Error() != `Site CA: host.example: Add "CN=Inspect Intermediate" to the Site CA.` {
 		t.Errorf("a chain missing its intermediate: %v", err)
 	}
 }
@@ -487,7 +487,7 @@ func TestSiteBundleNamesTheCertificateThatBreaksTheChain(t *testing.T) {
 		chain []*testAuthority
 		want  string
 	}{
-		"a middle intermediate missing":               {[]*testAuthority{leaf, three, one}, `Intermediate "CN=Inspect Two" is not presented. Have the device send it.`},
+		"a middle intermediate missing":               {[]*testAuthority{leaf, three, one}, `Have the device send "CN=Inspect Two", or add it to the Site CA.`},
 		"an intermediate that is no CA":               {[]*testAuthority{underNotCA, notCA}, `"CN=Inspect NotCA" is no CA. Reissue it as a CA on the device.`},
 		"an intermediate without certificate signing": {[]*testAuthority{underNoSigning, noSigning}, `"CN=Inspect NoSign" may not sign certificates. Reissue it with the certificate signing key usage.`},
 		"a root that was not pasted":                  {[]*testAuthority{other}, "Chain ends at \"CN=Other Root\" (SHA-256 " + Fingerprint(other.cert) + "). Add that root to the Site CA."},
@@ -512,7 +512,7 @@ func TestSiteChainErrorGroupTheHostsAndStayShort(t *testing.T) {
 	s := &Settings{SiteCA: c.root.pem() + weakRoot.pem()}
 	_, err := a.ResolveSite(t.Context(), s)
 	want := []string{
-		`Site CA: factory.talos.dev, ghcr.io: Intermediate "CN=Inspect Intermediate" is not presented. Have the device send it.`,
+		`Site CA: factory.talos.dev, ghcr.io: Add "CN=Inspect Intermediate" to the Site CA.`,
 		`Site CA: tuf-repo-cdn.sigstore.dev: "CN=Inspect Weak" is signed with ECDSA-SHA1. Nodes refuse that. Reissue it with SHA-256.`,
 	}
 	faults, ok := errors.AsType[SiteChainError](err)
@@ -908,7 +908,7 @@ func TestAnUnattendedRunKeepsTheLastBundleThroughAChainFault(t *testing.T) {
 	}
 
 	a.SiteChains = fakeChains(map[string][]*x509.Certificate{"ghcr.io": certs(c.leaf)})
-	const fault = `Site CA: ghcr.io: Intermediate "CN=Inspect Intermediate" is not presented. Have the device send it.`
+	const fault = `Site CA: ghcr.io: Add "CN=Inspect Intermediate" to the Site CA.`
 	if err := a.KeepUnattended(Unattended{Passphrase: "correct horse battery staple", Token: upgraderAPI}); err != nil {
 		t.Fatal(err)
 	}
@@ -1067,7 +1067,7 @@ func TestSiteFaultNamesAnIssuerInUniversalString(t *testing.T) {
 	root := newTestRoot(t, "Inspect Root")
 	intermediate := root.issue(t, issuance{cn: "Inspect Intermediate", tag: tagUniversalString})
 	leaf := intermediate.issue(t, issuance{cn: "host.example", leaf: true})
-	const want = `Site CA: host.example: Intermediate "CN=Inspect Intermediate" is not presented. Have the device send it.`
+	const want = `Site CA: host.example: Add "CN=Inspect Intermediate" to the Site CA.`
 	if _, err := bundleFor(root, leaf); err == nil || err.Error() != want {
 		t.Errorf("got %v, want %q", err, want)
 	}
@@ -1126,7 +1126,7 @@ func TestASaveThatChangesTheSiteCARefusesAChainFault(t *testing.T) {
 	a, ready := newAppliance(t)
 	a.sitePublic = x509.NewCertPool()
 	missing := fakeChains(map[string][]*x509.Certificate{"ghcr.io": certs(c.leaf)})
-	const fault = `Site CA: ghcr.io: Intermediate "CN=Inspect Intermediate" is not presented. Have the device send it.`
+	const fault = `Site CA: ghcr.io: Add "CN=Inspect Intermediate" to the Site CA.`
 	a.SiteChains = missing
 	first := settings("pve1")
 	first.SiteCA = c.root.pem()
@@ -1254,7 +1254,7 @@ func TestSiteCheckOffersNoRootTheHostDidNotPresent(t *testing.T) {
 	c := newInspected(t)
 	a := &Appliance{SiteChains: fakeChains(map[string][]*x509.Certificate{"ghcr.io": certs(c.leaf, c.intermediate)})}
 	got := a.CheckSite(t.Context(), &Settings{SiteCA: newTestRoot(t, "Internal-R2").pem()})
-	if want := []string{`Site CA: ghcr.io: Issuer "CN=Inspect Root" is not presented. Add that root to the Site CA.`}; !slices.Equal(got.Errors, want) || len(got.MissingRoots) != 0 {
+	if want := []string{`Site CA: ghcr.io: Add "CN=Inspect Root" to the Site CA.`}; !slices.Equal(got.Errors, want) || len(got.MissingRoots) != 0 {
 		t.Errorf("got %+v, want errors %q and no roots", got, want)
 	}
 }
@@ -1328,9 +1328,9 @@ func readTestFile(t *testing.T, path string) string {
 	return string(raw)
 }
 
-// TestSiteCheckTellsAMissingIntermediateFromAMissingRoot asks the device for an intermediate where
-// the Site CA may well hold the root: the host sent no intermediate, or one the path does not reach.
-// A chain whose every presented certificate is on the path lacks its root.
+// TestSiteCheckTellsAMissingIntermediateFromAMissingRoot asks the device for an intermediate only
+// where a certificate it presents above the gap leads to a pasted root. Else it names the missing
+// issuer to add, which works for a root and an intermediate alike.
 func TestSiteCheckTellsAMissingIntermediateFromAMissingRoot(t *testing.T) {
 	t.Parallel()
 	c := newInspected(t)
@@ -1340,9 +1340,9 @@ func TestSiteCheckTellsAMissingIntermediateFromAMissingRoot(t *testing.T) {
 		chain  []*x509.Certificate
 		want   string
 	}{
-		"the root pasted, no intermediate sent": {c.root.pem(), certs(c.leaf), `Intermediate "CN=Inspect Intermediate" is not presented. Have the device send it.`},
-		"the root pasted, another one sent":     {c.root.pem(), certs(c.leaf, stray), `Intermediate "CN=Inspect Intermediate" is not presented. Have the device send it.`},
-		"another root pasted, the chain whole":  {newTestRoot(t, "Internal-R2").pem(), certs(c.leaf, c.intermediate), `Issuer "CN=Inspect Root" is not presented. Add that root to the Site CA.`},
+		"the root pasted, no intermediate sent": {c.root.pem(), certs(c.leaf), `Add "CN=Inspect Intermediate" to the Site CA.`},
+		"the root pasted, another one sent":     {c.root.pem(), certs(c.leaf, stray), `Add "CN=Inspect Intermediate" to the Site CA.`},
+		"another root pasted, the chain whole":  {newTestRoot(t, "Internal-R2").pem(), certs(c.leaf, c.intermediate), `Add "CN=Inspect Root" to the Site CA.`},
 	} {
 		a := &Appliance{sitePublic: x509.NewCertPool(), SiteChains: fakeChains(map[string][]*x509.Certificate{"ghcr.io": tc.chain})}
 		got := a.CheckSite(t.Context(), &Settings{SiteCA: tc.siteCA})
@@ -1352,9 +1352,9 @@ func TestSiteCheckTellsAMissingIntermediateFromAMissingRoot(t *testing.T) {
 	}
 }
 
-// TestAProxyChainEndingAtARootItsCALacksNamesTheProxysCA names the proxy's field and hands no root
+// TestAProxyChainEndingAtARootItsCALacksNamesTheProxyField names the proxy's field and hands no root
 // over, since the button adds to the Site CA.
-func TestAProxyChainEndingAtARootItsCALacksNamesTheProxysCA(t *testing.T) {
+func TestAProxyChainEndingAtARootItsCALacksNamesTheProxyField(t *testing.T) {
 	t.Parallel()
 	c := newInspected(t)
 	stray := newTestRoot(t, "Stray Root")
