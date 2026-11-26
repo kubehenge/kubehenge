@@ -302,6 +302,24 @@ func certManagerValues(c *Certificates) map[string]any {
 	return values
 }
 
+// certificatesSettings says which of the certificates add-on's settings that only Kubehenge's
+// cert-manager carries (certManagerValues, the egress proxy) are not applied where the cluster's
+// own cert-manager is used, or nothing.
+func certificatesSettings(addons *Addons) string {
+	c := &addons.Certificates
+	if !c.on() {
+		return ""
+	}
+	settings := []string{"the default issuer for tls-acme Ingresses"}
+	if c.issuer() == IssuerACMEDNS01 && len(c.DNS01.Nameservers) > 0 {
+		settings = append(settings, "dns01.nameservers")
+	}
+	if addons.viaProxy.on() {
+		settings = append(settings, "the egress proxy")
+	}
+	return "certificates uses the cluster's own cert-manager, so " + andJoined(settings) + " are not applied. Set them on that cert-manager"
+}
+
 // addonIngress is the TLS and the annotations of an add-on's Ingress for hostname. A certificate
 // the cluster names is used as it is. One the default certificate covers is left to Traefik, which
 // serves that one where an Ingress names none. Any other is asked of the cluster's issuer.

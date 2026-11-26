@@ -46,6 +46,8 @@ func newRollout(t *testing.T, now time.Time, variables ...clusterv1.ClusterVaria
 	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(c).WithStatusSubresource(&clusterv1.Cluster{}).Build()
 	w := &rollout{t: t, kube: kube, cluster: c, now: now, addons: &Addons{Headlamp: Headlamp{Enabled: true}}}
 	w.r = &Reconciler{Client: kube, Charts: testCharts, Now: func() time.Time { return w.now }}
+	// Kubehenge installs cert-manager only once the cluster answers that it runs none.
+	w.inside()
 	return w
 }
 

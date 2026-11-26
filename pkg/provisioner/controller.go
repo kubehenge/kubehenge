@@ -707,7 +707,8 @@ func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluste
 		return false, err
 	}
 	addons.rollout, addons.pending, addons.conflicts = gate, nil, nil
-	addons.certManagerConflict, addons.certManagerWaiting, addons.clusterCertManager = addonConflict{}, nil, false
+	addons.certManagerConflict, addons.certManagerWaiting = addonConflict{}, nil
+	addons.clusterCertManager, addons.certManagerUnread = false, false
 	labels := proxyNamespaces(proxies)
 	labelsWait, err := r.applyNamespaceLabels(ctx, cluster, labels, addons.NamespaceLabels)
 	if err != nil {
@@ -727,6 +728,9 @@ func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluste
 		}
 		if state != proxyReady {
 			continue
+		}
+		if addons.clusterCertManager && slices.Contains(certManagerUsers(cluster), p.GetName()) {
+			servedByClusterCertManager(p)
 		}
 		held, err := r.applyProxy(ctx, cluster, p, &gate)
 		if err != nil {
@@ -756,8 +760,14 @@ func (r *Reconciler) proxyState(ctx context.Context, cluster *clusterv1.Cluster,
 	switch {
 	case err != nil:
 		return proxyReady, err
+	case conflict.unread:
+		addons.certManagerUnread = true
+		return proxyWaits, nil
 	case conflict.clusterOwn:
 		addons.clusterCertManager = true
+		if settings := certificatesSettings(addons); settings != "" {
+			addons.conflicts = append(addons.conflicts, addonConflict{reason: AddonConflictSettingsReason, message: settings})
+		}
 		return proxyConflicts, nil
 	case conflict.message != "" && p.GetName() == certManagerProxy(cluster):
 		addons.certManagerConflict = conflict

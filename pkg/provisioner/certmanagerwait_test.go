@@ -43,6 +43,13 @@ func setCertManagerReady(t *testing.T, kube client.Client, c *clusterv1.Cluster)
 	}
 }
 
+// answering gives the cluster an empty workload cluster, which Kubehenge reads for a cert-manager
+// of its own before it installs one.
+func answering(r *Reconciler, c *clusterv1.Cluster) {
+	workload := fake.NewClientBuilder().WithScheme(remoteScheme).Build()
+	r.Remotes = &Remotes{byCluster: map[string]remote{remoteKey(c): {client: workload, until: time.Now().Add(time.Hour)}}}
+}
+
 func proxyExists(kube client.Client, c *clusterv1.Cluster, name string) bool {
 	p := &unstructured.Unstructured{}
 	p.SetGroupVersionKind(helmChartProxyGVK)
@@ -62,6 +69,7 @@ func TestMonitoringAndLogsWaitForCertManager(t *testing.T) {
 	c := withAddons(storageCluster(), map[string]string{"monitoring": formMonitoring, "logs": formLogs})
 	c.Annotations = map[string]string{gatewayAPIAnnotation: "v1.6.3"}
 	r, kube := newReconciler(t, &fakeCloud{}, c)
+	answering(r, c)
 	if err := reconcile(t, r, c); err != nil {
 		t.Fatal(err)
 	}
@@ -265,6 +273,7 @@ func TestClusterThatUsedAnExistingCertManagerGetsKubehengesOwn(t *testing.T) {
 	c := withAddons(storageCluster(), map[string]string{"monitoring": formMonitoring, "logs": formLogs, "useExisting": `{"certManager":true}`})
 	c.Annotations = map[string]string{gatewayAPIAnnotation: "v1.6.3"}
 	r, kube := newReconciler(t, &fakeCloud{}, c)
+	answering(r, c)
 	if err := reconcile(t, r, c); err != nil {
 		t.Fatal(err)
 	}
@@ -328,6 +337,7 @@ func TestCertManagerGoesWithItsLastUser(t *testing.T) {
 	c := withAddons(storageCluster(), map[string]string{"monitoring": formMonitoring, "logs": formLogs})
 	c.Annotations = map[string]string{gatewayAPIAnnotation: "v1.6.3"}
 	r, kube := newReconciler(t, &fakeCloud{}, c)
+	answering(r, c)
 	if err := reconcile(t, r, c); err != nil {
 		t.Fatal(err)
 	}

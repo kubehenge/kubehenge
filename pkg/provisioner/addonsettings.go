@@ -43,6 +43,9 @@ const (
 	// AddonConflictDeploymentReason is its reason while the only conflict is a cert-manager
 	// controller's Deployment, installed without its definitions.
 	AddonConflictDeploymentReason = "DeploymentExists"
+	// AddonConflictSettingsReason is its reason while the cluster's own cert-manager is used and
+	// certificates' settings that only Kubehenge's carries are not applied.
+	AddonConflictSettingsReason = "SettingsNotApplied"
 
 	// addonLabel on the objects of an add-on's release names the add-on. cert-manager's release
 	// carries it, since a cert-manager installed the usual Helm way has its release name and
@@ -123,10 +126,12 @@ func (o *crdOwner) owns(obj metav1.Object, addon string) bool {
 }
 
 // addonConflict is why an add-on is not installed: the reason of AddonConflictCondition and its
-// line. clusterOwn is set instead where the cluster's own install works and is used.
+// line. clusterOwn is set instead where the cluster's own install works and is used, and unread
+// where the cluster could not be read in full for one.
 type addonConflict struct {
 	reason, message string
 	clusterOwn      bool
+	unread          bool
 }
 
 // addonCRDs lists, by the suffix of the add-on's HelmChartProxy, a custom resource definition that
@@ -160,7 +165,7 @@ func AddonCRDs() map[string][]string {
 // conflictOf reports why the add-on of proxy p is not installed: the cluster holds custom resource
 // definitions of the same software that its release does not own. An add-on that is installed
 // already owns its own. No conflict has an empty message. A cert-manager of the cluster's own is a
-// conflict only where it does not work (clusterCertManager).
+// conflict only where it does not work (certManagerConflictOf).
 func (r *Reconciler) conflictOf(ctx context.Context, cluster *clusterv1.Cluster, p *unstructured.Unstructured) (addonConflict, error) {
 	suffix := strings.TrimPrefix(p.GetName(), cluster.Name+"-")
 	owner, ok := addonCRDs[suffix]
@@ -176,13 +181,15 @@ func (r *Reconciler) conflictOf(ctx context.Context, cluster *clusterv1.Cluster,
 	if !apierrors.IsNotFound(err) {
 		return addonConflict{}, fmt.Errorf("reading add-on %s: %w", p.GetName(), err)
 	}
+	if suffix == certManagerAddon {
+		return r.certManagerConflictOf(ctx, cluster), nil
+	}
 	workload, found, err := r.Remotes.get(ctx, cluster)
 	if err != nil || !found {
 		return addonConflict{}, err
 	}
 	for _, name := range owner.crds {
-		crd := &metav1.PartialObjectMetadata{}
-		crd.SetGroupVersionKind(schema.GroupVersionKind{Group: "apiextensions.k8s.io", Version: "v1", Kind: "CustomResourceDefinition"})
+		crd := crdMetadata()
 		switch err = workload.client.Get(ctx, client.ObjectKey{Name: name}, crd); {
 		case apierrors.IsNotFound(err):
 			continue
@@ -196,46 +203,78 @@ func (r *Reconciler) conflictOf(ctx context.Context, cluster *clusterv1.Cluster,
 		if owner.owns(crd, suffix) {
 			continue
 		}
-		if suffix == certManagerAddon {
-			return r.clusterCertManager(ctx, cluster, workload.client, name)
-		}
 		return addonConflict{reason: AddonConflictReason, message: fmt.Sprintf("%s is not installed: the cluster already holds its custom resource definition %s, which no Kubehenge release owns. %s", suffix, name, owner.option)}, nil
 	}
-	if suffix != certManagerAddon {
-		return addonConflict{}, nil
-	}
-	deployment, err := foreignCertManager(ctx, workload.client)
-	switch {
-	case unreachable(err):
-		r.Remotes.forget(cluster)
-		return addonConflict{}, nil
-	case err != nil || deployment == "":
-		return addonConflict{}, err
-	}
-	return addonConflict{reason: AddonConflictDeploymentReason, message: fmt.Sprintf("%s is not installed: the cluster already runs its Deployment %s, which no Kubehenge release owns. It has no custom resource definitions. %s", suffix, deployment, owner.option)}, nil
+	return addonConflict{}, nil
 }
 
-// clusterCertManager decides on a cert-manager of the cluster's own, found by its definition crd:
-// one that works is used, and one that does not is a conflict that says why.
-func (r *Reconciler) clusterCertManager(ctx context.Context, cluster *clusterv1.Cluster, workload client.Client, crd string) (addonConflict, error) {
-	problem, err := certManagerProblem(ctx, workload)
+// crdMetadata is a custom resource definition to read the metadata of.
+func crdMetadata() *metav1.PartialObjectMetadata {
+	crd := &metav1.PartialObjectMetadata{}
+	crd.SetGroupVersionKind(schema.GroupVersionKind{Group: "apiextensions.k8s.io", Version: "v1", Kind: "CustomResourceDefinition"})
+	return crd
+}
+
+// certManagerConflictOf decides on Kubehenge's cert-manager where it is not installed yet. A read
+// of the cluster that fails or cannot be made yet leaves it unread, to be read again on the next
+// reconcile: Kubehenge's release would upgrade or replace any install of the same name, so it is
+// made only once a complete read found none.
+func (r *Reconciler) certManagerConflictOf(ctx context.Context, cluster *clusterv1.Cluster) addonConflict {
+	conflict, err := r.readCertManager(ctx, cluster)
 	if err != nil {
 		if unreachable(err) {
 			r.Remotes.forget(cluster)
 		}
+		ctrl.LoggerFrom(ctx).Info("cert-manager waits for a complete read of the cluster", "error", err.Error())
+		return addonConflict{unread: true}
+	}
+	return conflict
+}
+
+// readCertManager reads the cluster for a cert-manager of its own: one that works is used, one
+// that does not is a conflict that says why.
+func (r *Reconciler) readCertManager(ctx context.Context, cluster *clusterv1.Cluster) (addonConflict, error) {
+	owner := addonCRDs[certManagerAddon]
+	workload, found, err := r.Remotes.get(ctx, cluster)
+	switch {
+	case err != nil:
+		return addonConflict{}, err
+	case !found:
+		return addonConflict{unread: true}, nil
+	}
+	for _, name := range owner.crds {
+		crd := crdMetadata()
+		switch err = workload.client.Get(ctx, client.ObjectKey{Name: name}, crd); {
+		case apierrors.IsNotFound(err):
+			continue
+		case err != nil:
+			return addonConflict{}, fmt.Errorf("reading the cluster's custom resource definition %s: %w", name, err)
+		}
+		if owner.owns(crd, certManagerAddon) {
+			continue
+		}
+		problem, problemErr := certManagerProblem(ctx, workload.client)
+		switch {
+		case problemErr != nil:
+			return addonConflict{}, problemErr
+		case problem == "":
+			return addonConflict{clusterOwn: true}, nil
+		}
+		return addonConflict{reason: AddonConflictReason, message: fmt.Sprintf("%s is not installed: the cluster already holds its custom resource definition %s, which no Kubehenge release owns. %s. %s",
+			certManagerAddon, name, problem, owner.option)}, nil
+	}
+	deployment, err := foreignCertManager(ctx, workload.client)
+	if err != nil || deployment == "" {
 		return addonConflict{}, err
 	}
-	if problem == "" {
-		return addonConflict{clusterOwn: true}, nil
-	}
-	return addonConflict{reason: AddonConflictReason, message: fmt.Sprintf("%s is not installed: the cluster already holds its custom resource definition %s, which no Kubehenge release owns. %s. %s",
-		certManagerAddon, crd, problem, addonCRDs[certManagerAddon].option)}, nil
+	return addonConflict{reason: AddonConflictDeploymentReason, message: fmt.Sprintf("%s is not installed: the cluster already runs its Deployment %s, which no Kubehenge release owns. It has no custom resource definitions. %s", certManagerAddon, deployment, owner.option)}, nil
 }
 
 // certManagerProblem says why the cluster's cert-manager cannot serve Kubehenge's add-ons, or
-// nothing where it can: it serves cert-manager.io/v1, its controller and webhook are Available, it
-// is certManagerMinimum or newer, and it keeps the cluster issuers' Secrets in the cert-manager
-// namespace, where Kubehenge puts them.
+// nothing where it can: it serves cert-manager.io/v1, its controller runs in the cert-manager
+// namespace, where Kubehenge's add-ons put their issuers' Secrets, and keeps the cluster issuers'
+// Secrets there, its controller and webhook are Available, and its version reads as
+// certManagerMinimum or newer.
 func certManagerProblem(ctx context.Context, workload client.Client) (string, error) {
 	for _, name := range addonCRDs[certManagerAddon].crds {
 		crd := &apiextensionsv1.CustomResourceDefinition{}
@@ -255,6 +294,9 @@ func certManagerProblem(ctx context.Context, workload client.Client) (string, er
 		return "It has no controller Deployment, as after an uninstall", nil
 	}
 	controller := &controllers[0]
+	if controller.Namespace != certManagerAddon {
+		return "It runs in " + controller.Namespace + ", not in " + certManagerAddon, nil
+	}
 	if !available(controller) {
 		return "Its controller " + controller.Namespace + "/" + controller.Name + " is not Available", nil
 	}
@@ -268,7 +310,10 @@ func certManagerProblem(ctx context.Context, workload client.Client) (string, er
 	case !available(&webhooks[0]):
 		return "Its webhook " + webhooks[0].Namespace + "/" + webhooks[0].Name + " is not Available", nil
 	}
-	if v := certManagerVersion(controller); v != nil && v.LessThan(version.MustParseSemantic(certManagerMinimum)) {
+	switch v := certManagerVersion(controller); {
+	case v == nil:
+		return "Its version cannot be read", nil
+	case v.LessThan(version.MustParseSemantic(certManagerMinimum)):
 		return fmt.Sprintf("It is v%s, older than %s", v, certManagerMinimum), nil
 	}
 	if ns := clusterResourceNamespace(controller); ns != certManagerAddon {

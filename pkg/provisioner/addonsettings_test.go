@@ -269,6 +269,7 @@ func TestNamespaceLabelsWaitForTheClusterAndCreateNamespacesLabelled(t *testing.
 	w := newRollout(t, outsideWindow)
 	w.addons.NamespaceLabels = map[string]string{"team": "platform"}
 	// No kubeconfig yet: the add-on waits for the labels rather than create its namespace bare.
+	w.r.Remotes = nil
 	proxies, err := helmChartProxies(w.cluster, &w.r.Charts, "rke2", "local-lvm", CNI{}, &Addons{Headlamp: Headlamp{Enabled: true}})
 	if err != nil {
 		t.Fatal(err)

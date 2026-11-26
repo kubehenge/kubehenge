@@ -500,7 +500,7 @@ Under a NetworkPolicy that denies by default, allow ztunnel's port 15008/TCP bet
 
 #### Add-ons' proxy
 
-**Proxy** (Management proxy, Own proxy or No proxy) is the proxy for the add-ons that reach beyond the cluster. Those are cert-manager (ACME and DNS providers), Velero (server and node agents), Argo CD, Flux's controllers, Headlamp and Rancher.
+**Proxy** (Management proxy, Own proxy or No proxy) is the proxy for the add-ons that reach beyond the cluster. Those are cert-manager (ACME and DNS providers), Velero (server and node agents), Argo CD, Flux's controllers, Headlamp and Rancher. A cert-manager the cluster runs already does not get it ([below](#a-cert-manager-the-cluster-runs-already)).
 
 - The management side's proxy ([below](#behind-a-proxy)) and its exceptions are the default.
 - Add-on settings are plain text, so a proxy address holding a user name or password is not passed on. Give the cluster its own address without credentials.
@@ -1346,6 +1346,8 @@ spec:
       secretName: shop-tls
 ```
 
+`kubernetes.io/tls-acme` uses cert-manager's default issuer, which Kubehenge sets only on its own cert-manager ([A cert-manager the cluster runs already](#a-cert-manager-the-cluster-runs-already)).
+
 A Gateway of your own asks for its listeners' certificates with `cert-manager.io/cluster-issuer: kubehenge-ingress` on the Gateway.
 
 ### The ACME server
@@ -1364,7 +1366,7 @@ Some ACME servers accept only accounts tied to one their operator made: a step-c
 
 ### An issuer you run
 
-With `issuer: external`, Kubehenge makes no issuer. It points every certificate it asks for at yours: the default certificate, the add-ons' Ingresses and cert-manager's default for Ingresses that name none. It also leaves out the ACME account, the DNS-01 credential and the cluster's CA.
+With `issuer: external`, Kubehenge makes no issuer. It points every certificate it asks for at yours: the default certificate, the add-ons' Ingresses and the default of Kubehenge's cert-manager for Ingresses that name none. It also leaves out the ACME account, the DNS-01 credential and the cluster's CA.
 
 | Variable | Meaning |
 | --- | --- |
@@ -1399,7 +1401,7 @@ The credential comes from one of three places, the first that applies:
 
 Kubehenge's controller copies the stored credential into the `cert-manager` namespace of the workload cluster (`kubehenge-dns01`). The copy follows any change of the stored credential. A cluster without a credential gets a `NoDNS01Credential` event. Its certificates wait.
 
-With split-horizon DNS, the domain answers differently inside the network than outside. `dns01.nameservers` then names the servers (host:port) cert-manager checks the challenge's record with, such as the domain's authoritative servers.
+With split-horizon DNS, the domain answers differently inside the network than outside. `dns01.nameservers` then names the servers (host:port) cert-manager checks the challenge's record with, such as the domain's authoritative servers. Only Kubehenge's own cert-manager gets them.
 
 ## Monitoring alerts and remote write
 
@@ -1956,9 +1958,20 @@ Helm refuses to install over objects that another release or tool owns. An add-o
 
 Kubehenge installs cert-manager for the certificates add-on, monitoring, logs and Rancher, unless the cluster already runs one that works. That one is used as it is, from the static manifest, a Helm release of your own or any other install. Kubehenge never installs, upgrades, changes or deletes it.
 
-It works when it serves `cert-manager.io/v1` and its controller and webhook Deployments are Available. It must also be v1.15.0 or newer, Rancher's minimum, and keep cluster issuers' Secrets in the `cert-manager` namespace. The certificates add-on's `acme-http01` also needs it to serve the Gateway API.
+Kubehenge installs its own only once the cluster has answered in full that it runs none. While the cluster cannot be read, `AddonsWaiting` says cert-manager waits until it can, and the next look reads it again.
 
-A cert-manager that does not work holds its users back. `AddonConflict` names what is wrong and the add-ons that wait, such as definitions left without a controller after an uninstall, a webhook that is not Available or a version too old. Make it work, or remove it and Kubehenge installs its own. Either takes effect on the next look, within ten minutes.
+It works when it serves `cert-manager.io/v1` and its controller and webhook Deployments run in the `cert-manager` namespace and are Available. Its version must read from its `app.kubernetes.io/version` label or its image's tag as v1.15.0 or newer, Rancher's minimum. It must keep cluster issuers' Secrets in `cert-manager`.
+
+The certificates add-on sets these only on Kubehenge's own cert-manager. Set them on yours yourself:
+
+- the default issuer `kubehenge-ingress` for Ingresses that ask with `kubernetes.io/tls-acme`, or the issuer you named with `external`
+- `dns01.nameservers` as its recursive nameservers
+- the add-ons' proxy
+- the Gateway API, which `acme-http01` needs
+
+While certificates is on, `AddonConflict` with the reason `SettingsNotApplied` names the first three, those it would set.
+
+A cert-manager that does not work holds its users back. `AddonConflict` names what is wrong and the add-ons that wait, such as definitions left without a controller after an uninstall, a webhook that is not Available, a version too old or one that cannot be read. Make it work, or remove it and Kubehenge installs its own. Either takes effect on the next look, within ten minutes. When the cert-manager in use changes, monitoring and logs are applied again, so their certificates and issuers come back.
 
 Only Kubehenge's own release labels its objects `kubehenge.dev/addon=cert-manager`. That one keeps getting Kubehenge's upgrades.
 

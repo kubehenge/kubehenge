@@ -279,6 +279,7 @@ func TestReconcileSwitchesMonitoringOnAndOff(t *testing.T) {
 	// cert-manager waits for the Gateway API.
 	c.Annotations = map[string]string{gatewayAPIAnnotation: "v1.6.3"}
 	r, kube := newReconciler(t, &fakeCloud{}, c)
+	answering(r, c)
 	if err := reconcile(t, r, c); err != nil {
 		t.Fatal(err)
 	}

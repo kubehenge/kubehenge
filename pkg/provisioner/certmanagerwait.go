@@ -8,6 +8,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -29,6 +30,10 @@ const (
 	// gatewayAPIOverdue is how long after the control plane is initialised the Gateway API may go
 	// unrecorded before the wait says so.
 	gatewayAPIOverdue = 10 * time.Minute
+
+	// certManagerUnreadWait is what cert-manager waits for while the cluster could not be read in
+	// full for a cert-manager of its own.
+	certManagerUnreadWait = "waits until the cluster can be read for a cert-manager of its own"
 )
 
 // certManagerUsers names the proxies of the charts that make cert-manager objects, which Helm
@@ -40,13 +45,14 @@ func certManagerUsers(cluster *clusterv1.Cluster) []string {
 // certManagerWaits reports whether the proxy named waits for cert-manager's release to be deployed,
 // and records it in addons.certManagerWaiting. The Add-on Provider for Helm puts each install after
 // a failed one further off. A proxy already installed stays while cert-manager is upgraded, and none
-// waits where the cluster's own cert-manager works.
+// waits where the cluster's own cert-manager works. While the cluster could not be read for one,
+// every proxy waits, so that none changes which cert-manager it is served by.
 func (r *Reconciler) certManagerWaits(ctx context.Context, cluster *clusterv1.Cluster, name string, addons *Addons) (bool, error) {
 	if addons.clusterCertManager {
 		return false, nil
 	}
 	installed, err := r.anyProxy(ctx, cluster, name)
-	if err != nil || installed {
+	if err != nil || installed && !addons.certManagerUnread {
 		return false, err
 	}
 	ready, err := r.proxyReady(ctx, cluster, certManagerProxy(cluster))
@@ -70,11 +76,13 @@ func (r *Reconciler) recordAddonsWaiting(ctx context.Context, cluster *clusterv1
 	case held.message != "":
 		conflicts = append(conflicts, held)
 	case waiting != "":
-		reason, why, err := r.certManagerHeldBy(ctx, cluster)
+		reason, why, err := r.certManagerHeldBy(ctx, cluster, addons)
 		if err != nil {
 			return nil, err
 		}
 		cond = &metav1.Condition{Type: AddonsWaitingCondition, Status: metav1.ConditionTrue, Reason: reason, Message: waiting + " wait for cert-manager" + why}
+	case addons.certManagerUnread:
+		cond = &metav1.Condition{Type: AddonsWaitingCondition, Status: metav1.ConditionTrue, Reason: AddonsWaitingForCertManager, Message: "cert-manager " + certManagerUnreadWait}
 	}
 	if len(volumes) > 0 {
 		if cond == nil {
@@ -105,11 +113,14 @@ func andJoined(names []string) string {
 	return strings.Join(names[:last], ", ") + " and " + names[last]
 }
 
-// certManagerHeldBy says what cert-manager itself waits for: its release, or the cluster's Gateway
-// API, which it serves. Once nothing has recorded the Gateway API for gatewayAPIOverdue, it names
+// certManagerHeldBy says what cert-manager itself waits for: its release, a complete read of the
+// cluster for a cert-manager of its own, or the cluster's Gateway API, which it serves. Once nothing has recorded the Gateway API for gatewayAPIOverdue, it names
 // the distribution's chart and whether it has deployed.
-func (r *Reconciler) certManagerHeldBy(ctx context.Context, cluster *clusterv1.Cluster) (string, string, error) {
+func (r *Reconciler) certManagerHeldBy(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons) (string, string, error) {
 	if _, has := cluster.Annotations[gatewayAPIAnnotation]; has {
+		if addons.certManagerUnread {
+			return AddonsWaitingForCertManager, ", which " + certManagerUnreadWait, nil
+		}
 		return AddonsWaitingForCertManager, " to be deployed", nil
 	}
 	const gatewayWait = ", which waits for the cluster's Gateway API definitions"
@@ -134,4 +145,34 @@ func (r *Reconciler) certManagerHeldBy(ctx context.Context, cluster *clusterv1.C
 			gatewayWait, charts.traefikCRD, int(gatewayAPIOverdue.Minutes()), charts.traefikCRD, charts.traefikCRD), nil
 	}
 	return AddonsWaitingGatewayAPIMissing, fmt.Sprintf("%s: %s is deployed, yet none were recorded in %d minutes", gatewayWait, charts.traefikCRD, int(gatewayAPIOverdue.Minutes())), nil
+}
+
+// certManagerServedBy on the cert-manager objects of an add-on's release names the cert-manager
+// that serves them: Kubehenge's, or the cluster's own (servedByClusterCertManager). A switch
+// between the two changes the release's values, so the Add-on Provider for Helm applies it again
+// and brings back the objects that the other one's removal took with its definitions.
+const (
+	certManagerServedBy = "kubehenge.dev/cert-manager"
+	servedByKubehenge   = "kubehenge"
+	servedByCluster     = "cluster"
+	labelsKey           = "labels"
+)
+
+func servedBy() map[string]any {
+	return map[string]any{certManagerServedBy: servedByKubehenge}
+}
+
+// servedByClusterCertManager marks the cert-manager objects in proxy p's values as served by the
+// cluster's own cert-manager. The values are text by then, in which the label is written only by
+// servedBy.
+func servedByClusterCertManager(p *unstructured.Unstructured) {
+	spec, ok := p.Object["spec"].(map[string]any)
+	if !ok {
+		return
+	}
+	values, ok := spec["valuesTemplate"].(string)
+	if !ok {
+		return
+	}
+	spec["valuesTemplate"] = strings.ReplaceAll(values, certManagerServedBy+": "+servedByKubehenge, certManagerServedBy+": "+servedByCluster)
 }
