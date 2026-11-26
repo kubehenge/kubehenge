@@ -4,15 +4,6 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
-### Changed
-
-- `kubehenge appliance health` shows each stage as it runs: the connection with the time left, the certificate, the answer and the settle time. It ends on a verdict, or on the cause and the step to take. `--quiet` keeps it silent and `--json` prints the verdict as one object.
-
-### Fixed
-
-- Setup and save judge each host's chain against what the nodes trust: Mozilla's roots, which Talos ships, and the Site CA, never the appliance container's own trust store. Where one internal CA signs both Proxmox VE and the TLS inspection device, the save now refuses before Apply and names the root the chain ends at, with its SHA-256 fingerprint. Setup adds a presented root to the Site CA on one click, and `POST /api/setup/check` returns it as PEM in `missingRoots`. A failed run names that root too.
-- After a restart of the appliance's container the interface answers at once. The appliance announces its addresses to the network when it starts and whenever one is added, as keepalived does. Before, a switch or gateway that had forgotten the container's address kept dropping traffic until the container sent something itself.
-
 ## [0.5.7] - 2026-11-26
 
 ### Highlights
