@@ -195,6 +195,9 @@ func TestAddonSwitchedOnInsideAClosedWindowInstallsAtOnce(t *testing.T) {
 	w := newRollout(t, outsideWindow, variableJSON("upgrades", closedWindowPolicy))
 	w.apply()
 	w.addons.Monitoring.Enabled = true
+	// Monitoring installs once cert-manager, which it makes objects of, is deployed.
+	w.apply()
+	setCertManagerReady(t, w.kube, w.cluster)
 	if held := w.apply(); len(held) != 0 {
 		t.Fatalf("held %v", held)
 	}

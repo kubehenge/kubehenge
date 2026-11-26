@@ -953,7 +953,7 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
           default: false
           description: >-
             Use the cert-manager the cluster runs. Kubehenge installs none, and still makes its
-            issuers and certificates in it. Rancher, monitoring and certificates need cert-manager
+            issuers and certificates in it. Rancher, monitoring, logs and certificates need cert-manager
             0.15 or newer with its custom resource definitions installed.
 - name: namespaceLabels
   required: false

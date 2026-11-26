@@ -282,6 +282,10 @@ func TestReconcileSwitchesMonitoringOnAndOff(t *testing.T) {
 	if err := reconcile(t, r, c); err != nil {
 		t.Fatal(err)
 	}
+	setCertManagerReady(t, kube, c)
+	if err := reconcile(t, r, c); err != nil {
+		t.Fatal(err)
+	}
 	hcp := &unstructured.Unstructured{}
 	hcp.SetGroupVersionKind(helmChartProxyGVK)
 	for _, name := range []string{"web-monitoring", "web-cert-manager"} {

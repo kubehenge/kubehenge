@@ -285,10 +285,16 @@ func addonsOf(cluster *clusterv1.Cluster) (Addons, error) {
 	return a, err
 }
 
-// certManager reports whether Kubehenge installs cert-manager, which Rancher, monitoring and the
-// certificates add-on each need, unless the cluster brings its own.
+// needsCertManager reports whether an add-on makes cert-manager objects: Rancher, monitoring, its
+// logs, or the certificates add-on.
+func (a *Addons) needsCertManager() bool {
+	return a.Rancher.Install || a.Monitoring.Enabled || a.logsOn() || a.Certificates.on()
+}
+
+// certManager reports whether Kubehenge installs cert-manager: an add-on needs it, and the cluster
+// brings none of its own.
 func (a *Addons) certManager() bool {
-	return !a.UseExisting.CertManager && (a.Rancher.Install || a.Monitoring.Enabled || a.Certificates.on())
+	return !a.UseExisting.CertManager && a.needsCertManager()
 }
 
 // certManagerProxy names the cluster's cert-manager proxy, installed for whichever add-ons need it.

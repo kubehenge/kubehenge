@@ -13,6 +13,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/tools/events"
 	addonsv1 "sigs.k8s.io/cluster-api/api/addons/v1beta2"
@@ -275,7 +276,7 @@ func (r *Reconciler) afterTheRest(ctx context.Context, cluster *clusterv1.Cluste
 	rancherWaiting := false
 	if !addons.Rancher.Install && rancherRefused == "" {
 		var with []string
-		if !addons.Monitoring.Enabled && !addons.Certificates.on() {
+		if !addons.needsCertManager() {
 			with = append(with, certManagerProxy(cluster))
 		}
 		if rancherWaiting, err = r.removeRancherWhenFree(ctx, cluster, with...); err != nil {
@@ -759,6 +760,11 @@ func (r *Reconciler) proxyState(ctx context.Context, cluster *clusterv1.Cluster,
 
 // chartWaits reports whether the proxy named waits for what its chart needs first.
 func (r *Reconciler) chartWaits(ctx context.Context, cluster *clusterv1.Cluster, name string, addons *Addons) (bool, error) {
+	if slices.Contains(certManagerUsers(cluster), name) {
+		if waits, err := r.certManagerWaits(ctx, cluster, name, addons); waits || err != nil {
+			return waits, err
+		}
+	}
 	var wait func(context.Context, *clusterv1.Cluster) (bool, error)
 	switch name {
 	case kyvernoPoliciesProxy(cluster):
@@ -781,6 +787,48 @@ func (r *Reconciler) chartWaits(ctx context.Context, cluster *clusterv1.Cluster,
 		return false, nil
 	}
 	return wait(ctx, cluster)
+}
+
+// certManagerUsers names the proxies of the charts that make cert-manager objects, which Helm
+// cannot install before the cluster serves their kinds.
+func certManagerUsers(cluster *clusterv1.Cluster) []string {
+	return []string{rancherProxy(cluster), monitoringProxy(cluster), lokiProxy(cluster), alloyProxy(cluster), alloyNodeProxy(cluster)}
+}
+
+// certManagerCRDs are the custom resource definitions of the kinds the add-ons make.
+var certManagerCRDs = []string{"certificates.cert-manager.io", "issuers.cert-manager.io", "clusterissuers.cert-manager.io"}
+
+// certManagerWaits reports whether the proxy named waits for cert-manager: until its release is
+// deployed, or with the cluster's own cert-manager until the cluster serves its definitions. The
+// Add-on Provider for Helm puts each install after a failed one further off. A proxy already
+// installed stays while cert-manager is upgraded.
+func (r *Reconciler) certManagerWaits(ctx context.Context, cluster *clusterv1.Cluster, name string, addons *Addons) (bool, error) {
+	installed, err := r.anyProxy(ctx, cluster, name)
+	if err != nil || installed {
+		return false, err
+	}
+	if !addons.UseExisting.CertManager {
+		ready, err := r.proxyReady(ctx, cluster, certManagerProxy(cluster))
+		return !ready, err
+	}
+	workload, found, err := r.Remotes.get(ctx, cluster)
+	if err != nil || !found {
+		return true, err
+	}
+	for _, crd := range certManagerCRDs {
+		o := &metav1.PartialObjectMetadata{}
+		o.SetGroupVersionKind(crdGVK)
+		switch err := workload.client.Get(ctx, client.ObjectKey{Name: crd}, o); {
+		case apierrors.IsNotFound(err):
+			return true, nil
+		case unreachable(err):
+			r.Remotes.forget(cluster)
+			return true, nil
+		case err != nil:
+			return false, fmt.Errorf("reading the cluster's custom resource definition %s: %w", crd, err)
+		}
+	}
+	return false, nil
 }
 
 // held reads what was recorded for the cluster. It reads nothing yet, or no longer once a foreground

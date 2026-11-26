@@ -31,7 +31,7 @@ func TestRancherInstallsOnlyOnceTurtlesIsPinned(t *testing.T) {
 	c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{Name: "rancher", Value: apiextensionsv1.JSON{
 		Raw: []byte(`{"install":true,"hostname":"rancher.example.org"}`),
 	}})
-	r, kube := newReconciler(t, &fakeCloud{}, c)
+	r, kube := newReconciler(t, &fakeCloud{}, c, readyCertManager(c))
 	hcp := &unstructured.Unstructured{}
 	hcp.SetGroupVersionKind(helmChartProxyGVK)
 	key := client.ObjectKey{Namespace: c.Namespace, Name: rancherProxy(c)}

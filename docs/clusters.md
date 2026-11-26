@@ -336,7 +336,7 @@ Kubehenge refuses a cluster short of that room on creation and when an add-on or
 | frr-k8s, added where the load balancer announces over BGP | 176 MiB | 176 MiB | none | none | 45 millicores |
 | GitOps with Argo CD | 512 MiB | 352 MiB | 432 MiB | 360 MiB | 90 millicores |
 | GitOps with Flux | 384 MiB | 320 MiB | none | none | 50 millicores |
-| cert-manager, with monitoring, Rancher or certificates | 192 MiB | 160 MiB | 48 MiB | none | 30 millicores |
+| cert-manager, with monitoring, logs, Rancher or certificates | 192 MiB | 160 MiB | 48 MiB | none | 30 millicores |
 | Rancher | 2048 MiB | 640 MiB | 512 MiB | 512 MiB | 120 millicores |
 | Rancher's agent, in every cluster that registers | 512 MiB | 192 MiB | none | none | 30 millicores |
 
@@ -412,7 +412,7 @@ Every cluster can also be opened in the appliance's shared Headlamp, without thi
 
 #### Monitoring
 
-Prometheus, Alertmanager and Grafana, with kube-prometheus-stack's dashboards and alerts for every node and control-plane component. It installs cert-manager too. It takes about 1.5 GiB of the workers' memory ([Machines](#machines)) and a 20 GiB volume.
+Prometheus, Alertmanager and Grafana, with kube-prometheus-stack's dashboards and alerts for every node and control-plane component. It installs cert-manager too, and installs once cert-manager is deployed. It takes about 1.5 GiB of the workers' memory ([Machines](#machines)) and a 20 GiB volume.
 
 - Each component is scraped over verified, authenticated TLS ([architecture.md](architecture.md#add-ons)).
 - Grafana's `admin` password is in the `kube-prometheus-stack-grafana` Secret of the `monitoring` namespace.
@@ -423,7 +423,7 @@ Prometheus, Alertmanager and Grafana, with kube-prometheus-stack's dashboards an
 
 #### Logs
 
-Loki keeps the cluster's logs on a volume of its own. Grafana Alloy collects them. Monitoring's Grafana reads them ([architecture.md](architecture.md#add-ons)). Logs need monitoring, which cannot be switched off while they are on.
+Loki keeps the cluster's logs on a volume of its own. Grafana Alloy collects them. Monitoring's Grafana reads them ([architecture.md](architecture.md#add-ons)). Logs need monitoring, which cannot be switched off while they are on. Loki and Alloy install once cert-manager, which monitoring brings, is deployed.
 
 Logs are kept for 7 days in a 10 GiB volume unless set otherwise. Loki deletes by age, not by size. Size the volume, which only grows, for the days kept.
 
@@ -1147,7 +1147,7 @@ The sections below cover the add-ons and sign-in.
 ### Monitoring settings
 
 - **Monitoring:** switch it on or off, set or clear Grafana's host name, and choose where alerts and samples go ([Monitoring alerts and remote write](#monitoring-alerts-and-remote-write)). The credentials are stored in the dialog at once, the rest with **Save**.
-  - Switching it off uninstalls it with its metrics proxies and certificates. It also uninstalls cert-manager, unless Rancher or the certificates add-on runs in the cluster.
+  - Switching it off uninstalls it with its metrics proxies and certificates. It also uninstalls cert-manager, unless Rancher or the certificates add-on runs in the cluster. Switching logs off alone leaves it.
   - The volumes and CRDs stay, as the dialog notes ([What stays](#what-stays-after-an-add-on-is-switched-off)). With logs on, the dialog switches them off too.
 
 ### Backup settings
@@ -1950,7 +1950,7 @@ Helm refuses to install over objects that another release or tool owns. An add-o
 
 ### Using a cert-manager you run
 
-To use a cert-manager the cluster runs already, choose **Use existing cert-manager** under Certificates when you create the cluster, or set `useExisting.certManager`. Kubehenge then installs no cert-manager and still makes its issuers and certificates in yours, for the certificates add-on, monitoring and Rancher. It is fixed once the cluster exists, since switching would delete the definitions with every certificate. The existing cert-manager must run with its custom resource definitions installed.
+To use a cert-manager the cluster runs already, choose **Use existing cert-manager** under Certificates when you create the cluster, or set `useExisting.certManager`. Kubehenge then installs no cert-manager and still makes its issuers and certificates in yours, for the certificates add-on, monitoring, logs and Rancher. Monitoring, logs and Rancher install once the cluster serves its custom resource definitions. It is fixed once the cluster exists, since switching would delete the definitions with every certificate. The existing cert-manager must run with its custom resource definitions installed.
 
 Kyverno and the Prometheus Operator have no such choice. Remove the cluster's own install, or switch the add-on off.
 
