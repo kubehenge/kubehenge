@@ -110,10 +110,29 @@ func (a *Appliance) SiteTrustFor(ca string) string {
 }
 
 // SiteChainError are what keeps the nodes from trusting the chains the hosts present, one line each.
-// Roots holds, as PEM, the roots such hosts presented that the Site CA lacks, for the person to add.
+// Roots are the roots such hosts presented that the Site CA lacks, for the person to add.
 type SiteChainError struct {
 	Lines []string
-	Roots []string
+	Roots []MissingRoot
+}
+
+// MissingRoot is a root a host presented that the Site CA lacks: its short name, for a button or a
+// prompt to name it by, and the certificate as PEM.
+type MissingRoot struct {
+	Name string `json:"name"`
+	PEM  string `json:"pem"`
+}
+
+// WithRoots is siteCA with each root appended that it does not hold yet.
+func WithRoots(siteCA string, roots []MissingRoot) string {
+	have := strings.TrimSpace(siteCA)
+	parts := []string{have}
+	for _, r := range roots {
+		if p := strings.TrimSpace(r.PEM); !strings.Contains(have, p) && !slices.Contains(parts, p) {
+			parts = append(parts, p)
+		}
+	}
+	return strings.TrimPrefix(strings.Join(parts, "\n"), "\n") + "\n"
 }
 
 func (f SiteChainError) Error() string { return strings.Join(f.Lines, "\n") }
@@ -184,12 +203,12 @@ func proxyCAOf(s *Settings) string {
 }
 
 // SiteCheck is what CheckSite found: the errors a save would refuse with, the warnings of faults it
-// goes on past with the last run's certificates, and the roots, as PEM, that the hosts presented and
-// the Site CA lacks. All are empty where the nodes would trust every host that answered.
+// goes on past with the last run's certificates, and the roots that the hosts presented and the Site
+// CA lacks. All are empty where the nodes would trust every host that answered.
 type SiteCheck struct {
 	Errors       []string
 	Warnings     []string
-	MissingRoots []string
+	MissingRoots []MissingRoot
 }
 
 // CheckSite runs the check a save runs, on a copy of s, for the setup to show its faults before a
@@ -453,7 +472,7 @@ func judgeChains(authorities []*siteAuthority, public *x509.CertPool, chains []h
 		out.Lines = append(out.Lines, key.label+" "+strings.Join(hosts[key], ", ")+": "+key.fault)
 	}
 	for _, r := range roots {
-		out.Roots = append(out.Roots, string(pem.EncodeToMemory(&pem.Block{Type: pemCertificate, Bytes: r.Raw})))
+		out.Roots = append(out.Roots, MissingRoot{Name: shortName(r), PEM: string(pem.EncodeToMemory(&pem.Block{Type: pemCertificate, Bytes: r.Raw}))})
 	}
 	return out
 }

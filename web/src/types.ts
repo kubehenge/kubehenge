@@ -1417,11 +1417,17 @@ export interface SiteCARoll {
   waiting: number;
 }
 
+/** A root a host presented that the Site CA lacks. */
+export interface MissingRoot {
+  /** Its common name, else its organisation, else its subject. */
+  name: string;
+  pem: string;
+}
+
 export interface SetupFindings {
   errors: string[];
   warnings: string[];
-  /** Roots, as PEM, that hosts presented and the Site CA lacks. */
-  missingRoots?: string[];
+  missingRoots?: MissingRoot[];
   podRanges?: string[];
   serviceRanges?: string[];
 }

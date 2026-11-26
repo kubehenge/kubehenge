@@ -498,6 +498,10 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	err = a.Apply(&req.Settings, req.Passphrase, ticket, s.applied(ticket)) //nolint:contextcheck // the job outlives the request on purpose
+	if faults, ok := errors.AsType[appliance.SiteChainError](err); ok {
+		writeJSON(w, http.StatusUnprocessableEntity, setupRefusal{Error: err.Error(), MissingRoots: faults.Roots, RequestID: w.Header().Get(requestIDHeader)})
+		return
+	}
 	switch {
 	case jobConflict(err):
 		writeError(w, http.StatusConflict, err.Error())
@@ -508,6 +512,14 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	s.Log.InfoContext(r.Context(), "management cluster apply started", "user", u.ticket.Username)
 	writeJSON(w, http.StatusAccepted, a.Current())
+}
+
+// setupRefusal is the answer to a save its checks refuse. MissingRoots are the roots the hosts
+// presented and the Site CA lacks, for a client to add as Setup's buttons do.
+type setupRefusal struct {
+	Error        string                  `json:"error"`
+	MissingRoots []appliance.MissingRoot `json:"missingRoots,omitempty"`
+	RequestID    string                  `json:"requestId,omitempty"`
 }
 
 // jobConflict tells whether a job could not start because another one, of any kind, holds the

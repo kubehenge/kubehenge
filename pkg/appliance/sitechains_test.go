@@ -1207,7 +1207,7 @@ func TestSiteCheckNamesThePresentedRootTheSiteCALacksAndPassesOnceItIsAdded(t *t
 	if want := []string{presentedRootFault("ghcr.io, registry.k8s.io", inspection)}; !slices.Equal(got.Errors, want) {
 		t.Fatalf("errors %q, want %q", got.Errors, want)
 	}
-	if want := []string{inspection.pem()}; !slices.Equal(got.MissingRoots, want) {
+	if want := []MissingRoot{{Name: "Internal-R1", PEM: inspection.pem()}}; !slices.Equal(got.MissingRoots, want) {
 		t.Fatalf("missing roots %q, want %q", got.MissingRoots, want)
 	}
 	if words := faultWords(got.Errors[0]); words > 16 {
@@ -1215,12 +1215,34 @@ func TestSiteCheckNamesThePresentedRootTheSiteCALacksAndPassesOnceItIsAdded(t *t
 	}
 
 	for name, siteCA := range map[string]string{
-		"the offered root appended": other.pem() + got.MissingRoots[0],
+		"the offered root appended": WithRoots(other.pem(), got.MissingRoots),
 		"the root alone":            inspection.pem(),
 		"several roots, one right":  other.pem() + newTestRoot(t, "Internal-R3").pem() + inspection.pem(),
 	} {
 		if again := a.CheckSite(t.Context(), &Settings{SiteCA: siteCA}); len(again.Errors) != 0 || len(again.Warnings) != 0 || len(again.MissingRoots) != 0 {
 			t.Errorf("%s: %+v", name, again)
+		}
+	}
+}
+
+// TestWithRootsAppendsEachRootOnce adds the roots a check hands over to a Site CA, none it holds and
+// none twice.
+func TestWithRootsAppendsEachRootOnce(t *testing.T) {
+	t.Parallel()
+	a, b := newTestRoot(t, "Internal-R1"), newTestRoot(t, "Internal-R2")
+	ra, rb := MissingRoot{Name: "Internal-R1", PEM: a.pem()}, MissingRoot{Name: "Internal-R2", PEM: b.pem()}
+	for name, tc := range map[string]struct {
+		siteCA string
+		roots  []MissingRoot
+		want   string
+	}{
+		"an empty Site CA":    {"", []MissingRoot{ra}, a.pem()},
+		"one held, one new":   {a.pem(), []MissingRoot{ra, rb}, a.pem() + b.pem()},
+		"the same root twice": {"", []MissingRoot{rb, rb}, b.pem()},
+		"no final line break": {strings.TrimSpace(a.pem()), []MissingRoot{rb}, a.pem() + b.pem()},
+	} {
+		if got := WithRoots(tc.siteCA, tc.roots); got != tc.want {
+			t.Errorf("%s: %q, want %q", name, got, tc.want)
 		}
 	}
 }
@@ -1368,7 +1390,7 @@ func TestSiteCheckHandsOverTheMissingRootWithAWarning(t *testing.T) {
 	again := settings("pve1")
 	again.SiteCA = c.root.pem()
 	got := a.CheckSite(t.Context(), again)
-	if len(got.Errors) != 0 || !slices.Equal(got.Warnings, []string{presentedRootFault("registry.k8s.io", other)}) || !slices.Equal(got.MissingRoots, []string{other.pem()}) {
+	if len(got.Errors) != 0 || !slices.Equal(got.Warnings, []string{presentedRootFault("registry.k8s.io", other)}) || !slices.Equal(got.MissingRoots, []MissingRoot{{Name: "Internal-R1", PEM: other.pem()}}) {
 		t.Errorf("got %+v, want the warning and the root", got)
 	}
 }

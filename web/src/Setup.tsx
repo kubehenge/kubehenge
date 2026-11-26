@@ -46,6 +46,7 @@ import type {
   FreeAddresses,
   Job,
   ManagementSettings,
+  MissingRoot,
   NodeDNS,
   OIDCProvider,
   PveNode,
@@ -2301,7 +2302,7 @@ export function withRoots(siteCA: string, roots: string[]): string {
 
 // SiteFields are what a proxied or offline site fills first: the site's CA and time zone, the mirrors
 // and the proxy.
-export function SiteFields({ form, set, shown, siteRoots }: FieldsProps & { siteRoots?: string[] }): JSX.Element {
+export function SiteFields({ form, set, shown, siteRoots }: FieldsProps & { siteRoots?: MissingRoot[] }): JSX.Element {
   return (
     <>
       <Field
@@ -2341,11 +2342,11 @@ export function SiteFields({ form, set, shown, siteRoots }: FieldsProps & { site
           <>
             PEM, root only.
             <SiteCARollNote siteCA={form.siteCA} />
-            {siteRoots !== undefined && siteRoots.length > 0 && (
-              <button type="button" onClick={() => set("siteCA", withRoots(form.siteCA, siteRoots))}>
-                Add that root
+            {siteRoots?.map((root) => (
+              <button key={root.pem} type="button" onClick={() => set("siteCA", withRoots(form.siteCA, [root.pem]))}>
+                Add {root.name}
               </button>
-            )}
+            ))}
           </>
         }
         info="Everything that names no other CA trusts it, the management cluster included. Proxmox VE's own downloads do not."
@@ -3218,7 +3219,7 @@ function setupFields({
   firstRun: boolean;
   advancedOpen: boolean;
   rangeWarnings: string[];
-  siteRoots: string[];
+  siteRoots: MissingRoot[];
   handleAdvanced: (open: boolean) => void;
   handleAskRestore: () => void;
   missing: { images: string | undefined; isos: string | undefined };

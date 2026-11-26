@@ -107,6 +107,9 @@ const forClusters = (group: string): BoundFunctions<typeof queries> =>
 
 // A one-node Proxmox VE as it answers: local takes every kind of content, local-lvm has more room
 // for disks, and the node reaches its gateway through vmbr0.
+// fieldOf is the field a labelled control sits in.
+const fieldOf = (control: HTMLElement): HTMLElement => control.closest<HTMLElement>(".field") ?? document.body;
+
 const oneNode = {
   "GET /api/proxmox/nodes": { body: [{ node: "pve1", online: true }] },
   "GET /api/proxmox/storages": {
@@ -1859,12 +1862,13 @@ describe("setup", () => {
     });
     expect(field).toHaveAttribute("aria-invalid", "true");
     expect(wizard.queryByRole("alert", { name: "Errors" })).not.toBeInTheDocument();
-    expect(wizard.queryByRole("button", { name: "Add that root" })).not.toBeInTheDocument();
+    expect(within(fieldOf(field)).queryByRole("button", { name: /^Add /u })).not.toBeInTheDocument();
   });
 
-  it("adds the root a host presented to the Site CA on one click", async () => {
+  it("adds each root a host presented to the Site CA with its own button", async () => {
     window.history.replaceState(null, "", "/administration");
     const root = "-----BEGIN CERTIFICATE-----\nQUJD\n-----END CERTIFICATE-----\n";
+    const second = "-----BEGIN CERTIFICATE-----\nR0hJ\n-----END CERTIFICATE-----\n";
     const own = "-----BEGIN CERTIFICATE-----\nREVG\n-----END CERTIFICATE-----\n";
     const saved = {
       nodes: ["pve1"],
@@ -1887,9 +1891,15 @@ describe("setup", () => {
       "GET /api/setup": { body: { appliance: true, ready: true, allowed: true, settings: saved } },
       "POST /api/setup/check": {
         body: {
-          errors: ['Site CA: ghcr.io: Chain ends at "CN=Internal-R1" (SHA-256 AB:CD). Add that root to the Site CA.'],
+          errors: [
+            'Site CA: ghcr.io: Chain ends at "CN=Internal-R1" (SHA-256 AB:CD). Add that root to the Site CA.',
+            'Site CA: registry.k8s.io: Chain ends at "CN=Internal-R2" (SHA-256 EF:01). Add that root to the Site CA.',
+          ],
           warnings: [],
-          missingRoots: [root],
+          missingRoots: [
+            { name: "Internal-R1", pem: root },
+            { name: "Internal-R2", pem: second },
+          ],
         },
       },
     });
@@ -1898,9 +1908,11 @@ describe("setup", () => {
     await user.click(await screen.findByRole("button", { name: "Edit settings" }));
     const wizard = within(screen.getByRole("region", { name: "Management cluster" }));
     await user.type(wizard.getByLabelText("State passphrase"), "correct horse battery staple");
-    await user.click(await wizard.findByRole("button", { name: "Add that root" }));
+    await user.click(await wizard.findByRole("button", { name: "Add Internal-R2" }));
     const field = wizard.getByLabelText("Site CA");
-    expect(field).toHaveValue(`${own}${root}`);
+    expect(field).toHaveValue(`${own}${second}`);
+    await user.click(await wizard.findByRole("button", { name: "Add Internal-R1" }));
+    expect(field).toHaveValue(`${own}${second}${root}`);
   });
 
   it("appends roots to a Site CA without repeating one", () => {

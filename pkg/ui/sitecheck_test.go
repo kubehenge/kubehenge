@@ -156,8 +156,9 @@ func TestSetupCheckNamesTheFaultsOfTheSiteCAChainAsTheSaveDoes(t *testing.T) {
 	}
 }
 
-// TestSetupCheckHandsOverTheRootAChainEndsAtAndTheSiteCALacks returns the presented root as PEM, for
-// the interface, the CLI and kubectl to append to the Site CA, and finds nothing wrong once it is there.
+// TestSetupCheckHandsOverTheRootAChainEndsAtAndTheSiteCALacks returns the presented root by name and as
+// PEM, from the live check and from the refused save, for the interface and the CLI to append to the
+// Site CA, and finds nothing wrong once it is there.
 func TestSetupCheckHandsOverTheRootAChainEndsAtAndTheSiteCALacks(t *testing.T) {
 	t.Parallel()
 	h, b := preflightHarness(t)
@@ -186,10 +187,24 @@ func TestSetupCheckHandsOverTheRootAChainEndsAtAndTheSiteCALacks(t *testing.T) {
 	}
 	other := issueSiteCert(t, "Other Root", nil, true)
 	f := check(other.pem())
-	if len(f.Errors) != 1 || !strings.Contains(f.Errors[0], "Chain ends at \"CN=Inspect Root\" (SHA-256 ") || len(f.MissingRoots) != 1 || f.MissingRoots[0] != root.pem() {
+	want := []appliance.MissingRoot{{Name: "Inspect Root", PEM: root.pem()}}
+	if len(f.Errors) != 1 || !strings.Contains(f.Errors[0], "Chain ends at \"CN=Inspect Root\" (SHA-256 ") || !slices.Equal(f.MissingRoots, want) {
 		t.Fatalf("the live check gave errors %q and roots %q", f.Errors, f.MissingRoots)
 	}
-	if again := check(other.pem() + f.MissingRoots[0]); len(again.Errors) != 0 || len(again.MissingRoots) != 0 {
+	saved, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := b.do("POST", "/api/setup", string(saved))
+	var refused struct {
+		Error        string                  `json:"error"`
+		MissingRoots []appliance.MissingRoot `json:"missingRoots"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &refused); err != nil || rec.Code != http.StatusUnprocessableEntity ||
+		refused.Error != f.Errors[0] || !slices.Equal(refused.MissingRoots, want) {
+		t.Errorf("the save answered %d %s", rec.Code, rec.Body.String())
+	}
+	if again := check(appliance.WithRoots(other.pem(), f.MissingRoots)); len(again.Errors) != 0 || len(again.MissingRoots) != 0 {
 		t.Errorf("with the root added the live check gave errors %q and roots %q", again.Errors, again.MissingRoots)
 	}
 }

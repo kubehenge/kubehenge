@@ -179,6 +179,11 @@ func newFakeInterface(t *testing.T) *fakeInterface {
 			answer(w, http.StatusUnprocessableEntity, `{"error":"Site CA: host.example: no chain from the certificate CN=host.example to the Site CA, as CN=Inspect Intermediate is unknown. Add the intermediates the host does not present."}`)
 			return
 		}
+		if siteCA := field(savedBody(f), "siteCA"); strings.Contains(siteCA, "UNROOTED") && !strings.Contains(siteCA, "PRESENTED") {
+			answer(w, http.StatusUnprocessableEntity, `{"error":"Site CA: host.example: Chain ends at \"CN=Inspect Root\" (SHA-256 AB:CD). Add that root to the Site CA.",`+
+				`"missingRoots":[{"name":"Inspect Root","pem":"-----BEGIN CERTIFICATE-----\nPRESENTED\n-----END CERTIFICATE-----\n"}]}`)
+			return
+		}
 		if field(savedBody(f), "timeZone") == "Mars/Base" {
 			answer(w, http.StatusUnprocessableEntity, `{"error":"Time zone: Mars/Base is not an IANA time zone"}`)
 			return

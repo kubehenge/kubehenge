@@ -395,7 +395,8 @@ func (c *interfaceClient) send(ctx context.Context, method, path string, body an
 		return nil, fmt.Errorf("reading the interface's answer: %w", err)
 	}
 	var e struct {
-		Error string `json:"error"`
+		Error        string                  `json:"error"`
+		MissingRoots []appliance.MissingRoot `json:"missingRoots"`
 	}
 	// A 401 without the version refused the login itself. One with it refused something else, such
 	// as nodes whose clocks disagree, and its reason says what. So does a sign-in step's refusal.
@@ -404,6 +405,9 @@ func (c *interfaceClient) send(ctx context.Context, method, path string, body an
 		return nil, fmt.Errorf("%w: run kubehenge login %s again", errLoginEnded, c.login.URL)
 	}
 	if json.Unmarshal(answer, &e) == nil && e.Error != "" {
+		if len(e.MissingRoots) > 0 {
+			return nil, &missingRootsError{message: e.Error, roots: e.MissingRoots}
+		}
 		return nil, errors.New(e.Error)
 	}
 	return nil, fmt.Errorf("the interface answered %s", res.Status)
