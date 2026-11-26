@@ -200,8 +200,8 @@ func TestEtcdVariableBounds(t *testing.T) {
 				quota.Default == nil || string(quota.Default.Raw) != "8" || quota.Type != "integer" {
 				t.Errorf("%s: quotaGiB = %+v", file, quota)
 			}
-			if rules := v.Schema.OpenAPIV3Schema.XValidations; len(rules) != 1 {
-				t.Errorf("%s: the quota cannot be lowered: %v", file, rules)
+			if rules := v.Schema.OpenAPIV3Schema.XValidations; len(rules) != 0 {
+				t.Errorf("%s: the webhook decides the quota's changes: %v", file, rules)
 			}
 		}
 		if !found {

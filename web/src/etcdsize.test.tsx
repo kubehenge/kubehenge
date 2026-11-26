@@ -130,7 +130,7 @@ describe("etcd limit", () => {
     await expect(screen.findByRole("button", { name: "Defragmenting…" })).resolves.toBeDisabled();
   });
 
-  it("is raised in a cluster's options, and refused below what it is, only once typed", async () => {
+  it("is changed in a cluster's options and sent as typed", async () => {
     window.history.replaceState(null, "", "/clusters/clusters/web/options");
     const calls = fakeServer({
       ...signedIn,
@@ -145,15 +145,13 @@ describe("etcd limit", () => {
     await user.click(screen.getByRole("button", { name: "Edit the etcd database limit" }));
     const dialog = screen.getByRole("dialog", { name: "Edit etcd" });
     const field = within(dialog).getByLabelText("Database limit (GiB)");
-    expect(within(dialog).queryByText(/Not lower than/u)).not.toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
 
     await user.clear(field);
-    await user.type(field, "4");
-    expect(within(dialog).getByText("Not lower than 6")).toBeInTheDocument();
+    await user.type(field, "9");
+    expect(within(dialog).getByText("A whole number from 2 to 8")).toBeInTheDocument();
     await user.clear(field);
     await user.type(field, "7");
-    expect(within(dialog).queryByText("Not lower than 6")).not.toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Add to plan" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await applyStaged(user);

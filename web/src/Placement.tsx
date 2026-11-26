@@ -375,6 +375,28 @@ export const sysAuditAnnotation = "kubehenge.dev/sys-audit";
 export const offersHAGroups = (cls: ClusterClass | undefined): boolean =>
   cls?.annotations?.[sysAuditAnnotation] === "true" && cls.variables.some((v) => v.name === "ccm");
 
+/** managementEndpointAnnotation marks the classes of a Kubehenge installed with the management cluster's address. */
+export const managementEndpointAnnotation = "kubehenge.dev/management-endpoint";
+
+/** useAutoscalerInCluster reads whether an existing cluster's autoscaler may run on its own control planes. */
+export function useAutoscalerInCluster(c: Cluster): boolean {
+  const [offered, setOffered] = useState(false);
+  const className = c.class;
+  useEffect(() => {
+    async function load(): Promise<void> {
+      try {
+        const classes = await api.classes();
+        setOffered(classes.find((x) => x.name === className)?.annotations?.[managementEndpointAnnotation] === "true");
+      } catch {
+        // Without the classes the option is not shown. The cluster keeps its setting.
+        setOffered(false);
+      }
+    }
+    void load();
+  }, [className]);
+  return offered;
+}
+
 /** haGroupsOn reads whether the cluster's nodes are labelled with their Proxmox VE HA groups. */
 export const haGroupsOn = (c: Cluster): boolean => flag(record(c.variables["ccm"])["haGroups"]) === true;
 

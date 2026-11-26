@@ -433,6 +433,7 @@ func (o *controllerOptions) newHooks(mgr ctrl.Manager, registrar *provisioner.Re
 		SecurityGroups:    cloud,
 		APIReach:          cloud,
 		Endpoint:          o.r.Endpoint.URL,
+		ManagementAPI:     o.autoscaler.Management.Server,
 		Management: &provisioner.FirewallSources{
 			Reader: mgr.GetAPIReader(), Namespace: o.r.ClassNamespace, Management: o.managementAddrs,
 			API: o.autoscaler.Management.Server, Bridge: o.managementBridge, VLAN: o.managementVLAN, Nodes: o.managementNodes,

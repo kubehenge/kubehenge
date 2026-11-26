@@ -14,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -135,6 +136,46 @@ type EtcdStatus struct {
 	Members    []EtcdMember `json:"members"`
 	// Error is why some member could not be read.
 	Error string `json:"error,omitempty"`
+}
+
+// validateEtcd holds a cluster's etcd limit and its etcd snapshots to their rules.
+func validateEtcd(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass) field.ErrorList {
+	errs := validateEtcdQuota(old, c)
+	if err := checkEtcdSnapshots(old, c, class); err != nil {
+		errs = append(errs, field.Invalid(field.NewPath("spec", "topology", "variables").Key(etcdSnapshotsVariable), etcdSnapshotsVariable, err.Error()))
+	}
+	return errs
+}
+
+// percentOf is the whole in percent.
+const percentOf = 100
+
+// validateEtcdQuota refuses a lower etcd limit unless every member's database stays under EtcdWarnPercent
+// of it, as the controller last read them. A database above the limit stops accepting writes. With no
+// sizes read yet, lowering is refused.
+func validateEtcdQuota(old, c *clusterv1.Cluster) field.ErrorList {
+	if old == nil {
+		return nil
+	}
+	was, wasErr := EtcdSettingsOf(old)
+	now, nowErr := EtcdSettingsOf(c)
+	if errors.Join(wasErr, nowErr) != nil || now.QuotaGiB >= was.QuotaGiB {
+		return nil
+	}
+	path := field.NewPath("spec", "topology", "variables").Key(etcdVariable)
+	status, ok := LastEtcdStatus(old)
+	if !ok || len(status.Members) == 0 {
+		return field.ErrorList{field.Forbidden(path, "the etcd limit cannot be lowered until the controller has read the members' database sizes, since a database above it stops accepting writes")}
+	}
+	var errs field.ErrorList
+	for i := range status.Members {
+		m := &status.Members[i]
+		if m.DBSize*percentOf > now.QuotaBytes()*EtcdWarnPercent {
+			errs = append(errs, field.Forbidden(path, fmt.Sprintf("etcd member %s's database is %.1f GiB, too large for a limit of %d GiB: a database above the limit stops accepting writes and needs %d%% of room",
+				m.Name, float64(m.DBSize)/float64(bytesPerGiB), now.QuotaGiB, percentOf-EtcdWarnPercent)))
+		}
+	}
+	return errs
 }
 
 // LastEtcdStatus reads a cluster's recorded etcd status.

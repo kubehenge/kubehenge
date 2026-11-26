@@ -80,9 +80,16 @@ func autoscaled(cluster *clusterv1.Cluster) bool {
 
 // validateAutoscaling holds each autoscaled pool to bounds the autoscaler can work with, and to
 // leaving its replicas unset: Cluster API would otherwise set them back on every change of the
-// cluster. That undoes what the autoscaler did.
-func validateAutoscaling(c *clusterv1.Cluster) field.ErrorList {
+// cluster. That undoes what the autoscaler did. An autoscaler placed on the cluster's control planes
+// reaches the management cluster at managementAPI, so with none it is refused.
+func validateAutoscaling(c *clusterv1.Cluster, managementAPI string) field.ErrorList {
 	var errs field.ErrorList
+	if managementAPI == "" && autoscaled(c) {
+		if settings, err := autoscalerSettingsOf(c); err == nil && settings.Placement == PlacementWorkload {
+			errs = append(errs, field.Forbidden(field.NewPath("spec", "topology", "variables").Key(AutoscalerVariable).Child("placement"),
+				"the autoscaler cannot run inside the cluster: Kubehenge was installed without the management cluster's address (managementEndpoint)"))
+		}
+	}
 	pools := field.NewPath("spec", "topology", "workers", "machineDeployments")
 	for i := range c.Spec.Topology.Workers.MachineDeployments {
 		md := &c.Spec.Topology.Workers.MachineDeployments[i]

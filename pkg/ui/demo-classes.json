@@ -2474,19 +2474,13 @@
               "properties": {
                 "quotaGiB": {
                   "default": 8,
-                  "description": "The most one member's database may reach, in GiB. It can be raised, not lowered.",
+                  "description": "The most one member's database may reach, in GiB. Lowering it needs every database well under the new limit.",
                   "maximum": 8,
                   "minimum": 2,
                   "type": "integer"
                 }
               },
-              "type": "object",
-              "x-kubernetes-validations": [
-                {
-                  "message": "The etcd limit can be raised, not lowered, since a database above it stops accepting writes",
-                  "rule": "!has(oldSelf.quotaGiB) || !has(self.quotaGiB) || self.quotaGiB \u003e= oldSelf.quotaGiB"
-                }
-              ]
+              "type": "object"
             }
           }
         },
@@ -5496,19 +5490,13 @@
               "properties": {
                 "quotaGiB": {
                   "default": 8,
-                  "description": "The most one member's database may reach, in GiB. It can be raised, not lowered.",
+                  "description": "The most one member's database may reach, in GiB. Lowering it needs every database well under the new limit.",
                   "maximum": 8,
                   "minimum": 2,
                   "type": "integer"
                 }
               },
-              "type": "object",
-              "x-kubernetes-validations": [
-                {
-                  "message": "The etcd limit can be raised, not lowered, since a database above it stops accepting writes",
-                  "rule": "!has(oldSelf.quotaGiB) || !has(self.quotaGiB) || self.quotaGiB \u003e= oldSelf.quotaGiB"
-                }
-              ]
+              "type": "object"
             }
           }
         },
@@ -8523,19 +8511,13 @@
               "properties": {
                 "quotaGiB": {
                   "default": 8,
-                  "description": "The most one member's database may reach, in GiB. It can be raised, not lowered.",
+                  "description": "The most one member's database may reach, in GiB. Lowering it needs every database well under the new limit.",
                   "maximum": 8,
                   "minimum": 2,
                   "type": "integer"
                 }
               },
-              "type": "object",
-              "x-kubernetes-validations": [
-                {
-                  "message": "The etcd limit can be raised, not lowered, since a database above it stops accepting writes",
-                  "rule": "!has(oldSelf.quotaGiB) || !has(self.quotaGiB) || self.quotaGiB \u003e= oldSelf.quotaGiB"
-                }
-              ]
+              "type": "object"
             }
           }
         },
@@ -11463,19 +11445,13 @@
               "properties": {
                 "quotaGiB": {
                   "default": 8,
-                  "description": "The most one member's database may reach, in GiB. It can be raised, not lowered.",
+                  "description": "The most one member's database may reach, in GiB. Lowering it needs every database well under the new limit.",
                   "maximum": 8,
                   "minimum": 2,
                   "type": "integer"
                 }
               },
-              "type": "object",
-              "x-kubernetes-validations": [
-                {
-                  "message": "The etcd limit can be raised, not lowered, since a database above it stops accepting writes",
-                  "rule": "!has(oldSelf.quotaGiB) || !has(self.quotaGiB) || self.quotaGiB \u003e= oldSelf.quotaGiB"
-                }
-              ]
+              "type": "object"
             }
           }
         },

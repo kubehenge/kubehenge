@@ -17,6 +17,9 @@
 - A cluster can no longer be given the management cluster's, its API's or the appliance's address, and a machine whose VM lacks its address after boot says so.
 - The refusal of a management node's address names the node. Existing installs need the management cluster's module applied again.
 - Each of the appliance's addresses is refused on the bridge and VLAN of its own network card. Existing appliances learn theirs at the next `install.sh --upgrade` or once an administrator signs in.
+- An autoscaler on the cluster's control planes is refused, and not offered, where Kubehenge was installed without `managementEndpoint`.
+- Refusing a change of address families, bridge or VLAN says why: the API address and the pods' ranges were made for that network.
+- An etcd limit can be lowered while every member's database stays under 60% of the new one. Before, it could only rise.
 
 ### Internal
 

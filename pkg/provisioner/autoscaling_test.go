@@ -72,7 +72,7 @@ func TestValidateAutoscaling(t *testing.T) {
 	} {
 		c := cluster()
 		c.Spec.Topology.Workers.MachineDeployments = []clusterv1.MachineDeploymentTopology{tc.pool}
-		errs := validateAutoscaling(c)
+		errs := validateAutoscaling(c, "https://192.0.2.10:6443")
 		switch {
 		case tc.want == "" && len(errs) > 0:
 			t.Errorf("%s: %v", tc.name, errs)

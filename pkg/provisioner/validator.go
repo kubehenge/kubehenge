@@ -134,11 +134,9 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	errs = append(errs, validateUpgradeWindow(old, c)...)
 	errs = append(errs, validateAddonSettings(c)...)
 	errs = append(errs, v.validateNodeCustomisation(ctx, old, c)...)
-	errs = append(errs, validateAutoscaling(c)...)
+	errs = append(errs, validateAutoscaling(c, v.Hooks.ManagementAPI)...)
 	errs = append(errs, validateHostOutageGrace(c)...)
-	if err := checkEtcdSnapshots(old, c, class); err != nil {
-		errs = append(errs, field.Invalid(topology.Child("variables").Key(etcdSnapshotsVariable), etcdSnapshotsVariable, err.Error()))
-	}
+	errs = append(errs, validateEtcd(old, c, class)...)
 	if err := checkNodeAddresses(old, c); err != nil {
 		errs = append(errs, field.Forbidden(topology.Child("variables").Key(networkVariable), err.Error()))
 	}

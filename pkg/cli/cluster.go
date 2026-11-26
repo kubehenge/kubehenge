@@ -176,7 +176,7 @@ request the controller defragments large, fragmented members inside the cluster'
 	var quota int
 	set := &cobra.Command{
 		Use:   "set NAME --quota-gib N",
-		Short: "Raise the size one etcd member's database may reach before etcd refuses writes",
+		Short: "Set the size one etcd member's database may reach before etcd refuses writes",
 		Args:  argsSay(cobra.ExactArgs(1), clusterNameArg),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if quota < minEtcdQuotaGiB || quota > maxEtcdQuotaGiB {
@@ -185,7 +185,7 @@ request the controller defragments large, fragmented members inside the cluster'
 			return o.change(cmd.Context(), cmd.OutOrStdout(), args[0], map[string]any{variablesKey: map[string]any{"etcd": map[string]any{"quotaGiB": quota}}})
 		},
 	}
-	set.Flags().IntVar(&quota, "quota-gib", 0, "the most one member's database may reach, in GiB: 2 to 8, never lower than now")
+	set.Flags().IntVar(&quota, "quota-gib", 0, "the most one member's database may reach, in GiB: 2 to 8, lowered only while every database stays well under it")
 	_ = set.MarkFlagRequired("quota-gib")
 	cmd.AddCommand(defrag, set)
 	return cmd

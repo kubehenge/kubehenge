@@ -218,18 +218,21 @@ func validateFamilies(old, c *clusterv1.Cluster) field.ErrorList {
 	return errs
 }
 
+// networkFixed is the reason a cluster's address families, bridge and VLAN cannot change.
+const networkFixed = ", since the cluster's API address and the pods' ranges were made for this network"
+
 // fixedNetwork refuses a change of what a cluster's network was created with: its address families,
 // its bridge and its VLAN.
 func fixedNetwork(was, now *nodeNetwork, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	if !slices.Equal(was.families(), now.families()) {
-		errs = append(errs, field.Forbidden(path.Child("ipFamilies"), "the address families are chosen when the cluster is created"))
+		errs = append(errs, field.Forbidden(path.Child("ipFamilies"), "the address families are chosen when the cluster is created"+networkFixed))
 	}
 	if was.Bridge != now.Bridge {
-		errs = append(errs, field.Forbidden(path.Child("bridge"), "the bridge is chosen when the cluster is created"))
+		errs = append(errs, field.Forbidden(path.Child("bridge"), "the bridge is chosen when the cluster is created"+networkFixed))
 	}
 	if was.VLAN != now.VLAN {
-		errs = append(errs, field.Forbidden(path.Child("vlan"), "the VLAN is chosen when the cluster is created"))
+		errs = append(errs, field.Forbidden(path.Child("vlan"), "the VLAN is chosen when the cluster is created"+networkFixed))
 	}
 	return errs
 }
