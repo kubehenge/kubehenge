@@ -332,7 +332,7 @@ CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e
 Four options put the guests behind mitmproxy (`test/e2e/ci/egress.sh`). The appliance and the workload tests take one each, after a `+`. The runner's rules touch only the guests' bridge, and they go when the test ends.
 
 - `+tls-inspection`: nft redirects the guests' port 443 to mitmproxy in transparent mode, which re-signs each connection with an intermediate and sends it in the chain. The Site CA is the root alone, whose name the intermediate gives in another string encoding (`test/e2e/tlsca`). Plain HTTP and DNS go as before.
-- `+tls-inspection-recovery`: the appliance's first setup lacks the Site CA and must fail with the interface naming a certificate a node rejected. The same setup with the CA then finishes with no node touched.
+- `+tls-inspection-recovery`: the appliance's own store trusts the root that signs the proxy. A Site CA of another root must be refused before any Apply, naming the root. The first setup then lacks the Site CA and must fail with the interface naming a certificate a node rejected. The same setup with the CA then finishes with no node touched.
 - `+proxy`: nft drops the guests' direct egress, and the only way out is a CONNECT proxy that asks for credentials and only tunnels. Kubehenge's proxy setting names it. Its time server setting names the runner's NTP server on the bridge (`test/e2e/ntp`), since the default one is out of reach.
 - `+proxy-inspecting`: the same with a proxy that re-signs TLS and asks for none. Its CA is the proxy's CA bundle.
 

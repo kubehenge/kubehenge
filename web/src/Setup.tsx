@@ -2292,9 +2292,16 @@ function ProxyPassword({ form, set }: FieldsProps): JSX.Element {
   );
 }
 
+// withRoots is the Site CA with each root the hosts presented appended, none twice.
+export function withRoots(siteCA: string, roots: string[]): string {
+  const have = siteCA.trim();
+  const added = roots.map((r) => r.trim()).filter((r) => !have.includes(r));
+  return `${[have, ...added].filter((r) => r !== "").join("\n")}\n`;
+}
+
 // SiteFields are what a proxied or offline site fills first: the site's CA and time zone, the mirrors
 // and the proxy.
-export function SiteFields({ form, set, shown }: FieldsProps): JSX.Element {
+export function SiteFields({ form, set, shown, siteRoots }: FieldsProps & { siteRoots?: string[] }): JSX.Element {
   return (
     <>
       <Field
@@ -2334,6 +2341,11 @@ export function SiteFields({ form, set, shown }: FieldsProps): JSX.Element {
           <>
             PEM, root only.
             <SiteCARollNote siteCA={form.siteCA} />
+            {siteRoots !== undefined && siteRoots.length > 0 && (
+              <button type="button" onClick={() => set("siteCA", withRoots(form.siteCA, siteRoots))}>
+                Add that root
+              </button>
+            )}
           </>
         }
         info="Everything that names no other CA trusts it, the management cluster included. Proxmox VE's own downloads do not."
@@ -2696,6 +2708,7 @@ function SetupWizard({
     firstRun,
     advancedOpen,
     rangeWarnings: rangeWarningsOf(findings),
+    siteRoots: findings?.missingRoots ?? [],
     handleAdvanced: setAdvancedOpen,
     handleAskRestore: () => setAskingRestore(true),
     missing,
@@ -3205,6 +3218,7 @@ function setupFields({
   firstRun: boolean;
   advancedOpen: boolean;
   rangeWarnings: string[];
+  siteRoots: string[];
   handleAdvanced: (open: boolean) => void;
   handleAskRestore: () => void;
   missing: { images: string | undefined; isos: string | undefined };
@@ -3366,7 +3380,7 @@ function setupFields({
         </Field>
         <fieldset className="group">
           <legend>Site</legend>
-          <SiteFields form={form} set={set} shown={shown} />
+          <SiteFields form={form} set={set} shown={shown} siteRoots={more.siteRoots} />
         </fieldset>
         <AdvancedFields
           form={form}

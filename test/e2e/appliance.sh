@@ -370,8 +370,31 @@ setup_status
 body_is '.allowed and (.ready | not)' "the administrator may not set up"
 
 # A setup behind TLS inspection without the Site CA fails on the certificate a node rejects, and the
-# same setup with the authority added finishes on its own.
+# same setup with the authority added finishes on its own. Before that, the appliance's own trust
+# store holds the root that signs the proxy, as it does where one internal CA signs Proxmox VE and the
+# inspection device, and a Site CA of another root is refused before any Apply.
 if [ -n "${KUBEHENGE_E2E_SITE_CA_LATER:-}" ]; then
+    step "a Site CA of another root is refused before any Apply, though the appliance's store trusts the proxy's root"
+    pct push "${ctid}" "${KUBEHENGE_E2E_SITE_CA_LATER}" /usr/local/share/ca-certificates/kubehenge-e2e-internal.crt --perms 0644
+    # The system pool is read once per process, so the interface restarts to see the root.
+    pct exec "${ctid}" -- sh -c 'update-ca-certificates > /dev/null && systemctl restart kubehenge.service'
+    until_true 120 "the interface to answer again" answers
+    sign_in "${work}/user.jar" "${user}"
+    user_csrf=${csrf}
+    sign_in "${work}/admin.jar" "${admin}"
+    admin_csrf=${csrf}
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 -subj /CN=kubehenge-e2e-other-root \
+        -keyout "${work}/other-root.key" -out "${work}/other-root.pem" 2> /dev/null
+    other_check=$(jq -c --rawfile ca "${work}/other-root.pem" '{settings: (. + {siteCA: $ca})}' "${work}/settings.json")
+    expect 200 "the check of a Site CA of another root" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup/check" "${other_check}"
+    body_is '.errors | any(test("Add that root to the Site CA"))' "the check does not tell the Site CA lacks the root the chain ends at"
+    body_is '.errors | any(test("Kubehenge e2e inspection root"))' "the check does not name the root the chain ends at"
+    other_setup=$(jq -c --arg p "${passphrase}" --rawfile ca "${work}/other-root.pem" '{passphrase: $p, settings: (. + {siteCA: $ca})}' "${work}/settings.json")
+    expect 422 "a setup with a Site CA of another root" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup" "${other_setup}"
+    body_is '.error | test("Add that root to the Site CA")' "the refused setup does not tell the Site CA lacks the root"
+    setup_status
+    body_is '.job == null' "the refused setup started a run"
+
     step "a setup behind TLS inspection without the Site CA fails, naming the certificate a node rejected"
     expect 202 "starting the setup without the Site CA" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup" "${setup}"
     until_true 3600 "the setup without the Site CA to end" job_ended

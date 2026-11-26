@@ -1420,6 +1420,8 @@ export interface SiteCARoll {
 export interface SetupFindings {
   errors: string[];
   warnings: string[];
+  /** Roots, as PEM, that hosts presented and the Site CA lacks. */
+  missingRoots?: string[];
   podRanges?: string[];
   serviceRanges?: string[];
 }

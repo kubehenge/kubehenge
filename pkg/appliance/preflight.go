@@ -68,6 +68,9 @@ type Inventory struct {
 type Findings struct {
 	Errors   []string `json:"errors"`
 	Warnings []string `json:"warnings"`
+	// MissingRoots are the roots, as PEM, that hosts presented and the Site CA lacks. Adding them to
+	// the Site CA makes the nodes trust those hosts' chains.
+	MissingRoots []string `json:"missingRoots,omitempty"`
 	// PodRanges and ServiceRanges are the ranges the run will use, set or chosen.
 	PodRanges     []string `json:"podRanges,omitempty"`
 	ServiceRanges []string `json:"serviceRanges,omitempty"`

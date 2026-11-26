@@ -22,6 +22,7 @@ import {
   setupFieldProblems,
   setupProblems,
   siteCARollText,
+  withRoots,
   type SetupForm,
 } from "./Setup";
 
@@ -1837,7 +1838,7 @@ describe("setup", () => {
       bootstrapDatastore: "local",
     };
     const faults = [
-      'factory.talos.dev, ghcr.io: "CN=Inspect Two" is missing. Paste it with the root.',
+      'factory.talos.dev, ghcr.io: Issuer "CN=Inspect Two" is not presented. Add that root to the Site CA.',
       'registry.k8s.io: "CN=Inspect Old" expired on 2026-11-25. Renew it on the device.',
     ];
     fakeServer({
@@ -1858,6 +1859,55 @@ describe("setup", () => {
     });
     expect(field).toHaveAttribute("aria-invalid", "true");
     expect(wizard.queryByRole("alert", { name: "Errors" })).not.toBeInTheDocument();
+  });
+
+  it("adds the root a host presented to the Site CA on one click", async () => {
+    window.history.replaceState(null, "", "/administration");
+    const root = "-----BEGIN CERTIFICATE-----\nQUJD\n-----END CERTIFICATE-----\n";
+    const own = "-----BEGIN CERTIFICATE-----\nREVG\n-----END CERTIFICATE-----\n";
+    const saved = {
+      nodes: ["pve1"],
+      imageDatastore: "local",
+      vmDatastore: "local-lvm",
+      bridge: "vmbr0",
+      nodeAddresses: ["192.0.2.11/24"],
+      apiAddress: "192.0.2.10",
+      gateway: "192.0.2.1",
+      dnsServers: ["192.0.2.1"],
+      workloadDatastores: ["local-lvm"],
+      workloadBridges: ["vmbr0"],
+      bootstrapDatastore: "local",
+      siteCA: own,
+    };
+    fakeServer({
+      ...administrator,
+      ...administration,
+      ...oneNode,
+      "GET /api/setup": { body: { appliance: true, ready: true, allowed: true, settings: saved } },
+      "POST /api/setup/check": {
+        body: {
+          errors: ['Site CA: ghcr.io: Chain ends at "CN=Internal-R1" (SHA-256 AB:CD). Add that root to the Site CA.'],
+          warnings: [],
+          missingRoots: [root],
+        },
+      },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Edit settings" }));
+    const wizard = within(screen.getByRole("region", { name: "Management cluster" }));
+    await user.type(wizard.getByLabelText("State passphrase"), "correct horse battery staple");
+    await user.click(await wizard.findByRole("button", { name: "Add that root" }));
+    const field = wizard.getByLabelText("Site CA");
+    expect(field).toHaveValue(`${own}${root}`);
+  });
+
+  it("appends roots to a Site CA without repeating one", () => {
+    const a = "-----BEGIN CERTIFICATE-----\nQUJD\n-----END CERTIFICATE-----\n";
+    const b = "-----BEGIN CERTIFICATE-----\nREVG\n-----END CERTIFICATE-----\n";
+    expect(withRoots("", [a])).toBe(a);
+    expect(withRoots(a, [a, b])).toBe(`${a}${b}`);
+    expect(withRoots(a.trim(), [b])).toBe(`${a}${b}`);
   });
 
   it("warns that one host's loss can take every backup until a bucket target is set", async () => {

@@ -21,6 +21,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	nss "golang.org/x/crypto/x509roots/fallback/bundle"
 )
 
 // siteCALabel and proxyCALabel open the messages about the pasted authorities, as the interface
@@ -29,6 +31,9 @@ const (
 	siteCALabel  = "Site CA:"
 	proxyCALabel = "Proxy certificate:"
 )
+
+// pemCertificate is the type of a PEM block that holds a certificate.
+const pemCertificate = "CERTIFICATE"
 
 // siteDialTimeout bounds the read of one host's chain, so that a host that does not answer holds a
 // save up for no longer.
@@ -43,10 +48,10 @@ const siteCheckTimeout = 2 * siteDialTimeout
 
 // noteSite tells the job's log which faults of the hosts' chains the run goes on past with the
 // certificates of the last run, and which hosts did not answer.
-func noteSite(j *Job, unchecked, kept []string) {
-	if len(kept) > 0 {
+func noteSite(j *Job, unchecked []string, kept SiteChainError) {
+	if len(kept.Lines) > 0 {
 		j.Add("Kept the certificates of the last run, since the nodes would refuse these chains:")
-		for _, fault := range kept {
+		for _, fault := range kept.Lines {
 			j.Add(fault)
 		}
 	}
@@ -106,15 +111,19 @@ func (a *Appliance) SiteTrustFor(ca string) string {
 	return ca
 }
 
-// SiteChainErrors are what keeps the nodes from trusting the chains the hosts present, one line each.
-type SiteChainErrors []string
+// SiteChainError are what keeps the nodes from trusting the chains the hosts present, one line each.
+// Roots holds, as PEM, the roots such hosts presented that the Site CA lacks, for the person to add.
+type SiteChainError struct {
+	Lines []string
+	Roots []string
+}
 
-func (f SiteChainErrors) Error() string { return strings.Join(f, "\n") }
+func (f SiteChainError) Error() string { return strings.Join(f.Lines, "\n") }
 
 // ResolveSite derives the bundles the nodes and downloads trust from the pasted Site CA and proxy
 // CA and the chains the hosts present, and sets them on s. The pasted authorities stay as they are.
 // A host that does not answer is returned in unchecked, and fails nothing. A chain the nodes would
-// refuse with the bundles fails with SiteChainErrors.
+// refuse with the bundles fails with SiteChainError.
 func (a *Appliance) ResolveSite(ctx context.Context, s *Settings) ([]string, error) {
 	authorities, err := a.siteAuthorities(s)
 	clearBundles(s)
@@ -154,12 +163,12 @@ func clearBundles(s *Settings) {
 // were saved. A chain the nodes would refuse keeps the bundles of the last run and comes back in
 // kept, since the nodes go on as they are and the fault should not block other settings. A first or
 // changed authority still fails.
-func (a *Appliance) resolveSiteKeeping(ctx context.Context, s *Settings) ([]string, []string, error) {
+func (a *Appliance) resolveSiteKeeping(ctx context.Context, s *Settings) ([]string, SiteChainError, error) {
 	unchecked, err := a.ResolveSite(ctx, s)
-	faults, ok := errors.AsType[SiteChainErrors](err)
+	faults, ok := errors.AsType[SiteChainError](err)
 	saved := a.SavedSettings()
 	if !ok || saved == nil || saved.SiteCA != s.SiteCA || proxyCAOf(saved) != proxyCAOf(s) {
-		return unchecked, nil, err
+		return unchecked, SiteChainError{}, err
 	}
 	s.SiteBundle = saved.SiteBundle
 	if s.Proxy != nil && saved.Proxy != nil {
@@ -176,24 +185,31 @@ func proxyCAOf(s *Settings) string {
 	return s.Proxy.CABundle
 }
 
+// SiteCheck is what CheckSite found: the errors a save would refuse with, the warnings of faults it
+// goes on past with the last run's certificates, and the roots, as PEM, that the hosts presented and
+// the Site CA lacks. All are empty where the nodes would trust every host that answered.
+type SiteCheck struct {
+	Errors       []string
+	Warnings     []string
+	MissingRoots []string
+}
+
 // CheckSite runs the check a save runs, on a copy of s, for the setup to show its faults before a
-// save. It returns the errors the save would refuse with, then the warnings of faults it goes on past
-// with the last run's certificates. Both are empty where the nodes would trust every host that
-// answered.
-func (a *Appliance) CheckSite(ctx context.Context, s *Settings) ([]string, []string) {
+// save.
+func (a *Appliance) CheckSite(ctx context.Context, s *Settings) SiteCheck {
 	c := *s
 	if s.Proxy != nil {
 		proxy := *s.Proxy
 		c.Proxy = &proxy
 	}
 	_, kept, err := a.resolveSiteKeeping(ctx, &c)
-	if faults, ok := errors.AsType[SiteChainErrors](err); ok {
-		return faults, nil
+	if faults, ok := errors.AsType[SiteChainError](err); ok {
+		return SiteCheck{Errors: faults.Lines, MissingRoots: faults.Roots}
 	}
 	if err != nil {
-		return []string{err.Error()}, nil
+		return SiteCheck{Errors: []string{err.Error()}}
 	}
-	return nil, kept
+	return SiteCheck{Warnings: kept.Lines, MissingRoots: kept.Roots}
 }
 
 // readChains reads what each host presents, the hosts in parallel, each within siteDialTimeout.
@@ -301,22 +317,38 @@ func (s *siteAuthority) derived() string {
 		out.WriteByte('\n')
 	}
 	for _, c := range s.copies {
-		out.Write(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw}))
+		out.Write(pem.EncodeToMemory(&pem.Block{Type: pemCertificate, Bytes: c.Raw}))
 	}
 	return out.String()
 }
 
-// publicRoots are the system's authorities, whose chains are no concern of the pasted ones.
+// publicRoots are the authorities the nodes ship with, whose chains are no concern of the pasted
+// ones.
 func (a *Appliance) publicRoots() *x509.CertPool {
 	if a.sitePublic != nil {
 		return a.sitePublic
 	}
-	pool, err := x509.SystemCertPool()
-	if err != nil {
-		return nil
+	return nodeRoots()
+}
+
+// nodeRoots are Mozilla's roots, the set Talos bundles, from the module that tracks it. The
+// appliance container's own store is no stand-in: it also holds what the installer adds for Proxmox
+// VE, which the nodes do not trust.
+var nodeRoots = sync.OnceValue(func() *x509.CertPool {
+	pool := x509.NewCertPool()
+	for root := range nss.Roots() {
+		c, err := x509.ParseCertificate(root.Certificate)
+		if err != nil {
+			continue
+		}
+		if root.Constraint == nil {
+			pool.AddCert(c)
+		} else {
+			pool.AddCertWithConstraint(c, root.Constraint)
+		}
 	}
 	return pool
-}
+})
 
 // DialChain is the SiteChains of the network: it opens a TLS connection to the host, through the
 // settings' proxy when there is one, and returns what the host presented without judging it. An
@@ -410,31 +442,39 @@ type hostChain struct {
 // judgeChains adds to the authorities the renamed roots that make Go's verifier, as the nodes run
 // it, accept each chain that no public authority signs. Go then checks the roots' path length, name
 // constraints and validity itself. A chain it still refuses is a fault, and the hosts with the same
-// fault share its line.
+// fault share its line. A fault that is a presented root the Site CA lacks also hands that root over.
 func judgeChains(authorities []*siteAuthority, public *x509.CertPool, chains []hostChain, now time.Time) error {
 	type labelled struct{ label, fault string }
 	var faults []labelled
 	hosts := map[labelled][]string{}
+	var roots []*x509.Certificate
 	for _, hc := range chains {
 		if public != nil && verifyChain(hc.chain, public, now) == nil {
 			continue
 		}
-		if fault := judgeChain(authorities, hc.chain, now); fault != "" {
-			key := labelled{authorityOf(authorities, hc.chain).label, fault}
+		if fault := judgeChain(authorities, hc.chain, now); fault.text != "" {
+			label := authorityOf(authorities, hc.chain).label
+			key := labelled{label, fault.text}
 			if _, seen := hosts[key]; !seen {
 				faults = append(faults, key)
 			}
 			hosts[key] = append(hosts[key], hc.host)
+			if fault.root != nil && label == siteCALabel && !slices.ContainsFunc(roots, fault.root.Equal) {
+				roots = append(roots, fault.root)
+			}
 		}
 	}
 	if len(faults) == 0 {
 		return nil
 	}
-	lines := make(SiteChainErrors, 0, len(faults))
+	out := SiteChainError{Lines: make([]string, 0, len(faults))}
 	for _, key := range faults {
-		lines = append(lines, key.label+" "+strings.Join(hosts[key], ", ")+": "+key.fault)
+		out.Lines = append(out.Lines, key.label+" "+strings.Join(hosts[key], ", ")+": "+key.fault)
 	}
-	return lines
+	for _, r := range roots {
+		out.Roots = append(out.Roots, string(pem.EncodeToMemory(&pem.Block{Type: pemCertificate, Bytes: r.Raw})))
+	}
+	return out
 }
 
 // authorityOf is the authority a refused chain is about: the one whose root a certificate of the
@@ -452,13 +492,40 @@ func authorityOf(authorities []*siteAuthority, chain []*x509.Certificate) *siteA
 	return authorities[len(authorities)-1]
 }
 
+// refusal is what keeps the nodes from trusting a chain, and the root it ends at where the host
+// presented it and the pasted authority lacks it.
+type refusal struct {
+	text string
+	root *x509.Certificate
+}
+
+// field is how the messages name the setting the authority was pasted into.
+func (s *siteAuthority) field() string {
+	if s.label == proxyCALabel {
+		return "the proxy's CA"
+	}
+	return "the Site CA"
+}
+
+// lackingRoot says that the chain ends at root, which the host presented and the authority lacks.
+// The fingerprint tells it from another root of the same name.
+func (s *siteAuthority) lackingRoot(root *x509.Certificate) refusal {
+	return refusal{fmt.Sprintf("Chain ends at %q (SHA-256 %s). Add that root to %s.", subjectOf(root), Fingerprint(root), s.field()), root}
+}
+
+// lackingIssuer says that the host presented no root: top is its topmost certificate, and top's
+// issuer is the root the authority lacks.
+func (s *siteAuthority) lackingIssuer(top *x509.Certificate) refusal {
+	return refusal{text: fmt.Sprintf("Issuer %q is not presented. Add that root to %s.", issuerOf(top), s.field())}
+}
+
 // judgeChain adds the renamed roots that make Go accept one chain, or names what keeps it from
 // doing so.
-func judgeChain(authorities []*siteAuthority, chain []*x509.Certificate, now time.Time) string {
+func judgeChain(authorities []*siteAuthority, chain []*x509.Certificate, now time.Time) refusal {
 	anchors := anchorsOf(authorities)
 	err := verifyChain(chain, poolOf(anchors), now)
 	if err == nil {
-		return ""
+		return refusal{}
 	}
 	found := renamedRoots(authorities, chain)
 	if len(found) > 0 {
@@ -469,10 +536,10 @@ func judgeChain(authorities []*siteAuthority, chain []*x509.Certificate, now tim
 			for _, f := range found {
 				f.auth.add(f.cert)
 			}
-			return ""
+			return refusal{}
 		}
 	}
-	return chainFault(chain, anchors, err, now)
+	return chainFault(chain, anchors, authorityOf(authorities, chain), err, now)
 }
 
 // anchorsOf are the pasted roots and the copies found so far.
@@ -530,20 +597,20 @@ func renamedRoots(authorities []*siteAuthority, chain []*x509.Certificate) []ren
 
 // chainFault names the certificate that breaks a chain Go refuses, and what to do about it. It
 // follows the chain up by names as OpenSSL compares them, then reads the verifier's error.
-func chainFault(chain, anchors []*x509.Certificate, verifyErr error, now time.Time) string {
+func chainFault(chain, anchors []*x509.Certificate, auth *siteAuthority, verifyErr error, now time.Time) refusal {
 	cur, path := chain[0], []*x509.Certificate{chain[0]}
 	for {
 		if fault := lapse(cur, now); fault != "" {
-			return fault
+			return refusal{text: fault}
 		}
 		if slices.ContainsFunc(anchors, cur.Equal) {
 			break
 		}
-		parent, fault := issuerIn(cur, anchors, chain[1:], path)
-		if fault != "" {
+		parent, fault := issuerIn(cur, anchors, chain[1:], path, auth)
+		if fault.text != "" {
 			return fault
 		}
-		if fault := presentedFault(cur, parent, anchors); fault != "" {
+		if fault := presentedFault(cur, parent, anchors, auth); fault.text != "" {
 			return fault
 		}
 		path = append(path, parent)
@@ -551,10 +618,10 @@ func chainFault(chain, anchors []*x509.Certificate, verifyErr error, now time.Ti
 	}
 	if invalid, ok := errors.AsType[x509.CertificateInvalidError](verifyErr); ok {
 		if fault := verifyFault(invalid); fault != "" {
-			return fault
+			return refusal{text: fault}
 		}
 	}
-	return fmt.Sprintf("the nodes refuse %q. Check the chain on the device.", subjectOf(chain[0]))
+	return refusal{text: fmt.Sprintf("the nodes refuse %q. Check the chain on the device.", subjectOf(chain[0]))}
 }
 
 // verifyFault names a refusal of Go's verifier that following the chain by names does not find,
@@ -578,23 +645,23 @@ func verifyFault(invalid x509.CertificateInvalidError) string {
 
 // presentedFault says what keeps a presented parent of cur from carrying the chain to a pasted
 // root: it is another root, or cur names it in other bytes. Empty for a pasted root or a copy.
-func presentedFault(cur, parent *x509.Certificate, anchors []*x509.Certificate) string {
+func presentedFault(cur, parent *x509.Certificate, anchors []*x509.Certificate, auth *siteAuthority) refusal {
 	switch {
 	case slices.ContainsFunc(anchors, parent.Equal):
-		return ""
+		return refusal{}
 	case canonicalName(parent.RawIssuer) == canonicalName(parent.RawSubject) && !slices.ContainsFunc(anchors, sameKey(parent)):
-		return fmt.Sprintf("%q is a root that was not pasted. Paste that root.", subjectOf(parent))
+		return auth.lackingRoot(parent)
 	case !bytes.Equal(cur.RawIssuer, parent.RawSubject):
-		return fmt.Sprintf("%q encodes its issuer's name %q differently. Reissue it on the device.", subjectOf(cur), subjectOf(parent))
+		return refusal{text: fmt.Sprintf("%q encodes its issuer's name %q differently. Reissue it on the device.", subjectOf(cur), subjectOf(parent))}
 	}
-	return ""
+	return refusal{}
 }
 
 // issuerIn finds the certificate that signs cur among the anchors and the presented certificates,
 // those already on the path left out, or says why none does.
-func issuerIn(cur *x509.Certificate, anchors, presented, path []*x509.Certificate) (*x509.Certificate, string) {
+func issuerIn(cur *x509.Certificate, anchors, presented, path []*x509.Certificate, auth *siteAuthority) (*x509.Certificate, refusal) {
 	if bytes.Equal(cur.RawIssuer, cur.RawSubject) {
-		return nil, fmt.Sprintf("%q is a root that was not pasted. Paste that root.", subjectOf(cur))
+		return nil, auth.lackingRoot(cur)
 	}
 	issuer := canonicalName(cur.RawIssuer)
 	fault := ""
@@ -606,9 +673,9 @@ func issuerIn(cur *x509.Certificate, anchors, presented, path []*x509.Certificat
 		_, insecure := errors.AsType[x509.InsecureAlgorithmError](err)
 		switch {
 		case err == nil:
-			return p, ""
+			return p, refusal{}
 		case insecure:
-			return nil, fmt.Sprintf("%q is signed with %s. Nodes refuse that. Reissue it with SHA-256.", subjectOf(cur), cur.SignatureAlgorithm)
+			return nil, refusal{text: fmt.Sprintf("%q is signed with %s. Nodes refuse that. Reissue it with SHA-256.", subjectOf(cur), cur.SignatureAlgorithm)}
 		case !p.BasicConstraintsValid || !p.IsCA:
 			fault = notCA(p)
 		case p.KeyUsage != 0 && p.KeyUsage&x509.KeyUsageCertSign == 0:
@@ -619,9 +686,9 @@ func issuerIn(cur *x509.Certificate, anchors, presented, path []*x509.Certificat
 		}
 	}
 	if fault == "" {
-		fault = fmt.Sprintf("%q is missing. Paste it with the root.", issuerOf(cur))
+		return nil, auth.lackingIssuer(cur)
 	}
-	return nil, fault
+	return nil, refusal{text: fault}
 }
 
 // sameKey matches a certificate that carries c's key.
@@ -656,7 +723,7 @@ func parseCertificates(bundle string) ([]*x509.Certificate, error) {
 		if block == nil {
 			break
 		}
-		if block.Type != "CERTIFICATE" {
+		if block.Type != pemCertificate {
 			continue
 		}
 		c, err := x509.ParseCertificate(block.Bytes)

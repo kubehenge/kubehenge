@@ -141,7 +141,7 @@ func TestSetupCheckNamesTheFaultsOfTheSiteCAChainAsTheSaveDoes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = `Site CA: factory.talos.dev, ghcr.io, registry.k8s.io, tuf-repo-cdn.sigstore.dev: "CN=Inspect Intermediate" is missing. Paste it with the root.`
+	const want = `Site CA: factory.talos.dev, ghcr.io, registry.k8s.io, tuf-repo-cdn.sigstore.dev: Issuer "CN=Inspect Intermediate" is not presented. Add that root to the Site CA.`
 	check, err := json.Marshal(map[string]any{"settings": settings["settings"]})
 	if err != nil {
 		t.Fatal(err)
@@ -151,8 +151,46 @@ func TestSetupCheckNamesTheFaultsOfTheSiteCAChainAsTheSaveDoes(t *testing.T) {
 		t.Errorf("the live check gave %q, want %q", f.Errors, want)
 	}
 	rec := b.do("POST", "/api/setup", string(raw))
-	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "Paste it with the root.") || h.server.Appliance.Current() != nil {
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "Add that root to the Site CA.") || h.server.Appliance.Current() != nil {
 		t.Errorf("the save answered %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestSetupCheckHandsOverTheRootAChainEndsAtAndTheSiteCALacks returns the presented root as PEM, for
+// the interface, the CLI and kubectl to append to the Site CA, and finds nothing wrong once it is there.
+func TestSetupCheckHandsOverTheRootAChainEndsAtAndTheSiteCALacks(t *testing.T) {
+	t.Parallel()
+	h, b := preflightHarness(t)
+	root := issueSiteCert(t, "Inspect Root", nil, true)
+	intermediate := issueSiteCert(t, "Inspect Intermediate", &root, true)
+	leaf := issueSiteCert(t, "host.example", &intermediate, false)
+	h.server.Appliance.SiteChains = func(context.Context, *appliance.Settings, string) ([]*x509.Certificate, error) {
+		return []*x509.Certificate{leaf.cert, intermediate.cert, root.cert}, nil
+	}
+	var settings map[string]any
+	if err := json.Unmarshal([]byte(preflightApply), &settings); err != nil {
+		t.Fatal(err)
+	}
+	inner, ok := settings["settings"].(map[string]any)
+	if !ok {
+		t.Fatal("the settings are no object")
+	}
+	check := func(siteCA string) appliance.Findings {
+		t.Helper()
+		inner["siteCA"] = siteCA
+		body, err := json.Marshal(map[string]any{"settings": inner})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return checkSettings(t, b, string(body))
+	}
+	other := issueSiteCert(t, "Other Root", nil, true)
+	f := check(other.pem())
+	if len(f.Errors) != 1 || !strings.Contains(f.Errors[0], "Chain ends at \"CN=Inspect Root\" (SHA-256 ") || len(f.MissingRoots) != 1 || f.MissingRoots[0] != root.pem() {
+		t.Fatalf("the live check gave errors %q and roots %q", f.Errors, f.MissingRoots)
+	}
+	if again := check(other.pem() + f.MissingRoots[0]); len(again.Errors) != 0 || len(again.MissingRoots) != 0 {
+		t.Errorf("with the root added the live check gave errors %q and roots %q", again.Errors, again.MissingRoots)
 	}
 }
 
@@ -192,7 +230,7 @@ func TestSetupCheckWarnsOfAChainFaultWhileTheSiteCAIsTheSaved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = `Site CA: factory.talos.dev, ghcr.io, registry.k8s.io, tuf-repo-cdn.sigstore.dev: "CN=Inspect Intermediate" is missing. Paste it with the root.`
+	const want = `Site CA: factory.talos.dev, ghcr.io, registry.k8s.io, tuf-repo-cdn.sigstore.dev: Issuer "CN=Inspect Intermediate" is not presented. Add that root to the Site CA.`
 	f := checkSettings(t, b, string(check))
 	if slices.Contains(f.Errors, want) || !slices.Contains(f.Warnings, want) {
 		t.Errorf("the live check gave errors %q and warnings %q, want the warning %q", f.Errors, f.Warnings, want)
