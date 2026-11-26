@@ -9,12 +9,15 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -183,6 +186,73 @@ func TestServeStopsCleanlyWhenItsContextEnds(t *testing.T) {
 	}
 }
 
+// syncBuffer is a buffer the serving goroutines and the test may use together.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// captureLogs has o's interface log into the buffer it returns.
+func captureLogs(o *serveOptions) *syncBuffer {
+	b := &syncBuffer{}
+	o.s.Log = slog.New(slog.NewTextHandler(b, nil))
+	return b
+}
+
+var servedAddress = regexp.MustCompile(`msg=serving address=(\S+)`)
+
+// An empty address is the scheme's port, as net/http reads it, never a random one.
+func TestServeReadsAnEmptyAddressAsNetHTTPDoes(t *testing.T) {
+	t.Parallel()
+	secured := newServer("", nil, 0)
+	plain := newPlainServer("", nil)
+	for _, c := range []struct {
+		name     string
+		certFile string
+		srv      *http.Server
+		want     string
+	}{
+		{"TLS", "cert.pem", secured, ":https"},
+		{"plain beside TLS", "cert.pem", plain, ":http"},
+		{"a demo without a certificate", "", secured, ":http"},
+		{"an address given", "cert.pem", newServer("127.0.0.1:8443", nil, 0), "127.0.0.1:8443"},
+	} {
+		o := &serveOptions{certFile: c.certFile}
+		if got := o.address(c.srv); got != c.want {
+			t.Errorf("%s: an address of %q listens on %q, want %q", c.name, c.srv.Addr, got, c.want)
+		}
+	}
+}
+
+// servedAddresses waits for n "serving" lines and returns the addresses they name, in order.
+func servedAddresses(t *testing.T, logs *syncBuffer, n int) []string {
+	t.Helper()
+	for range 200 {
+		if m := servedAddress.FindAllStringSubmatch(logs.String(), -1); len(m) >= n {
+			addrs := make([]string, 0, n)
+			for _, x := range m[:n] {
+				addrs = append(addrs, x[1])
+			}
+			return addrs
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("serve logged no %d serving lines: %s", n, logs.String())
+	return nil
+}
+
 // A port the interface cannot have stops Headlamp's too, and the command with the reason, once
 // what serve started has stopped: Headlamp's first sync has written its kubeconfig, and nothing
 // writes after the process would have ended.
@@ -211,22 +281,94 @@ func TestServeStopsWithTheFirstServerThatFails(t *testing.T) {
 	}
 }
 
+// An address that is already taken is reported at once, naming it, and nothing claims to serve it.
+func TestServeReportsAnAddressItCannotBind(t *testing.T) {
+	t.Parallel()
+	taken, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = taken.Close() })
+	o, _ := serveOptionsIn(t, t.TempDir())
+	o.a.Dir = ""
+	logs := captureLogs(o)
+	o.s.Certificate = ui.NewInterfaceCertificate("", o.certFile, o.keyFile)
+	if err = o.s.Certificate.Load(time.Now(), nil); err != nil {
+		t.Fatal(err)
+	}
+	o.headlampListen, o.headlampUpstream, o.headlampKubeconfig = taken.Addr().String(), "http://127.0.0.1:4466", filepath.Join(t.TempDir(), "headlamp.kubeconfig")
+	if err = o.setUpHeadlamp(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- o.serve(t.Context()) }()
+	select {
+	case err = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("serve kept running with an address it could not bind")
+	}
+	if err == nil || !strings.Contains(err.Error(), taken.Addr().String()) {
+		t.Errorf("serve gave %v; want the taken address named", err)
+	}
+	if strings.Contains(logs.String(), "serving") {
+		t.Errorf("serve logged that it served: %s", logs.String())
+	}
+}
+
+// The interface's own listener, bound before the taken address failed, is free again.
+func TestServeClosesTheListenersItBoundBeforeOneFailed(t *testing.T) {
+	t.Parallel()
+	taken, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = taken.Close() })
+	listeners, err := (&serveOptions{}).listenAll(t.Context(), []*http.Server{newPlainServer("127.0.0.1:0", nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listeners[0].Addr().String()
+	_ = listeners[0].Close()
+	if _, err = (&serveOptions{}).listenAll(t.Context(), []*http.Server{newPlainServer(addr, nil), newPlainServer(taken.Addr().String(), nil)}); err == nil {
+		t.Fatal("listenAll bound a taken address")
+	}
+	again, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", addr)
+	if err != nil {
+		t.Fatalf("the listener bound before the failure stayed open: %v", err)
+	}
+	_ = again.Close()
+}
+
+// A stop that comes before the addresses are bound is a clean stop, a name to look up included.
+func TestServeStoppedBeforeItBindsStopsCleanly(t *testing.T) {
+	t.Parallel()
+	for _, addr := range []string{"127.0.0.1:0", "localhost:0"} {
+		t.Run(addr, func(t *testing.T) {
+			t.Parallel()
+			o, _ := serveOptionsIn(t, t.TempDir())
+			o.a.Dir = ""
+			o.listen = addr
+			o.s.Certificate = ui.NewInterfaceCertificate("", o.certFile, o.keyFile)
+			if err := o.s.Certificate.Load(time.Now(), nil); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			if err := o.serve(ctx); err != nil {
+				t.Errorf("serve gave %v once its context had ended", err)
+			}
+		})
+	}
+}
+
 // The interface and Headlamp take the certificate they present from the one holder, which serve
 // does not hand them as files.
 func TestServeGivesBothListenersTheCertificateOfOneHolder(t *testing.T) {
 	t.Parallel()
-	free := func() string {
-		l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = l.Close() }()
-		return l.Addr().String()
-	}
 	o, _ := serveOptionsIn(t, t.TempDir())
 	o.a.Dir = ""
-	o.listen = free()
-	o.headlampListen, o.headlampUpstream, o.headlampKubeconfig = free(), "http://127.0.0.1:4466", filepath.Join(t.TempDir(), "headlamp.kubeconfig")
+	logs := captureLogs(o)
+	o.headlampListen, o.headlampUpstream, o.headlampKubeconfig = "127.0.0.1:0", "http://127.0.0.1:4466", filepath.Join(t.TempDir(), "headlamp.kubeconfig")
 	o.s.Certificate = ui.NewInterfaceCertificate("", o.certFile, o.keyFile)
 	if err := o.s.Certificate.Load(time.Now(), nil); err != nil {
 		t.Fatal(err)
@@ -244,7 +386,7 @@ func TestServeGivesBothListenersTheCertificateOfOneHolder(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- o.serve(ctx) }()
 	want := ""
-	for _, addr := range []string{o.listen, o.headlampListen} {
+	for _, addr := range servedAddresses(t, logs, 2) {
 		var got string
 		for range 100 {
 			conn, err := (&tls.Dialer{Config: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}}).DialContext(ctx, "tcp", addr) //nolint:gosec // only the presented certificate is read
@@ -294,16 +436,9 @@ func TestServeTakesTheAddressSetOnThePage(t *testing.T) {
 // and sends everything else to https. The manager that orders the certificate knows it listens.
 func TestServeListensOnPlainHTTPForACMEAndRedirects(t *testing.T) {
 	t.Parallel()
-	free := func() string {
-		l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = l.Close() }()
-		return l.Addr().String()
-	}
 	o, _ := serveOptionsIn(t, t.TempDir())
-	o.listen, o.httpListen = free(), free()
+	logs := captureLogs(o)
+	o.httpListen = "127.0.0.1:0"
 	o.s.PublicURL = "https://kubehenge.example.org"
 	if err := o.loadCertificate(time.Now()); err != nil {
 		t.Fatal(err)
@@ -315,10 +450,11 @@ func TestServeListensOnPlainHTTPForACMEAndRedirects(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- o.serve(ctx) }()
+	httpAddr := servedAddresses(t, logs, 2)[1]
 	hc := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Timeout: 5 * time.Second}
 	var res *http.Response
 	for range 100 {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+o.httpListen+"/clusters?x=1", http.NoBody)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+httpAddr+"/clusters?x=1", http.NoBody)
 		if err != nil {
 			t.Fatal(err)
 		}

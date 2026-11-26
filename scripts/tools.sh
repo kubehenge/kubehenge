@@ -189,3 +189,11 @@ release cosign sigstore/cosign "${COSIGN}" cosign-linux-amd64 "${COSIGN_SHA256}"
 SYFT=v1.57.2
 SYFT_SHA256=ad92bd3ec1b94a3df01d4d0aec199afa9c42b72e86da436ff5f837914d32706b
 release syft anchore/syft "${SYFT}" "syft_${SYFT#v}_linux_amd64.tar.gz" "${SYFT_SHA256}" syft
+
+# The end-to-end lanes behind TLS inspection and a proxy run it (test/e2e/ci/egress.sh). The GitHub
+# release has no assets and no checksum list, so Renovate moves the version and the SHA-256 is taken
+# from the download.
+# renovate: datasource=github-releases depName=mitmproxy/mitmproxy
+MITMPROXY=v12.3.1
+MITMPROXY_SHA256=f7b4237f5702f6cd21357fe6e4680a7e905f8f9b816b872230d018ea696c34d5
+tool mitmdump "https://downloads.mitmproxy.org/${MITMPROXY#v}/mitmproxy-${MITMPROXY#v}-linux-x86_64.tar.gz" "${MITMPROXY_SHA256}" mitmdump

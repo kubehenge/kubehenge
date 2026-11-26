@@ -654,7 +654,7 @@ func TestEtcdReportsTheServicesStateAndHealth(t *testing.T) {
 		{Id: "etcd", State: "Preparing", Health: &machine.ServiceHealth{Healthy: false}},
 	}}
 	node, _ := dialFake(t, api)
-	etcd, err := node.Etcd(t.Context())
+	etcd, err := node.Service(t.Context(), talosServiceEtcd)
 	if err != nil || etcd != (TalosService{State: "Preparing"}) {
 		t.Errorf("etcd %+v, %v", etcd, err)
 	}
@@ -662,7 +662,7 @@ func TestEtcdReportsTheServicesStateAndHealth(t *testing.T) {
 	api.mu.Lock()
 	api.services[1] = &machine.ServiceInfo{Id: "etcd", State: "Running", Health: &machine.ServiceHealth{Healthy: true}}
 	api.mu.Unlock()
-	if etcd, err := node.Etcd(t.Context()); err != nil || etcd != (TalosService{State: "Running", Healthy: true}) {
+	if etcd, err := node.Service(t.Context(), talosServiceEtcd); err != nil || etcd != (TalosService{State: "Running", Healthy: true}) {
 		t.Errorf("etcd %+v, %v", etcd, err)
 	}
 }
@@ -676,7 +676,7 @@ func TestEtcdCarriesTalossReasonForAFailure(t *testing.T) {
 	}}}}}
 	node, _ := dialFake(t, api)
 	want := TalosService{State: "Failed", Event: "Failed to run pre stage: failed to pull image \"registry.k8s.io/etcd\":"}
-	if etcd, err := node.Etcd(t.Context()); err != nil || etcd != want {
+	if etcd, err := node.Service(t.Context(), talosServiceEtcd); err != nil || etcd != want {
 		t.Errorf("etcd %+v, %v, want %+v", etcd, err, want)
 	}
 }
@@ -686,13 +686,13 @@ func TestEtcdOfANodeStillBootingIsNotReady(t *testing.T) {
 	t.Parallel()
 	api := &fakeTalosAPI{services: []*machine.ServiceInfo{{Id: "apid", State: "Running"}}}
 	node, _ := dialFake(t, api)
-	if _, err := node.Etcd(t.Context()); !errors.Is(err, errTalosNotReady) || !strings.Contains(err.Error(), "etcd is not among its services") {
+	if _, err := node.Service(t.Context(), talosServiceEtcd); !errors.Is(err, errTalosNotReady) || !strings.Contains(err.Error(), "etcd is not among its services") {
 		t.Errorf("no etcd yet: %v", err)
 	}
 
 	api = &fakeTalosAPI{fail: map[string]error{"ServiceList": status.Error(codes.Unavailable, "machined is starting")}}
 	node, _ = dialFake(t, api)
-	if _, err := node.Etcd(t.Context()); !errors.Is(err, errTalosNotReady) {
+	if _, err := node.Service(t.Context(), talosServiceEtcd); !errors.Is(err, errTalosNotReady) {
 		t.Errorf("a booting node: %v", err)
 	}
 }

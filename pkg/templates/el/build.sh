@@ -39,7 +39,7 @@ point_at_mirrors /etc/yum.repos.d "${mirrors}"
 
 # Talos has no node image to compose: Sidero's pinned imager writes its disk (talos.sh).
 if [ "${distribution}" = talos ]; then
-    from_repositories "${mirrors}" dnf -y install podman
+    from_repositories /etc/yum.repos.d "${mirrors}" dnf -y install podman
     exec sh el/talos.sh "${target}"
 fi
 
@@ -48,7 +48,7 @@ compose() {
     /usr/libexec/bootc-base-imagectl build-rootfs --manifest=kubehenge-node "${PWD}/rootfs"
 }
 
-from_repositories "${mirrors}" dnf -y install podman rpm-ostree bootc ostree skopeo
+from_repositories /etc/yum.repos.d "${mirrors}" dnf -y install podman rpm-ostree bootc ostree skopeo
 
 container=$(podman create "${tools}")
 mounted=$(podman mount "${container}")
@@ -62,12 +62,12 @@ podman rmi "${tools}"
 
 # Composed from the builder's own repositories and keys, which are the family's.
 cp el/manifest.yaml /usr/share/doc/bootc-base-imagectl/manifests/kubehenge-node.yaml
-from_repositories "${mirrors}" compose
+from_repositories /etc/yum.repos.d "${mirrors}" compose
 podman build --file el/base.Containerfile --tag localhost/kubehenge-base:build .
 rm -rf rootfs
 
 # node.sh installs the node's packages.
-from_repositories "${mirrors}" podman build --file el/Containerfile --build-arg "DISTRIBUTION=${distribution}" --build-arg "KUBERNETES=${kubernetes}" \
+from_repositories /etc/yum.repos.d "${mirrors}" podman build --file el/Containerfile --build-arg "DISTRIBUTION=${distribution}" --build-arg "KUBERNETES=${kubernetes}" \
     --tag localhost/kubehenge-node:build .
 
 podman run --rm --privileged --pid=host --volume /dev:/dev --volume /var/lib/containers:/var/lib/containers \

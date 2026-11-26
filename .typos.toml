@@ -90,6 +90,7 @@ extend-ignore-identifiers-re = [
   "^armor$",
   "^Serialize$",
   "^(Is|Err)NotAuthorized$",
+  "^(NotAuthorizedToSign|CANotAuthorizedForThisName|CANotAuthorizedForExtKeyUsage)$",
   "^Organization$",
   "^Initialization$",
   "^ClusterInitializationStatus$",

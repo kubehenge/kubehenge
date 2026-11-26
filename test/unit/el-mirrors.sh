@@ -211,7 +211,7 @@ has "a repository without a list keeps the service's" "${repos}/almalinux-appstr
     'mirrorlist=https://mirrors.almalinux.org/mirrorlist/$releasever/appstream-debug?arch=x86_64_v2'
 
 # shellcheck disable=SC2310 # the status is the answer looked for.
-from_repositories "${lists}" dnf_reads "${repos}" 2> "${root}/said" && status=0 || status=$?
+from_repositories "${repos}" "${lists}" dnf_reads "${repos}" 2> "${root}/said" && status=0 || status=$?
 expect "the step succeeds on its second attempt" 0 "${status}"
 has "the first attempt read the broken mirror" "${root}/read" "${site}/one/AppStream/x86_64/os/repodata/repomd.xml"
 has "the second read the next mirror" "${root}/read" "${site}/two/AppStream/x86_64/os/repodata/repomd.xml"
@@ -225,7 +225,7 @@ rm "${root}/read" "${root}/slept"
 fetch_mirrors "${lists}"
 read -r first < "${lists}/appstream"
 expect "fetching again keeps the lists as they turned" "${site}/two/AppStream/\$basearch/os/" "${first}"
-from_repositories "${lists}" dnf_reads "${repos}" 2> /dev/null
+from_repositories "${repos}" "${lists}" dnf_reads "${repos}" 2> /dev/null
 lacks "a later step leaves the broken mirror alone" "${root}/read" "${site}/one/"
 lacks "and does not pause" "${root}/slept" 10
 
@@ -240,7 +240,7 @@ has "the image's build reads the same list" "${root}/image/almalinux-appstream.r
 repomd two AppStream 'mirror sync in progress'
 rm "${root}/read"
 # shellcheck disable=SC2310 # the status is the answer looked for.
-from_repositories "${lists}" dnf_reads "${repos}" 2> /dev/null && status=0 || status=$?
+from_repositories "${repos}" "${lists}" dnf_reads "${repos}" 2> /dev/null && status=0 || status=$?
 expect "with every mirror broken the step fails" 1 "${status}"
 lines "after three attempts" "${root}/read" 3
 
@@ -418,6 +418,104 @@ stale_run
 rm "${root}/clock"
 holds "the mirrors not asked within the minute stay" "${root}/stale/appstream" "${site}/late/AppStream/\$basearch/os/
 ${site}/later/AppStream/\$basearch/os/"
+
+# After a failed attempt, a repository on Rocky Linux's metalink reads the publisher's own server.
+own=${root}/own
+mkdir "${own}" "${own}/lists"
+cat > "${own}/rocky.repo" << 'EOF'
+[baseos]
+name=Rocky Linux $releasever - BaseOS
+#baseurl=http://dl.rockylinux.org/$contentdir/$releasever/BaseOS/$basearch/os/
+metalink=https://mirrors.rockylinux.org/metalink?arch=$basearch&repo=BaseOS-$releasever$rltype
+mirrorlist=https://mirrors.rockylinux.org/mirrorlist?arch=$basearch&repo=BaseOS-$releasever$rltype
+enabled=1
+gpgcheck=1
+
+[baseos-debug]
+name=Rocky Linux $releasever - BaseOS - Source
+#baseurl=http://dl.rockylinux.org/$contentdir/$releasever/BaseOS/source/tree/
+metalink=https://mirrors.rockylinux.org/metalink?arch=source&repo=BaseOS-$releasever$rltype
+enabled=0
+
+[nolink]
+name=Rocky Linux $releasever - Plus
+metalink=https://mirrors.rockylinux.org/metalink?arch=$basearch&repo=plus-$releasever$rltype
+enabled=1
+EOF
+cp "${repos}/almalinux-baseos.repo" "${own}/"
+cp "${own}/rocky.repo" "${own}/rocky.orig"
+cp "${own}/almalinux-baseos.repo" "${own}/almalinux.orig"
+
+use_own_servers "${own}"
+has "the metalink's repository reads one https folder of the own server" "${own}/rocky.repo" \
+    'baseurl=https://dl.rockylinux.org/$contentdir/$releasever/BaseOS/$basearch/os/'
+lines "with the one active baseurl line of its section" "${own}/rocky.repo" 17
+sed -n '/^\[baseos\]/,/^\[baseos-debug\]/p' "${own}/rocky.repo" > "${own}/baseos"
+lacks "and no active metalink in it" "${own}/baseos" 'metalink='
+lacks "nor mirror list" "${own}/baseos" 'mirrorlist='
+http=$(grep -c '^baseurl=http:' "${own}/rocky.repo" || true)
+expect "and no active http folder" 0 "${http}"
+has "a disabled repository is switched too, and stays disabled" "${own}/rocky.repo" \
+    'baseurl=https://dl.rockylinux.org/$contentdir/$releasever/BaseOS/source/tree/'
+enabled=$(grep -c '^enabled=1' "${own}/rocky.repo")
+expect "a repository's own enabled line stays" 2 "${enabled}"
+has "a repository without a folder line stays on its metalink" "${own}/rocky.repo" \
+    'metalink=https://mirrors.rockylinux.org/metalink?arch=$basearch&repo=plus-$releasever$rltype'
+alma=$(cat "${own}/almalinux.orig")
+holds "AlmaLinux's mirror list is untouched" "${own}/almalinux-baseos.repo" "${alma}"
+once=$(cat "${own}/rocky.repo")
+use_own_servers "${own}"
+holds "the switch changes nothing the second time" "${own}/rocky.repo" "${once}"
+
+# from_repositories switches only once an attempt has failed, and leaves the mark the image's build reads.
+cp "${own}/rocky.orig" "${own}/rocky.repo"
+from_repositories "${own}" "${own}/lists" true
+has "a first attempt that succeeds leaves the metalink" "${own}/rocky.repo" \
+    'metalink=https://mirrors.rockylinux.org/metalink?arch=$basearch&repo=BaseOS-$releasever$rltype'
+marked=no
+[ ! -e "${own}/lists/.own-servers" ] || marked=yes
+expect "and no mark" no "${marked}"
+fails_once() {
+    [ -e "${own}/tried" ] && return 0
+    : > "${own}/tried"
+    return 1
+}
+from_repositories "${own}" "${own}/lists" fails_once 2> /dev/null
+lacks "a failed attempt moves the repository off the metalink" "${own}/rocky.repo" \
+    'metalink=https://mirrors.rockylinux.org/metalink?arch=$basearch&repo=BaseOS-'
+has "to the own server" "${own}/rocky.repo" 'baseurl=https://dl.rockylinux.org/$contentdir/$releasever/BaseOS/$basearch/os/'
+marked=no
+[ ! -e "${own}/lists/.own-servers" ] || marked=yes
+expect "and leaves the mark" yes "${marked}"
+
+# node.sh's own steps on its copies of the family's files, in node.sh's order, read the own server
+# on the mark. Rocky Linux's files come with a mirror list, which use_metalinks makes the metalink.
+node_repos=${root}/node-repos node_files=${root}/node-files
+mkdir "${node_repos}" "${node_files}"
+ln -s "${own}/lists" "${node_files}/mirrors"
+grep -E '^(use_metalinks|pin_release|point_at_mirrors) |own-servers' "${here}/../../pkg/templates/el/node.sh" > "${root}/node-steps" || true
+cat > "${node_repos}/rocky.repo" << 'EOF'
+[baseos]
+name=Rocky Linux $releasever - BaseOS
+#baseurl=http://dl.rockylinux.org/$contentdir/$releasever/BaseOS/$basearch/os/
+mirrorlist=https://mirrors.rockylinux.org/mirrorlist?arch=$basearch&repo=BaseOS-$releasever$rltype
+enabled=1
+EOF
+lines "node.sh has its four steps on the repositories" "${root}/node-steps" 4
+(
+    # shellcheck disable=SC2034 # node.sh's steps read them.
+    repos=${node_repos} files=${node_files} release=10.3
+    # shellcheck disable=SC1090,SC1091 # node.sh's own lines, read above.
+    . "${root}/node-steps"
+)
+has "the image's build reads the own server" "${node_repos}/rocky.repo" \
+    'baseurl=https://dl.rockylinux.org/$contentdir/10.3/BaseOS/$basearch/os/'
+lacks "not the metalink" "${node_repos}/rocky.repo" 'metalink='
+build=${here}/../../pkg/templates/el/build.sh
+unpassed=$(grep -c '^ *from_repositories "' "${build}" || true)
+expect "every step of build.sh passes the repositories to from_repositories" 0 "${unpassed}"
+passed=$(grep -c 'from_repositories /etc/yum.repos.d "${mirrors}" ' "${build}")
+expect "and build.sh has four such steps" 4 "${passed}"
 
 if [ "${failures}" -ne 0 ]; then
     echo "el-mirrors: ${failures} of $((passes + failures)) checks failed"

@@ -26,6 +26,7 @@ use_metalinks "${repos}"
 read -r release < "${files}/el/release"
 pin_release "${repos}" "${release}"
 point_at_mirrors "${repos}" "${files}/mirrors"
+[ ! -e "${files}/mirrors/.own-servers" ] || use_own_servers "${repos}"
 for key in "${files}"/keys/*.asc; do
     install -m 0644 "${key}" "/etc/pki/rpm-gpg/kubehenge-$(basename "${key}")"
 done

@@ -1821,6 +1821,45 @@ describe("setup", () => {
     expect(screen.getByRole("button", { name: "Apply again…" })).toBeInTheDocument();
   });
 
+  it("shows the faults of the hosts' chains beside the Site CA field", async () => {
+    window.history.replaceState(null, "", "/administration");
+    const saved = {
+      nodes: ["pve1"],
+      imageDatastore: "local",
+      vmDatastore: "local-lvm",
+      bridge: "vmbr0",
+      nodeAddresses: ["192.0.2.11/24"],
+      apiAddress: "192.0.2.10",
+      gateway: "192.0.2.1",
+      dnsServers: ["192.0.2.1"],
+      workloadDatastores: ["local-lvm"],
+      workloadBridges: ["vmbr0"],
+      bootstrapDatastore: "local",
+    };
+    const faults = [
+      'factory.talos.dev, ghcr.io: "CN=Inspect Two" is missing. Paste it with the root.',
+      'registry.k8s.io: "CN=Inspect Old" expired on 2026-11-25. Renew it on the device.',
+    ];
+    fakeServer({
+      ...administrator,
+      ...administration,
+      ...oneNode,
+      "GET /api/setup": { body: { appliance: true, ready: true, allowed: true, settings: saved } },
+      "POST /api/setup/check": { body: { errors: faults.map((f) => `Site CA: ${f}`), warnings: [] } },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Edit settings" }));
+    const wizard = within(screen.getByRole("region", { name: "Management cluster" }));
+    await user.type(wizard.getByLabelText("State passphrase"), "correct horse battery staple");
+    const field = wizard.getByLabelText("Site CA");
+    await waitFor(() => {
+      expect(field.closest(".field")?.querySelector(".field-error")?.textContent).toBe(faults.join("\n"));
+    });
+    expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(wizard.queryByRole("alert", { name: "Errors" })).not.toBeInTheDocument();
+  });
+
   it("warns that one host's loss can take every backup until a bucket target is set", async () => {
     window.history.replaceState(null, "", "/administration");
     const saved = {

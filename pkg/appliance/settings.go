@@ -65,6 +65,11 @@ type Settings struct {
 	// the release mirror, the backup targets, the identity providers and the appliance's own outgoing
 	// connections. Empty, none.
 	SiteCA string `json:"siteCA,omitempty"`
+	// SiteBundle is derived from SiteCA on every save and apply: SiteCA with the copies of its roots,
+	// renamed as the hosts' chains name them, that Go's verifier needs. Empty when SiteCA alone
+	// does. It is kept while SiteCA stays the same. The nodes and downloads trust it in place of
+	// SiteCA.
+	SiteBundle string `json:"siteBundle,omitempty"`
 	// TimeZone is the IANA time zone of schedules that name none. Empty, UTC.
 	TimeZone string `json:"timeZone,omitempty"`
 	// WorkloadVMIDRange is the VM IDs a new cluster's VMs and the templates take, both ends included.

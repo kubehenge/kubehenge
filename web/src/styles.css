@@ -1897,6 +1897,9 @@ fieldset.choices .check {
   margin-block-start: 3px;
   font-size: 12.5px;
   color: var(--error);
+
+  /* A field with several faults gives one per line. */
+  white-space: pre-line;
 }
 
 /* Under the control of the field it is about, in the column the controls start in. */

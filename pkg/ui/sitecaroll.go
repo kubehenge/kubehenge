@@ -80,7 +80,8 @@ func (s *Server) timeZoneCheck(w http.ResponseWriter, r *http.Request, u user) {
 }
 
 // siteCARollPreview answers what saving a site CA would do to the clusters, so that the interface
-// says so before it saves. It validates the authority as saving does.
+// says so before it saves. It validates the authority as saving does, and compares what the
+// clusters would get, the saved bundle for the saved Site CA, with what they run.
 func (s *Server) siteCARollPreview(w http.ResponseWriter, r *http.Request, u user) {
 	if s.Appliance == nil {
 		writeError(w, http.StatusNotFound, "this interface does not manage its management cluster")
@@ -111,5 +112,5 @@ func (s *Server) siteCARollPreview(w http.ResponseWriter, r *http.Request, u use
 		}
 		settling = provisioner.SiteRollSettling(r.Context(), kube, list.Items, now)
 	}
-	writeJSON(w, http.StatusOK, siteCARollOf(check.SiteCA, s.siteZone(), s.ClassNamespace, list.Items, settling, now))
+	writeJSON(w, http.StatusOK, siteCARollOf(s.Appliance.SiteTrustFor(check.SiteCA), s.siteZone(), s.ClassNamespace, list.Items, settling, now))
 }

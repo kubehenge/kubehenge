@@ -23,8 +23,8 @@ const nodeModuleAddress = moduleAddress + "module.talos_node_"
 const firstEtcdPoll = 20 * time.Second
 
 // etcdStartsPath keeps the watch's starts by node: the count across the applies of one run, and
-// each node's boot and whether its etcd ran across runs, so that no run reboots a node twice in
-// one boot or bootstraps beside etcd data.
+// each node's boots and whether its etcd ran across runs, so that no run reboots or bootstraps a
+// node twice in one boot or bootstraps beside etcd data.
 func (a *Appliance) etcdStartsPath() string { return filepath.Join(a.workdir(), "etcd-starts.json") }
 
 // freshEtcdStarts gives each node a new count of starts for a run, which the user starts once the
@@ -36,7 +36,7 @@ func (a *Appliance) freshEtcdStarts() error {
 		return nil //nolint:nilerr // the watch starts from no count then too
 	}
 	for address, s := range *saved {
-		(*saved)[address] = provisioner.EtcdStart{Boot: s.Boot, Ran: s.Ran}
+		(*saved)[address] = provisioner.EtcdStart{Boot: s.Boot, Bootstrapped: s.Bootstrapped, Ran: s.Ran}
 	}
 	return writeJSONFile(a.etcdStartsPath(), *saved)
 }

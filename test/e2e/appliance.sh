@@ -369,6 +369,19 @@ expect 403 "a setup without the session's CSRF token" post "${work}/admin.jar" '
 setup_status
 body_is '.allowed and (.ready | not)' "the administrator may not set up"
 
+# A setup behind TLS inspection without the Site CA fails on the certificate a node rejects, and the
+# same setup with the authority added finishes on its own.
+if [ -n "${KUBEHENGE_E2E_SITE_CA_LATER:-}" ]; then
+    step "a setup behind TLS inspection without the Site CA fails, naming the certificate a node rejected"
+    expect 202 "starting the setup without the Site CA" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup" "${setup}"
+    until_true 3600 "the setup without the Site CA to end" job_ended
+    body_is '.job.kind == "apply" and .job.state == "failed"' "the setup without the Site CA did not end failed"
+    body_has "the failed setup does not name a certificate a node rejected" -r \
+        '((.job.error // "") + " " + ((.job.log // []) | join(" "))) | test("certificate"; "i") and test("node"; "i")'
+    setup=$(jq -c --arg p "${passphrase}" --rawfile ca "${KUBEHENGE_E2E_SITE_CA_LATER}" \
+        '{passphrase: $p, settings: (. + {siteCA: $ca})}' "${work}/settings.json")
+fi
+
 step "set the management cluster up from the interface"
 expect 202 "starting the setup" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup" "${setup}"
 expect 409 "a second setup beside it" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup" "${setup}"

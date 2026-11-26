@@ -46,13 +46,13 @@ func (s *Settings) ValidateSiteDefaults() error {
 // EffectiveReleaseMirror is the release mirror as the nodes and the interface use it: an https
 // mirror without an authority of its own is verified with the site CA.
 func (s *Settings) EffectiveReleaseMirror() provisioner.ReleaseMirror {
-	return s.ReleaseMirror.Mirror().WithSiteCA(s.SiteCA)
+	return s.ReleaseMirror.Mirror().WithSiteCA(s.siteTrust())
 }
 
 // siteCA is the saved site CA, empty when none is saved.
 func (a *Appliance) siteCA() string {
 	if saved := a.SavedSettings(); saved != nil {
-		return saved.SiteCA
+		return saved.siteTrust()
 	}
 	return ""
 }
@@ -61,11 +61,11 @@ func (a *Appliance) siteCA() string {
 // site CA, then the proxy's. Either may be empty, and the proxy's counts only while there is a proxy.
 func (s *Settings) OutboundCA() string {
 	var parts []string
-	if s.SiteCA != "" {
-		parts = append(parts, s.SiteCA)
+	if trust := s.siteTrust(); trust != "" {
+		parts = append(parts, trust)
 	}
 	if s.Proxy.Enabled() && s.Proxy.CABundle != "" {
-		parts = append(parts, s.Proxy.CABundle)
+		parts = append(parts, s.Proxy.trust())
 	}
 	return strings.Join(parts, "\n")
 }

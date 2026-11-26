@@ -162,6 +162,38 @@ expect_each() {
 appliance_lane='"appliance,management-cluster"'
 workload_tests='kubeadm kubeadm-addons-a kubeadm-addons-b kubeadm-addons-c rke2-etcd rke2-machines rke2-addons-a rke2-addons-b rke2-addons-c rke2-addons-d k3s-etcd k3s-machines k3s-addons-a k3s-addons-b talos talos-addons-a talos-addons-b talos-addons-c'
 
+# The lane behind TLS inspection comes for the code that handles a proxy or a Site CA, beside what the
+# path brings otherwise, and for no other path, a full run included.
+tls_lane='"appliance+tls-inspection"'
+expect_lanes test/e2e/ci/egress.sh "[${tls_lane}]"
+expect_lanes pkg/appliance/proxy.go "[${appliance_lane},${tls_lane}]"
+expect_lanes pkg/ui/sitecaroll.go "[${appliance_lane},\"k3s-machines\",${tls_lane}]"
+expect_lanes pkg/provisioner/siteca_test.go '[]'
+expect_lanes pkg/appliance/proxy_test.go '[]'
+expect_lanes test/unit/egress.sh '[]'
+for path in pkg/provisioner/egress.go pkg/provisioner/siteca.go pkg/provisioner/sitecasettle.go pkg/templates/proxy.go \
+    pkg/templates/sitecache.go pkg/cli/proxyclient.go; do
+    expect_lanes "${path}" "${want_all%]},${tls_lane}]"
+done
+expect_each management-cluster/proxy.tf yes appliance kubeadm talos management-cluster-upgrade
+# The module file that patches the Site CA into the Helm provider brings what proxy.tf brings.
+lanes_for management-cluster/proxy.tf
+compact
+expect_lanes management-cluster/cluster-api.tf "${list}"
+expect_each management-cluster/cluster-api.tf yes appliance+tls-inspection
+expect_lanes test/e2e/tlsca/main.go "[${tls_lane}]"
+expect_lanes test/e2e/ntp/main.go "[${tls_lane}]"
+expect_lanes test/e2e/tlsca/main_test.go '[]'
+expect_lanes test/e2e/ntp/main_test.go '[]'
+for path in pkg/appliance/sitebundle.go pkg/appliance/sitefailure.go pkg/appliance/sitedefaults.go; do
+    expect_lanes "${path}" "[${appliance_lane},${tls_lane}]"
+done
+expect_lanes pkg/appliance/sitebundle_test.go '[]'
+for path in charts/kubehenge/templates/_nodesite.tpl charts/kubehenge/files/node-site.sh.tpl; do
+    expect_lanes "${path}" "${want_all%]},${tls_lane}]"
+done
+expect_lanes test/e2e/ci/run.sh "${want_all}"
+
 # The web interface runs in the appliance alone, and its tests and tooling in no lane.
 expect_lanes web/src/app.tsx "[${appliance_lane}]"
 expect_lanes web/package-lock.json "[${appliance_lane}]"

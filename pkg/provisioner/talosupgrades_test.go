@@ -59,6 +59,8 @@ type fakeTalos struct {
 	pullFailed map[string]bool
 	// service is the etcd a node reports in place of the states above.
 	service map[string]TalosService
+	// kubelet is the kubelet a node reports, a running one where a node has none.
+	kubelet map[string]TalosService
 }
 
 // fakePullFailure is the last event of a fake etcd that reads Failed.
@@ -82,7 +84,7 @@ func (f *fakeTalos) restoreCalls() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.DeleteFunc(slices.Clone(f.calls), func(c string) bool {
-		return strings.HasSuffix(c, " boot") || strings.HasSuffix(c, " etcd")
+		return strings.HasSuffix(c, " boot") || strings.HasSuffix(c, " etcd") || strings.HasSuffix(c, " kubelet")
 	})
 }
 
@@ -161,12 +163,18 @@ func (n *fakeTalosNode) WipeEtcd(context.Context) error {
 	return nil
 }
 
-func (n *fakeTalosNode) Etcd(context.Context) (TalosService, error) {
-	if err := n.f.call(n.address, "etcd"); err != nil {
+func (n *fakeTalosNode) Service(_ context.Context, name string) (TalosService, error) {
+	if err := n.f.call(n.address, name); err != nil {
 		return TalosService{}, err
 	}
 	n.f.mu.Lock()
 	defer n.f.mu.Unlock()
+	if name == talosServiceKubelet {
+		if s, ok := n.f.kubelet[n.address]; ok {
+			return s, nil
+		}
+		return TalosService{State: talosEtcdRunning, Healthy: true}, nil
+	}
 	if s, ok := n.f.service[n.address]; ok {
 		return s, nil
 	}

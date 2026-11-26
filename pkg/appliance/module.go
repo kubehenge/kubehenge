@@ -138,7 +138,7 @@ func (a *Appliance) run(ctx context.Context, j *Job, s *Settings, passphrase str
 	err = a.applyPlanned(ctx, j, env, ticket)
 	if err != nil {
 		a.explainWaits(ctx, j, env)
-		return nil, err
+		return nil, a.explainCertificates(ctx, j, env, s, err)
 	}
 	admin, err := a.output(ctx, env, "kubeconfig")
 	if err != nil {
@@ -263,8 +263,8 @@ func (a *Appliance) writeConfig(s *Settings, ids VMIDRange) error {
 		"extraClusterNamespaces": append([]string{}, s.ExtraClusterNamespaces...),
 	}
 	// Left out while unset, so that the module's defaults apply.
-	if s.SiteCA != "" {
-		values["siteCA"] = s.SiteCA
+	if trust := s.siteTrust(); trust != "" {
+		values["siteCA"] = trust
 	}
 	if s.TimeZone != "" {
 		values["timeZone"] = s.TimeZone
@@ -382,7 +382,7 @@ func moduleProxy(s *Settings, proxmoxURL string) map[string]any {
 	}
 	out["url"] = s.Proxy.FullURL()
 	out["no_proxy"] = strings.Join(s.NoProxyList(proxmoxURL), ",")
-	out[moduleCABundle] = s.Proxy.CABundle
+	out[moduleCABundle] = s.Proxy.trust()
 	return out
 }
 

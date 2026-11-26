@@ -65,7 +65,10 @@ type firstNode struct {
 	address string
 }
 
-func (n *firstNode) Etcd(ctx context.Context) (provisioner.TalosService, error) {
+func (n *firstNode) Service(ctx context.Context, name string) (provisioner.TalosService, error) {
+	if name == "kubelet" {
+		return provisioner.TalosService{State: "Running", Healthy: true}, nil
+	}
 	// As the Talos API, an ended context reaches no node.
 	if err := ctx.Err(); err != nil {
 		return provisioner.TalosService{}, err
@@ -390,6 +393,25 @@ func TestFirstEtcdStartsAgainInTheRunAfterAGiveUp(t *testing.T) {
 	waitFor(t, a)
 	if got := readStarts(t, a)["10.0.0.12"]; got != (provisioner.EtcdStart{Boot: "3", Repairs: 1}) {
 		t.Errorf("recorded %+v", got)
+	}
+}
+
+// A new run keeps each node's boots and whether its etcd ran, and counts its own starts.
+func TestFreshEtcdStartsKeepsTheBoots(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	if err := os.MkdirAll(a.workdir(), privateDir); err != nil {
+		t.Fatal(err)
+	}
+	saved := provisioner.EtcdStart{Boot: "1", Bootstrapped: "2", Repairs: 3, GaveUp: true, Ran: true}
+	if err := writeJSONFile(a.etcdStartsPath(), map[string]provisioner.EtcdStart{"10.0.0.11": saved}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.freshEtcdStarts(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := readStarts(t, a)["10.0.0.11"], (provisioner.EtcdStart{Boot: "1", Bootstrapped: "2", Ran: true}); got != want {
+		t.Errorf("kept %+v, want %+v", got, want)
 	}
 }
 

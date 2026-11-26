@@ -163,7 +163,7 @@ locals {
     { kind = "IPAMProvider", name = "in-cluster", namespace = "in-cluster-ipam-system", spec = { version = local.versions.ipam_in_cluster, patches = [local.patient_probes] } },
     { kind = "AddonProvider", name = "helm", namespace = "helm-addon-system", spec = {
       version = local.versions.helm_addon
-      patches = concat([local.patient_probes], local.addon_has_ca ? [local.proxy_addon_ca_patch] : [])
+      patches = concat([local.patient_probes], local.addon_has_ca ? local.proxy_addon_ca_patches : [])
       manager = local.patient_leases
     } },
   ]
@@ -236,15 +236,20 @@ locals {
 
   # Only the Add-on Provider for Helm downloads on its own, the charts clusters ask for. It takes the
   # proxy from the Secret beside it. The operator's container list has no volumes, so the authority
-  # arrives through a strategic merge patch of the Deployment, which merges the container by name.
+  # arrives through patches of the Deployment. The operator applies a map patch as a JSON merge patch,
+  # which replaces lists whole: one holding the containers or volumes would drop the image and the
+  # webhook's certificate, and the API server refuses the Deployment. So the annotation goes in a map
+  # patch and the volume and its mount in an operation list.
   proxy_addon_ca_dir = "/etc/kubehenge/proxy"
-  proxy_addon_ca_patch = { target = { kind = "Deployment" }, patch = yamlencode({ spec = { template = {
-    metadata = { annotations = { (local.trusted_ca_annotation) = sha256(local.addon_ca) } }
-    spec = {
-      volumes    = [{ name = "proxy-ca", secret = { secretName = local.proxy_addon_secret_name, items = [{ key = "ca.crt", path = "ca.crt" }] } }]
-      containers = [{ name = "manager", volumeMounts = [{ name = "proxy-ca", mountPath = local.proxy_addon_ca_dir, readOnly = true }] }]
-    }
-  } } }) }
+  proxy_addon_ca_patches = [
+    { target = { kind = "Deployment" }, patch = yamlencode({ spec = { template = { metadata = { annotations = {
+      (local.trusted_ca_annotation) = sha256(local.addon_ca)
+    } } } } }) },
+    { target = { kind = "Deployment" }, patch = yamlencode([
+      { op = "add", path = "/spec/template/spec/volumes/-", value = { name = "proxy-ca", secret = { secretName = local.proxy_addon_secret_name, items = [{ key = "ca.crt", path = "ca.crt" }] } } },
+      { op = "add", path = "/spec/template/spec/containers/0/volumeMounts/-", value = { name = "proxy-ca", mountPath = local.proxy_addon_ca_dir, readOnly = true } },
+    ]) },
+  ]
 
   # Every Cluster API provider names its controller container "manager".
   provider_containers = { for p in local.provider_specs : "${p.kind}/${p.name}" => merge({

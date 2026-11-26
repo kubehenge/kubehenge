@@ -165,7 +165,7 @@ func newFakeInterface(t *testing.T) *fakeInterface {
 		}
 		answer(w, http.StatusOK, `{"entries":[]}`)
 	}))
-	const saved = `"appliance":true,"allowed":true,"settings":{"bridge":"vmbr0","timeZone":"Europe/Zurich"}`
+	const saved = `"appliance":true,"allowed":true,"settings":{"bridge":"vmbr0","timeZone":"Europe/Zurich","siteBundle":"stale"}`
 	mux.HandleFunc("GET /api/setup", f.admin(func(w http.ResponseWriter, _ *http.Request) {
 		f.setups++
 		if f.setups == 1 {
@@ -175,6 +175,10 @@ func newFakeInterface(t *testing.T) *fakeInterface {
 		answer(w, http.StatusOK, `{`+saved+`,"job":{"kind":"etcd-restore","state":"succeeded","log":["The snapshot matches its checksum","etcd runs"],"lines":3}}`)
 	}))
 	mux.HandleFunc("POST /api/setup", f.admin(func(w http.ResponseWriter, _ *http.Request) {
+		if strings.Contains(field(savedBody(f), "siteCA"), "UNCHAINED") {
+			answer(w, http.StatusUnprocessableEntity, `{"error":"Site CA: host.example: no chain from the certificate CN=host.example to the Site CA, as CN=Inspect Intermediate is unknown. Add the intermediates the host does not present."}`)
+			return
+		}
 		if field(savedBody(f), "timeZone") == "Mars/Base" {
 			answer(w, http.StatusUnprocessableEntity, `{"error":"Time zone: Mars/Base is not an IANA time zone"}`)
 			return

@@ -52,8 +52,11 @@ k3s_users='cluster-mesh node-image-refresh autoscaler'
 interface_users='appliance k3s-machines'
 # The tests that install the chart and look for its ClusterClasses (lib.sh, appliance.sh).
 chart_users='management-cluster appliance'
-# Tests the nightly run adds to --all.
-nightly='management-cluster-upgrade rancher control-plane-ha two-nodes appliance-upgrade'
+# Tests the nightly run adds to --all. tls-inspection is the appliance's test behind TLS inspection,
+# for the code that handles a proxy or a Site CA: one lane more than --all's, which waits for a runner
+# behind the others. The nightly run adds its workload half (nightly.sh).
+nightly='management-cluster-upgrade rancher control-plane-ha two-nodes appliance-upgrade tls-inspection'
+tls_lane='appliance+tls-inspection'
 # Tests that share a lane, one after the other on its runner, which keeps a pull request at 20 lanes,
 # as many as a run's jobs at once. Each pair ends within the longest lane, and the first test leaves
 # no guest behind (docs/testing.md).
@@ -62,6 +65,10 @@ pairs='appliance,management-cluster k3s-etcd,cluster-mesh k3s-addons-b,autoscale
 # because a command substitution starts a process for each test.
 lane_of() {
     lane=$1
+    if [ "$1" = tls-inspection ]; then
+        lane=${tls_lane}
+        return
+    fi
     for lane_pair in ${pairs}; do
         case ",${lane_pair}," in
             *",$1,"*)
@@ -90,7 +97,7 @@ need=
         .github/workflows/links.yml | .github/actionlint.yaml | .github/dependency-review-config.yml) ;;
         .typos.toml | lychee.toml) ;;
         # The web interface's unit and flow tests, its lint settings and the script that takes the docs' screenshots.
-        web/*.test.ts | web/*.test.tsx | web/screenshots.ts | web/stylelint.config.mjs | web/osv-scanner.toml) ;;
+        web/*.test.ts | web/*.test.tsx | web/screenshots.ts | web/stylelint.config.mjs) ;;
         web/flows/* | web/playwright.config.ts) ;;
         # The Go tests that run against a Proxmox VE host are the tests' own, as `make e2e-*` runs them.
         pkg/appliance/e2e_test.go) need="${need} appliance" ;;
@@ -100,6 +107,18 @@ need=
             need="${need} rancher"
             ;;
         *_test.go) ;;
+        # What reads the proxy and the Site CA, which the lane behind TLS inspection runs alone.
+        test/e2e/ci/egress.sh | test/e2e/tlsca/* | test/e2e/ntp/*) need="${need} tls-inspection" ;;
+        pkg/appliance/proxy.go | pkg/appliance/sitebundle.go | pkg/appliance/sitefailure.go | pkg/appliance/sitedefaults.go)
+            need="${need} appliance tls-inspection"
+            ;;
+        pkg/ui/sitecaroll.go) need="${need} ${interface_users} tls-inspection" ;;
+        pkg/provisioner/egress.go | pkg/provisioner/siteca*.go | pkg/templates/proxy.go | pkg/templates/sitecache.go | pkg/cli/proxyclient.go | \
+            charts/kubehenge/templates/_nodesite.tpl | charts/kubehenge/files/node-site.sh.tpl)
+            need="${need} ${all} tls-inspection"
+            ;;
+        # cluster-api.tf patches the Site CA into the Add-on Provider for Helm.
+        management-cluster/proxy.tf | management-cluster/charts/proxy/* | management-cluster/cluster-api.tf) need="${need} ${all} management-cluster-upgrade tls-inspection" ;;
         # The interface, the appliance's commands and what installs the appliance. The interface is
         # also what `kubehenge cluster` reaches, in the one workload test that runs it.
         pkg/ui/* | pkg/cli/serve.go | pkg/cli/cluster.go) need="${need} ${interface_users}" ;;

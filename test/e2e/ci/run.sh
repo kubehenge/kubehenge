@@ -105,6 +105,38 @@ fi
 : "${KUBEHENGE_PROXMOX_URL:?}" "${KUBEHENGE_PROXMOX_TOKEN:?}" "${KUBEHENGE_PROXMOX_CA:?}" "${KUBEHENGE_E2E_NODE:?}" "${KUBEHENGE_E2E_ADDRESS:?}"
 : "${KUBEHENGE_E2E_GATEWAY:?}" "${KUBEHENGE_E2E_DNS:?}" "${KUBEHENGE_E2E_REGISTRY:?}"
 
+# A lane behind TLS inspection or a proxy (test/e2e/ci/egress.sh) has its rules and its proxy for the
+# test's run alone, and its guests' connections are judged once the test has passed.
+egress=${KUBEHENGE_E2E_EGRESS:-}
+if [ -n "${egress}" ]; then
+    trap 'sh "${repo}/test/e2e/ci/egress.sh" stop "${work}"' EXIT
+    sh "${repo}/test/e2e/ci/egress.sh" start "${work}" "${egress}"
+    # shellcheck source=/dev/null
+    . "${work}/egress/env"
+    # The management cluster's module takes the authority and the proxy, with its credentials in the
+    # address, as variables. Neither is on a command line.
+    if [ -n "${KUBEHENGE_E2E_SITE_CA:-}" ]; then
+        TF_VAR_site_ca=$(cat "${KUBEHENGE_E2E_SITE_CA}")
+        export TF_VAR_site_ca
+    fi
+    if [ -n "${KUBEHENGE_E2E_PROXY_URL:-}" ]; then
+        proxy_ca=
+        [ -z "${KUBEHENGE_E2E_PROXY_CA:-}" ] || proxy_ca=$(cat "${KUBEHENGE_E2E_PROXY_CA}")
+        proxy_url=${KUBEHENGE_E2E_PROXY_URL}
+        if [ -n "${KUBEHENGE_E2E_PROXY_USER:-}" ]; then
+            proxy_url=http://${KUBEHENGE_E2E_PROXY_USER}:$(cat "${KUBEHENGE_E2E_PROXY_PASSWORD_FILE:?}")@${KUBEHENGE_E2E_PROXY_URL#http://}
+        fi
+        TF_VAR_proxy=$(jq -cn --arg u "${proxy_url}" --arg n "${KUBEHENGE_E2E_NO_PROXY:?}" --arg ca "${proxy_ca}" \
+            '{url: $u, no_proxy: $n, ca_bundle: $ca}')
+        export TF_VAR_proxy
+    fi
+    # Where only the proxy leads out, the nodes keep time by the runner, as a site's own time server.
+    if [ -n "${KUBEHENGE_E2E_TIME_SERVER:-}" ]; then
+        TF_VAR_time_servers=$(jq -cn --arg t "${KUBEHENGE_E2E_TIME_SERVER}" '[$t]')
+        export TF_VAR_time_servers
+    fi
+fi
+
 # shellcheck source=templates.sh
 . "${repo}/test/e2e/ci/templates.sh"
 kubernetes_versions "${repo}"
@@ -341,10 +373,36 @@ case "${test}" in
             headlampActions: true, apiAuditLog: true
         }' > "${work}/appliance-settings.json"
         pve=kubehenge-e2e-pve
+        # The authority and the proxy are the settings a user gives the setup. A lane that gives the
+        # authority only after a first failed setup passes it to the test on the side.
+        later_ca=
+        if [ -n "${KUBEHENGE_E2E_SITE_CA:-}" ]; then
+            if [ "${egress}" = tls-inspection-recovery ]; then
+                later_ca=/root/kubehenge/site-ca.pem
+            else
+                jq --rawfile ca "${KUBEHENGE_E2E_SITE_CA}" '. + {siteCA: $ca}' "${work}/appliance-settings.json" > "${work}/appliance-settings.new"
+                mv "${work}/appliance-settings.new" "${work}/appliance-settings.json"
+            fi
+        fi
+        if [ -n "${KUBEHENGE_E2E_PROXY_URL:-}" ]; then
+            jq --arg url "${KUBEHENGE_E2E_PROXY_URL}" --arg user "${KUBEHENGE_E2E_PROXY_USER:-}" \
+                --arg noProxy "${KUBEHENGE_E2E_NO_PROXY}" \
+                --rawfile ca "${KUBEHENGE_E2E_PROXY_CA:-/dev/null}" --rawfile pw "${KUBEHENGE_E2E_PROXY_PASSWORD_FILE:-/dev/null}" '
+                . + {proxy: ({url: $url, noProxy: ($noProxy | split(","))}
+                    + (if $user != "" then {user: $user, password: $pw} else {} end)
+                    + (if $ca != "" then {caBundle: $ca} else {} end))}' \
+                "${work}/appliance-settings.json" > "${work}/appliance-settings.new"
+            mv "${work}/appliance-settings.new" "${work}/appliance-settings.json"
+        fi
+        if [ -n "${KUBEHENGE_E2E_TIME_SERVER:-}" ]; then
+            jq --arg t "${KUBEHENGE_E2E_TIME_SERVER}" '. + {timeServers: [$t]}' "${work}/appliance-settings.json" > "${work}/appliance-settings.new"
+            mv "${work}/appliance-settings.new" "${work}/appliance-settings.json"
+        fi
         docker exec "${pve}" sh -c 'rm -rf /root/kubehenge && mkdir -p /root/kubehenge/test /root/kubehenge/scripts'
         docker cp "${repo}/test/e2e" "${pve}:/root/kubehenge/test/e2e"
         docker cp "${repo}/scripts/fetch.sh" "${pve}:/root/kubehenge/scripts/fetch.sh"
         docker cp "${repo}/appliance" "${pve}:/root/kubehenge/appliance"
+        [ -z "${later_ca}" ] || docker cp "${KUBEHENGE_E2E_SITE_CA}" "${pve}:${later_ca}"
         # The test reads the backup volume's store over a port-forward, as the appliance reaches it.
         runner_kubectl=$(command -v kubectl)
         docker cp "${runner_kubectl}" "${pve}:/usr/local/bin/kubectl"
@@ -353,15 +411,21 @@ case "${test}" in
         done
         docker cp "${work}/appliance-settings.json" "${pve}:/root/kubehenge/settings.json"
         docker cp "${work}/release.key" "${pve}:/root/kubehenge/release.key"
-        exec docker exec -e KUBEHENGE_E2E_APPLIANCE_ID=900 -e KUBEHENGE_E2E_APPLIANCE_ADDRESS=172.20.99.40/24 \
+        appliance_status=0
+        docker exec -e KUBEHENGE_E2E_APPLIANCE_ID=900 -e KUBEHENGE_E2E_APPLIANCE_ADDRESS=172.20.99.40/24 \
             -e KUBEHENGE_E2E_GATEWAY="${KUBEHENGE_E2E_GATEWAY}" -e KUBEHENGE_E2E_DNS="${KUBEHENGE_E2E_DNS}" \
             -e KUBEHENGE_E2E_STORAGE=local -e KUBEHENGE_E2E_S3_ADDRESS=172.20.99.1 \
             -e KUBEHENGE_E2E_RECREATE="${KUBEHENGE_E2E_RECREATE:-}" \
+            -e KUBEHENGE_E2E_SITE_CA_LATER="${later_ca}" \
             -e KUBEHENGE_E2E_RELEASE_KEY=/root/kubehenge/release.key \
             -e KUBEHENGE_E2E_KEEP=/root/kubehenge/management \
             "${pve}" sh /root/kubehenge/test/e2e/appliance.sh \
             /root/kubehenge/kubehenge_0.0.1_linux_amd64.tar.gz /root/kubehenge/kubehenge_0.0.2_linux_amd64.tar.gz \
-            /root/kubehenge/kubehenge_0.0.3_linux_amd64.tar.gz /root/kubehenge/settings.json
+            /root/kubehenge/kubehenge_0.0.3_linux_amd64.tar.gz /root/kubehenge/settings.json || appliance_status=$?
+        [ "${appliance_status}" = 0 ] || exit "${appliance_status}"
+        # The appliance and the management nodes it made.
+        [ -z "${egress}" ] || sh "${repo}/test/e2e/ci/egress.sh" check "${work}" "${egress}" '172\.20\.99\.40' '172\.20\.99\.1[1-3]'
+        exit 0
         ;;
     appliance-upgrade)
         # What a user does: the newest published release installed with the installer published
@@ -636,3 +700,14 @@ case "${test}" in
     # Checked before anything was built.
     *) ;;
 esac
+
+# What the lane's guests did behind the proxy: the management cluster's nodes, the workload cluster's
+# and the template build's.
+if [ -n "${egress}" ]; then
+    set -- '172\.20\.99\.1[1-3]' '172\.20\.99\.2[1-9]'
+    case "${test}" in
+        talos*) ;;
+        *) set -- "$@" '172\.20\.99\.50' ;;
+    esac
+    sh "${repo}/test/e2e/ci/egress.sh" check "${work}" "${egress}" "$@"
+fi

@@ -7,6 +7,7 @@ package appliance
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,6 +74,14 @@ type Appliance struct {
 	// OpenStore opens the backups' target, provisioner.OpenTarget when nil.
 	Talos     TalosAccess
 	OpenStore provisioner.OpenStore
+	// SiteChains reads the chains hosts present, for checking the Site CA against them. Nil checks
+	// nothing, and the bundle is the Site CA as pasted.
+	SiteChains SiteChains
+	// TalosLogs reads a management node's logs, to name the certificate a failed run's node
+	// rejected. Nil reads none.
+	TalosLogs provisioner.TalosLogDialer
+	// sitePublic stands in for the system's authorities when judging a presented chain.
+	sitePublic *x509.CertPool
 	// OpenVolume reaches the store on the management cluster's backup volume, through the
 	// interface's kubeconfig when nil.
 	OpenVolume func(ctx context.Context) (provisioner.ObjectStore, error)
@@ -169,7 +178,14 @@ func (a *Appliance) Apply(settings *Settings, passphrase string, ticket *pve.Tic
 	if err := ValidPassphrase(passphrase); err != nil {
 		return err
 	}
+	checking, cancel := context.WithTimeout(context.Background(), siteCheckTimeout)
+	unchecked, kept, err := a.resolveSiteKeeping(checking, &s)
+	cancel()
+	if err != nil {
+		return err
+	}
 	return a.start(ticket, "apply", func(ctx context.Context, j *Job) error {
+		noteSite(j, unchecked, kept)
 		kubeconfig, err := a.run(ctx, j, &s, passphrase, ticket)
 		if err != nil {
 			return err

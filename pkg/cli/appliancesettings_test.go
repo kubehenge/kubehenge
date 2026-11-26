@@ -58,6 +58,22 @@ func TestApplianceSettingsRefuseWhatTheInterfaceRefuses(t *testing.T) {
 	}
 }
 
+// TestApplianceSettingsSetNamesTheFaultsOfTheSiteCAChain sends the Site CA to the interface, whose
+// save runs the chain check, and prints what it names. A bundle derived from an earlier Site CA is
+// not sent along.
+func TestApplianceSettingsSetNamesTheFaultsOfTheSiteCAChain(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	pem := "-----BEGIN CERTIFICATE-----\nUNCHAINED\n-----END CERTIFICATE-----"
+	_, err := f.run(f.args("admin@pve", "settings", "set", "--site-ca-file", writeTemp(t, pem), "--passphrase-file", writeTemp(t, "right"))...)
+	if err == nil || !strings.Contains(err.Error(), "Site CA: host.example: no chain from the certificate") || !strings.Contains(err.Error(), "CN=Inspect Intermediate") {
+		t.Errorf("a Site CA whose chain the interface refuses: %v", err)
+	}
+	if _, sent := savedBody(f)["siteBundle"]; sent {
+		t.Errorf("the settings carried the earlier bundle: %v", savedBody(f)["siteBundle"])
+	}
+}
+
 func TestApplianceSettingsSetAndClearTheVMIDRange(t *testing.T) {
 	t.Parallel()
 	f := newFakeInterface(t)

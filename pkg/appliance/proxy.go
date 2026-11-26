@@ -60,6 +60,9 @@ type Proxy struct {
 	// CABundle is the PEM certificate authority that signs the certificates of a proxy that
 	// re-signs TLS.
 	CABundle string `json:"caBundle,omitempty"`
+	// Bundle is derived from CABundle as Settings.SiteBundle is from the Site CA, and connections
+	// through the proxy trust it in its place. Empty when CABundle alone does.
+	Bundle string `json:"bundle,omitempty"`
 }
 
 // Enabled tells whether there is a proxy to go through.
@@ -252,12 +255,21 @@ func (p *Proxy) Transport(noProxy []string) (*http.Transport, error) {
 		if err != nil {
 			pool = x509.NewCertPool()
 		}
-		if !pool.AppendCertsFromPEM([]byte(p.CABundle)) {
+		if !pool.AppendCertsFromPEM([]byte(p.trust())) {
 			return nil, errors.New("the proxy certificate authority holds no PEM certificate")
 		}
 		t.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}
 	}
 	return t, nil
+}
+
+// trust is the authority connections through the proxy trust: the derived bundle when there is one,
+// else the CA as pasted.
+func (p *Proxy) trust() string {
+	if p.Bundle != "" {
+		return p.Bundle
+	}
+	return p.CABundle
 }
 
 // SavedTransport sends requests the way the settings saved in an appliance directory say, read
@@ -311,7 +323,7 @@ func (t *SavedTransport) current() (http.RoundTripper, error) {
 		if err = saved.ReleaseMirror.Mirror().Trust(transport); err != nil {
 			return nil, fmt.Errorf("the saved release mirror: %w", err)
 		}
-		if err = trustSiteCA(transport, saved.SiteCA); err != nil {
+		if err = trustSiteCA(transport, saved.siteTrust()); err != nil {
 			return nil, fmt.Errorf("the saved site CA: %w", err)
 		}
 	}
