@@ -302,9 +302,6 @@ function EtcdSnapshotsChoice({
 // which Sys.Modify on its pool grants.
 const tokenRefusal = "Needs Sys.Modify on the workload pool";
 
-const existingCertManagerInfo =
-  "Kubehenge installs no cert-manager and makes its issuers and certificates in yours. Fixed once the cluster exists.";
-
 // CertificatesAddOn sets the certificates up, with the DNS provider's credential typed in here for
 // the new cluster.
 function CertificatesAddOn({
@@ -312,28 +309,13 @@ function CertificatesAddOn({
   set,
   canTrust,
   showAll = false,
-  mayUseExisting,
 }: Pick<StepProps, "form" | "set"> & {
   canTrust: boolean | undefined;
   showAll: boolean | undefined;
-  mayUseExisting: boolean;
 }): JSX.Element {
   return (
     <fieldset className="group">
       <legend>Certificates</legend>
-      {mayUseExisting && (
-        <>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={form.existingCertManager}
-              onChange={(e) => set("existingCertManager", e.target.checked)}
-            />{" "}
-            Use existing cert-manager
-          </label>
-          <Info about="Existing cert-manager">{existingCertManagerInfo}</Info>
-        </>
-      )}
       <CertificatesFields
         value={form.certificates}
         onChange={(f) => set("certificates", f)}
@@ -688,13 +670,7 @@ function AddonCards({
       )}
       {variable(cls, "certificates") && (
         <AddonCard mib={cost("certManager")} on={form.certificates.enabled}>
-          <CertificatesAddOn
-            form={form}
-            set={set}
-            canTrust={canTrust}
-            showAll={showAll}
-            mayUseExisting={variable(cls, "useExisting") !== undefined}
-          />
+          <CertificatesAddOn form={form} set={set} canTrust={canTrust} showAll={showAll} />
         </AddonCard>
       )}
       {variable(cls, "gitops") && (

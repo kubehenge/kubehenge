@@ -756,7 +756,7 @@ const (
 // proxyState decides what the proxy does. A conflict is recorded in addons.conflicts, cert-manager's
 // in addons.certManagerConflict.
 func (r *Reconciler) proxyState(ctx context.Context, cluster *clusterv1.Cluster, p *unstructured.Unstructured, addons *Addons) (proxyStates, error) {
-	conflict, err := r.conflictOf(ctx, cluster, p, addons)
+	conflict, err := r.conflictOf(ctx, cluster, p)
 	switch {
 	case err != nil:
 		return proxyReady, err

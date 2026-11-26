@@ -91,7 +91,6 @@ const raising = new Set<keyof Form>([
   "rancherRegister",
   "backups",
   "certificates",
-  "existingCertManager",
 ]);
 
 const haControlPlanes = 3;

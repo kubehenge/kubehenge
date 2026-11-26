@@ -27,7 +27,6 @@ export type Features = Pick<
   | "etcdSnapshots"
   | "etcdFields"
   | "namespaceLabels"
-  | "existingCertManager"
 >;
 
 /** featuresOf reads the features of a cluster's variables v, with base for what v leaves unset. */
@@ -51,6 +50,5 @@ export function featuresOf(v: Cluster["variables"], base: Features): Features {
     etcdSnapshots: etcd?.enabled ?? base.etcdSnapshots,
     etcdFields: etcd === undefined ? base.etcdFields : etcdFieldsOf(etcd),
     namespaceLabels: labelsLines(labelsOf(v["namespaceLabels"])),
-    existingCertManager: flag(record(v["useExisting"])["certManager"]) === true,
   };
 }

@@ -343,8 +343,6 @@ export interface Form {
   certificates: CertificatesForm;
   /** The labels of every namespace Kubehenge makes, one key=value per line. */
   namespaceLabels: string;
-  /** Whether the cluster's cert-manager is one it already holds. It is fixed once the cluster exists. */
-  existingCertManager: boolean;
   // The DNS provider's credential, stored for the cluster once it is created. Never in the request.
   dns01Token: string;
   eabKey: string;
@@ -621,8 +619,7 @@ function addonTotal(
     istio: form.istio,
     clusterMesh: meshChosen(form),
     loadBalancer: form.loadBalancer !== "",
-    certManager:
-      (form.monitoring || form.rancherInstall || form.certificates.enabled) && !usesExistingCertManager(form, c),
+    certManager: form.monitoring || form.rancherInstall || form.certificates.enabled,
     rancher: form.rancherInstall,
     rancherAgent: !form.rancherInstall && form.rancherRegister,
     backups: backupsChosen(form, c),
@@ -1077,7 +1074,6 @@ export const newForm = (): Form => ({
   noSharedKey: false,
   certificates: newCertificates(),
   namespaceLabels: "",
-  existingCertManager: false,
   dns01Token: "",
   eabKey: "",
   gitops: newGitOps(),
@@ -1157,10 +1153,6 @@ export function withClass(f: Form, c: ClusterClass | undefined, kept: (k: keyof 
     oidc: kept("oidc") ? f.oidc : oidcProviders(variable(c, "oidc")?.default),
   };
 }
-
-// usesExistingCertManager is whether the form ticks the existing cert-manager and the class offers it.
-const usesExistingCertManager = (form: Form, c: ClusterClass | undefined): boolean =>
-  form.existingCertManager && variable(c, "useExisting") !== undefined;
 
 // hardeningVariables are the variables of the cluster's pod security, CIS profile and etcd limit.
 function hardeningVariables(form: Form, defined: Set<string>): Record<string, unknown> {
@@ -1276,9 +1268,6 @@ function installVariables(form: Form, defined: Set<string>): Record<string, unkn
   const labels = defined.has("namespaceLabels") ? parseLabels(form.namespaceLabels).labels : {};
   if (Object.keys(labels).length > 0) {
     variables["namespaceLabels"] = labels;
-  }
-  if (form.existingCertManager && defined.has("useExisting")) {
-    variables["useExisting"] = { certManager: true };
   }
   return variables;
 }
@@ -1830,9 +1819,6 @@ function reachRows(form: Form, defined: Set<string>, c: ClusterClass): [string, 
 // installRows sum up where the add-ons go and what they find.
 function installRows(form: Form, defined: Set<string>): [string, string][] {
   const rows: [string, string][] = [];
-  if (defined.has("useExisting")) {
-    rows.push(["Existing cert-manager", form.existingCertManager ? "Yes" : "No"]);
-  }
   if (defined.has("namespaceLabels")) {
     rows.push(["Namespace labels", labelsText(parseLabels(form.namespaceLabels).labels)]);
   }

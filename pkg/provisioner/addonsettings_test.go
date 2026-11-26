@@ -36,20 +36,6 @@ func newProxyObject() *unstructured.Unstructured {
 	return p
 }
 
-func (w *rollout) exists(suffix string) bool {
-	w.t.Helper()
-	proxies, err := helmChartProxies(w.cluster, &w.r.Charts, "rke2", "local-lvm", CNI{}, w.addons)
-	if err != nil {
-		w.t.Fatal(err)
-	}
-	for _, p := range proxies {
-		if p.GetName() == w.cluster.Name+"-"+suffix {
-			return true
-		}
-	}
-	return false
-}
-
 func TestCertManagerInstallRefusedOverAnExistingInstall(t *testing.T) {
 	t.Parallel()
 	w := newRollout(t, outsideWindow)
@@ -85,10 +71,10 @@ func TestCertManagerInstallRefusedOverAnExistingInstall(t *testing.T) {
 // certManagerDeployment is a cert-manager controller's Deployment in namespace, as its chart and
 // its static manifest label it.
 func certManagerDeployment(namespace string, annotations map[string]string) *appsv1.Deployment {
-	return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+	return &appsv1.Deployment{
 		Namespace: namespace, Name: "cert-manager", Annotations: annotations,
 		Labels: map[string]string{"app.kubernetes.io/name": "cert-manager", "app.kubernetes.io/component": "controller"},
-	}}
+	}
 }
 
 // A cert-manager installed without its definitions still runs a controller that would fight

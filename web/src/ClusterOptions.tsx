@@ -411,11 +411,6 @@ export function optionRows<A extends string = never>(
       action: "certificates",
       name: "certificates",
     },
-  );
-  if (flag(record(c.variables["useExisting"])["certManager"]) === true) {
-    rows.push({ label: "Existing cert-manager", value: "Yes", group: "Add-ons" });
-  }
-  rows.push(
     {
       label: "Pod security",
       value: podSecurityText(podSecurity),

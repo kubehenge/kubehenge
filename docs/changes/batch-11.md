@@ -1,11 +1,12 @@
 ### Changed
 
+- The option to use a cluster's own cert-manager is gone. Kubehenge always installs its own, and a cluster that set `useExisting` has it taken off.
 - `kubehenge appliance health` shows each stage, the time left and a verdict. `--quiet` keeps it silent and `--json` prints one object.
 
 ### Fixed
 
 - Persistent volumes work on shared storage such as LVM on iSCSI. A Pending add-on claim shows as `<add-on> has no volume: <reason>`.
-- Monitoring, logs and Rancher install only once cert-manager is deployed, so their add-ons no longer fail on a missing Certificate kind.
+- Monitoring, logs and Rancher install once cert-manager is deployed. `AddonsWaiting` and the Health page name what they wait for, and a cert-manager of the cluster's own is named as a conflict.
 - Release pins on the VM templates page work on an appliance: the interface's account may read and update the pins, and the other pages it could not read now answer too.
 - Setup refuses a Site CA that lacks the root a host's chain ends at, also when the appliance itself trusts that root. It names the root with its fingerprint and offers to add it.
 - Setup names a certificate that is not for servers at once, and no longer offers to add a public root that never fixes it.

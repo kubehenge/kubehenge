@@ -1952,11 +1952,11 @@ Helm refuses to install over objects that another release or tool owns. An add-o
 
 <!-- addon-owned:end -->
 
-### Using a cert-manager you run
+### A cert-manager the cluster runs already
 
-To use a cert-manager the cluster runs already, choose **Use existing cert-manager** under Certificates when you create the cluster, or set `useExisting.certManager`. Kubehenge then installs no cert-manager and still makes its issuers and certificates in yours, for the certificates add-on, monitoring, logs and Rancher. Monitoring, logs and Rancher install once the cluster serves its custom resource definitions. It is fixed once the cluster exists, since switching would delete the definitions with every certificate. The existing cert-manager must run with its custom resource definitions installed.
+Kubehenge always installs its own cert-manager for the certificates add-on, monitoring, logs and Rancher. A cert-manager the cluster runs already, found by its definitions or its controller's Deployment, holds them back. `AddonConflict` names what was found and the add-ons that wait. Remove it, and Kubehenge installs its own on its next look.
 
-Kyverno and the Prometheus Operator have no such choice. Remove the cluster's own install, or switch the add-on off.
+For Kyverno and the Prometheus Operator, remove the cluster's own install, or switch the add-on off.
 
 ## Who may do what
 
@@ -2202,7 +2202,6 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `podSecurity` | no | `admission`, the level Pod Security Admission enforces in every namespace that labels none of its own: `privileged`, `baseline` (default) or `restricted`. Changing it replaces the control-plane machines. `kyverno`, the level Kyverno enforces in every namespace: `off` (default), `baseline` or `restricted` ([above](#add-ons)). |
 | `istio` | no | `enabled` (default false): Istio in ambient mode ([above](#add-ons)). |
 | `namespaceLabels` | no | Up to 20 labels, as key and value, put on the namespaces the add-ons install into ([above](#add-ons-and-your-policies)). Keys and values follow Kubernetes' label syntax. The webhook refuses `kubernetes.io/metadata.name`. |
-| `useExisting` | no | `certManager` (default false) uses the cert-manager the cluster runs and installs none ([above](#installs-that-collide)). The webhook refuses a change once the cluster exists. |
 | `clusterMesh` | no | For a cluster that runs Cilium ([above](#add-ons)). `enabled` (default false). `peers`, the clusters of this namespace to link with, by name. |
 | `certificates` | no | `enabled` (default false). `issuer`, `acme-dns01` (default), `acme-http01`, `ca` or `external`. `domain`, needed with `acme-dns01` and `ca`. `issuerName`, `issuerKind`, `issuerGroup`, with `external` ([above](#an-issuer-you-run)). `acme` holds `email`, `server`, `staging`, `caBundle`, `externalAccountBinding.keyID` ([above](#external-account-binding)). `dns01` holds `provider`, its settings, `existingSecret`, `sharedCredential`, `nameservers` ([above](#certificates)). |
 | `rancher` | no | `install` (default false), which needs `hostname` and at least 4 vCPUs on every node. `register` (default true), to register with the Rancher Kubehenge installed. Setting `install` back to false uninstalls it ([above](#change-settings)). |

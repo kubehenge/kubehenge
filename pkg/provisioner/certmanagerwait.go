@@ -80,10 +80,11 @@ func (r *Reconciler) recordCertManagerWait(ctx context.Context, cluster *cluster
 
 // andJoined lists names as a sentence does: "a, b and c".
 func andJoined(names []string) string {
-	if len(names) < 2 {
+	last := len(names) - 1
+	if last <= 0 {
 		return strings.Join(names, "")
 	}
-	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+	return strings.Join(names[:last], ", ") + " and " + names[last]
 }
 
 // certManagerHeldBy says what cert-manager itself waits for: its release, or the cluster's Gateway

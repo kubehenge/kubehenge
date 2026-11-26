@@ -121,7 +121,7 @@ func AddonCRDs() map[string][]string {
 // conflictOf reports why the add-on of proxy p is not installed: the cluster holds custom resource
 // definitions of the same software that its release does not own. An add-on that is installed
 // already owns its own.
-func (r *Reconciler) conflictOf(ctx context.Context, cluster *clusterv1.Cluster, p *unstructured.Unstructured, addons *Addons) (string, error) {
+func (r *Reconciler) conflictOf(ctx context.Context, cluster *clusterv1.Cluster, p *unstructured.Unstructured) (string, error) {
 	suffix := strings.TrimPrefix(p.GetName(), cluster.Name+"-")
 	owner, ok := addonCRDs[suffix]
 	if !ok {
@@ -143,7 +143,7 @@ func (r *Reconciler) conflictOf(ctx context.Context, cluster *clusterv1.Cluster,
 	for _, name := range owner.crds {
 		crd := &metav1.PartialObjectMetadata{}
 		crd.SetGroupVersionKind(schema.GroupVersionKind{Group: "apiextensions.k8s.io", Version: "v1", Kind: "CustomResourceDefinition"})
-		switch err := workload.client.Get(ctx, client.ObjectKey{Name: name}, crd); {
+		switch err = workload.client.Get(ctx, client.ObjectKey{Name: name}, crd); {
 		case apierrors.IsNotFound(err):
 			continue
 		case unreachable(err):
@@ -183,7 +183,8 @@ func foreignCertManager(ctx context.Context, workload client.Client) (string, er
 		return "", fmt.Errorf("listing the cluster's cert-manager Deployments: %w", err)
 	}
 	owner := addonCRDs[certManagerAddon]
-	for _, d := range deployments.Items {
+	for i := range deployments.Items {
+		d := &deployments.Items[i]
 		if d.Annotations[helmReleaseNameAnnotation] != owner.release || d.Annotations[helmReleaseNamespaceAnnotation] != owner.namespace {
 			return d.Namespace + "/" + d.Name, nil
 		}

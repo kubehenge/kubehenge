@@ -1438,7 +1438,7 @@ Any other change applies at once: a new proxy, a change of the cluster's variabl
 
 #### Software already in the cluster
 
-Before it first installs cert-manager, Kyverno or monitoring, the controller asks the workload cluster for the custom resource definitions of that software. It leaves the add-on out when one exists that its release does not own, and records the condition `AddonConflict`. `useExisting.certManager` leaves cert-manager's chart out, and the issuers and certificates are made in the existing install. The controller puts `namespaceLabels` on the namespaces of the proxies before it applies them. It creates a missing namespace with them.
+Before it first installs cert-manager, Kyverno or monitoring, the controller asks the workload cluster for the custom resource definitions of that software. It leaves the add-on out when one exists that its release does not own, and records the condition `AddonConflict`. For cert-manager, a controller Deployment that no Kubehenge release owns counts too, and the message names the add-ons it holds back. Rancher, monitoring, Loki and Alloy are applied only once cert-manager's release is deployed. Until then the condition `AddonsWaiting` names them and what cert-manager waits for. A Cluster that still sets the retired `useExisting` variable has it taken off, since Cluster API refuses every change to a Cluster with a variable its class does not define. The controller puts `namespaceLabels` on the namespaces of the proxies before it applies them. It creates a missing namespace with them.
 
 ## Networking
 

@@ -162,10 +162,10 @@ func TestEachCertManagerUserWaits(t *testing.T) {
 
 // helmRelease is a deployed revision of a Helm release in kube-system, as Helm stores it.
 func helmRelease(name string) *corev1.Secret {
-	return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+	return &corev1.Secret{
 		Namespace: metav1.NamespaceSystem, Name: "sh.helm.release.v1." + name + ".v1",
 		Labels: map[string]string{"owner": "helm", "name": name, "status": "deployed", "version": "1"},
-	}}
+	}
 }
 
 // The add-ons that wait for cert-manager say so on the cluster, with what cert-manager waits for,
@@ -180,9 +180,9 @@ func TestAddonsWaitingSayWhatCertManagerWaitsFor(t *testing.T) {
 		reason      string
 		says        string
 	}{
-		"installing":         {annotated: true, reason: AddonsWaitingForCertManager, says: "monitoring, loki, alloy and alloy-node wait for cert-manager to be deployed"},
-		"gateway, new":       {initialised: time.Minute, reason: AddonsWaitingForCertManager, says: "wait for cert-manager, which waits for the cluster's Gateway API definitions"},
-		"gateway, no chart":  {initialised: time.Hour, reason: AddonsWaitingForCertManager, says: "Gateway API definitions from rke2-traefik-crd"},
+		"installing":          {annotated: true, reason: AddonsWaitingForCertManager, says: "monitoring, loki, alloy and alloy-node wait for cert-manager to be deployed"},
+		"gateway, new":        {initialised: time.Minute, reason: AddonsWaitingForCertManager, says: "wait for cert-manager, which waits for the cluster's Gateway API definitions"},
+		"gateway, no chart":   {initialised: time.Hour, reason: AddonsWaitingForCertManager, says: "Gateway API definitions from rke2-traefik-crd"},
 		"gateway, unrecorded": {initialised: time.Hour, workload: []client.Object{helmRelease("rke2-traefik-crd")}, reason: AddonsWaitingGatewayAPIMissing, says: "rke2-traefik-crd is deployed, yet none were recorded in 10 minutes"},
 	} {
 		c := withAddons(storageCluster(), map[string]string{"monitoring": formMonitoring, "logs": formLogs})
@@ -192,7 +192,7 @@ func TestAddonsWaitingSayWhatCertManagerWaitsFor(t *testing.T) {
 		if tc.initialised > 0 {
 			c.Status.Conditions = []metav1.Condition{{
 				Type: clusterv1.ClusterControlPlaneInitializedCondition, Status: metav1.ConditionTrue,
-				LastTransitionTime: metav1.NewTime(now.Add(-tc.initialised)), Reason: "Initialized",
+				LastTransitionTime: metav1.NewTime(now.Add(-tc.initialised)), Reason: "Initialised",
 			}}
 		}
 		r, kube := newReconciler(t, &fakeCloud{}, c)
