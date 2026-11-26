@@ -460,7 +460,8 @@ func (m *EtcdMaintainer) visit(ctx context.Context, c *clusterv1.Cluster, status
 	return done
 }
 
-// afterDefrag reads the members again, and clears the NOSPACE alarm once every database is under the
+// afterDefrag reads the members again, stamping the status with that read's time so a lower etcd limit
+// can trust it, and clears the NOSPACE alarm once every database is under the
 // quota: etcd keeps refusing writes until the alarm is cleared, whatever space was freed.
 func (m *EtcdMaintainer) afterDefrag(ctx context.Context, c *clusterv1.Cluster, status *EtcdStatus, done *EtcdDefrag) {
 	if len(done.Members) == 0 {
@@ -472,7 +473,7 @@ func (m *EtcdMaintainer) afterDefrag(ctx context.Context, c *clusterv1.Cluster, 
 	if err != nil {
 		return
 	}
-	status.Members = members
+	status.Members, status.At = members, m.now().UTC()
 	alarmed := slices.ContainsFunc(members, func(x EtcdMember) bool { return x.Alarmed() })
 	full := slices.ContainsFunc(members, func(x EtcdMember) bool { return x.DBSize >= status.QuotaBytes })
 	if !alarmed || full {

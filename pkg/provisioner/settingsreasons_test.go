@@ -43,6 +43,8 @@ func TestAutoscalerInClusterNeedsTheManagementAddress(t *testing.T) {
 		"moved into the cluster with it":             {autoscalerPlaced(PlacementManagement), inCluster, testManagementAPI, ""},
 		"already in the cluster, another change":     {inCluster, grown, "", ""},
 		"moved out of the cluster":                   {inCluster, autoscalerPlaced(PlacementManagement), "", ""},
+		"switched on in the cluster without it":      {notScaled, inCluster, "", refused},
+		"switched on in the cluster with it":         {notScaled, inCluster, testManagementAPI, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -164,5 +166,30 @@ func TestClusterValidatorRefusesALowerEtcdLimitWithoutSizes(t *testing.T) {
 	_, err := (&ClusterValidator{Hooks: hooks}).ValidateUpdate(context.Background(), old, lower)
 	if err == nil || !strings.Contains(err.Error(), "the etcd limit cannot be lowered") {
 		t.Errorf("lowered with sizes unknown: %v", err)
+	}
+}
+
+// slowDefrag defragments a member in ten minutes of the rig's clock.
+type slowDefrag struct {
+	*fakeMaintenance
+
+	r *maintenanceRig
+}
+
+func (s slowDefrag) Defragment(ctx context.Context, c *clusterv1.Cluster, member string) error {
+	s.r.now = s.r.now.Add(10 * time.Minute)
+	return s.fakeMaintenance.Defragment(ctx, c, member)
+}
+
+// The read after a defragmentation is what the status records, so its time is when that read ended.
+func TestEtcdStatusIsStampedAfterADefragmentationsRead(t *testing.T) {
+	t.Parallel()
+	r := newMaintenanceRig(t, nil, fragmented("cp-0", true), fragmented("cp-1", false), fragmented("cp-2", false))
+	r.m.Etcd = slowDefrag{r.etcd, r}
+	askForDefrag(t, r)
+	c, _ := r.reconcile(t)
+	status, ok := LastEtcdStatus(c)
+	if !ok || !status.At.Equal(r.now) {
+		t.Errorf("status at %v, the re-read ended at %v", status.At, r.now)
 	}
 }

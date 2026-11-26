@@ -18,7 +18,7 @@
 - A cluster can no longer be given the management cluster's, its API's or the appliance's address, and a machine whose VM lacks its address after boot says so.
 - The refusal of a management node's address names the node. Existing installs need the management cluster's module applied again.
 - Each of the appliance's addresses is refused on the bridge and VLAN of its own network card. Existing appliances learn theirs at the next `install.sh --upgrade` or once an administrator signs in.
-- Without `managementEndpoint`, a new cluster or a move of its autoscaler onto the control planes is refused and not offered. A cluster already there keeps its other changes.
+- Without `managementEndpoint`, a new cluster, a move of its autoscaler onto the control planes or autoscaling switched on there is refused. A cluster already there keeps its other changes.
 - Refusing a change of address families, bridge or VLAN says why: the API address and the pods' ranges were made for that network.
 - An etcd limit can be lowered while every member's database stays under 60% of the new one, as read from every member in the last 18 minutes. Before, it could only rise.
 

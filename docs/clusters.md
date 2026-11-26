@@ -836,7 +836,7 @@ A cluster runs the cluster autoscaler release of its Kubernetes minor version, s
 
 By default each cluster's autoscaler runs in the management cluster, in the `kubehenge-autoscaler` namespace. It reaches its cluster with a token of its own there. The cluster holds no credential of the management cluster. Each autoscaler asks for 64 MiB of memory, with a limit of 512 MiB.
 
-Setting **Runs** to **Cluster's control planes** (under **Options**, **Edit** beside Autoscaler) moves it into the cluster. The option appears only when Kubehenge was installed with `managementEndpoint`. That spares the management cluster the memory. The management cluster's API must then be reachable from the cluster's nodes.
+Setting **Runs** to **Cluster's control planes** (under **Options**, **Edit** beside Autoscaler) moves it into the cluster. That spares the management cluster the memory. The option appears when Kubehenge was installed with `managementEndpoint`, or for a cluster already placed there. The management cluster's API must then be reachable from the cluster's nodes.
 
 Without the management cluster's address, set by its module, the autoscaler stays out with an `AutoscalerNotPlaced` event.
 

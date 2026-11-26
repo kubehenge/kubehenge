@@ -520,7 +520,7 @@ export function AutoscalerDialog({ cluster: c, onClose }: { cluster: Cluster; on
             }
           >
             <option value="management">Management cluster (recommended)</option>
-            {(inCluster || value.placement === "workload") && (
+            {(inCluster || current.placement === "workload") && (
               <option value="workload">Cluster&apos;s control planes</option>
             )}
           </select>

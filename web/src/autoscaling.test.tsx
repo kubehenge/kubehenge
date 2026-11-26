@@ -248,6 +248,8 @@ describe("the autoscaler's options", () => {
     await waitFor(() => expect(calls.map((c) => c.key)).toContain("GET /api/classes"));
     expect(within(dialog).getByLabelText("Runs")).toHaveValue("workload");
     expect(within(dialog).getByRole("option", { name: "Cluster's control planes" })).toBeInTheDocument();
+    await user.selectOptions(within(dialog).getByLabelText("Runs"), "management");
+    expect(within(dialog).getByRole("option", { name: "Cluster's control planes" })).toBeInTheDocument();
   });
 
   it("tunes the autoscaler and moves it into the cluster", async () => {
