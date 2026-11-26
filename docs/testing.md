@@ -308,7 +308,7 @@ CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e
 - One distribution's ClusterClass picks its own tests and those that install the chart.
 - Every test a rule names must be in the list of `nightly.sh`.
 - The nightly run's five extra tests join a pull request only for their own scripts and the code only they exercise (`scope.sh` names it). Rancher's also joins for a change to the chart's `addons.rancher` values.
-- The lane behind TLS inspection (`appliance+tls-inspection,k3s-addons-a+tls-inspection`) joins for the code that reads the proxy and the Site CA and for `egress.sh`, beside the lanes the path brings. That makes it a 21st lane after a change that brings the others, and it waits for a runner.
+- The lane behind TLS inspection (`appliance+tls-inspection`) joins for the code that reads the proxy and the Site CA and for `egress.sh`, beside the lanes the path brings. That makes it a 21st lane after a change that brings the others, and it waits for a runner. The nightly run pairs it with `k3s-addons-a+tls-inspection`, as it pairs `appliance+proxy-inspecting` with `k3s-addons-a+proxy-inspecting`.
 
 ### The nightly run
 

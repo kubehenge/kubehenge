@@ -52,10 +52,11 @@ k3s_users='cluster-mesh node-image-refresh autoscaler'
 interface_users='appliance k3s-machines'
 # The tests that install the chart and look for its ClusterClasses (lib.sh, appliance.sh).
 chart_users='management-cluster appliance'
-# Tests the nightly run adds to --all. tls-inspection is a lane of two with options, for the code that
-# handles a proxy or a Site CA: one lane more than --all's, which waits for a runner behind the others.
+# Tests the nightly run adds to --all. tls-inspection is the appliance's test behind TLS inspection,
+# for the code that handles a proxy or a Site CA: one lane more than --all's, which waits for a runner
+# behind the others. The nightly run adds its workload half (nightly.sh).
 nightly='management-cluster-upgrade rancher control-plane-ha two-nodes appliance-upgrade tls-inspection'
-tls_lane='appliance+tls-inspection,k3s-addons-a+tls-inspection'
+tls_lane='appliance+tls-inspection'
 # Tests that share a lane, one after the other on its runner, which keeps a pull request at 20 lanes,
 # as many as a run's jobs at once. Each pair ends within the longest lane, and the first test leaves
 # no guest behind (docs/testing.md).

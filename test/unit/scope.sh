@@ -164,7 +164,7 @@ workload_tests='kubeadm kubeadm-addons-a kubeadm-addons-b kubeadm-addons-c rke2-
 
 # The lane behind TLS inspection comes for the code that handles a proxy or a Site CA, beside what the
 # path brings otherwise, and for no other path, a full run included.
-tls_lane='"appliance+tls-inspection,k3s-addons-a+tls-inspection"'
+tls_lane='"appliance+tls-inspection"'
 expect_lanes test/e2e/ci/egress.sh "[${tls_lane}]"
 expect_lanes pkg/appliance/proxy.go "[${appliance_lane},${tls_lane}]"
 expect_lanes pkg/ui/sitecaroll.go "[${appliance_lane},\"k3s-machines\",${tls_lane}]"
