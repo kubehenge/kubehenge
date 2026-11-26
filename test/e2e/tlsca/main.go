@@ -7,7 +7,9 @@
 //
 // It writes root.pem, the root alone, which a lane gives as its Site CA, and mitmproxy-ca.pem: the
 // intermediate's key, the intermediate and the root. mitmproxy signs every certificate with that
-// key and sends the intermediate with it.
+// key and sends the intermediate with it. store-root.pem is a copy of the root, same key, under the
+// name in the bytes the intermediate gives it, so that Go links the intermediate to it: the root a
+// company installs in a host's own trust store.
 package main
 
 import (
@@ -44,7 +46,7 @@ const (
 
 // authority is the root and the intermediate it signed, with the intermediate's key.
 type authority struct {
-	root, intermediate *x509.Certificate
+	root, intermediate, storeRoot *x509.Certificate
 	key                *rsa.PrivateKey
 }
 
@@ -89,7 +91,13 @@ func newAuthority(now time.Time) (*authority, error) {
 	if err != nil {
 		return nil, fmt.Errorf("making the intermediate: %w", err)
 	}
-	return &authority{root: root, intermediate: intermediate, key: key}, nil
+	stored := caTemplate(now, "Kubehenge e2e inspection root")
+	stored.RawSubject = issuer.RawSubject
+	storeRoot, err := sign(stored, nil, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		return nil, fmt.Errorf("making the root's copy for a trust store: %w", err)
+	}
+	return &authority{root: root, intermediate: intermediate, storeRoot: storeRoot, key: key}, nil
 }
 
 func caTemplate(now time.Time, name string) *x509.Certificate {
@@ -163,11 +171,12 @@ func (a *authority) write(dir string) error {
 		}
 	}
 	root := pem.EncodeToMemory(&pem.Block{Type: pemCert, Bytes: a.root.Raw})
+	storeRoot := pem.EncodeToMemory(&pem.Block{Type: pemCert, Bytes: a.storeRoot.Raw})
 	//nolint:gosec // the directory is the one the caller names.
 	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return fmt.Errorf("making %s: %w", dir, err)
 	}
-	for name, content := range map[string][]byte{"mitmproxy-ca.pem": store.Bytes(), "root.pem": root} {
+	for name, content := range map[string][]byte{"mitmproxy-ca.pem": store.Bytes(), "root.pem": root, "store-root.pem": storeRoot} {
 		//nolint:gosec // a fixed name in the directory the caller names.
 		if err := os.WriteFile(filepath.Join(dir, name), content, fileMode); err != nil {
 			return fmt.Errorf("writing %s: %w", name, err)

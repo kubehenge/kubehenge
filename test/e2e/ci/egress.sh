@@ -246,7 +246,10 @@ start() {
         exit 1
     fi
     case ${kind} in
-        tls-inspection*) cp "${dir}/conf/root.pem" "${dir}/ca.pem" ;;
+        tls-inspection*)
+            cp "${dir}/conf/root.pem" "${dir}/ca.pem"
+            cp "${dir}/conf/store-root.pem" "${dir}/store-ca.pem"
+            ;;
         *)
             cp "${dir}/conf/mitmproxy-ca-cert.pem" "${dir}/ca.pem"
             time_server
@@ -263,6 +266,7 @@ start() {
         case ${kind} in
             tls-inspection*)
                 echo "export KUBEHENGE_E2E_SITE_CA='${dir}/ca.pem'"
+                echo "export KUBEHENGE_E2E_STORE_CA='${dir}/store-ca.pem'"
                 echo "export KUBEHENGE_PROXY_CA_FILE='${dir}/ca.pem'" > "${dir}/template.env"
                 ;;
             *)

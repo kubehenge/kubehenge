@@ -21,8 +21,6 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
-
-	nss "golang.org/x/crypto/x509roots/fallback/bundle"
 )
 
 // siteCALabel and proxyCALabel open the messages about the pasted authorities, as the interface
@@ -328,27 +326,10 @@ func (a *Appliance) publicRoots() *x509.CertPool {
 	if a.sitePublic != nil {
 		return a.sitePublic
 	}
+	// The appliance container's own store is no stand-in: it also holds what the installer adds
+	// for Proxmox VE, which the nodes do not trust.
 	return nodeRoots()
 }
-
-// nodeRoots are Mozilla's roots, the set Talos bundles, from the module that tracks it. The
-// appliance container's own store is no stand-in: it also holds what the installer adds for Proxmox
-// VE, which the nodes do not trust.
-var nodeRoots = sync.OnceValue(func() *x509.CertPool {
-	pool := x509.NewCertPool()
-	for root := range nss.Roots() {
-		c, err := x509.ParseCertificate(root.Certificate)
-		if err != nil {
-			continue
-		}
-		if root.Constraint == nil {
-			pool.AddCert(c)
-		} else {
-			pool.AddCertWithConstraint(c, root.Constraint)
-		}
-	}
-	return pool
-})
 
 // DialChain is the SiteChains of the network: it opens a TLS connection to the host, through the
 // settings' proxy when there is one, and returns what the host presented without judging it. An
@@ -449,7 +430,7 @@ func judgeChains(authorities []*siteAuthority, public *x509.CertPool, chains []h
 	hosts := map[labelled][]string{}
 	var roots []*x509.Certificate
 	for _, hc := range chains {
-		if public != nil && verifyChain(hc.chain, public, now) == nil {
+		if verifyChain(hc.chain, public, now) == nil {
 			continue
 		}
 		if fault := judgeChain(authorities, hc.chain, now); fault.text != "" {
@@ -513,9 +494,16 @@ func (s *siteAuthority) lackingRoot(root *x509.Certificate) refusal {
 	return refusal{fmt.Sprintf("Chain ends at %q (SHA-256 %s). Add that root to %s.", subjectOf(root), Fingerprint(root), s.field()), root}
 }
 
-// lackingIssuer says that the host presented no root: top is its topmost certificate, and top's
-// issuer is the root the authority lacks.
-func (s *siteAuthority) lackingIssuer(top *x509.Certificate) refusal {
+// lackingIssuer says that nothing the host presented or the authority holds signs top, the
+// topmost certificate of the path. Where the path reaches every certificate the host presented,
+// and one of them is an intermediate, top's issuer is the root the authority lacks. Where the host
+// presented no intermediate, or some the path does not reach, an intermediate is missing below the
+// root, and the device has to send it.
+func (s *siteAuthority) lackingIssuer(top *x509.Certificate, presented, path []*x509.Certificate) refusal {
+	offPath := slices.ContainsFunc(presented, func(p *x509.Certificate) bool { return !slices.ContainsFunc(path, p.Equal) })
+	if len(path) == 1 || offPath {
+		return refusal{text: fmt.Sprintf("Intermediate %q is not presented. Have the device send it.", issuerOf(top))}
+	}
 	return refusal{text: fmt.Sprintf("Issuer %q is not presented. Add that root to %s.", issuerOf(top), s.field())}
 }
 
@@ -686,7 +674,7 @@ func issuerIn(cur *x509.Certificate, anchors, presented, path []*x509.Certificat
 		}
 	}
 	if fault == "" {
-		return nil, auth.lackingIssuer(cur)
+		return nil, auth.lackingIssuer(cur, presented, path)
 	}
 	return nil, refusal{text: fault}
 }

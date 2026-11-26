@@ -376,9 +376,11 @@ case "${test}" in
         # The authority and the proxy are the settings a user gives the setup. A lane that gives the
         # authority only after a first failed setup passes it to the test on the side.
         later_ca=
+        store_ca=
         if [ -n "${KUBEHENGE_E2E_SITE_CA:-}" ]; then
             if [ "${egress}" = tls-inspection-recovery ]; then
                 later_ca=/root/kubehenge/site-ca.pem
+                store_ca=/root/kubehenge/store-ca.pem
             else
                 jq --rawfile ca "${KUBEHENGE_E2E_SITE_CA}" '. + {siteCA: $ca}' "${work}/appliance-settings.json" > "${work}/appliance-settings.new"
                 mv "${work}/appliance-settings.new" "${work}/appliance-settings.json"
@@ -403,6 +405,7 @@ case "${test}" in
         docker cp "${repo}/scripts/fetch.sh" "${pve}:/root/kubehenge/scripts/fetch.sh"
         docker cp "${repo}/appliance" "${pve}:/root/kubehenge/appliance"
         [ -z "${later_ca}" ] || docker cp "${KUBEHENGE_E2E_SITE_CA}" "${pve}:${later_ca}"
+        [ -z "${store_ca}" ] || docker cp "${KUBEHENGE_E2E_STORE_CA:?egress.sh exports it with the Site CA}" "${pve}:${store_ca}"
         # The test reads the backup volume's store over a port-forward, as the appliance reaches it.
         runner_kubectl=$(command -v kubectl)
         docker cp "${runner_kubectl}" "${pve}:/usr/local/bin/kubectl"
@@ -416,7 +419,7 @@ case "${test}" in
             -e KUBEHENGE_E2E_GATEWAY="${KUBEHENGE_E2E_GATEWAY}" -e KUBEHENGE_E2E_DNS="${KUBEHENGE_E2E_DNS}" \
             -e KUBEHENGE_E2E_STORAGE=local -e KUBEHENGE_E2E_S3_ADDRESS=172.20.99.1 \
             -e KUBEHENGE_E2E_RECREATE="${KUBEHENGE_E2E_RECREATE:-}" \
-            -e KUBEHENGE_E2E_SITE_CA_LATER="${later_ca}" \
+            -e KUBEHENGE_E2E_SITE_CA_LATER="${later_ca}" -e KUBEHENGE_E2E_STORE_CA="${store_ca}" \
             -e KUBEHENGE_E2E_RELEASE_KEY=/root/kubehenge/release.key \
             -e KUBEHENGE_E2E_KEEP=/root/kubehenge/management \
             "${pve}" sh /root/kubehenge/test/e2e/appliance.sh \

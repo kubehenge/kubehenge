@@ -1838,7 +1838,7 @@ describe("setup", () => {
       bootstrapDatastore: "local",
     };
     const faults = [
-      'factory.talos.dev, ghcr.io: Issuer "CN=Inspect Two" is not presented. Add that root to the Site CA.',
+      'factory.talos.dev, ghcr.io: Intermediate "CN=Inspect Two" is not presented. Have the device send it.',
       'registry.k8s.io: "CN=Inspect Old" expired on 2026-11-25. Renew it on the device.',
     ];
     fakeServer({
@@ -1859,6 +1859,7 @@ describe("setup", () => {
     });
     expect(field).toHaveAttribute("aria-invalid", "true");
     expect(wizard.queryByRole("alert", { name: "Errors" })).not.toBeInTheDocument();
+    expect(wizard.queryByRole("button", { name: "Add that root" })).not.toBeInTheDocument();
   });
 
   it("adds the root a host presented to the Site CA on one click", async () => {

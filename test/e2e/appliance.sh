@@ -375,12 +375,13 @@ body_is '.allowed and (.ready | not)' "the administrator may not set up"
 # inspection device, and a Site CA of another root is refused before any Apply.
 if [ -n "${KUBEHENGE_E2E_SITE_CA_LATER:-}" ]; then
     step "a Site CA of another root is refused before any Apply, though the appliance's store trusts the proxy's root"
-    pct push "${ctid}" "${KUBEHENGE_E2E_SITE_CA_LATER}" /usr/local/share/ca-certificates/kubehenge-e2e-internal.crt --perms 0644
+    # The store's copy names the root in the bytes the proxy's intermediate uses, so that Go in the
+    # container verifies the proxy's chains with it. The nodes trust only their own roots and the Site CA.
+    pct push "${ctid}" "${KUBEHENGE_E2E_STORE_CA:?the lane passes no copy of the root for the store}" \
+        /usr/local/share/ca-certificates/kubehenge-e2e-internal.crt --perms 0644
     # The system pool is read once per process, so the interface restarts to see the root.
     pct exec "${ctid}" -- sh -c 'update-ca-certificates > /dev/null && systemctl restart kubehenge.service'
     until_true 120 "the interface to answer again" answers
-    sign_in "${work}/user.jar" "${user}"
-    user_csrf=${csrf}
     sign_in "${work}/admin.jar" "${admin}"
     admin_csrf=${csrf}
     openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 -subj /CN=kubehenge-e2e-other-root \
@@ -394,6 +395,13 @@ if [ -n "${KUBEHENGE_E2E_SITE_CA_LATER:-}" ]; then
     body_is '.error | test("Add that root to the Site CA")' "the refused setup does not tell the Site CA lacks the root"
     setup_status
     body_is '.job == null' "the refused setup started a run"
+    # The rest of the lane runs with the container's store as installed.
+    pct exec "${ctid}" -- sh -c 'rm /usr/local/share/ca-certificates/kubehenge-e2e-internal.crt && update-ca-certificates --fresh > /dev/null && systemctl restart kubehenge.service'
+    until_true 120 "the interface to answer again" answers
+    sign_in "${work}/user.jar" "${user}"
+    user_csrf=${csrf}
+    sign_in "${work}/admin.jar" "${admin}"
+    admin_csrf=${csrf}
 
     step "a setup behind TLS inspection without the Site CA fails, naming the certificate a node rejected"
     expect 202 "starting the setup without the Site CA" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup" "${setup}"

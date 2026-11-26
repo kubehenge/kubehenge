@@ -20,13 +20,19 @@ const nodeLogTimeout = 10 * time.Second
 // the error ends.
 var rejectedHost = regexp.MustCompile(`https?://([A-Za-z0-9.-]+(?::\d+)?)`)
 
-// rejectedAuthority finds the certificate Go names as the candidate authority it tried.
-var rejectedAuthority = regexp.MustCompile(`candidate authority certificate "([^"]+)"`)
+// rejectedAuthority finds the certificate Go names as the candidate authority it tried, also in a
+// line that quotes the error as a JSON string.
+var rejectedAuthority = regexp.MustCompile(`candidate authority certificate \\?"([^"\\]+)\\?"`)
+
+// rejectedReason finds Go's reason for refusing the certificate, up to its details.
+var rejectedReason = regexp.MustCompile(`x509: ([^(\\":]+)`)
+
+// unknownAuthority is Go's reason for a chain that no root the node trusts signs.
+const unknownAuthority = "certificate signed by unknown authority"
 
 // explainCertificates names, after a failed run, each management node whose log says it could not
-// verify a host's certificate, with the host and the root its chain ends at, and tells the person
-// to add that root to the Site CA. The error names the first such node. It returns err as it was where no node
-// says so.
+// verify a host's certificate, with the host and what to do about it (refusalLine). The error names
+// the first such node. It returns err as it was where no node says so.
 func (a *Appliance) explainCertificates(ctx context.Context, j *Job, env []string, s *Settings, err error) error {
 	if a.TalosLogs == nil {
 		return err
@@ -49,7 +55,7 @@ func (a *Appliance) explainCertificates(ctx context.Context, j *Job, env []strin
 		if !found {
 			continue
 		}
-		said = append(said, fmt.Sprintf("Node %s rejected the certificate %s presents, %s", node, rejected.host, a.chainEndOf(ctx, s, rejected.host, rejected.authority)))
+		said = append(said, a.refusalLine(ctx, s, node, rejected))
 	}
 	if len(said) == 0 {
 		return err
@@ -77,24 +83,44 @@ func (a *Appliance) nodeLog(ctx context.Context, admin []byte, node string) []st
 	return lines
 }
 
-// chainEndOf says where the chain a host presents ends and what to do about it, as the host shows
-// it now, else as the node's log names the authority.
-func (a *Appliance) chainEndOf(ctx context.Context, s *Settings, host, logged string) string {
-	if a.SiteChains != nil {
-		dial, cancel := context.WithTimeout(ctx, siteDialTimeout)
-		defer cancel()
-		if chain, err := a.SiteChains(dial, s, host); err == nil && len(chain) > 0 {
-			top, presented := endOf(chain)
-			if presented {
-				return fmt.Sprintf("whose chain ends at %q (SHA-256 %s). Add that root to the Site CA.", subjectOf(top), Fingerprint(top))
-			}
-			return fmt.Sprintf("whose root, %q, is not presented. Add that root to the Site CA.", issuerOf(top))
-		}
+// refusalLine says that the node refused the host's certificate, and what to do about it. The
+// node's own log decides first: a reason other than an unknown authority, or a candidate authority
+// that is one of the nodes' public roots, is no matter of the Site CA. A candidate the Site CA
+// holds signs no longer, as a device's root made again does. With no candidate logged, the chain
+// the host presents now names the root to add, unless a public root signs it, since the node may
+// meet another device than the appliance does.
+func (a *Appliance) refusalLine(ctx context.Context, s *Settings, node string, r rejection) string {
+	refused := fmt.Sprintf("Node %s refused %s's certificate", node, r.host)
+	plain := fmt.Sprintf("%s: %s.", refused, r.reason)
+	switch {
+	case r.reason != unknownAuthority || r.authority != "" && publicName(r.authority):
+		return plain
+	case r.authority != "":
+		return fmt.Sprintf("%s, signed by a new %q. Paste the new root.", refused, r.authority)
 	}
-	if logged != "" {
-		return fmt.Sprintf("whose chain the node could not trace to %s. Check the Site CA.", logged)
+	chain := a.liveChain(ctx, s, r.host)
+	if chain == nil || verifyChain(chain, a.publicRoots(), a.now()) == nil {
+		return plain + " Check the Site CA."
 	}
-	return "issued by an authority the node does not know. Check the Site CA."
+	top, presented := endOf(chain)
+	if presented {
+		return fmt.Sprintf("%s. Add its root %q (SHA-256 %s) to the Site CA.", refused, subjectOf(top), Fingerprint(top))
+	}
+	return fmt.Sprintf("%s. Add %q to the Site CA.", refused, issuerOf(top))
+}
+
+// liveChain is the chain the host presents now, or none where it cannot be read.
+func (a *Appliance) liveChain(ctx context.Context, s *Settings, host string) []*x509.Certificate {
+	if a.SiteChains == nil {
+		return nil
+	}
+	dial, cancel := context.WithTimeout(ctx, siteDialTimeout)
+	defer cancel()
+	chain, err := a.SiteChains(dial, s, host)
+	if err != nil || len(chain) == 0 {
+		return nil
+	}
+	return chain
 }
 
 // endOf follows a presented chain from its leaf by issuer names and returns the certificate it stops
@@ -116,8 +142,8 @@ func endOf(chain []*x509.Certificate) (*x509.Certificate, bool) {
 }
 
 // rejection is a certificate a node's log says it could not verify: the host it was presented by,
-// and the authority the line names where it does.
-type rejection struct{ host, authority string }
+// Go's reason, and the authority the line names where it does.
+type rejection struct{ host, reason, authority string }
 
 // rejectedCertificate finds the last line that says a certificate could not be verified.
 func rejectedCertificate(lines []string) (rejection, bool) {
@@ -129,7 +155,10 @@ func rejectedCertificate(lines []string) (rejection, bool) {
 		if m == nil {
 			continue
 		}
-		found := rejection{host: m[1]}
+		found := rejection{host: m[1], reason: unknownAuthority}
+		if reason := rejectedReason.FindStringSubmatch(line); reason != nil {
+			found.reason = strings.TrimSpace(reason[1])
+		}
 		if a := rejectedAuthority.FindStringSubmatch(line); a != nil {
 			found.authority = a[1]
 		}
