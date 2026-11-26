@@ -233,8 +233,11 @@ var gatewayRE = regexp.MustCompile(`(?m)^default via (\S+)`)
 
 func isAddress(s string) bool { return net.ParseIP(s) != nil }
 
+// The link in /usr/bin is there because `pct exec` starts its command on the PATH of the caller's
+// shell, which need not hold /usr/local/bin. The link follows the binary the updater replaces.
 const swapScript = `
 set -e
+ln -sfn /usr/local/bin/kubehenge /usr/bin/kubehenge
 rm -rf /usr/local/share/kubehenge.new && mkdir /usr/local/share/kubehenge.new
 tar -xf /tmp/share.tar -C /usr/local/share/kubehenge.new && rm /tmp/share.tar
 rm -rf /usr/local/share/kubehenge.old

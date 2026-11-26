@@ -435,6 +435,21 @@ func TestAptOptions(t *testing.T) {
 	}
 }
 
+// `pct exec` starts its command on the caller's PATH, which need not hold /usr/local/bin, so the
+// install links the binary into /usr/bin and the updater's later replacements of it stay reachable.
+func TestInstallLinksTheBinaryOntoPctExecPath(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, opts{})
+	r := h.runner(h.session(Config{CTID: "100"}), nil)
+	if _, err := r.inCT(context.Background(), "sh", "-c", swapScript); err != nil {
+		t.Fatal(err)
+	}
+	call := h.exec.last("pct exec 100 -- sh -c \nset -e\nln -sfn /usr/local/bin/kubehenge /usr/bin/kubehenge\n")
+	if call == "" || strings.Index(call, "ln -sfn") > strings.Index(call, "mv /usr/local/bin/kubehenge.new") {
+		t.Fatalf("the install script leaves no link in /usr/bin: %q", call)
+	}
+}
+
 // A failed run's own cleanup and the shutdown after a signal can run at once. The container is
 // removed once.
 func TestCleanupRunsOnce(t *testing.T) {
