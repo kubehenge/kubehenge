@@ -405,7 +405,7 @@ func addonsSection(c *clusterv1.Cluster, m *managementRead, a *attention) sectio
 		if !v.Ready {
 			for _, cond := range conds {
 				if cond.Status != string(metav1.ConditionTrue) && cond.Message != "" {
-					v.Message = cond.Message
+					v.Message = withCertManagerCause(cond.Message)
 					break
 				}
 			}
@@ -425,6 +425,15 @@ func addonsSection(c *clusterv1.Cluster, m *managementRead, a *attention) sectio
 		return cmp.Or(strings.Compare(x.Name, y.Name), strings.Compare(x.Release, y.Release))
 	})
 	return s
+}
+
+// withCertManagerCause leads Helm's refusal of a cert-manager kind with what it means: the cluster
+// serves none of cert-manager's kinds, which an install of cert-manager brings.
+func withCertManagerCause(message string) string {
+	if strings.Contains(message, "no matches for kind") && strings.Contains(message, "cert-manager.io") {
+		return "The cluster lacks cert-manager's custom resource definitions. Helm: " + message
+	}
+	return message
 }
 
 // addonName is the add-on a release is of: its HelmChartProxy's name without the cluster's.

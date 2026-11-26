@@ -13,7 +13,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/tools/events"
 	addonsv1 "sigs.k8s.io/cluster-api/api/addons/v1beta2"
@@ -172,6 +171,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 func (r *Reconciler) reconcileCluster(ctx context.Context, cluster *clusterv1.Cluster) (ctrl.Result, error) {
+	if err := r.dropRetiredVariables(ctx, cluster); err != nil {
+		return ctrl.Result{}, err
+	}
 	if !cluster.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, cluster)
 	}
@@ -224,7 +226,11 @@ func (r *Reconciler) reconcileAddons(ctx context.Context, cluster *clusterv1.Clu
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if err = errors.Join(r.recordAddonChanges(ctx, cluster, &addons), r.recordAddonConflicts(ctx, cluster, addons.conflicts)); err != nil {
+	conflicts, err := r.recordCertManagerWait(ctx, cluster, &addons)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if err = errors.Join(r.recordAddonChanges(ctx, cluster, &addons), r.recordAddonConflicts(ctx, cluster, conflicts)); err != nil {
 		return ctrl.Result{}, err
 	}
 	bgpHeld, err := r.reconcileKubeVip(ctx, cluster, addons.LoadBalancer)
@@ -276,7 +282,7 @@ func (r *Reconciler) afterTheRest(ctx context.Context, cluster *clusterv1.Cluste
 	rancherWaiting := false
 	if !addons.Rancher.Install && rancherRefused == "" {
 		var with []string
-		if !addons.needsCertManager() {
+		if !addons.certManager() {
 			with = append(with, certManagerProxy(cluster))
 		}
 		if rancherWaiting, err = r.removeRancherWhenFree(ctx, cluster, with...); err != nil {
@@ -700,6 +706,7 @@ func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluste
 		return false, err
 	}
 	addons.rollout, addons.pending, addons.conflicts = gate, nil, nil
+	addons.certManagerConflict, addons.certManagerWaiting = "", nil
 	labels := proxyNamespaces(proxies)
 	labelsWait, err := r.applyNamespaceLabels(ctx, cluster, labels, addons.NamespaceLabels)
 	if err != nil {
@@ -741,12 +748,16 @@ const (
 	proxyConflicts
 )
 
-// proxyState decides what the proxy does. A conflict is recorded in addons.conflicts.
+// proxyState decides what the proxy does. A conflict is recorded in addons.conflicts, cert-manager's
+// in addons.certManagerConflict.
 func (r *Reconciler) proxyState(ctx context.Context, cluster *clusterv1.Cluster, p *unstructured.Unstructured, addons *Addons) (proxyStates, error) {
 	conflict, err := r.conflictOf(ctx, cluster, p, addons)
 	switch {
 	case err != nil:
 		return proxyReady, err
+	case conflict != "" && p.GetName() == certManagerProxy(cluster):
+		addons.certManagerConflict = conflict
+		return proxyConflicts, nil
 	case conflict != "":
 		addons.conflicts = append(addons.conflicts, conflict)
 		return proxyConflicts, nil
@@ -787,48 +798,6 @@ func (r *Reconciler) chartWaits(ctx context.Context, cluster *clusterv1.Cluster,
 		return false, nil
 	}
 	return wait(ctx, cluster)
-}
-
-// certManagerUsers names the proxies of the charts that make cert-manager objects, which Helm
-// cannot install before the cluster serves their kinds.
-func certManagerUsers(cluster *clusterv1.Cluster) []string {
-	return []string{rancherProxy(cluster), monitoringProxy(cluster), lokiProxy(cluster), alloyProxy(cluster), alloyNodeProxy(cluster)}
-}
-
-// certManagerCRDs are the custom resource definitions of the kinds the add-ons make.
-var certManagerCRDs = []string{"certificates.cert-manager.io", "issuers.cert-manager.io", "clusterissuers.cert-manager.io"}
-
-// certManagerWaits reports whether the proxy named waits for cert-manager: until its release is
-// deployed, or with the cluster's own cert-manager until the cluster serves its definitions. The
-// Add-on Provider for Helm puts each install after a failed one further off. A proxy already
-// installed stays while cert-manager is upgraded.
-func (r *Reconciler) certManagerWaits(ctx context.Context, cluster *clusterv1.Cluster, name string, addons *Addons) (bool, error) {
-	installed, err := r.anyProxy(ctx, cluster, name)
-	if err != nil || installed {
-		return false, err
-	}
-	if !addons.UseExisting.CertManager {
-		ready, err := r.proxyReady(ctx, cluster, certManagerProxy(cluster))
-		return !ready, err
-	}
-	workload, found, err := r.Remotes.get(ctx, cluster)
-	if err != nil || !found {
-		return true, err
-	}
-	for _, crd := range certManagerCRDs {
-		o := &metav1.PartialObjectMetadata{}
-		o.SetGroupVersionKind(crdGVK)
-		switch err := workload.client.Get(ctx, client.ObjectKey{Name: crd}, o); {
-		case apierrors.IsNotFound(err):
-			return true, nil
-		case unreachable(err):
-			r.Remotes.forget(cluster)
-			return true, nil
-		case err != nil:
-			return false, fmt.Errorf("reading the cluster's custom resource definition %s: %w", crd, err)
-		}
-	}
-	return false, nil
 }
 
 // held reads what was recorded for the cluster. It reads nothing yet, or no longer once a foreground

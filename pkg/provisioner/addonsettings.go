@@ -22,9 +22,6 @@ import (
 )
 
 const (
-	// useExistingVariable names installs in the cluster that Kubehenge's add-ons use instead of
-	// installing their own.
-	useExistingVariable = "useExisting"
 	// namespaceLabelsVariable are labels for the namespaces the add-ons install into.
 	namespaceLabelsVariable = "namespaceLabels"
 
@@ -44,18 +41,26 @@ const (
 	helmReleaseNamespaceAnnotation = "meta.helm.sh/release-namespace"
 )
 
-// UseExisting is a cluster's useExisting variable: the installs of the cluster itself that the
-// add-ons use rather than their own.
-type UseExisting struct {
-	// CertManager has the add-ons that need cert-manager use the one the cluster runs. Kubehenge
-	// then installs no cert-manager and still makes its issuers and certificates in it.
-	CertManager bool `json:"certManager,omitempty"`
+// retiredVariables are variables a cluster may still set that the ClusterClasses no longer define.
+// Cluster API refuses every change to a Cluster that sets one, and stops reconciling its topology.
+var retiredVariables = []string{"useExisting"}
+
+// dropRetiredVariables takes the retired variables off the cluster.
+func (r *Reconciler) dropRetiredVariables(ctx context.Context, cluster *clusterv1.Cluster) error {
+	retired := func(v clusterv1.ClusterVariable) bool { return slices.Contains(retiredVariables, v.Name) }
+	if !slices.ContainsFunc(cluster.Spec.Topology.Variables, retired) {
+		return nil
+	}
+	patch := client.MergeFromWithOptions(cluster.DeepCopy(), client.MergeFromWithOptimisticLock{})
+	cluster.Spec.Topology.Variables = slices.DeleteFunc(cluster.Spec.Topology.Variables, retired)
+	if err := r.Client.Patch(ctx, cluster, patch); err != nil {
+		return fmt.Errorf("taking retired variables off the cluster: %w", err)
+	}
+	return nil
 }
 
-// validateAddonSettings holds the namespace labels to Kubernetes' label syntax, and refuses a change
-// of useExisting: a cluster that moved its cert-manager to the company's, or the other way, would
-// delete the custom resource definitions with the certificates in them.
-func validateAddonSettings(old, c *clusterv1.Cluster) field.ErrorList {
+// validateAddonSettings holds the namespace labels to Kubernetes' label syntax.
+func validateAddonSettings(c *clusterv1.Cluster) field.ErrorList {
 	variables := field.NewPath("spec", "topology", "variables")
 	var errs field.ErrorList
 	labels, _, err := optionalVariable[map[string]string](c, namespaceLabelsVariable)
@@ -74,9 +79,6 @@ func validateAddonSettings(old, c *clusterv1.Cluster) field.ErrorList {
 			errs = append(errs, field.Forbidden(path.Key(k), "Kubernetes sets "+k+" itself"))
 		}
 	}
-	if old != nil && variableChanged(old, c, useExistingVariable) {
-		errs = append(errs, field.Forbidden(variables.Key(useExistingVariable), "the installs the add-ons use are chosen when the cluster is created and cannot be changed"))
-	}
 	return errs
 }
 
@@ -94,7 +96,7 @@ type crdOwner struct {
 var addonCRDs = map[string]crdOwner{
 	certManagerAddon: {
 		release: certManagerAddon, namespace: certManagerAddon, crds: []string{"certificates.cert-manager.io", "clusterissuers.cert-manager.io"},
-		option: "Remove it, or create the cluster with useExisting.certManager to use it",
+		option: "Remove it",
 	},
 	kyvernoAddon: {
 		release: kyvernoAddon, namespace: kyvernoAddon, crds: []string{"clusterpolicies.kyverno.io", "policyexceptions.kyverno.io"},
@@ -122,7 +124,7 @@ func AddonCRDs() map[string][]string {
 func (r *Reconciler) conflictOf(ctx context.Context, cluster *clusterv1.Cluster, p *unstructured.Unstructured, addons *Addons) (string, error) {
 	suffix := strings.TrimPrefix(p.GetName(), cluster.Name+"-")
 	owner, ok := addonCRDs[suffix]
-	if !ok || suffix == certManagerAddon && addons.UseExisting.CertManager {
+	if !ok {
 		return "", nil
 	}
 	installed := &unstructured.Unstructured{}
@@ -155,6 +157,36 @@ func (r *Reconciler) conflictOf(ctx context.Context, cluster *clusterv1.Cluster,
 			continue
 		}
 		return fmt.Sprintf("%s is not installed: the cluster already holds its custom resource definition %s, which no Kubehenge release owns. %s", suffix, name, owner.option), nil
+	}
+	if suffix != certManagerAddon {
+		return "", nil
+	}
+	deployment, err := foreignCertManager(ctx, workload.client)
+	switch {
+	case unreachable(err):
+		r.Remotes.forget(cluster)
+		return "", nil
+	case err != nil || deployment == "":
+		return "", err
+	}
+	return fmt.Sprintf("%s is not installed: the cluster already runs its Deployment %s, which no Kubehenge release owns. %s", suffix, deployment, owner.option), nil
+}
+
+// foreignCertManager names a cert-manager controller's Deployment in the workload cluster that
+// Kubehenge's release does not own, as namespace/name, or nothing. A cert-manager installed without
+// its custom resource definitions holds them by none, and would still fight Kubehenge's.
+func foreignCertManager(ctx context.Context, workload client.Client) (string, error) {
+	deployments := &metav1.PartialObjectMetadataList{}
+	deployments.SetGroupVersionKind(schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "DeploymentList"})
+	err := workload.List(ctx, deployments, client.MatchingLabels{"app.kubernetes.io/name": certManagerAddon, "app.kubernetes.io/component": "controller"})
+	if err != nil {
+		return "", fmt.Errorf("listing the cluster's cert-manager Deployments: %w", err)
+	}
+	owner := addonCRDs[certManagerAddon]
+	for _, d := range deployments.Items {
+		if d.Annotations[helmReleaseNameAnnotation] != owner.release || d.Annotations[helmReleaseNamespaceAnnotation] != owner.namespace {
+			return d.Namespace + "/" + d.Name, nil
+		}
 	}
 	return "", nil
 }

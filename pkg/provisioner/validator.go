@@ -132,7 +132,7 @@ func (v *ClusterValidator) check(ctx context.Context, old, c *clusterv1.Cluster,
 	errs = append(errs, validateEgress(c)...)
 	errs = append(errs, validateNodeSite(old, c, time.Now())...)
 	errs = append(errs, validateUpgradeWindow(old, c)...)
-	errs = append(errs, validateAddonSettings(old, c)...)
+	errs = append(errs, validateAddonSettings(c)...)
 	errs = append(errs, v.validateNodeCustomisation(ctx, old, c)...)
 	errs = append(errs, validateAutoscaling(c)...)
 	errs = append(errs, validateHostOutageGrace(c)...)

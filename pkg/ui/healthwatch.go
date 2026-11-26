@@ -38,6 +38,7 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 		a.add(severity, sectionClusterAPI, what, cond.Message, cond.LastTransitionTime.Time)
 	}
 	templateAttention(c, a)
+	addonWaitAttention(c, a)
 	if cond := trueCondition(c, provisioner.NodeCustomisationCondition); cond != nil {
 		a.add(severityWarning, sectionClusterAPI, "Node customisation misses a reference", cond.Message, cond.LastTransitionTime.Time)
 	}
@@ -59,6 +60,21 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 			severity, what = severityError, "Storage full"
 		}
 		a.add(severity, sectionVolumes, what, provisioner.StorageSummary(cond.Message), cond.LastTransitionTime.Time)
+	}
+}
+
+// addonWaitAttention adds the add-ons the controller holds back: those another install of their
+// software blocks, and those that wait for cert-manager.
+func addonWaitAttention(c *clusterv1.Cluster, a *attention) {
+	if cond := trueCondition(c, provisioner.AddonConflictCondition); cond != nil {
+		a.add(severityWarning, sectionAddons, "Add-on conflict", cond.Message, cond.LastTransitionTime.Time)
+	}
+	if cond := trueCondition(c, provisioner.AddonsWaitingCondition); cond != nil {
+		severity := severityProgress
+		if cond.Reason == provisioner.AddonsWaitingGatewayAPIMissing {
+			severity = severityWarning
+		}
+		a.add(severity, sectionAddons, "Add-ons wait for cert-manager", cond.Message, cond.LastTransitionTime.Time)
 	}
 }
 

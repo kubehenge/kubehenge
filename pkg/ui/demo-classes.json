@@ -1365,23 +1365,6 @@
           }
         },
         {
-          "name": "useExisting",
-          "required": false,
-          "schema": {
-            "openAPIV3Schema": {
-              "description": "Installs the cluster already runs that the add-ons use instead of their own, so that they do not collide with the company's. Chosen when the cluster is created and fixed after.",
-              "properties": {
-                "certManager": {
-                  "default": false,
-                  "description": "Use the cert-manager the cluster runs. Kubehenge installs none, and still makes its issuers and certificates in it. Rancher, monitoring, logs and certificates need cert-manager 0.15 or newer with its custom resource definitions installed.",
-                  "type": "boolean"
-                }
-              },
-              "type": "object"
-            }
-          }
-        },
-        {
           "name": "namespaceLabels",
           "required": false,
           "schema": {
@@ -4397,23 +4380,6 @@
                     "restricted"
                   ],
                   "type": "string"
-                }
-              },
-              "type": "object"
-            }
-          }
-        },
-        {
-          "name": "useExisting",
-          "required": false,
-          "schema": {
-            "openAPIV3Schema": {
-              "description": "Installs the cluster already runs that the add-ons use instead of their own, so that they do not collide with the company's. Chosen when the cluster is created and fixed after.",
-              "properties": {
-                "certManager": {
-                  "default": false,
-                  "description": "Use the cert-manager the cluster runs. Kubehenge installs none, and still makes its issuers and certificates in it. Rancher, monitoring, logs and certificates need cert-manager 0.15 or newer with its custom resource definitions installed.",
-                  "type": "boolean"
                 }
               },
               "type": "object"
@@ -7452,23 +7418,6 @@
           }
         },
         {
-          "name": "useExisting",
-          "required": false,
-          "schema": {
-            "openAPIV3Schema": {
-              "description": "Installs the cluster already runs that the add-ons use instead of their own, so that they do not collide with the company's. Chosen when the cluster is created and fixed after.",
-              "properties": {
-                "certManager": {
-                  "default": false,
-                  "description": "Use the cert-manager the cluster runs. Kubehenge installs none, and still makes its issuers and certificates in it. Rancher, monitoring, logs and certificates need cert-manager 0.15 or newer with its custom resource definitions installed.",
-                  "type": "boolean"
-                }
-              },
-              "type": "object"
-            }
-          }
-        },
-        {
           "name": "namespaceLabels",
           "required": false,
           "schema": {
@@ -10447,23 +10396,6 @@
                     "restricted"
                   ],
                   "type": "string"
-                }
-              },
-              "type": "object"
-            }
-          }
-        },
-        {
-          "name": "useExisting",
-          "required": false,
-          "schema": {
-            "openAPIV3Schema": {
-              "description": "Installs the cluster already runs that the add-ons use instead of their own, so that they do not collide with the company's. Chosen when the cluster is created and fixed after.",
-              "properties": {
-                "certManager": {
-                  "default": false,
-                  "description": "Use the cert-manager the cluster runs. Kubehenge installs none, and still makes its issuers and certificates in it. Rancher, monitoring, logs and certificates need cert-manager 0.15 or newer with its custom resource definitions installed.",
-                  "type": "boolean"
                 }
               },
               "type": "object"

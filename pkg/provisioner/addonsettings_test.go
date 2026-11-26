@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -55,19 +56,20 @@ func TestCertManagerInstallRefusedOverAnExistingInstall(t *testing.T) {
 	w.addons.Certificates.Enabled = true
 	w.inside(crd("certificates.cert-manager.io", nil))
 	w.apply()
-	if len(w.addons.conflicts) != 1 {
-		t.Fatalf("conflicts %v", w.addons.conflicts)
-	}
-	for _, want := range []string{"cert-manager is not installed", "certificates.cert-manager.io", "useExisting.certManager"} {
-		if !strings.Contains(w.addons.conflicts[0], want) {
-			t.Errorf("the conflict lacks %q: %s", want, w.addons.conflicts[0])
+	conflict := w.addons.certManagerConflict
+	for _, want := range []string{"cert-manager is not installed", "certificates.cert-manager.io", "Remove it"} {
+		if !strings.Contains(conflict, want) {
+			t.Errorf("the conflict lacks %q: %s", want, conflict)
 		}
+	}
+	if strings.Contains(conflict, "useExisting") {
+		t.Errorf("the conflict offers a setting that is gone: %s", conflict)
 	}
 	err := w.kube.Get(context.Background(), client.ObjectKey{Namespace: w.cluster.Namespace, Name: w.cluster.Name + "-cert-manager"}, newProxyObject())
 	if !apierrors.IsNotFound(err) {
 		t.Errorf("cert-manager was installed over the company's: %v", err)
 	}
-	if err := w.r.recordAddonConflicts(context.Background(), w.cluster, w.addons.conflicts); err != nil {
+	if err := w.r.recordAddonConflicts(context.Background(), w.cluster, []string{conflict}); err != nil {
 		t.Fatal(err)
 	}
 	got := &clusterv1.Cluster{}
@@ -77,6 +79,39 @@ func TestCertManagerInstallRefusedOverAnExistingInstall(t *testing.T) {
 	cond := meta.FindStatusCondition(got.Status.Conditions, AddonConflictCondition)
 	if cond == nil || cond.Reason != AddonConflictReason {
 		t.Errorf("condition %+v", cond)
+	}
+}
+
+// certManagerDeployment is a cert-manager controller's Deployment in namespace, as its chart and
+// its static manifest label it.
+func certManagerDeployment(namespace string, annotations map[string]string) *appsv1.Deployment {
+	return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+		Namespace: namespace, Name: "cert-manager", Annotations: annotations,
+		Labels: map[string]string{"app.kubernetes.io/name": "cert-manager", "app.kubernetes.io/component": "controller"},
+	}}
+}
+
+// A cert-manager installed without its definitions still runs a controller that would fight
+// Kubehenge's: the conflict names its Deployment. Kubehenge's own is no conflict.
+func TestCertManagerInstallRefusedBesideAForeignDeployment(t *testing.T) {
+	t.Parallel()
+	w := newRollout(t, outsideWindow)
+	w.addons.Certificates.Enabled = true
+	w.inside(certManagerDeployment("security", nil))
+	w.apply()
+	if !strings.Contains(w.addons.certManagerConflict, "Deployment security/cert-manager") {
+		t.Errorf("conflict %q", w.addons.certManagerConflict)
+	}
+	if err := w.kube.Get(context.Background(), client.ObjectKey{Namespace: w.cluster.Namespace, Name: w.cluster.Name + "-cert-manager"}, newProxyObject()); !apierrors.IsNotFound(err) {
+		t.Errorf("cert-manager was installed beside the cluster's own: %v", err)
+	}
+
+	own := newRollout(t, outsideWindow)
+	own.addons.Certificates.Enabled = true
+	own.inside(certManagerDeployment("cert-manager", map[string]string{helmReleaseNameAnnotation: "cert-manager", helmReleaseNamespaceAnnotation: "cert-manager"}))
+	own.apply()
+	if own.addons.certManagerConflict != "" || own.version("cert-manager") != testCharts.CertManager.Version {
+		t.Errorf("Kubehenge's own cert-manager conflicts: %q", own.addons.certManagerConflict)
 	}
 }
 
@@ -93,8 +128,8 @@ func TestAddonsInstallWhereNothingCollides(t *testing.T) {
 		w.addons.Certificates.Enabled = true
 		w.inside(workload...)
 		w.apply()
-		if len(w.addons.conflicts) != 0 || w.version("cert-manager") != testCharts.CertManager.Version {
-			t.Errorf("%s: conflicts %v", name, w.addons.conflicts)
+		if w.addons.certManagerConflict != "" || w.version("cert-manager") != testCharts.CertManager.Version {
+			t.Errorf("%s: conflict %q", name, w.addons.certManagerConflict)
 		}
 	}
 }
@@ -106,8 +141,8 @@ func TestInstalledAddonOwnsItsDefinitions(t *testing.T) {
 	w.apply()
 	w.inside(crd("certificates.cert-manager.io", nil))
 	w.apply()
-	if len(w.addons.conflicts) != 0 {
-		t.Errorf("an installed cert-manager conflicts with itself: %v", w.addons.conflicts)
+	if w.addons.certManagerConflict != "" {
+		t.Errorf("an installed cert-manager conflicts with itself: %s", w.addons.certManagerConflict)
 	}
 }
 
@@ -116,7 +151,6 @@ func TestMonitoringAndKyvernoRefuseTheirDefinitionsToo(t *testing.T) {
 	w := newRollout(t, outsideWindow)
 	w.addons.Monitoring.Enabled = true
 	w.addons.PodSecurity.Kyverno = "baseline"
-	w.addons.UseExisting.CertManager = true
 	w.inside(crd("prometheuses.monitoring.coreos.com", nil), crd("clusterpolicies.kyverno.io", nil))
 	w.apply()
 	if len(w.addons.conflicts) != 2 {
@@ -124,33 +158,10 @@ func TestMonitoringAndKyvernoRefuseTheirDefinitionsToo(t *testing.T) {
 	}
 }
 
-func TestUseExistingCertManagerInstallsNoChart(t *testing.T) {
+func TestNamespaceLabelsAreRead(t *testing.T) {
 	t.Parallel()
-	w := newRollout(t, outsideWindow)
-	w.addons.Certificates.Enabled = true
-	w.addons.Monitoring.Enabled = true
-	if !w.exists("cert-manager") {
-		t.Fatal("cert-manager is missing without the option")
-	}
-	w.addons.UseExisting.CertManager = true
-	if w.exists("cert-manager") {
-		t.Error("cert-manager is installed beside the company's")
-	}
-	w.inside(crd("certificates.cert-manager.io", nil))
-	w.apply()
-	if len(w.addons.conflicts) != 0 {
-		t.Errorf("the existing install conflicts: %v", w.addons.conflicts)
-	}
-	if !w.exists(monitoringAddon) {
-		t.Error("monitoring waits for a cert-manager it does not need to install")
-	}
-}
-
-func TestUseExistingReadsTheVariable(t *testing.T) {
-	t.Parallel()
-	c := cluster(variableJSON("useExisting", `{"certManager":true}`), variableJSON("namespaceLabels", `{"team":"platform"}`))
-	addons, err := addonsOf(c)
-	if err != nil || !addons.UseExisting.CertManager || addons.NamespaceLabels["team"] != "platform" {
+	addons, err := addonsOf(cluster(variableJSON("namespaceLabels", `{"team":"platform"}`)))
+	if err != nil || addons.NamespaceLabels["team"] != "platform" {
 		t.Errorf("%+v, %v", addons, err)
 	}
 }
@@ -237,27 +248,12 @@ func TestNamespaceLabelsAreHeldToLabelSyntax(t *testing.T) {
 		"long value":      {`{"team":"` + strings.Repeat("a", 64) + `"}`, "the label's value"},
 		"Kubernetes' own": {`{"kubernetes.io/metadata.name":"x"}`, "sets kubernetes.io/metadata.name itself"},
 	} {
-		errs := validateAddonSettings(nil, cluster(variableJSON("namespaceLabels", c.labels)))
+		errs := validateAddonSettings(cluster(variableJSON("namespaceLabels", c.labels)))
 		switch {
 		case c.want == "" && len(errs) != 0:
 			t.Errorf("%s: %v", name, errs)
 		case c.want != "" && !strings.Contains(errs.ToAggregate().Error(), c.want):
 			t.Errorf("%s: %v", name, errs)
 		}
-	}
-}
-
-func TestUseExistingCannotChangeAfterCreation(t *testing.T) {
-	t.Parallel()
-	on := cluster(variableJSON("useExisting", `{"certManager":true}`))
-	off := cluster(variableJSON("useExisting", `{"certManager":false}`))
-	if errs := validateAddonSettings(nil, on); len(errs) != 0 {
-		t.Errorf("creation: %v", errs)
-	}
-	if errs := validateAddonSettings(off, on); len(errs) != 1 {
-		t.Errorf("switching it on: %v", errs)
-	}
-	if errs := validateAddonSettings(on, on); len(errs) != 0 {
-		t.Errorf("an unrelated edit: %v", errs)
 	}
 }
