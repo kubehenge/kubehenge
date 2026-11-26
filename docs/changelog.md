@@ -4,6 +4,10 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ## [Unreleased]
 
+### Fixed
+
+- After a restart of the appliance's container the interface answers at once. The appliance announces its addresses to the network when it starts and whenever one is added, as keepalived does. Before, a switch or gateway that had forgotten the container's address kept dropping traffic until the container sent something itself.
+
 ### Changed
 
 - `kubehenge appliance health` shows each stage as it runs: the connection with the time left, the certificate, the answer and the settle time. It ends on a verdict, or on the cause and the step to take. `--quiet` keeps it silent and `--json` prints the verdict as one object.

@@ -895,6 +895,32 @@ else
     pvesh delete "/nodes/${kept_node}/qemu/${kept_vmid}" --purge 1 > /dev/null
 fi
 
+# announcements <seconds> <count> <command...>: runs the command while tcpdump watches the node's bridge
+# for gratuitous ARP frames from the appliance's address, and prints how many it saw, up to the count
+# and within the seconds. The appliance sends three, so the count tells them from the one or two a
+# container's own network setup may send.
+announcements() {
+    capture_seconds=$1 capture_count=$2
+    shift 2
+    : > "${work}/capture"
+    timeout "${capture_seconds}" tcpdump -l -n -c "${capture_count}" -i "${KUBEHENGE_E2E_BRIDGE:-vmbr0}" \
+        "arp and ether src ${appliance_mac} and arp[14:4] = arp[24:4]" > "${work}/capture" 2> "${work}/capture.err" &
+    capture_pid=$!
+    until_true 10 "tcpdump to listen" grep -q listening "${work}/capture.err"
+    "$@"
+    wait "${capture_pid}" || true
+    grep -c "Request who-has ${ip} tell ${ip}" "${work}/capture" || true
+}
+
+step "the appliance announces its address to the network after its service restarts and after its container reboots"
+appliance_mac=$(pct config "${ctid}" | sed -n 's/^net0:.*hwaddr=\([0-9A-Fa-f:]*\).*/\1/p')
+[ -n "${appliance_mac}" ] || fail "the container's configuration has no hardware address for net0"
+command -v tcpdump > /dev/null || apt-get install -y -qq tcpdump > /dev/null
+seen=$(announcements 20 3 pct exec "${ctid}" -- systemctl restart kubehenge.service)
+[ "${seen}" -ge 3 ] || fail "the appliance sent ${seen} gratuitous ARP frames for ${ip} within 20 seconds of its service restarting, not 3"
+seen=$(announcements 90 3 sh -c 'pct reboot "$1" && until curl -sS -o /dev/null --cacert "$2" "$3/api/realms" 2> /dev/null; do sleep 2; done' sh "${ctid}" "${ca}" "${ui}")
+[ "${seen}" -ge 3 ] || fail "the appliance sent ${seen} gratuitous ARP frames for ${ip} within 90 seconds of its container rebooting, not 3"
+
 step "remove the appliance"
 pct config "${ctid}" | grep -qx 'protection: 1' || fail "the installer left the appliance unprotected"
 pct stop "${ctid}"

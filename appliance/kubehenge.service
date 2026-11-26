@@ -44,9 +44,10 @@ RestartSec=5s
 KillMode=mixed
 TimeoutStopSec=170s
 
-# Ports 443 and 80 (ACME's http-01 proof and the redirect to https) are the one privilege it keeps.
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+# Ports 443 and 80 (ACME's http-01 proof and the redirect to https) are one privilege it keeps. The
+# other is the raw sockets that announce its addresses to the network when it starts.
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW
 NoNewPrivileges=yes
 UMask=0077
 ProtectSystem=strict
@@ -63,8 +64,9 @@ ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
 # AF_NETLINK lists its own network interfaces and addresses, which it records for the clusters'
-# firewalls and by which it finds its guest in Proxmox VE.
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+# firewalls and by which it finds its guest in Proxmox VE. AF_PACKET sends the ARP announcement of
+# an address.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK AF_PACKET
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes

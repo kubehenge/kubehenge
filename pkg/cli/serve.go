@@ -482,6 +482,10 @@ func (o *serveOptions) serve(ctx context.Context) error {
 		}
 		return fmt.Errorf("serving: %w", err)
 	}
+	if o.a.Dir != "" {
+		// Once the interface listens, so what the announcement draws in is answered.
+		wg.Go(func() { o.a.AnnounceAddresses(ctx) })
+	}
 	wg.Go(func() {
 		<-ctx.Done()
 		shutdown, done := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
