@@ -282,3 +282,46 @@ func TestAFailedRunLineCountsOnlyWhatTheNodesTrust(t *testing.T) {
 		}
 	}
 }
+
+// TestAChainUnderAPublicRootIsNamedByItsFaultAtOnce says what is wrong with a server leaf signed by
+// an intermediate for clients alone under a public root, whether or not the host presents the root,
+// and never offers that root. A chain the public roots verify, and a root of the Site CA's kind,
+// stay as they were.
+func TestAChainUnderAPublicRootIsNamedByItsFaultAtOnce(t *testing.T) {
+	t.Parallel()
+	public := newTestRoot(t, "Public Test Root")
+	clients := public.issue(t, issuance{cn: "Public Clients", clientOnly: true})
+	leaf := clients.issue(t, issuance{cn: "host.example", leaf: true})
+	servers := public.issue(t, issuance{cn: "Public Servers"})
+	fine := servers.issue(t, issuance{cn: "host.example", leaf: true})
+	corp := newTestRoot(t, "Corp Root")
+	corpLeaf := corp.issue(t, issuance{cn: "host.example", leaf: true})
+	corpInspect := corp.issue(t, issuance{cn: "Corp Inspect"})
+	underInspect := corpInspect.issue(t, issuance{cn: "host.example", leaf: true})
+	const fault = `Site CA: ghcr.io: "CN=host.example" is not for servers. Reissue it for server authentication.`
+	for name, tc := range map[string]struct {
+		chain []*x509.Certificate
+		want  string
+		roots []MissingRoot
+	}{
+		"the public root not presented":                              {certs(leaf, clients), fault, nil},
+		"the public root presented":                                  {certs(leaf, clients, public), fault, nil},
+		"the issuer named as a public root, the public roots verify": {certs(fine, servers), "", nil},
+		"a root that is no public root, presented": {
+			certs(corpLeaf, corp),
+			"Site CA: ghcr.io: Chain ends at \"CN=Corp Root\" (SHA-256 " + Fingerprint(corp.cert) + "). Add that root to the Site CA.",
+			[]MissingRoot{{Name: "Corp Root", PEM: corp.pem()}},
+		},
+		"a root that is no public root, not presented": {certs(underInspect, corpInspect), `Site CA: ghcr.io: Add "CN=Corp Root" to the Site CA.`, nil},
+	} {
+		a := &Appliance{sitePublic: poolOf(certs(public)), SiteChains: fakeChains(map[string][]*x509.Certificate{"ghcr.io": tc.chain})}
+		got := a.CheckSite(t.Context(), &Settings{SiteCA: newTestRoot(t, "Internal-R2").pem()})
+		var want []string
+		if tc.want != "" {
+			want = []string{tc.want}
+		}
+		if !slices.Equal(got.Errors, want) || !slices.Equal(got.MissingRoots, tc.roots) {
+			t.Errorf("%s: %+v, want %q and roots %v", name, got, want, tc.roots)
+		}
+	}
+}

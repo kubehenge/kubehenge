@@ -490,14 +490,25 @@ func missingRoots(roots []*x509.Certificate) []MissingRoot {
 	return out
 }
 
-// nodesRefusal is what keeps the nodes from trusting chain (judgeChain), where the root it ends at
-// is no public root, which the nodes hold already.
+// nodesRefusal is what keeps the nodes from trusting chain (judgeChain). Where the chain leads to
+// one of the nodes' public roots for some usage, or ends at one, which the nodes hold already, the
+// fault is in the chain and no Site CA entry mends it.
 func nodesRefusal(authorities []*siteAuthority, public *x509.CertPool, chain []*x509.Certificate, now time.Time) refusal {
 	fault := judgeChain(authorities, chain, now)
-	if fault.root != nil && isPublicRoot(fault.root, public, now) {
+	if fault.text != "" && (leadsToPublicRoot(chain, public, now) || fault.root != nil && isPublicRoot(fault.root, public, now)) {
 		return publicRefusal(chain, public, now)
 	}
 	return fault
+}
+
+// leadsToPublicRoot says whether chain leads to one of the nodes' public roots for any usage.
+func leadsToPublicRoot(chain []*x509.Certificate, public *x509.CertPool, now time.Time) bool {
+	intermediates := x509.NewCertPool()
+	for _, c := range chain[1:] {
+		intermediates.AddCert(c)
+	}
+	_, err := chain[0].Verify(x509.VerifyOptions{Roots: public, Intermediates: intermediates, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}})
+	return err == nil
 }
 
 // isPublicRoot says whether root is one of the nodes' public roots.

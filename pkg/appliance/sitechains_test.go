@@ -101,7 +101,7 @@ type issuance struct {
 	leaf      bool
 	// notCA and noSign make an intermediate that may not sign.
 	notCA, noSign bool
-	// clientOnly makes a leaf for client authentication alone.
+	// clientOnly makes a leaf, or an intermediate, for client authentication alone.
 	clientOnly bool
 	notAfter   time.Time
 	sig        x509.SignatureAlgorithm
@@ -126,6 +126,9 @@ func (a *testAuthority) issue(t *testing.T, o issuance) *testAuthority {
 	}
 	if o.noSign {
 		tmpl.KeyUsage = x509.KeyUsageDigitalSignature
+	}
+	if o.clientOnly && !o.leaf {
+		tmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
 	}
 	if o.leaf {
 		tmpl.KeyUsage = x509.KeyUsageDigitalSignature
