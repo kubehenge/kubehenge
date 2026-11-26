@@ -926,7 +926,7 @@ Every 15 seconds the controller checks the VMs of joined machines and the cluste
 
 A warning event of the condition's name records each start and change. `VMsRunning` and `StorageFreed` record the end.
 
-- **`AddressUnavailable`**, set on a Machine rather than the cluster, means its VM ran for 5 minutes without its node joining and has not the address it was given.
+- **`AddressUnavailable`**, set on a Machine rather than the cluster, means its VM ran for 5 minutes since it started without its node joining and has not the address it was given.
   - Another host on the network holds the address, so the VM's network manager refuses it. The message names that host's hardware address where the node's boot log has it.
   - The Machines row shows the same text. Free the address or replace the machine with another range. The condition goes once the VM has its address or its node joins.
   - The controller reads the VM's addresses through its guest agent once, and again every 5 minutes while the condition stays. It needs `node_boot_logs`.

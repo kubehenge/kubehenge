@@ -2150,7 +2150,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
   - 1, 3, 5 or 7 control-plane nodes, and 0 to 100 workers in each pool.
   - Enough node addresses for every machine at once plus one for a rollout.
   - Node addresses and a control-plane endpoint on the gateway's network, with the endpoint outside the node addresses.
-  - None of another cluster's, the management cluster's or the appliance's addresses on the same bridge and VLAN.
+  - None of another cluster's, the management cluster's or the appliance's addresses on the bridge and VLAN that cluster or the appliance is on.
 
 ### Namespaces and ranges
 

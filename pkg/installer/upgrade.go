@@ -413,6 +413,9 @@ func (r *Runner) Upgrade(ctx context.Context, out io.Writer) (*Result, error) {
 	if err = r.upgradeCertificate(ctx, out); err != nil {
 		return nil, err
 	}
+	if err = r.recordNetwork(ctx); err != nil {
+		return nil, userErr("recording container "+c.CTID+"'s network failed", "See "+r.LogPath+" for the command's message")
+	}
 	r.sayf(out, "== starting Kubehenge %s, and checking that it serves", r.version)
 	proxies := strings.Join(c.TrustedProxies, ",")
 	if c.NoTrustedProxy {

@@ -175,7 +175,7 @@ Cluster API sees a VM only through its node. A paused VM keeps its machine ready
 
 Kubehenge's controller therefore reads Proxmox VE's resource list every 15 seconds, with `VM.Audit` on the workload pool and `Datastore.Audit` on the clusters' storages. For a started VM, the list gives the state QEMU reports, such as paused or a disk error.
 
-The controller sets `VMsNotRunning` on a Cluster whose joined machine's VM has been stopped, paused or crashed for 3 minutes. It sets `AddressUnavailable` on a Machine whose VM has run for 5 minutes without its node joining and shows none of the addresses it was given on its network card, read through the guest agent. It sets `StorageNearlyFull` while the cluster's storage is 85% full on a node its VMs run on ([troubleshooting.md](troubleshooting.md#vms-that-do-not-run-storage-nearly-full)). Resuming, starting or replacing a VM is the administrator's call.
+The controller sets `VMsNotRunning` on a Cluster whose joined machine's VM has been stopped, paused or crashed for 3 minutes. It sets `AddressUnavailable` on a Machine whose VM has run for 5 minutes since it started without its node joining and shows none of the addresses it was given on its network card, read through the guest agent. It sets `StorageNearlyFull` while the cluster's storage is 85% full on a node its VMs run on ([troubleshooting.md](troubleshooting.md#vms-that-do-not-run-storage-nearly-full)). Resuming, starting or replacing a VM is the administrator's call.
 
 #### Names and zones set back
 

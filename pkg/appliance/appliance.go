@@ -110,6 +110,11 @@ type Appliance struct {
 	// Addresses lists the addresses the appliance reaches the workload clusters from, which their
 	// firewalls accept. Nil reads the container's own.
 	Addresses func() ([]string, error)
+	// Bridge and VLAN are the network the appliance's container is on, as the installer set it: a
+	// bridge or a VNet by its name, and its VLAN tag, 0 for none. The controller holds the
+	// appliance's addresses off the clusters on that network. An empty bridge records none.
+	Bridge string
+	VLAN   int
 
 	mu          sync.Mutex
 	job         *Job

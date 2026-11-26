@@ -1077,6 +1077,11 @@ run "vnets_are_granted_in_their_zones" {
     condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : vm.network_device[0].bridge == "mgmt"])
     error_message = "the management VMs attach to the VNet by its name"
   }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).managementNetwork.bridge == "mgmt"
+    error_message = "the controller holds the management side's addresses on the VNet by its name, as clusters name it"
+  }
 }
 
 run "bridge_with_two_slashes_is_refused" {
@@ -2223,6 +2228,14 @@ run "dual_stack_ipv4_first" {
   assert {
     condition     = output.api_endpoint == "https://192.0.2.10:6443"
     error_message = "an IPv4-first cluster's endpoint is the IPv4 virtual IP"
+  }
+
+  assert {
+    condition = yamldecode(helm_release.kubehenge.values[0]).managementNetwork.nodes == {
+      "192.0.2.11" = "kubehenge-cp-0", "192.0.2.12" = "kubehenge-cp-1", "192.0.2.13" = "kubehenge-cp-2",
+      "2001:db8:1::11" = "kubehenge-cp-0", "2001:db8:1::12" = "kubehenge-cp-1", "2001:db8:1::13" = "kubehenge-cp-2",
+    }
+    error_message = "the controller names each management node by its address of either family"
   }
 }
 

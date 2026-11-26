@@ -32,10 +32,11 @@ func (g *guestFiles) ReadFile(_ context.Context, vmid int64, file string, _ int)
 func (*guestFiles) Running(context.Context, int64) (bool, error) { return true, nil }
 
 // addressFixture is the VM fixture's worker web-md-0, VM 104, whose node has not joined, given the
-// address 192.0.2.9 and created addressWait ago.
+// address 192.0.2.9. Its Machine is old, and its VM starts now.
 func addressFixture(t *testing.T) (*vmFixture, *guestFiles) {
 	t.Helper()
 	f := newVMFixture(t)
+	f.started = map[int64]time.Time{104: f.now}
 	files := &guestFiles{files: map[string]string{}}
 	f.watch.Files = files
 	m := f.machine("web-md-0")
@@ -70,10 +71,9 @@ func TestVMWatchSaysAVMHasNoAddress(t *testing.T) {
 	t.Parallel()
 	f, files := addressFixture(t)
 	f.cardHolds("192.0.2.77")
-	// The machine is younger than addressWait: nothing is asked.
-	f.now = f.machine("web-md-0").CreationTimestamp.Add(addressWait - time.Second)
-	if cond := f.addressCondition(0); cond != nil {
-		t.Fatalf("a young machine: %+v", cond)
+	// The VM has run for less than addressWait: nothing is asked.
+	if cond := f.addressCondition(addressWait - time.Second); cond != nil {
+		t.Fatalf("a VM that has only just started: %+v", cond)
 	}
 	cond := f.addressCondition(time.Second)
 	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != AddressMissingReason ||
@@ -101,7 +101,7 @@ func TestVMWatchLooksAtAVMWithItsAddressOnce(t *testing.T) {
 	f, _ := addressFixture(t)
 	asked := 0
 	f.watch.Proxmox = countingProxmox{editingProxmox: f.edit, path: "/nodes/pve1/qemu/104/agent/network-get-interfaces", count: &asked}
-	f.now = f.machine("web-md-0").CreationTimestamp.Add(addressWait)
+	f.now = f.now.Add(addressWait)
 	for range 5 {
 		if cond := f.addressCondition(addressWait); cond != nil {
 			t.Fatalf("a VM with its address: %+v", cond)
@@ -118,7 +118,7 @@ func TestVMWatchClearsAndRetriesTheAddressCheck(t *testing.T) {
 	t.Parallel()
 	f, _ := addressFixture(t)
 	f.cardHolds("192.0.2.77")
-	f.now = f.machine("web-md-0").CreationTimestamp.Add(addressWait)
+	f.now = f.now.Add(addressWait)
 	if f.addressCondition(0) == nil {
 		t.Fatal("no condition")
 	}
@@ -135,7 +135,7 @@ func TestVMWatchClearsAndRetriesTheAddressCheck(t *testing.T) {
 	delete(g.pve, "/nodes/pve1/qemu/104/agent/network-get-interfaces")
 	asked := 0
 	g.watch.Proxmox = countingProxmox{editingProxmox: g.edit, path: "/nodes/pve1/qemu/104/agent/network-get-interfaces", count: &asked}
-	g.now = g.machine("web-md-0").CreationTimestamp.Add(addressWait)
+	g.now = g.now.Add(addressWait)
 	for _, after := range []time.Duration{0, time.Minute, time.Minute} {
 		if cond := g.addressCondition(after); cond != nil {
 			t.Fatalf("an agent that does not answer: %+v", cond)
@@ -155,7 +155,7 @@ func TestVMWatchLeavesAddressesAloneWithoutGuestAgentReads(t *testing.T) {
 	t.Parallel()
 	f, _ := addressFixture(t)
 	f.cardHolds("192.0.2.77")
-	f.now = f.machine("web-md-0").CreationTimestamp.Add(addressWait)
+	f.now = f.now.Add(addressWait)
 	f.watch.Files = nil
 	if cond := f.addressCondition(0); cond != nil {
 		t.Fatalf("without Files: %+v", cond)
@@ -163,7 +163,7 @@ func TestVMWatchLeavesAddressesAloneWithoutGuestAgentReads(t *testing.T) {
 	g, files := addressFixture(t)
 	g.cardHolds("192.0.2.77")
 	g.vms(map[int64]string{101: "running", 102: "running", 103: "running", 104: "stopped"})
-	g.now = g.machine("web-md-0").CreationTimestamp.Add(addressWait)
+	g.now = g.now.Add(addressWait)
 	if cond := g.addressCondition(0); cond != nil {
 		t.Fatalf("a stopped VM: %+v", cond)
 	}
@@ -174,8 +174,7 @@ func TestVMWatchLeavesAddressesAloneWithoutGuestAgentReads(t *testing.T) {
 	if err := h.kube.Status().Update(context.Background(), m); err != nil {
 		t.Fatal(err)
 	}
-	h.now = m.CreationTimestamp.Add(addressWait)
-	if cond := h.addressCondition(0); cond != nil {
+	if cond := h.addressCondition(addressWait); cond != nil {
 		t.Fatalf("no address given: %+v", cond)
 	}
 	if files.reads != 0 {
@@ -196,4 +195,98 @@ func (c countingProxmox) Get(ctx context.Context, path string, v any) error {
 		*c.count++
 	}
 	return c.editingProxmox.Get(ctx, path, v)
+}
+
+// A Machine made long before its VM, as a worker's is while the control plane comes up, is looked
+// at only once its VM has run for addressWait, so a VM whose network is still coming up is left alone.
+func TestVMWatchWaitsFromTheVMsStart(t *testing.T) {
+	t.Parallel()
+	f, _ := addressFixture(t)
+	f.cardHolds()
+	asked := 0
+	f.watch.Proxmox = countingProxmox{editingProxmox: f.edit, path: "/nodes/pve1/qemu/104/agent/network-get-interfaces", count: &asked}
+	f.vms(map[int64]string{101: "running", 102: "running", 103: "running", 104: "stopped"})
+	if cond := f.addressCondition(10 * time.Minute); cond != nil {
+		t.Fatalf("a stopped VM: %+v", cond)
+	}
+	f.started[104] = f.now
+	f.vms(map[int64]string{101: "running", 102: "running", 103: "running", 104: "running"})
+	for _, after := range []time.Duration{15 * time.Second, 2 * time.Minute, addressWait - 2*time.Minute - 16*time.Second} {
+		if cond := f.addressCondition(after); cond != nil {
+			t.Fatalf("a VM that has run for %s: %+v", f.now.Sub(f.started[104]), cond)
+		}
+	}
+	if e := f.event(); e != "" || asked != 0 {
+		t.Fatalf("a VM that has run less than addressWait: event %q, agent asked %d times", e, asked)
+	}
+	// Its network came up in time: nothing is said.
+	f.cardHolds("192.0.2.9")
+	if cond := f.addressCondition(time.Second); cond != nil || asked != 1 {
+		t.Fatalf("a VM with its address after addressWait: %+v, agent asked %d times", cond, asked)
+	}
+	if e := f.event(); e != "" {
+		t.Errorf("event %q", e)
+	}
+}
+
+// A VM whose machine has no addresses yet when it has run for addressWait stays watched, and a
+// duplicate address found once Cluster API sets them shows.
+func TestVMWatchWaitsForTheMachinesAddresses(t *testing.T) {
+	t.Parallel()
+	f, _ := addressFixture(t)
+	f.cardHolds("192.0.2.77")
+	m := f.machine("web-md-0")
+	m.Status.Addresses = nil
+	if err := f.kube.Status().Update(context.Background(), m); err != nil {
+		t.Fatal(err)
+	}
+	if cond := f.addressCondition(addressWait); cond != nil {
+		t.Fatalf("no address given: %+v", cond)
+	}
+	m = f.machine("web-md-0")
+	m.Status.Addresses = []clusterv1.MachineAddress{{Type: clusterv1.MachineInternalIP, Address: "192.0.2.9"}}
+	if err := f.kube.Status().Update(context.Background(), m); err != nil {
+		t.Fatal(err)
+	}
+	cond := f.addressCondition(15 * time.Second)
+	if cond == nil || cond.Reason != AddressMissingReason {
+		t.Fatalf("the address given later: %+v", cond)
+	}
+}
+
+// A restarted controller remembers nothing of its looks: it asks a fine VM's agent once more and
+// says nothing, and a machine already marked keeps its condition without a second event.
+func TestVMWatchAfterARestart(t *testing.T) {
+	t.Parallel()
+	f, _ := addressFixture(t)
+	asked := 0
+	f.watch.Proxmox = countingProxmox{editingProxmox: f.edit, path: "/nodes/pve1/qemu/104/agent/network-get-interfaces", count: &asked}
+	if cond := f.addressCondition(addressWait); cond != nil {
+		t.Fatalf("a VM with its address: %+v", cond)
+	}
+	f.watch.addresses = nil
+	for range 3 {
+		if cond := f.addressCondition(time.Minute); cond != nil {
+			t.Fatalf("a VM with its address after a restart: %+v", cond)
+		}
+	}
+	if e := f.event(); e != "" || asked != 2 {
+		t.Fatalf("after a restart: event %q, agent asked %d times, want twice in all", e, asked)
+	}
+
+	g, _ := addressFixture(t)
+	g.cardHolds("192.0.2.77")
+	if g.addressCondition(addressWait) == nil {
+		t.Fatal("no condition")
+	}
+	if e := g.event(); !strings.HasPrefix(e, "Warning AddressUnavailable") {
+		t.Fatalf("event %q", e)
+	}
+	g.watch.addresses = nil
+	if cond := g.addressCondition(time.Minute); cond == nil || cond.Reason != AddressMissingReason {
+		t.Fatalf("after a restart: %+v", cond)
+	}
+	if e := g.event(); e != "" {
+		t.Errorf("a second event after a restart: %q", e)
+	}
 }

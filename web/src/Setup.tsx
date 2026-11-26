@@ -2131,7 +2131,7 @@ function BootLogsChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element 
         Shows why a kubeadm, RKE2 or k3s node does not join. Talos nodes&apos; logs come through Talos either way.
       </Info>
       <p className="hint" id={hint}>
-        Grants VM.GuestAgent.FileRead on the clusters&apos; pool.
+        Grants VM.GuestAgent.FileRead and VM.GuestAgent.Audit on the clusters&apos; pool.
       </p>
     </fieldset>
   );

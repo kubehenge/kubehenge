@@ -128,6 +128,8 @@ The interface acts in the management cluster with its own kubeconfig.`,
 	f.StringVar(&o.headlampUpstream, "headlamp-upstream", "", "the Headlamp server, such as http://127.0.0.1:4466")
 	f.StringVar(&o.headlampKubeconfig, "headlamp-kubeconfig", "", "file the Headlamp server reads its clusters from, written by the interface")
 	f.IntVar(&s.ApplianceVMID, "appliance-vmid", applianceVMIDDefault(), "the appliance's guest ID in Proxmox VE, for telling administrators whether a backup job includes it (env KUBEHENGE_APPLIANCE_VMID)")
+	f.StringVar(&a.Bridge, "appliance-bridge", os.Getenv("KUBEHENGE_APPLIANCE_BRIDGE"), "the bridge, or VNet by its name, the appliance's container is on. No cluster on it may take the appliance's addresses (env KUBEHENGE_APPLIANCE_BRIDGE)")
+	f.IntVar(&a.VLAN, "appliance-vlan", envInt("KUBEHENGE_APPLIANCE_VLAN"), "the VLAN tag of the appliance's container, 0 for none (env KUBEHENGE_APPLIANCE_VLAN)")
 	f.StringVar(&a.Module, "module", "/usr/share/kubehenge/management-cluster", "the management-cluster module the appliance applies")
 	f.StringVar(&a.Tofu, "tofu", "/usr/local/bin/tofu", "the OpenTofu binary the appliance runs")
 	f.StringVar(&o.updateSpool, "update-spool", "/var/lib/kubehenge-update", "the appliance updater's spool, where upgrades are requested")
@@ -625,9 +627,12 @@ func listenPort(addr string) (int, error) {
 	return n, nil
 }
 
-func applianceVMIDDefault() int {
-	id, _ := strconv.Atoi(os.Getenv("KUBEHENGE_APPLIANCE_VMID"))
-	return id
+func applianceVMIDDefault() int { return envInt("KUBEHENGE_APPLIANCE_VMID") }
+
+// envInt is the number an environment variable holds, 0 when it holds none.
+func envInt(name string) int {
+	n, _ := strconv.Atoi(os.Getenv(name))
+	return n
 }
 
 // knowTheAppliance tells the interface the appliance's MAC and IP addresses, by which it finds its

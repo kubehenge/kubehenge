@@ -304,7 +304,7 @@
         },
         "etcdRestore": { "type": "boolean" },
         "bootLogs": {
-          "description": "Whether the controller reads nodes' boot logs through their guest agents, with its token holding VM.GuestAgent.FileRead on the workload pool.",
+          "description": "Whether the controller reads nodes' boot logs through their guest agents, with its token holding VM.GuestAgent.FileRead and VM.GuestAgent.Audit on the workload pool.",
           "type": "boolean"
         }
       }

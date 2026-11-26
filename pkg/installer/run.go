@@ -225,8 +225,10 @@ func urlHost(h string) string {
 }
 
 var (
-	cfgIP4RE = regexp.MustCompile(`(?m)^net0: (?:.*,)?ip=([0-9.]+)/`)
-	cfgIP6RE = regexp.MustCompile(`(?m)^net0: (?:.*,)?ip6=([0-9A-Fa-f:]+)/`)
+	cfgIP4RE    = regexp.MustCompile(`(?m)^net0: (?:.*,)?ip=([0-9.]+)/`)
+	cfgIP6RE    = regexp.MustCompile(`(?m)^net0: (?:.*,)?ip6=([0-9A-Fa-f:]+)/`)
+	cfgBridgeRE = regexp.MustCompile(`(?m)^net0: (?:.*,)?bridge=([^,\s]+)`)
+	cfgTagRE    = regexp.MustCompile(`(?m)^net0: (?:.*,)?tag=(\d+)`)
 )
 
 var gatewayRE = regexp.MustCompile(`(?m)^default via (\S+)`)
@@ -998,7 +1000,9 @@ func (r *Runner) stepInstall(ctx context.Context) error {
 		}
 	}
 	public := urlHost(r.public())
-	env := fmt.Sprintf("KUBEHENGE_PROXMOX_URL=%s\nKUBEHENGE_PUBLIC_URL=https://%s\nKUBEHENGE_APPLIANCE_VMID=%s\n", c.ProxmoxURL, public, c.CTID)
+	bridge, vlan := r.containerNetwork(ctx)
+	env := fmt.Sprintf("KUBEHENGE_PROXMOX_URL=%s\nKUBEHENGE_PUBLIC_URL=https://%s\nKUBEHENGE_APPLIANCE_VMID=%s\nKUBEHENGE_APPLIANCE_BRIDGE=%s\nKUBEHENGE_APPLIANCE_VLAN=%s\n",
+		c.ProxmoxURL, public, c.CTID, bridge, vlan)
 	if c.Insecure {
 		env += "KUBEHENGE_PROXMOX_INSECURE=true\n"
 	}
@@ -1202,4 +1206,35 @@ func tarDir(dir, dest string) error {
 		return fmt.Errorf("close archive: %w", err)
 	}
 	return nil
+}
+
+// containerNetwork is the bridge, or VNet by its name, and the VLAN tag of the container's network
+// as Proxmox VE has it, each empty where its configuration names none.
+func (r *Runner) containerNetwork(ctx context.Context) (string, string) {
+	conf, _ := r.pct(ctx, "config", r.S.Cfg.CTID)
+	var bridge, vlan string
+	if m := cfgBridgeRE.FindStringSubmatch(conf); m != nil {
+		bridge = m[1]
+	}
+	if m := cfgTagRE.FindStringSubmatch(conf); m != nil {
+		vlan = m[1]
+	}
+	return bridge, vlan
+}
+
+// recordNetworkScript puts the container's bridge ($1) and VLAN tag ($2) into the appliance's
+// environment, in place of what it held.
+const recordNetworkScript = `
+set -e
+env=/etc/kubehenge/appliance.env
+{ grep -v -e "^KUBEHENGE_APPLIANCE_BRIDGE=" -e "^KUBEHENGE_APPLIANCE_VLAN=" "$env" || true; echo "KUBEHENGE_APPLIANCE_BRIDGE=$1"; echo "KUBEHENGE_APPLIANCE_VLAN=$2"; } > "$env.new"
+chmod 0644 "$env.new" && mv "$env.new" "$env"
+`
+
+// recordNetwork tells an installed appliance the network its container is on now, which it starts
+// with.
+func (r *Runner) recordNetwork(ctx context.Context) error {
+	bridge, vlan := r.containerNetwork(ctx)
+	_, err := r.inCT(ctx, "sh", "-c", recordNetworkScript, "sh", bridge, vlan)
+	return err
 }

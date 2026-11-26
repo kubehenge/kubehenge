@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +31,11 @@ const (
 	ApplianceAddressesName = "kubehenge-appliance-addresses"
 	// ApplianceAddressesKey holds the appliance's addresses, comma-separated.
 	ApplianceAddressesKey = "addresses"
+	// ApplianceBridgeKey holds the bridge, or VNet by its name, the appliance is on, empty where it
+	// does not know it.
+	ApplianceBridgeKey = "bridge"
+	// ApplianceVLANKey holds the VLAN tag of the appliance's network, 0 for none.
+	ApplianceVLANKey = "vlan"
 	// FirewallSourcesAnnotation names, on the ProxmoxCluster of a firewalled cluster, the addresses
 	// beside the cluster's own that Kubehenge's capmox build keeps in each node's IPSet kubehenge:
 	// the management cluster's nodes, the appliance and the nodes and pods of the clusters it is
@@ -134,10 +140,17 @@ func (f *FirewallSources) Addresses(ctx context.Context) ([]string, error) {
 
 // applianceAddresses are the addresses the appliance recorded for itself, none while it has not.
 func (f *FirewallSources) applianceAddresses(ctx context.Context) ([]string, error) {
+	own, _, err := f.appliance(ctx)
+	return own, err
+}
+
+// appliance is what the appliance recorded of itself: its addresses, and its network as
+// "<bridge>/<vlan>", empty where it recorded no bridge.
+func (f *FirewallSources) appliance(ctx context.Context) ([]string, string, error) {
 	cm := &corev1.ConfigMap{}
 	err := f.Reader.Get(ctx, client.ObjectKey{Namespace: f.Namespace, Name: ApplianceAddressesName}, cm)
 	if err != nil && !apierrors.IsNotFound(err) {
-		return nil, fmt.Errorf("reading the appliance's addresses: %w", err)
+		return nil, "", fmt.Errorf("reading the appliance's addresses: %w", err)
 	}
 	var own []string
 	for address := range strings.SplitSeq(cm.Data[ApplianceAddressesKey], ",") {
@@ -145,7 +158,12 @@ func (f *FirewallSources) applianceAddresses(ctx context.Context) ([]string, err
 			own = append(own, address)
 		}
 	}
-	return own, nil
+	segment := ""
+	if bridge := strings.TrimSpace(cm.Data[ApplianceBridgeKey]); bridge != "" {
+		vlan, _ := strconv.Atoi(strings.TrimSpace(cm.Data[ApplianceVLANKey]))
+		segment = fmt.Sprintf("%s/%d", bridge, vlan)
+	}
+	return own, segment, nil
 }
 
 func (f *FirewallSources) runOnce(ctx context.Context) error {

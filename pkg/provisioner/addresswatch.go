@@ -36,9 +36,9 @@ const (
 )
 
 const (
-	// addressWait is how long a machine's VM runs without its node joining before the card is
-	// looked at, and how long a look that found a problem or could not be made waits to be made
-	// again. A look that finds the address is final.
+	// addressWait is how long a machine's VM runs, by Proxmox VE's uptime of it, without its node
+	// joining before the card is looked at, and how long a look that found a problem or could not be
+	// made waits to be made again. A look that finds the address is final.
 	addressWait = 5 * time.Minute
 	// duplicateLogRead bounds how much of cloud-init's output is read for the holder's address.
 	duplicateLogRead = 1 << 20
@@ -58,9 +58,12 @@ type addressLook struct {
 // watchAddresses says on a machine whose VM has run for addressWait without its node joining that
 // the address it was given is not on the VM's network card, which is what a duplicate address on
 // the network does: the VM's network manager refuses it, and the node never joins, with nothing
-// else saying why. It reads the card through the guest agent once, and again every addressWait
-// while the machine shows the problem or the agent did not answer. It is off where the controller's
-// token may not read the guest agents (Files is nil).
+// else saying why. The wait counts from the VM's start, as Proxmox VE's uptime gives it, so a
+// controller restart neither shortens nor restarts it. A machine stays watched until its card shows
+// its address or its node joins, a machine given no address yet included. The card is read through
+// the guest agent once, and again every addressWait while the machine shows the problem or the
+// agent did not answer. It is off where the controller's token may not read the guest agents
+// (Files is nil).
 func (w *VMWatch) watchAddresses(ctx context.Context, c *clusterv1.Cluster, look *vmLook) error {
 	if w.Files == nil {
 		return nil
@@ -94,16 +97,21 @@ func (w *VMWatch) watchMachineAddress(ctx context.Context, c *clusterv1.Cluster,
 		}
 		return w.markAddress(ctx, c, m, nil)
 	}
-	if pm == nil || w.now().Sub(m.CreationTimestamp.Time) < addressWait {
+	if pm == nil {
 		return nil
 	}
 	vmid, _, _ := unstructured.NestedInt64(pm.Object, "spec", "virtualMachineID")
 	guest, listed := look.guests[vmid]
 	seen := w.addresses[key]
-	if !listed || guest.Status != guestRunning || seen.found || w.now().Before(seen.next) {
+	if !listed || guest.Status != guestRunning || time.Duration(guest.Uptime)*time.Second < addressWait || seen.found || w.now().Before(seen.next) {
 		return nil
 	}
-	problem, found, err := w.checkAddress(ctx, m, pm, guest.Node, vmid)
+	expected := expectedAddresses(m, pm)
+	if len(expected) == 0 {
+		// Cluster API sets the addresses after the VM starts: the machine is looked at once it has them.
+		return nil
+	}
+	problem, found, err := w.checkAddress(ctx, guest.Node, vmid, expected)
 	w.addresses[key] = addressLook{found: found, next: w.now().Add(addressWait)}
 	if err != nil {
 		ctrl.LoggerFrom(ctx).WithName("vm-watch").Info("could not read a VM's network card", "machine", m.Name, "error", err.Error())
@@ -115,13 +123,10 @@ func (w *VMWatch) watchMachineAddress(ctx context.Context, c *clusterv1.Cluster,
 	return w.markAddress(ctx, c, m, problem)
 }
 
-// checkAddress reads the VM's addresses through its guest agent and compares them to the machine's.
-// It returns the condition for an address the card lacks, or whether every address is there.
-func (w *VMWatch) checkAddress(ctx context.Context, m *clusterv1.Machine, pm *unstructured.Unstructured, node string, vmid int64) (*metav1.Condition, bool, error) {
-	expected := expectedAddresses(m, pm)
-	if len(expected) == 0 {
-		return nil, true, nil
-	}
+// checkAddress reads the VM's addresses through its guest agent and compares them to the ones the
+// machine was given. It returns the condition for an address the card lacks, or whether every
+// address is there.
+func (w *VMWatch) checkAddress(ctx context.Context, node string, vmid int64, expected []netip.Addr) (*metav1.Condition, bool, error) {
 	have, err := w.guestAddresses(ctx, node, vmid)
 	if err != nil {
 		return nil, false, err

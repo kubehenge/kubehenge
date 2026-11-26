@@ -70,6 +70,9 @@ type vmFixture struct {
 	watch  *VMWatch
 	now    time.Time
 	states map[int64]string
+	// started is when each running VM started, for its uptime in the resource list, which is 0
+	// for a VM not in it.
+	started map[int64]time.Time
 	// names, pools and vmNodes are what the resource list says of each VM.
 	names   map[int64]string
 	pools   map[int64]string
@@ -188,8 +191,12 @@ func (f *vmFixture) render() {
 	guests := make([]string, 0, len(f.states)+1)
 	for vmid, entry := range f.states {
 		status, lock, _ := strings.Cut(entry, ":")
-		guests = append(guests, fmt.Sprintf(`{"vmid":%d,"name":%q,"pool":%q,"node":%q,"type":"qemu","status":%q,"lock":%q}`,
-			vmid, f.names[vmid], f.pools[vmid], f.vmNodes[vmid], status, lock))
+		var uptime int64
+		if started, ok := f.started[vmid]; ok && status == guestRunning {
+			uptime = int64(f.now.Sub(started) / time.Second)
+		}
+		guests = append(guests, fmt.Sprintf(`{"vmid":%d,"name":%q,"pool":%q,"node":%q,"type":"qemu","status":%q,"lock":%q,"uptime":%d}`,
+			vmid, f.names[vmid], f.pools[vmid], f.vmNodes[vmid], status, lock, uptime))
 	}
 	guests = append(guests, `{"vmid":200,"node":"pve1","type":"lxc","status":"stopped"}`)
 	f.pve["/cluster/resources?type=vm"] = "[" + strings.Join(guests, ",") + "]"
@@ -201,6 +208,9 @@ func (f *vmFixture) storages(raw string) { f.pve["/cluster/resources?type=storag
 func (f *vmFixture) look(after time.Duration, condType string) *metav1.Condition {
 	f.t.Helper()
 	f.now = f.now.Add(after)
+	if f.started != nil {
+		f.render()
+	}
 	ctx := context.Background()
 	look, err := f.watch.read(ctx)
 	if err != nil {

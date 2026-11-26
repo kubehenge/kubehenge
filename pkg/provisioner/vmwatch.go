@@ -153,6 +153,8 @@ type pveGuest struct {
 	Type   string `json:"type"`
 	Status string `json:"status"`
 	Lock   string `json:"lock"`
+	// Uptime is how long a running guest has run since it last started, in seconds.
+	Uptime int64 `json:"uptime"`
 }
 
 // pveStorageUse is a storage on one node as Proxmox VE's resource list shows it.

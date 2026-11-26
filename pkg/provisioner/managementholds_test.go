@@ -26,13 +26,16 @@ func managementSide(t *testing.T) *FirewallSources {
 
 func TestManagementHeldAddressesNameTheirHolders(t *testing.T) {
 	t.Parallel()
-	segment, held, err := managementSide(t).Held(t.Context())
-	if err != nil || segment != "vmbr0/0" {
-		t.Fatalf("segment %q, error %v", segment, err)
+	held, err := managementSide(t).Held(t.Context())
+	if err != nil {
+		t.Fatal(err)
 	}
 	got := map[string]string{}
 	for _, h := range held {
 		got[h.Address.String()] = h.Holder
+		if h.Segment != "vmbr0/0" {
+			t.Errorf("%s is held on %q, want vmbr0/0", h.Address, h.Segment)
+		}
 	}
 	want := map[string]string{
 		"10.0.0.11": "management node kubehenge-cp-0", "2001:db8::11": holderManagementNode,
@@ -48,8 +51,8 @@ func TestManagementHeldAddressesNameTheirHolders(t *testing.T) {
 	}
 	unset := managementSide(t)
 	unset.Bridge = ""
-	if segment, held, err := unset.Held(t.Context()); err != nil || segment != "" || len(held) != 0 {
-		t.Errorf("without a bridge: %q, %v, %v", segment, held, err)
+	if held, err := unset.Held(t.Context()); err != nil || len(held) != 0 {
+		t.Errorf("without a bridge: %v, %v", held, err)
 	}
 }
 
@@ -83,16 +86,45 @@ func TestManagementAddressesAreRefused(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			segment, held, err := managementSide(t).Held(t.Context())
+			held, err := managementSide(t).Held(t.Context())
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = checkManagementAddresses(tc.cluster, segment, held)
+			err = checkManagementAddresses(tc.cluster, held)
 			switch {
 			case tc.want == "" && err != nil:
 				t.Errorf("refused: %v", err)
 			case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
 				t.Errorf("got %v, want it to say %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// An appliance on a network of its own holds its addresses there, and on no other, also where the
+// management cluster's bridge is not known.
+func TestApplianceAddressesAreHeldOnItsOwnNetwork(t *testing.T) {
+	t.Parallel()
+	for name, bridge := range map[string]string{"management on vmbr0": "vmbr0", "management bridge not known": ""} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			appliance := &corev1.ConfigMap{
+				Name: ApplianceAddressesName, Namespace: "kubehenge-system",
+				Data: map[string]string{ApplianceAddressesKey: "10.0.0.31", ApplianceBridgeKey: "vmbr0", ApplianceVLANKey: "7"},
+			}
+			f := managementSide(t)
+			f.Reader = fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(appliance).Build()
+			f.Bridge = bridge
+			held, err := f.Held(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = checkManagementAddresses(lbCluster("web", 7, "10.0.0.100-10.0.0.110", "10.0.0.99", onAt(`"10.0.0.30-10.0.0.40"`)), held)
+			if err == nil || !strings.Contains(err.Error(), "include 10.0.0.31, which is the appliance's address") {
+				t.Errorf("on the appliance's network: %v", err)
+			}
+			if err := checkManagementAddresses(lbCluster("web", 0, "10.0.0.100-10.0.0.110", "10.0.0.99", onAt(`"10.0.0.30-10.0.0.40"`)), held); err != nil {
+				t.Errorf("on another network than the appliance's: %v", err)
 			}
 		})
 	}
