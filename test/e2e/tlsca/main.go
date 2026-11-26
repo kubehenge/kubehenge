@@ -47,7 +47,7 @@ const (
 // authority is the root and the intermediate it signed, with the intermediate's key.
 type authority struct {
 	root, intermediate, storeRoot *x509.Certificate
-	key                *rsa.PrivateKey
+	key                           *rsa.PrivateKey
 }
 
 func main() {

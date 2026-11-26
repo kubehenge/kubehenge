@@ -140,8 +140,8 @@ func (c *settingsChange) apply(ctx context.Context, s *applianceSession) ([]appl
 		settings.WorkloadVMIDRange = c.vmIDRange
 	}
 	save := func() error {
-		_, err := s.call(ctx, http.MethodPost, "/api/setup", map[string]any{"settings": settings, "passphrase": c.passphrase}, nil)
-		return err
+		_, saveErr := s.call(ctx, http.MethodPost, "/api/setup", map[string]any{"settings": settings, "passphrase": c.passphrase}, nil)
+		return saveErr
 	}
 	err = save()
 	refused, ok := errors.AsType[*missingRootsError](err)
@@ -156,6 +156,20 @@ func (c *settingsChange) apply(ctx context.Context, s *applianceSession) ([]appl
 		return nil, err
 	}
 	return refused.roots, nil
+}
+
+// applyAndSay applies the change and says which roots it added to the site CA.
+func (c *settingsChange) applyAndSay(ctx context.Context, cmd *cobra.Command, s *applianceSession) error {
+	added, err := c.apply(ctx, s)
+	if err != nil {
+		return err
+	}
+	if len(added) > 0 {
+		if err := say(cmd, "Added "+rootNames(added)+" to the site CA"); err != nil {
+			return err
+		}
+	}
+	return say(cmd, "Applying the settings")
 }
 
 func (o *applianceOptions) settingsSetCommand() *cobra.Command {
@@ -196,18 +210,7 @@ buttons do. The state passphrase comes from --passphrase-file or KUBEHENGE_PASSP
 				}
 				change.siteCA = string(raw)
 			}
-			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
-				added, err := change.apply(ctx, s)
-				if err != nil {
-					return err
-				}
-				if len(added) > 0 {
-					if err := say(cmd, "Added "+rootNames(added)+" to the site CA"); err != nil {
-						return err
-					}
-				}
-				return say(cmd, "Applying the settings")
-			})
+			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error { return change.applyAndSay(ctx, cmd, s) })
 		},
 	}
 	f := cmd.Flags()
