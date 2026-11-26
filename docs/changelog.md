@@ -8,17 +8,17 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ### Highlights
 
-- **Behind TLS inspection, the device's root CA is all the Site CA needs.** The nodes trust its chains, also when an intermediate writes the root's name another way.
+- **Behind TLS inspection, the device's root CA is all the Site CA needs.** The nodes trust its chains, also when an intermediate encodes the root's name differently.
 - **Setup checks the Site CA before Apply.** It names the certificate that breaks a chain, under the Site CA field.
 
 ### Fixed
 
-- A Site CA or proxy certificate of just a TLS inspection root now works for the management nodes. Setup names the certificate that breaks a chain before Apply.
+- A Site CA or proxy CA that holds only the TLS inspection root now works for the management nodes.
 - A failed run names the node, host and issuer of a rejected certificate.
 - A management cluster with a Site CA, a proxy CA or a chart mirror's CA now sets up the Add-on Provider for Helm.
-- A first setup that failed behind TLS inspection now finishes on the next Apply once the Site CA is set. The appliance reboots the nodes whose etcd or kubelet gave up pulling their images.
-- Rocky Linux template builds read Rocky's own server after a failed attempt, so a mirror behind it no longer fails the build.
-- The appliance reports a listen address it cannot bind, and no longer logs it as served.
+- A first setup that failed behind TLS inspection now finishes on the next Apply once the Site CA is set. The appliance reboots nodes whose etcd or kubelet Talos left Failed.
+- Rocky Linux template builds switch to Rocky's own servers after a failed attempt. A metalink that refuses the repository index no longer fails the build.
+- The appliance stops with an error when it cannot bind a listen address. It used to log the address as served.
 
 ## [0.5.6] - 2026-11-23
 

@@ -485,7 +485,7 @@ func TestSiteBundleNamesTheCertificateThatBreaksTheChain(t *testing.T) {
 	}{
 		"a middle intermediate missing":               {[]*testAuthority{leaf, three, one}, `"CN=Inspect Two" is missing. Paste it with the root.`},
 		"an intermediate that is no CA":               {[]*testAuthority{underNotCA, notCA}, `"CN=Inspect NotCA" is no CA. Reissue it as a CA on the device.`},
-		"an intermediate without certificate signing": {[]*testAuthority{underNoSigning, noSigning}, `"CN=Inspect NoSign" may not sign certificates. Reissue it with certificate signing.`},
+		"an intermediate without certificate signing": {[]*testAuthority{underNoSigning, noSigning}, `"CN=Inspect NoSign" may not sign certificates. Reissue it with the certificate signing key usage.`},
 		"a root that was not pasted":                  {[]*testAuthority{newTestRoot(t, "Other Root")}, `"CN=Other Root" is a root that was not pasted. Paste that root.`},
 	} {
 		if _, err := bundleFor(root, tc.chain...); err == nil || err.Error() != "Site CA: host.example: "+tc.want {
@@ -509,7 +509,7 @@ func TestSiteChainErrorsGroupTheHostsAndStayShort(t *testing.T) {
 	_, err := a.ResolveSite(t.Context(), s)
 	want := []string{
 		`Site CA: factory.talos.dev, ghcr.io: "CN=Inspect Intermediate" is missing. Paste it with the root.`,
-		`Site CA: tuf-repo-cdn.sigstore.dev: "CN=Inspect Weak" is signed with ECDSA-SHA1, which nodes refuse. Reissue it with SHA-256.`,
+		`Site CA: tuf-repo-cdn.sigstore.dev: "CN=Inspect Weak" is signed with ECDSA-SHA1. Nodes refuse that. Reissue it with SHA-256.`,
 	}
 	faults, ok := errors.AsType[SiteChainErrors](err)
 	if !ok || !slices.Equal(faults, want) {
@@ -963,7 +963,7 @@ func TestSiteBundleNamesARootTheDeviceMadeAgain(t *testing.T) {
 		chain []*testAuthority
 		want  string
 	}{
-		"without the new root": {[]*testAuthority{c.leaf, c.intermediate}, `"CN=Inspect Intermediate" is signed by a new "CN=Inspect Root". Paste it.`},
+		"without the new root": {[]*testAuthority{c.leaf, c.intermediate}, `"CN=Inspect Intermediate" is signed by a new "CN=Inspect Root". Paste the new root.`},
 		"with the new root":    {[]*testAuthority{c.leaf, c.intermediate, c.root}, `"CN=Inspect Root" is a root that was not pasted. Paste that root.`},
 	} {
 		if _, err := bundleFor(pasted, tc.chain...); err == nil || err.Error() != "Site CA: host.example: "+tc.want {
@@ -998,7 +998,7 @@ func TestAFailedApplyNamesTheNodeTheHostAndTheIssuerOfARejectedCertificate(t *te
 		t.Fatal(err)
 	}
 	j := waitFor(t, a)
-	want := "Node 10.0.0.11 rejected the certificate tuf-repo-cdn.sigstore.dev presents, issued by CN=Inspect Intermediate, so check the Site CA. The run failed:"
+	want := "Node 10.0.0.11 rejected the certificate tuf-repo-cdn.sigstore.dev presents, issued by CN=Inspect Intermediate. Check the Site CA. The run failed:"
 	if j.State != StateFailed || !strings.HasPrefix(j.Error, want) || strings.Contains(j.Error, "10.0.0.12") {
 		t.Errorf("job error %q, want it to hold %q", j.Error, want)
 	}

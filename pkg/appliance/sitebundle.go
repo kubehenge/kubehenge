@@ -51,7 +51,7 @@ func noteSite(j *Job, unchecked, kept []string) {
 		}
 	}
 	if len(unchecked) > 0 {
-		j.Add("The Site CA was not checked against " + strings.Join(unchecked, ", ") + ", which did not answer")
+		j.Add("The Site CA was not checked against " + strings.Join(unchecked, ", ") + ". They did not answer.")
 	}
 }
 
@@ -269,7 +269,7 @@ func (a *Appliance) siteAuthorities(s *Settings) ([]*siteAuthority, error) {
 func newSiteAuthority(label, pasted, kept string, bundle *string) (*siteAuthority, error) {
 	roots, err := parseCertificates(pasted)
 	if err != nil {
-		return nil, fmt.Errorf("%s the authority %w", label, err)
+		return nil, fmt.Errorf("%s the pasted text %w", label, err)
 	}
 	auth := &siteAuthority{label: label, pasted: pasted, roots: roots, bundle: bundle}
 	held, _ := parseCertificates(kept)
@@ -608,14 +608,14 @@ func issuerIn(cur *x509.Certificate, anchors, presented, path []*x509.Certificat
 		case err == nil:
 			return p, ""
 		case insecure:
-			return nil, fmt.Sprintf("%q is signed with %s, which nodes refuse. Reissue it with SHA-256.", subjectOf(cur), cur.SignatureAlgorithm)
+			return nil, fmt.Sprintf("%q is signed with %s. Nodes refuse that. Reissue it with SHA-256.", subjectOf(cur), cur.SignatureAlgorithm)
 		case !p.BasicConstraintsValid || !p.IsCA:
 			fault = notCA(p)
 		case p.KeyUsage != 0 && p.KeyUsage&x509.KeyUsageCertSign == 0:
-			fault = fmt.Sprintf("%q may not sign certificates. Reissue it with certificate signing.", subjectOf(p))
+			fault = fmt.Sprintf("%q may not sign certificates. Reissue it with the certificate signing key usage.", subjectOf(p))
 		case slices.ContainsFunc(anchors, p.Equal):
 			// The device's root was made again under the same name, with another key.
-			fault = fmt.Sprintf("%q is signed by a new %q. Paste it.", subjectOf(cur), subjectOf(p))
+			fault = fmt.Sprintf("%q is signed by a new %q. Paste the new root.", subjectOf(cur), subjectOf(p))
 		}
 	}
 	if fault == "" {
@@ -843,14 +843,14 @@ func canonicalValue(s string) string {
 func withSubject(c *x509.Certificate, name []byte) (*x509.Certificate, error) {
 	var outer struct{ TBS, Algorithm, Signature asn1.RawValue }
 	if rest, err := asn1.Unmarshal(c.Raw, &outer); err != nil || len(rest) > 0 {
-		return nil, errors.New("does not parse to re-encode its name")
+		return nil, errors.New("holds a certificate that does not parse")
 	}
 	var fields []asn1.RawValue
 	for body := outer.TBS.Bytes; len(body) > 0; {
 		var f asn1.RawValue
 		var err error
 		if body, err = asn1.Unmarshal(body, &f); err != nil {
-			return nil, errors.New("does not parse to re-encode its name")
+			return nil, errors.New("holds a certificate that does not parse")
 		}
 		fields = append(fields, f)
 	}
@@ -861,7 +861,7 @@ func withSubject(c *x509.Certificate, name []byte) (*x509.Certificate, error) {
 		subject = 5
 	}
 	if len(fields) <= subject || !bytes.Equal(fields[subject].FullBytes, c.RawSubject) {
-		return nil, errors.New("holds its subject where it cannot be re-encoded")
+		return nil, errors.New("holds a certificate whose name cannot be copied under another encoding")
 	}
 	var tbs []byte
 	for i, f := range fields {
@@ -876,15 +876,15 @@ func withSubject(c *x509.Certificate, name []byte) (*x509.Certificate, error) {
 	}
 	tbsDER, err := sequence(tbs)
 	if err != nil {
-		return nil, errors.New("cannot be re-encoded")
+		return nil, errors.New("holds a certificate whose name cannot be copied under another encoding")
 	}
 	der, err := sequence(slices.Concat(tbsDER, outer.Algorithm.FullBytes, outer.Signature.FullBytes))
 	if err != nil {
-		return nil, errors.New("cannot be re-encoded")
+		return nil, errors.New("holds a certificate whose name cannot be copied under another encoding")
 	}
 	renamed, err := x509.ParseCertificate(der)
 	if err != nil {
-		return nil, errors.New("does not parse once its name is re-encoded")
+		return nil, errors.New("holds a certificate that does not parse")
 	}
 	return renamed, nil
 }

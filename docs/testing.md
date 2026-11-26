@@ -308,7 +308,7 @@ CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e
 - One distribution's ClusterClass picks its own tests and those that install the chart.
 - Every test a rule names must be in the list of `nightly.sh`.
 - The nightly run's five extra tests join a pull request only for their own scripts and the code only they exercise (`scope.sh` names it). Rancher's also joins for a change to the chart's `addons.rancher` values.
-- The lane behind TLS inspection (`appliance+tls-inspection`) joins for the code that reads the proxy and the Site CA and for `egress.sh`, beside the lanes the path brings. That makes it a 21st lane after a change that brings the others, and it waits for a runner. The nightly run pairs it with `k3s-addons-a+tls-inspection`, as it pairs `appliance+proxy-inspecting` with `k3s-addons-a+proxy-inspecting`.
+- The lane behind TLS inspection (`appliance+tls-inspection`) joins for the code that reads the proxy and the Site CA and for `egress.sh`, beside the lanes the path brings. It adds one lane to the run and waits for a runner. The nightly run pairs it with `k3s-addons-a+tls-inspection`, as it pairs `appliance+proxy-inspecting` with `k3s-addons-a+proxy-inspecting`.
 
 ### The nightly run
 
@@ -336,9 +336,9 @@ Four options put the guests behind mitmproxy (`test/e2e/ci/egress.sh`). The appl
 - `+proxy`: nft drops the guests' direct egress, and the only way out is a CONNECT proxy that asks for credentials and only tunnels. Kubehenge's proxy setting names it. Its time server setting names the runner's NTP server on the bridge (`test/e2e/ntp`), since the default one is out of reach.
 - `+proxy-inspecting`: the same with a proxy that re-signs TLS and asks for none. Its CA is the proxy's CA bundle.
 
-A test passes only if mitmproxy's log shows each guest of the path going through it: the appliance and the management nodes, the workload nodes and the template build. The proxy lanes also fail when the proxy was asked for an address inside the lab, which the exceptions leave out. They fail when the proxy's password is in a log. The log of a failed lane is in its artifacts as `egress-flows.log`. Every failed lane also keeps the operator's providers and the log of the Job that waits for them.
+A test passes only if mitmproxy's log shows each guest of the path going through it: the appliance and the management nodes, the workload nodes and the template build. The proxy lanes also fail when the proxy was asked for an address inside the lab, which the guests' no-proxy list leaves out, or when the proxy's password appears in a log. The log of a failed lane is in its artifacts as `egress-flows.log`. Every failed lane also keeps the Cluster API operator's provider objects and the log of the Job that waits for them.
 
-Proxmox VE's own downloads do not pass through the proxy, as the Site CA does not cover them either.
+Proxmox VE's own downloads do not pass through the proxy, and the Site CA does not cover them.
 
 ### Images and templates
 

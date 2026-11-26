@@ -56,7 +56,7 @@ func (a *Appliance) explainCertificates(ctx context.Context, j *Job, env []strin
 		j.Add(line + ". Check the Site CA.")
 	}
 	// The log names every node, so that the error stays two sentences.
-	return fmt.Errorf("%s, so check the Site CA. The run failed: %w", said[0], err)
+	return fmt.Errorf("%s. Check the Site CA. The run failed: %w", said[0], err)
 }
 
 // nodeLog is a node's kernel and Talos messages, or none where the node does not answer.
