@@ -63,6 +63,7 @@ const (
 	nonRootKey        = "runAsNonRoot"
 	readOnlyRootKey   = "readOnlyRootFilesystem"
 	configKey         = "config"
+	globalKey         = "global"
 	regionKey         = "region"
 	defaultKey        = "default"
 	installCRDsKey    = "installCRDs"
@@ -227,8 +228,8 @@ type Addons struct {
 	// conflicts are the add-ons left out because the cluster holds an install of their software.
 	// certManagerConflict is cert-manager's, and certManagerWaiting the add-ons that wait for its
 	// release.
-	conflicts           []string
-	certManagerConflict string
+	conflicts           []addonConflict
+	certManagerConflict addonConflict
 	certManagerWaiting  []string
 	// talosServing is set when every controller manager and scheduler of a Talos cluster serves a
 	// certificate of the cluster CA (talosServesControlPlaneMetrics), so that their metrics are

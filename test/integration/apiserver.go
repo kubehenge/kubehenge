@@ -44,6 +44,7 @@ import (
 	runtimeclient "sigs.k8s.io/cluster-api/exp/runtime/client"
 	"sigs.k8s.io/cluster-api/feature"
 	"sigs.k8s.io/cluster-api/util/conditions"
+	"sigs.k8s.io/cluster-api/util/index"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
@@ -243,6 +244,30 @@ func clusterAPIScheme(t *testing.T) *runtime.Scheme {
 	return scheme
 }
 
+// serveClusterAPI sets up Cluster API's Cluster and ClusterClass webhooks and its ClusterClass
+// controller in mgr, as the management cluster runs them.
+func serveClusterAPI(ctx context.Context, t *testing.T, mgr ctrl.Manager) {
+	t.Helper()
+	// What the management cluster's Cluster API runs with (management-cluster/cluster-api.tf).
+	if err := feature.MutableGates.SetFromMap(map[string]bool{string(feature.ClusterTopology): true, string(feature.RuntimeSDK): true}); err != nil {
+		t.Fatal(err)
+	}
+	// The ClusterClass webhook finds a class's Clusters by Cluster API's index of their class.
+	if err := index.ByClusterClassRef(ctx, mgr); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&capiadmission.Cluster{Client: mgr.GetClient()}).SetupWebhookWithManager(mgr); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&capiadmission.ClusterClass{Client: mgr.GetClient()}).SetupWebhookWithManager(mgr); err != nil {
+		t.Fatal(err)
+	}
+	r := &clusterclass.Reconciler{Client: mgr.GetClient(), RuntimeClient: noExtensions{}}
+	if err := r.SetupWithManager(ctx, mgr, controller.Options{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // serve runs a manager with the webhook server and, with ClusterAPI, Cluster API's webhooks and
 // ClusterClass controller, until the test ends.
 func serve(t *testing.T, cfg *rest.Config, admin client.Client, w *envtest.WebhookInstallOptions, o *Options) {
@@ -262,20 +287,7 @@ func serve(t *testing.T, cfg *rest.Config, admin client.Client, w *envtest.Webho
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	if o.ClusterAPI {
-		// What the management cluster's Cluster API runs with (management-cluster/cluster-api.tf).
-		if err := feature.MutableGates.SetFromMap(map[string]bool{string(feature.ClusterTopology): true, string(feature.RuntimeSDK): true}); err != nil {
-			t.Fatal(err)
-		}
-		if err := (&capiadmission.Cluster{Client: mgr.GetClient()}).SetupWebhookWithManager(mgr); err != nil {
-			t.Fatal(err)
-		}
-		if err := (&capiadmission.ClusterClass{Client: mgr.GetClient()}).SetupWebhookWithManager(mgr); err != nil {
-			t.Fatal(err)
-		}
-		r := &clusterclass.Reconciler{Client: mgr.GetClient(), RuntimeClient: noExtensions{}}
-		if err := r.SetupWithManager(ctx, mgr, controller.Options{}); err != nil {
-			t.Fatal(err)
-		}
+		serveClusterAPI(ctx, t, mgr)
 	}
 	if o.Serve != nil {
 		for path, h := range o.Serve(admin) {

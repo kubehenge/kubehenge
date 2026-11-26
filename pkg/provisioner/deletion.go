@@ -140,11 +140,17 @@ const ClusterBeingDeleted = "the cluster is being deleted"
 // So do spec.paused, which the etcd restore and Cluster API write, and the control plane endpoint,
 // which Cluster API copies from the infrastructure cluster. A change that is only Cluster API's own
 // defaulting of the cluster's variables by its class goes through as well, since that webhook runs
-// on every update and a refusal would hold up every write the deletion needs.
+// on every update and a refusal would hold up every write the deletion needs. Taking a retired
+// variable off goes through too, since Cluster API refuses every write to a cluster that sets one,
+// the removal of its last finalizer included.
 func validateDeleting(ctx context.Context, old, c *clusterv1.Cluster, classOf classReader) error {
 	if old == nil {
 		return nil
 	}
+	old = old.DeepCopy()
+	old.Spec.Topology.Variables = slices.DeleteFunc(old.Spec.Topology.Variables, func(v clusterv1.ClusterVariable) bool {
+		return retired(v) && !slices.ContainsFunc(c.Spec.Topology.Variables, func(w clusterv1.ClusterVariable) bool { return w.Name == v.Name })
+	})
 	was, is := old.Spec.DeepCopy(), c.Spec.DeepCopy()
 	is.Paused, is.ControlPlaneEndpoint = was.Paused, was.ControlPlaneEndpoint
 	if equality.Semantic.DeepEqual(was, is) {

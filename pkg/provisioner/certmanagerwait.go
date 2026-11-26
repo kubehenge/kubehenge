@@ -19,8 +19,9 @@ const (
 	// AddonsWaitingForCertManager is its reason while cert-manager installs or waits for the
 	// cluster's Gateway API.
 	AddonsWaitingForCertManager = "WaitingForCertManager"
-	// AddonsWaitingGatewayAPIMissing is its reason once the distribution's chart has installed the
-	// Gateway API and the controller has still not recorded it after gatewayAPIOverdue.
+	// AddonsWaitingGatewayAPIMissing is its reason once the Gateway API is still unrecorded
+	// gatewayAPIOverdue after the control plane is initialised: the distribution's chart has not
+	// deployed, or has and the controller did not record it.
 	AddonsWaitingGatewayAPIMissing = "GatewayAPIMissing"
 	// AddonsWaitingVolumeMissing is its reason while only add-ons whose volume cannot be made wait.
 	AddonsWaitingVolumeMissing = "VolumeMissing"
@@ -55,14 +56,15 @@ func (r *Reconciler) certManagerWaits(ctx context.Context, cluster *clusterv1.Cl
 // recordAddonsWaiting sets the cluster's AddonsWaiting condition to the add-ons that wait for
 // cert-manager and why, then the volume lines, or takes it off. It returns the add-on conflicts to
 // record, cert-manager's with the add-ons it holds back, so that a conflict is said once.
-func (r *Reconciler) recordAddonsWaiting(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons, volumes []string) ([]string, error) {
+func (r *Reconciler) recordAddonsWaiting(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons, volumes []string) ([]addonConflict, error) {
 	conflicts, waiting := addons.conflicts, andJoined(addons.certManagerWaiting)
 	var cond *metav1.Condition
-	switch {
-	case addons.certManagerConflict != "" && waiting != "":
-		conflicts = append(conflicts, addons.certManagerConflict+". Until then "+waiting+" wait")
-	case addons.certManagerConflict != "":
-		conflicts = append(conflicts, addons.certManagerConflict)
+	switch held := addons.certManagerConflict; {
+	case held.message != "" && waiting != "":
+		held.message += ". Until then " + waiting + " wait"
+		conflicts = append(conflicts, held)
+	case held.message != "":
+		conflicts = append(conflicts, held)
 	case waiting != "":
 		reason, why, err := r.certManagerHeldBy(ctx, cluster)
 		if err != nil {
@@ -100,8 +102,8 @@ func andJoined(names []string) string {
 }
 
 // certManagerHeldBy says what cert-manager itself waits for: its release, or the cluster's Gateway
-// API, which it serves. Once the distribution's chart has installed the Gateway API and nothing has
-// recorded it for gatewayAPIOverdue, it names the chart.
+// API, which it serves. Once nothing has recorded the Gateway API for gatewayAPIOverdue, it names
+// the distribution's chart and whether it has deployed.
 func (r *Reconciler) certManagerHeldBy(ctx context.Context, cluster *clusterv1.Cluster) (string, string, error) {
 	if _, has := cluster.Annotations[gatewayAPIAnnotation]; has {
 		return AddonsWaitingForCertManager, " to be deployed", nil
@@ -124,7 +126,8 @@ func (r *Reconciler) certManagerHeldBy(ctx context.Context, cluster *clusterv1.C
 	case err != nil:
 		return "", "", fmt.Errorf("reading the cluster's %s release: %w", charts.traefikCRD, err)
 	case !deployed:
-		return AddonsWaitingForCertManager, gatewayWait + " from " + charts.traefikCRD, nil
+		return AddonsWaitingGatewayAPIMissing, fmt.Sprintf("%s: %s has not deployed in %d minutes. Check the HelmChart %s and the Job helm-install-%s in kube-system",
+			gatewayWait, charts.traefikCRD, int(gatewayAPIOverdue.Minutes()), charts.traefikCRD, charts.traefikCRD), nil
 	}
 	return AddonsWaitingGatewayAPIMissing, fmt.Sprintf("%s: %s is deployed, yet none were recorded in %d minutes", gatewayWait, charts.traefikCRD, int(gatewayAPIOverdue.Minutes())), nil
 }

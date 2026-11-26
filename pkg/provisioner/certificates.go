@@ -281,6 +281,8 @@ func CertificatesOf(cluster *clusterv1.Cluster) (Certificates, error) {
 func certManagerValues(c *Certificates) map[string]any {
 	values := map[string]any{
 		"crds": map[string]any{"enabled": true},
+		// Tells Kubehenge's release from a cert-manager installed by hand under the same name.
+		globalKey: map[string]any{"commonLabels": map[string]any{addonLabel: certManagerAddon}},
 		// A Secret goes with its Certificate, so that nothing an add-on asked for outlives it.
 		"enableCertificateOwnerRef": true,
 		configKey:                   map[string]any{"gatewayAPI": map[string]any{"enabled": true}},

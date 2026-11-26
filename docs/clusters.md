@@ -1954,7 +1954,7 @@ Helm refuses to install over objects that another release or tool owns. An add-o
 
 ### A cert-manager the cluster runs already
 
-Kubehenge always installs its own cert-manager for the certificates add-on, monitoring, logs and Rancher. A cert-manager the cluster runs already, found by its definitions or its controller's Deployment, holds them back. `AddonConflict` names what was found and the add-ons that wait. Remove it, and Kubehenge installs its own on its next look.
+Kubehenge always installs its own cert-manager for the certificates add-on, monitoring, logs and Rancher. A cert-manager the cluster runs already, found by its definitions or its controller's Deployment, holds them back. That holds also for one installed under Kubehenge's release name `cert-manager`, since only Kubehenge's release labels its objects `kubehenge.dev/addon=cert-manager`. `AddonConflict` names what was found and the add-ons that wait. Remove it, and Kubehenge installs its own on its next look.
 
 For Kyverno and the Prometheus Operator, remove the cluster's own install, or switch the add-on off.
 

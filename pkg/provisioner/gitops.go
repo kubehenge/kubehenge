@@ -337,7 +337,7 @@ func argoCDValues(certs *Certificates, g *GitOps, state *gitOpsState) (map[strin
 	}
 	values := map[string]any{
 		"crds":           map[string]any{"keep": false},
-		"global":         map[string]any{"networkPolicy": map[string]any{createKey: true}},
+		globalKey:        map[string]any{"networkPolicy": map[string]any{createKey: true}},
 		"dex":            map[string]any{"enabled": false},
 		"notifications":  map[string]any{"enabled": false},
 		"configs":        configs,

@@ -832,9 +832,9 @@ Changes that never apply mean the window never opens. Check the `upgrades` varia
 
 ### An add-on is not installed over an existing install
 
-The Cluster has the condition `AddonConflict`. The add-on's HelmChartProxy does not exist. The message names the custom resource definition the cluster already holds, which no Kubehenge release owns. Helm refuses to install over it.
+The Cluster has the condition `AddonConflict` with the reason `CRDsExist`. The add-on's HelmChartProxy does not exist. The message names the custom resource definition the cluster already holds, which no Kubehenge release owns. Helm refuses to install over it.
 
-- **cert-manager.** The message also names a cert-manager controller Deployment that no Kubehenge release owns, and the add-ons that wait for Kubehenge's cert-manager. Remove the cluster's own cert-manager.
+- **cert-manager.** The message also names the add-ons that wait for Kubehenge's cert-manager. A cert-manager controller Deployment with no definitions gives the reason `DeploymentExists` and names the Deployment. Kubehenge's release labels its objects `kubehenge.dev/addon=cert-manager`. A cert-manager without that label is the cluster's own, also under the release name `cert-manager`. Remove it.
 - **Kyverno and monitoring.** Remove the cluster's own install, or switch the add-on off.
 
 `kubectl get crd <name> -o yaml` shows who owns a definition in its `meta.helm.sh/release-name` annotation. Kubehenge installs the add-on on its next look, within ten minutes, once the definition is gone or is its own. [clusters.md](clusters.md#installs-that-collide) lists the definitions it checks.
@@ -845,8 +845,8 @@ Rancher, monitoring and the logs add-on install only once Kubehenge's cert-manag
 
 | Reason | Cause and fix |
 | --- | --- |
-| `WaitingForCertManager` | cert-manager is installing, or waits for the cluster's Gateway API definitions. On RKE2 and k3s these come from the chart `rke2-traefik-crd` or `traefik-crd`. Nothing to do: the add-ons follow once cert-manager is deployed. |
-| `GatewayAPIMissing` | The distribution's chart is deployed, yet the controller has recorded no Gateway API definitions 10 minutes after the control plane came up. Check that `kubectl get crd gateways.gateway.networking.k8s.io` answers in the cluster, and read the controller's log. |
+| `WaitingForCertManager` | cert-manager is installing, or waits for the cluster's Gateway API definitions. On RKE2 and k3s these come from the chart `rke2-traefik-crd` or `traefik-crd`. The add-ons follow once cert-manager is deployed. If cert-manager's install fails, `kubectl -n <namespace> get helmreleaseproxies` in the management cluster gives Helm's error. |
+| `GatewayAPIMissing` | No Gateway API definitions are recorded 10 minutes after the control plane came up. If the message says the chart has not deployed, read its install in the cluster: `kubectl -n kube-system logs job/helm-install-rke2-traefik-crd`, or `helm-install-traefik-crd` on k3s. If the chart is deployed, check that `kubectl get crd gateways.gateway.networking.k8s.io` answers in the cluster, and read the controller's log. |
 
 ### Add-ons wait for a volume
 

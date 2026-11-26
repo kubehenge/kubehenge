@@ -34,8 +34,17 @@ const (
 	// AddonConflictCondition on a Cluster says that an add-on is not installed because the cluster
 	// already holds an install of the same custom resource definitions.
 	AddonConflictCondition = "AddonConflict"
-	// AddonConflictReason is the reason of AddonConflictCondition.
+	// AddonConflictReason is the reason of AddonConflictCondition while the cluster holds an add-on's
+	// custom resource definitions.
 	AddonConflictReason = "CRDsExist"
+	// AddonConflictDeploymentReason is its reason while the only conflict is a cert-manager
+	// controller's Deployment, installed without its definitions.
+	AddonConflictDeploymentReason = "DeploymentExists"
+
+	// addonLabel on the objects of an add-on's release names the add-on. cert-manager's release
+	// carries it, since a cert-manager installed the usual Helm way has its release name and
+	// namespace too.
+	addonLabel = "kubehenge.dev/addon"
 
 	helmReleaseNameAnnotation      = "meta.helm.sh/release-name"
 	helmReleaseNamespaceAnnotation = "meta.helm.sh/release-namespace"
@@ -45,9 +54,11 @@ const (
 // Cluster API refuses every change to a Cluster that sets one, and stops reconciling its topology.
 var retiredVariables = []string{"useExisting"}
 
+// retired tells whether v is one of retiredVariables.
+func retired(v clusterv1.ClusterVariable) bool { return slices.Contains(retiredVariables, v.Name) }
+
 // dropRetiredVariables takes the retired variables off the cluster.
 func (r *Reconciler) dropRetiredVariables(ctx context.Context, cluster *clusterv1.Cluster) error {
-	retired := func(v clusterv1.ClusterVariable) bool { return slices.Contains(retiredVariables, v.Name) }
 	if !slices.ContainsFunc(cluster.Spec.Topology.Variables, retired) {
 		return nil
 	}
@@ -88,6 +99,22 @@ type crdOwner struct {
 	crds               []string
 	// option says how to go on when the cluster holds these already.
 	option string
+	// labelled is set where the release puts addonLabel on its objects, which then tells them apart.
+	labelled bool
+}
+
+// owns tells whether o is of the add-on's release.
+func (o *crdOwner) owns(obj metav1.Object, addon string) bool {
+	if o.labelled {
+		return obj.GetLabels()[addonLabel] == addon
+	}
+	return obj.GetAnnotations()[helmReleaseNameAnnotation] == o.release && obj.GetAnnotations()[helmReleaseNamespaceAnnotation] == o.namespace
+}
+
+// addonConflict is why an add-on is not installed: the reason of AddonConflictCondition and its
+// line.
+type addonConflict struct {
+	reason, message string
 }
 
 // addonCRDs lists, by the suffix of the add-on's HelmChartProxy, a custom resource definition that
@@ -96,7 +123,7 @@ type crdOwner struct {
 var addonCRDs = map[string]crdOwner{
 	certManagerAddon: {
 		release: certManagerAddon, namespace: certManagerAddon, crds: []string{"certificates.cert-manager.io", "clusterissuers.cert-manager.io"},
-		option: "Remove it",
+		option: "Remove it", labelled: true,
 	},
 	kyvernoAddon: {
 		release: kyvernoAddon, namespace: kyvernoAddon, crds: []string{"clusterpolicies.kyverno.io", "policyexceptions.kyverno.io"},
@@ -120,25 +147,25 @@ func AddonCRDs() map[string][]string {
 
 // conflictOf reports why the add-on of proxy p is not installed: the cluster holds custom resource
 // definitions of the same software that its release does not own. An add-on that is installed
-// already owns its own.
-func (r *Reconciler) conflictOf(ctx context.Context, cluster *clusterv1.Cluster, p *unstructured.Unstructured) (string, error) {
+// already owns its own. No conflict has an empty message.
+func (r *Reconciler) conflictOf(ctx context.Context, cluster *clusterv1.Cluster, p *unstructured.Unstructured) (addonConflict, error) {
 	suffix := strings.TrimPrefix(p.GetName(), cluster.Name+"-")
 	owner, ok := addonCRDs[suffix]
 	if !ok {
-		return "", nil
+		return addonConflict{}, nil
 	}
 	installed := &unstructured.Unstructured{}
 	installed.SetGroupVersionKind(helmChartProxyGVK)
 	err := r.Client.Get(ctx, client.ObjectKeyFromObject(p), installed)
 	if err == nil {
-		return "", nil
+		return addonConflict{}, nil
 	}
 	if !apierrors.IsNotFound(err) {
-		return "", fmt.Errorf("reading add-on %s: %w", p.GetName(), err)
+		return addonConflict{}, fmt.Errorf("reading add-on %s: %w", p.GetName(), err)
 	}
 	workload, found, err := r.Remotes.get(ctx, cluster)
 	if err != nil || !found {
-		return "", err
+		return addonConflict{}, err
 	}
 	for _, name := range owner.crds {
 		crd := &metav1.PartialObjectMetadata{}
@@ -149,27 +176,27 @@ func (r *Reconciler) conflictOf(ctx context.Context, cluster *clusterv1.Cluster,
 		case unreachable(err):
 			// A cluster whose API does not answer holds nothing to collide with yet, or Helm says so.
 			r.Remotes.forget(cluster)
-			return "", nil
+			return addonConflict{}, nil
 		case err != nil:
-			return "", fmt.Errorf("reading the cluster's custom resource definition %s: %w", name, err)
+			return addonConflict{}, fmt.Errorf("reading the cluster's custom resource definition %s: %w", name, err)
 		}
-		if crd.Annotations[helmReleaseNameAnnotation] == owner.release && crd.Annotations[helmReleaseNamespaceAnnotation] == owner.namespace {
+		if owner.owns(crd, suffix) {
 			continue
 		}
-		return fmt.Sprintf("%s is not installed: the cluster already holds its custom resource definition %s, which no Kubehenge release owns. %s", suffix, name, owner.option), nil
+		return addonConflict{AddonConflictReason, fmt.Sprintf("%s is not installed: the cluster already holds its custom resource definition %s, which no Kubehenge release owns. %s", suffix, name, owner.option)}, nil
 	}
 	if suffix != certManagerAddon {
-		return "", nil
+		return addonConflict{}, nil
 	}
 	deployment, err := foreignCertManager(ctx, workload.client)
 	switch {
 	case unreachable(err):
 		r.Remotes.forget(cluster)
-		return "", nil
+		return addonConflict{}, nil
 	case err != nil || deployment == "":
-		return "", err
+		return addonConflict{}, err
 	}
-	return fmt.Sprintf("%s is not installed: the cluster already runs its Deployment %s, which no Kubehenge release owns. %s", suffix, deployment, owner.option), nil
+	return addonConflict{AddonConflictDeploymentReason, fmt.Sprintf("%s is not installed: the cluster already runs its Deployment %s, which no Kubehenge release owns. %s", suffix, deployment, owner.option)}, nil
 }
 
 // foreignCertManager names a cert-manager controller's Deployment in the workload cluster that
@@ -185,7 +212,7 @@ func foreignCertManager(ctx context.Context, workload client.Client) (string, er
 	owner := addonCRDs[certManagerAddon]
 	for i := range deployments.Items {
 		d := &deployments.Items[i]
-		if d.Annotations[helmReleaseNameAnnotation] != owner.release || d.Annotations[helmReleaseNamespaceAnnotation] != owner.namespace {
+		if !owner.owns(d, certManagerAddon) {
 			return d.Namespace + "/" + d.Name, nil
 		}
 	}
@@ -198,9 +225,10 @@ func unreachable(err error) bool {
 	return err != nil && !errors.As(err, &status)
 }
 
-// recordAddonConflicts sets the cluster's AddonConflict condition to the conflicts found, or takes
-// it off where there are none, and says so in an event when a conflict is new.
-func (r *Reconciler) recordAddonConflicts(ctx context.Context, cluster *clusterv1.Cluster, conflicts []string) error {
+// recordAddonConflicts sets the cluster's AddonConflict condition to the conflicts found, with the
+// first one's reason, or takes it off where there are none, and says so in an event when a conflict
+// is new.
+func (r *Reconciler) recordAddonConflicts(ctx context.Context, cluster *clusterv1.Cluster, conflicts []addonConflict) error {
 	found := meta.FindStatusCondition(cluster.Status.Conditions, AddonConflictCondition)
 	if len(conflicts) == 0 {
 		if found == nil {
@@ -209,11 +237,15 @@ func (r *Reconciler) recordAddonConflicts(ctx context.Context, cluster *clusterv
 		_, err := markCluster(ctx, r.Client, r.Reader, client.ObjectKeyFromObject(cluster), AddonConflictCondition, nil)
 		return err
 	}
-	cond := metav1.Condition{Type: AddonConflictCondition, Status: metav1.ConditionTrue, Reason: AddonConflictReason, Message: strings.Join(conflicts, ". ")}
-	if found != nil && found.Message == shorten(cond.Message, watchMessageMax) {
+	lines := make([]string, len(conflicts))
+	for i, c := range conflicts {
+		lines[i] = c.message
+	}
+	cond := metav1.Condition{Type: AddonConflictCondition, Status: metav1.ConditionTrue, Reason: conflicts[0].reason, Message: strings.Join(lines, ". ")}
+	if found != nil && found.Reason == cond.Reason && found.Message == shorten(cond.Message, watchMessageMax) {
 		return nil
 	}
-	ctrl.LoggerFrom(ctx).Info("add-on not installed over an existing install", "conflicts", conflicts)
+	ctrl.LoggerFrom(ctx).Info("add-on not installed over an existing install", "conflicts", lines)
 	if r.Events != nil {
 		r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, AddonConflictCondition, "InstallAddon", "%s", clip(cond.Message, eventNoteMax))
 	}

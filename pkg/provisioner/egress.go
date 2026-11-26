@@ -161,7 +161,7 @@ func (e egressEnv) values() map[string]map[string]any {
 			"configuration": map[string]any{"extraEnvVars": e.vars()},
 			"nodeAgent":     map[string]any{"extraEnvVars": e.vars()},
 		},
-		argoCD:        {"global": map[string]any{envKey: e.vars()}},
+		argoCD:        {globalKey: map[string]any{envKey: e.vars()}},
 		headlampAddon: {envKey: e.vars()},
 		rancherAddon:  {"proxy": e.url, "noProxy": e.exceptions()},
 	}

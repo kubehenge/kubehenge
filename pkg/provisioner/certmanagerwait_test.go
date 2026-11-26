@@ -182,7 +182,8 @@ func TestAddonsWaitingSayWhatCertManagerWaitsFor(t *testing.T) {
 	}{
 		"installing":          {annotated: true, reason: AddonsWaitingForCertManager, says: "monitoring, loki, alloy and alloy-node wait for cert-manager to be deployed"},
 		"gateway, new":        {initialised: time.Minute, reason: AddonsWaitingForCertManager, says: "wait for cert-manager, which waits for the cluster's Gateway API definitions"},
-		"gateway, no chart":   {initialised: time.Hour, reason: AddonsWaitingForCertManager, says: "Gateway API definitions from rke2-traefik-crd"},
+		"gateway, chart new":  {initialised: 9 * time.Minute, reason: AddonsWaitingForCertManager, says: "wait for cert-manager, which waits for the cluster's Gateway API definitions"},
+		"gateway, no chart":   {initialised: time.Hour, reason: AddonsWaitingGatewayAPIMissing, says: "rke2-traefik-crd has not deployed in 10 minutes. Check the HelmChart rke2-traefik-crd and the Job helm-install-rke2-traefik-crd in kube-system"},
 		"gateway, unrecorded": {initialised: time.Hour, workload: []client.Object{helmRelease("rke2-traefik-crd")}, reason: AddonsWaitingGatewayAPIMissing, says: "rke2-traefik-crd is deployed, yet none were recorded in 10 minutes"},
 	} {
 		c := withAddons(storageCluster(), map[string]string{"monitoring": formMonitoring, "logs": formLogs})

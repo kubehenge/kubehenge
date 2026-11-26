@@ -707,7 +707,7 @@ func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluste
 		return false, err
 	}
 	addons.rollout, addons.pending, addons.conflicts = gate, nil, nil
-	addons.certManagerConflict, addons.certManagerWaiting = "", nil
+	addons.certManagerConflict, addons.certManagerWaiting = addonConflict{}, nil
 	labels := proxyNamespaces(proxies)
 	labelsWait, err := r.applyNamespaceLabels(ctx, cluster, labels, addons.NamespaceLabels)
 	if err != nil {
@@ -756,10 +756,10 @@ func (r *Reconciler) proxyState(ctx context.Context, cluster *clusterv1.Cluster,
 	switch {
 	case err != nil:
 		return proxyReady, err
-	case conflict != "" && p.GetName() == certManagerProxy(cluster):
+	case conflict.message != "" && p.GetName() == certManagerProxy(cluster):
 		addons.certManagerConflict = conflict
 		return proxyConflicts, nil
-	case conflict != "":
+	case conflict.message != "":
 		addons.conflicts = append(addons.conflicts, conflict)
 		return proxyConflicts, nil
 	}
