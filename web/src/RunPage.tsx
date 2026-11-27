@@ -7,7 +7,7 @@ import { Link } from "./router";
 import { TryAgain } from "./RunAgain";
 import { runTitle, runView } from "./Runs";
 import type { HealthEvent, Job, RunInfo, RunStep } from "./types";
-import { age, ErrorBox, logLines, pollIdle, pollRunning, Skeleton, Status, usePoll } from "./ui";
+import { age, ErrorBox, logLines, pollIdle, pollRunning, ReadError, Skeleton, Status, usePoll } from "./ui";
 
 const states: Record<RunInfo["state"], { state: "progress" | "warning" | "ok" | "error"; text: string }> = {
   running: { state: "progress", text: "Running" },
@@ -50,14 +50,15 @@ export function RunPage({ id }: { id: string }): JSX.Element {
   const [retryError, setRetryError] = useState<string>();
   const run = fleet?.runs?.find((r) => r.id === id);
   if (run === undefined) {
+    const unread = fleet?.runs === undefined;
     return (
       <section className="page">
         <div className="page-head">
           <h2>Run</h2>
         </div>
-        <p className="muted">
-          {fleet?.runs === undefined ? "Loading…" : "Run no longer kept. Runs stay 1 h, failed ones 1 day."}
-        </p>
+        {unread && fleet?.runsRead.error === undefined && <Skeleton rows={3} />}
+        {unread && fleet !== null && <ReadError read={fleet.runsRead} />}
+        {!unread && <p className="muted">Run no longer kept. Runs stay 1 h, failed ones 1 day.</p>}
       </section>
     );
   }

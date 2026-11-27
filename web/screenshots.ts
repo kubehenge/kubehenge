@@ -1,7 +1,10 @@
 // Takes the documentation's screenshots of the interface: starts `kubehenge serve --demo` on a
 // loopback port, opens each view in a headless Chromium and writes it as a PNG.
 //
-//   node screenshots.ts <kubehenge binary> <output directory>
+//   node screenshots.ts <kubehenge binary> <output directory> [states]
+//
+// With "states" it writes instead the pages whose reads fail or have not answered, to check that
+// they state nothing they have not read.
 //
 // The window, the colour scheme and both clocks are fixed, so a run gives the same images as the
 // one before unless the interface or the demo changed.
@@ -43,9 +46,32 @@ const shots: Shot[] = [
   },
 ];
 
-const [binary, outArg] = process.argv.slice(2);
+// A page with some of its reads made to fail (answered 502) or never answered.
+interface State {
+  file: string;
+  path: string;
+  fail?: string[];
+  hang?: string[];
+  // A text the page shows in that state.
+  ready: string;
+}
+
+const states: State[] = [
+  { file: "fleet-health-failed.png", path: "/", fail: ["/api/fleet/health"], ready: "Unknown" },
+  { file: "fleet-health-pending.png", path: "/", hang: ["/api/fleet/health"], ready: "Loading…" },
+  { file: "run-failed.png", path: "/runs/change/clusters/edge", fail: ["/api/runs"], ready: "Try now" },
+  { file: "run-pending.png", path: "/runs/change/clusters/edge", hang: ["/api/runs"], ready: "Run" },
+  {
+    file: "cluster-placement-pending.png",
+    path: "/clusters/clusters/web",
+    hang: ["/api/clusters/clusters/web"],
+    ready: "Placement",
+  },
+];
+
+const [binary, outArg, mode] = process.argv.slice(2);
 if (binary === undefined || outArg === undefined) {
-  console.error("usage: node screenshots.ts <kubehenge binary> <output directory>");
+  console.error("usage: node screenshots.ts <kubehenge binary> <output directory> [states]");
   process.exit(2);
 }
 const out = resolve(outArg);
@@ -76,7 +102,27 @@ try {
   });
   const page = await context.newPage();
   await page.clock.setFixedTime(new Date(demoTime));
-  for (const shot of shots) {
+  for (const state of mode === "states" ? states : []) {
+    await page.route(
+      (url) => [...(state.fail ?? []), ...(state.hang ?? [])].some((p) => url.pathname.includes(p)),
+      async (route) => {
+        if (state.fail?.some((p) => route.request().url().includes(p)) === true) {
+          await route.fulfill({
+            status: 502,
+            contentType: "application/json",
+            body: JSON.stringify({ error: "the management cluster did not answer" }),
+          });
+        }
+      },
+    );
+    await page.goto(origin + state.path);
+    await page.getByText(state.ready, { exact: true }).first().waitFor({ timeout: readyDeadline });
+    await page.waitForTimeout(settle);
+    await page.screenshot({ path: join(out, state.file), animations: "disabled", caret: "hide" });
+    console.log(`wrote ${state.file}`);
+    await page.unrouteAll();
+  }
+  for (const shot of mode === "states" ? [] : shots) {
     await page.goto(origin + shot.path);
     try {
       await page.getByText(shot.ready, { exact: true }).first().waitFor({ timeout: readyDeadline });

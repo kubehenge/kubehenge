@@ -3,7 +3,7 @@ import { useState, type JSX } from "react";
 import { api } from "./api";
 import { CredentialField } from "./CredentialField";
 import type { NotificationSent } from "./types";
-import { ErrorBox, Status, age, errorMessage, filled, pollIdle, usePoll } from "./ui";
+import { ErrorBox, ReadError, Status, age, errorMessage, filled, pollIdle, usePoll } from "./ui";
 
 /** SentLine is a target's last sending: how it went, when, and what it was. */
 function SentLine({ sent }: { sent: NotificationSent | undefined }): JSX.Element | null {
@@ -25,7 +25,8 @@ function SentLine({ sent }: { sent: NotificationSent | undefined }): JSX.Element
  * target's last sending and sends a test.
  */
 export function Notifications(): JSX.Element {
-  const { data, error: readError, put } = usePoll(api.notifications, pollIdle);
+  const read = usePoll(api.notifications, pollIdle);
+  const { data, put } = read;
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string>();
   const sent = Object.fromEntries((data ?? []).map((s) => [s.kind, s]));
@@ -82,7 +83,8 @@ export function Notifications(): JSX.Element {
           Send test
         </button>
       </div>
-      <ErrorBox message={error ?? readError} />
+      <ErrorBox message={error} />
+      <ReadError read={read} />
     </div>
   );
 }

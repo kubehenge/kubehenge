@@ -22,6 +22,8 @@
 - Refusing a change of address families, bridge or VLAN says why: the API address and the pods' ranges were made for that network.
 - An etcd limit can be lowered while every member's database stays under 60% of the new one, as read from every member in the last 18 minutes. Before, it could only rise.
 
+- The interface no longer states what it has not read: a pending read shows loading, a failed one Unknown with its error and a retry. A failed health read no longer leaves every cluster Available.
+
 ### Internal
 
 - End-to-end tests run on the newest Proxmox VE release.

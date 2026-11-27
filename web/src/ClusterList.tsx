@@ -8,7 +8,7 @@ import { FleetBackupWarning } from "./ManagementRecovery";
 import { score } from "./Palette";
 import { Link, navigate } from "./router";
 import type { Cluster, FleetHealth } from "./types";
-import { ErrorBox, RetryIn, Skeleton, Status, age, distributionName, filled } from "./ui";
+import { ErrorBox, ReadError, RetryIn, Skeleton, Status, age, distributionName, filled } from "./ui";
 
 // The privilege creating a cluster needs, as Proxmox VE names it.
 const createNeeds = "Creating clusters needs VM.Allocate on the workload pool.";
@@ -50,7 +50,10 @@ function FleetList({ canCreate, canManage }: { canCreate: boolean | undefined; c
     shown.length === 0 ? (
       <FirstCluster canCreate={canCreate} canManage={canManage} />
     ) : (
-      <Clusters clusters={shown} found={fleet?.health} />
+      <>
+        {fleet !== null && <ReadError read={fleet.healthRead} />}
+        <Clusters clusters={shown} found={fleet?.health} failed={fleet?.healthRead.error !== undefined} />
+      </>
     );
   // Without the clusters, the list says when it reads them again, and administrators get the
   // management cluster's page, which works without them.
@@ -168,9 +171,11 @@ function SortHeader({
 function Clusters({
   clusters,
   found,
+  failed,
 }: {
   clusters: Cluster[];
   found: Map<string, FleetHealth> | undefined;
+  failed: boolean;
 }): JSX.Element {
   const [query, setQuery] = useState(() => readView().query);
   const [show, setShow] = useState<Group | "">(() => readView().show);
@@ -178,7 +183,7 @@ function Clusters({
   useEffect(() => writeView(query, show, sort), [query, show, sort]);
 
   const rows = useMemo(() => {
-    const all = ranked(clusters, found);
+    const all = ranked(clusters, found, failed);
     const rank = new Map(all.map((r, i) => [fleetKey(r.cluster), i]));
     const counts = new Map<Group, number>(
       groups.map((g) => [g.group, all.filter((r) => r.standing.group === g.group).length]),
@@ -201,7 +206,7 @@ function Clusters({
       total: all.length,
       shown: shown.toSorted((a, b) => (sort.descending ? -order(a, b) : order(a, b))),
     };
-  }, [clusters, found, query, show, sort]);
+  }, [clusters, found, failed, query, show, sort]);
 
   // The group's own button counts what it shows. A typed filter needs the count said.
   const narrowed = query !== "";
@@ -216,11 +221,13 @@ function Clusters({
           <button type="button" aria-pressed={show === ""} onClick={() => setShow("")}>
             All <span className="count">{rows.total}</span>
           </button>
-          {groups.map((g) => (
-            <button key={g.group} type="button" aria-pressed={show === g.group} onClick={() => setShow(g.group)}>
-              {g.label} <span className="count">{rows.counts.get(g.group) ?? 0}</span>
-            </button>
-          ))}
+          {groups
+            .filter((g) => g.group !== "unknown" || (rows.counts.get(g.group) ?? 0) > 0)
+            .map((g) => (
+              <button key={g.group} type="button" aria-pressed={show === g.group} onClick={() => setShow(g.group)}>
+                {g.label} <span className="count">{rows.counts.get(g.group) ?? 0}</span>
+              </button>
+            ))}
         </fieldset>
       </div>
       {rows.shown.length === 0 ? (

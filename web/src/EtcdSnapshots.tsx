@@ -441,7 +441,8 @@ export function EtcdSnapshotsView({
   }
 
   const pool = poolName(c.pool);
-  const noSnapshot = v.canSnapshot ? undefined : `Taking snapshots needs VM.Allocate on pool ${pool}.`;
+  const noRead = error === undefined ? undefined : "Snapshots not read.";
+  const noSnapshot = noRead ?? (v.canSnapshot ? undefined : `Taking snapshots needs VM.Allocate on pool ${pool}.`);
   const noRestore = v.canRestore ? undefined : `Download and restore need Sys.Modify on pool ${pool}.`;
   const take = async (): Promise<void> => {
     setBusy(true);
@@ -466,7 +467,7 @@ export function EtcdSnapshotsView({
           {v.enabled ? (
             <button
               type="button"
-              disabled={busy || !v.canSnapshot || v.requested || v.restoring}
+              disabled={busy || !v.canSnapshot || v.requested || v.restoring || noRead !== undefined}
               title={noSnapshot}
               onClick={() => {
                 void take();

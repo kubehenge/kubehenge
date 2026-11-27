@@ -531,7 +531,8 @@ export function Placement({ cluster: c }: { cluster: Cluster }): JSX.Element {
   const nodeOf = new Map((health.data?.nodes.items ?? []).map((n) => [n.machine ?? n.name, n]));
   const machines = c.machines ?? [];
   const crowded = crowding(machines);
-  const list = hosts(machines, nodes);
+  // Until the cluster's machines are read, no node is known to be empty.
+  const list = c.machines === undefined ? [] : hosts(machines, nodes);
   return (
     <section className="box placement" aria-label="Placement">
       <h3>Placement</h3>

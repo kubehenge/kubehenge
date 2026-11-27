@@ -84,7 +84,8 @@ export function ManagementBackups({ running }: { running: boolean }): JSX.Elemen
               <button
                 type="button"
                 className="primary"
-                disabled={busy || b.taking === true}
+                disabled={busy || b.taking === true || error !== undefined}
+                title={error === undefined ? undefined : "Backups not read"}
                 onClick={() => {
                   void act(api.takeManagementSnapshot);
                 }}
@@ -107,6 +108,7 @@ export function ManagementBackups({ running }: { running: boolean }): JSX.Elemen
           </>
         )}
         <ErrorBox message={actionError} />
+        <ErrorBox message={error} />
       </div>
       {b.settings !== undefined && <ExportBox backups={b} />}
       {b.settings !== undefined && <Snapshots running={running} />}
@@ -263,6 +265,11 @@ function Snapshots({ running }: { running: boolean }): JSX.Element {
   const [restoring, setRestoring] = useState<EtcdSnapshot>();
   const [recreating, setRecreating] = useState<EtcdSnapshot>();
   const list = v?.snapshots ?? [];
+  // Nothing is listed yet: still reading, not read, or read and none taken.
+  let empty = "None yet.";
+  if (v === undefined) {
+    empty = error === undefined ? "Loading…" : "Unknown";
+  }
   return (
     <div className="box scroll">
       <h3>Snapshots in the target</h3>
@@ -282,7 +289,7 @@ function Snapshots({ running }: { running: boolean }): JSX.Element {
           {list.length === 0 && (
             <tr>
               <td colSpan={4} className="muted">
-                {v === undefined ? "Loading…" : "None yet."}
+                {empty}
               </td>
             </tr>
           )}

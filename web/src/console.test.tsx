@@ -235,6 +235,15 @@ function serve(): Record<string, Route> {
     "GET /api/session": { body: { user: "alice@pve", csrf: "c1" } },
     "GET /api/clusters": { body: fleet },
     "GET /api/runs": { body: [] },
+    "GET /api/fleet/health": {
+      body: fleet.map((c) => ({
+        namespace: c.namespace,
+        name: c.name,
+        read: minutesAgo(0),
+        verdict: "healthy",
+        attention: [],
+      })),
+    },
   };
   for (const c of fleet) {
     routes[`GET /api/clusters/default/${c.name}`] = { body: c };

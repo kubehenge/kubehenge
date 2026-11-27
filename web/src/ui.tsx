@@ -534,6 +534,28 @@ export function ErrorBox({ message }: { message?: string | undefined }): JSX.Ele
   );
 }
 
+/** ReadError is a failed read's error with when it is tried again and a way to try now. */
+export function ReadError({
+  read,
+}: {
+  read: { error: string | undefined; next: () => number; reload: () => Promise<void> };
+}): JSX.Element | null {
+  if (read.error === undefined) {
+    return null;
+  }
+  return (
+    <div className="read-error">
+      <ErrorBox message={read.error} />
+      <RetryIn
+        next={read.next}
+        onRetry={() => {
+          void read.reload();
+        }}
+      />
+    </div>
+  );
+}
+
 /** ErrorText is an error's message as a sentence, with its reference set apart under it. */
 export function ErrorText({ message }: { message: string }): JSX.Element {
   const at = message.lastIndexOf(referenceMark);
