@@ -484,8 +484,8 @@ resource "helm_release" "kubehenge" {
         vlan   = coalesce(var.vlan_id, 0)
         nodes  = merge([for n in local.nodes : { for a in compact([n.address_ipv4, n.address_ipv6]) : split("/", a)[0] => n.name }]...)
       }
-      talos             = { imageSignatures = local.image_signatures }
-      watch             = { stallMinutes = var.watch.stall_minutes }
+      talos = { imageSignatures = local.image_signatures }
+      watch = { stallMinutes = var.watch.stall_minutes }
       interface = {
         extraNamespaces = var.extra_cluster_namespaces
         offerHARules    = var.offer_ha_rules

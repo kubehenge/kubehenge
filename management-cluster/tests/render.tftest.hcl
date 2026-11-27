@@ -2232,7 +2232,7 @@ run "dual_stack_ipv4_first" {
 
   assert {
     condition = yamldecode(helm_release.kubehenge.values[0]).managementNetwork.nodes == {
-      "192.0.2.11" = "kubehenge-cp-0", "192.0.2.12" = "kubehenge-cp-1", "192.0.2.13" = "kubehenge-cp-2",
+      "192.0.2.11"     = "kubehenge-cp-0", "192.0.2.12" = "kubehenge-cp-1", "192.0.2.13" = "kubehenge-cp-2",
       "2001:db8:1::11" = "kubehenge-cp-0", "2001:db8:1::12" = "kubehenge-cp-1", "2001:db8:1::13" = "kubehenge-cp-2",
     }
     error_message = "the controller names each management node by its address of either family"
