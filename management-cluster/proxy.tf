@@ -30,6 +30,18 @@ locals {
     } : k => v if k == "secret" ? local.proxy_enabled : k == "ca" ? local.outbound_secret_on : local.outbound_has_ca && !local.proxy_enabled
   }
 
+  # The proxy the nodes of a workload cluster without one of its own take, as its add-ons do. An
+  # address with credentials, or one the classes would not take, is left out, since node files are
+  # plain text. The authority is the certificates alone, as the classes read them.
+  cluster_proxy_url = local.proxy_enabled && nonsensitive(can(regex("^https?://([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:]+\\])(:[0-9]{1,5})?/?$", var.proxy.url))) ? nonsensitive(var.proxy.url) : ""
+  proxy_cluster_default = local.cluster_proxy_url == "" ? {} : {
+    clusterDefault = {
+      url      = local.cluster_proxy_url
+      noProxy  = [for e in split(",", nonsensitive(var.proxy.no_proxy)) : trimspace(e) if can(regex("^[A-Za-z0-9._*:/\\[\\]-]+$", trimspace(e)))]
+      caBundle = join("", [for c in regexall("-----BEGIN CERTIFICATE-----[A-Za-z0-9+/=\\s]+-----END CERTIFICATE-----", replace(nonsensitive(var.proxy.ca_bundle), "\r", "")) : "${c}\n"])
+    }
+  }
+
   # The Add-on Provider for Helm fetches every chart itself, through the proxy and from the chart
   # mirrors, and trusts the authorities of all from one file. It gets the Secret for a mirror alone too.
   addon_namespace = one([for p in local.providers : p.namespace if p.kind == "AddonProvider"])

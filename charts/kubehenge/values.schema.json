@@ -128,7 +128,17 @@
       "properties": {
         "secret": { "type": "string" },
         "ca": { "type": "boolean" },
-        "caSecret": { "type": "string" }
+        "caSecret": { "type": "string" },
+        "clusterDefault": {
+          "description": "The management side's proxy, which the nodes of a cluster without an egressProxy of its own take.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "url": { "type": "string", "maxLength": 2048, "pattern": "^(https?://([A-Za-z0-9]([-A-Za-z0-9.]*[A-Za-z0-9])?|\\[[0-9A-Fa-f:]+\\])(:[0-9]{1,5})?/?)?$" },
+            "noProxy": { "type": "array", "items": { "type": "string", "maxLength": 253, "pattern": "^[A-Za-z0-9._*:/\\[\\]-]+$" } },
+            "caBundle": { "type": "string", "maxLength": 65536, "pattern": "^[-A-Za-z0-9+/=\\s]*$" }
+          }
+        }
       }
     },
     "chartMirrors": {

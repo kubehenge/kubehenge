@@ -1901,6 +1901,27 @@ run "no_proxy_leaves_everything_direct" {
   }
 }
 
+run "proxy_without_credentials_reaches_workload_nodes" {
+  command = plan
+
+  variables {
+    proxy = {
+      url       = "http://proxy.example.com:3128"
+      no_proxy  = "pve.example.org, 192.0.2.0/24,,10.244.0.0/16"
+      ca_bundle = "subject=proxy\r\n-----BEGIN CERTIFICATE-----\r\nMIIB\r\n-----END CERTIFICATE-----\r\n"
+    }
+  }
+
+  assert {
+    condition = yamldecode(helm_release.kubehenge.values[0]).proxy.clusterDefault == {
+      url      = "http://proxy.example.com:3128"
+      noProxy  = ["pve.example.org", "192.0.2.0/24", "10.244.0.0/16"]
+      caBundle = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+    }
+    error_message = "the classes get the proxy for workload nodes without one of their own, its exceptions and its authority as certificates alone"
+  }
+}
+
 run "proxy_reaches_every_downloader" {
   command = plan
 

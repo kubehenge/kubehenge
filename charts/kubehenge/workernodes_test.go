@@ -43,11 +43,14 @@ func asMap(t *testing.T, v any) map[string]any {
 	return m
 }
 
-func renderClass(t *testing.T, file string) renderedClass {
+// renderClass renders a class's file, with set as further helm arguments, such as --set a=b.
+func renderClass(t *testing.T, file string, set ...string) renderedClass {
 	t.Helper()
-	cmd := exec.CommandContext( //nolint:gosec // fixed arguments, only the file under the chart varies
-		t.Context(), "helm", "template", "kubehenge", ".", "--namespace", "kubehenge-system",
-		"--values", "../../pkg/provisioner/testdata/integration-values.yaml", "--show-only", "templates/"+file)
+	args := append([]string{
+		"template", "kubehenge", ".", "--namespace", "kubehenge-system",
+		"--values", "../../pkg/provisioner/testdata/integration-values.yaml", "--show-only", "templates/" + file,
+	}, set...)
+	cmd := exec.CommandContext(t.Context(), "helm", args...) //nolint:gosec // the test's own arguments
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

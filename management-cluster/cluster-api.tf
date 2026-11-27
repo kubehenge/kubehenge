@@ -557,7 +557,7 @@ resource "helm_release" "kubehenge" {
     var.time_zone != "" ? { timeZone = var.time_zone } : {},
     var.workload_vm_id_range == null ? {} : { vmIDRange = var.workload_vm_id_range },
     var.site_ca != "" ? { siteCA = var.site_ca } : {},
-    local.outbound_secret_on ? { proxy = local.proxy_chart } : {},
+    local.outbound_secret_on ? { proxy = merge(local.proxy_chart, local.proxy_cluster_default) } : {},
     length(var.chart_repositories.mirrors) > 0 ? { chartMirrors = var.chart_repositories.mirrors } : {},
     var.release_mirror.url != "" ? { releaseMirror = { url = var.release_mirror.url, caBundle = var.release_mirror.ca_bundle } } : {},
   ))]

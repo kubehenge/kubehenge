@@ -500,10 +500,10 @@ Under a NetworkPolicy that denies by default, allow ztunnel's port 15008/TCP bet
 
 #### Add-ons' proxy
 
-**Proxy** (Management proxy, Own proxy or No proxy) is the proxy for the add-ons that reach beyond the cluster. Those are cert-manager (ACME and DNS providers), Velero (server and node agents), Argo CD, Flux's controllers, Headlamp and Rancher. A cert-manager the cluster runs already does not get it ([below](#a-cert-manager-the-cluster-runs-already)).
+**Proxy** (Management proxy, Own proxy or No proxy) is the proxy for the nodes and the add-ons that reach beyond the cluster. Those are cert-manager (ACME and DNS providers), Velero (server and node agents), Argo CD, Flux's controllers, Headlamp and Rancher. A cert-manager the cluster runs already does not get it ([below](#a-cert-manager-the-cluster-runs-already)).
 
 - The management side's proxy ([below](#behind-a-proxy)) and its exceptions are the default.
-- Add-on settings are plain text, so a proxy address holding a user name or password is not passed on. Give the cluster its own address without credentials.
+- Add-on settings and node files are plain text, so a proxy address holding a user name or password is not passed on. Give the cluster its own address without credentials.
 - The cluster's pod and service ranges, `localhost`, `127.0.0.1`, `.svc` and `.cluster.local` bypass the proxy. Add an internal S3 store, Git server or identity provider under Exceptions.
 - The add-ons' pods do not trust a proxy that re-signs TLS. Kubehenge does not add its authority to them.
 
@@ -879,7 +879,7 @@ A network that reaches few hosts needs four settings. Each works on every distri
 | Setting | Variable | What the nodes get |
 | --- | --- | --- |
 | Time servers | `network.ntp` | NTP servers, with the hypervisor's clock as the fallback. |
-| Proxy | `egressProxy` | The proxy for the container runtime, the installers of RKE2 and k3s, and the distribution's service. The add-ons use it too. |
+| Proxy | `egressProxy` | The proxy for the container runtime, the installers of RKE2 and k3s, and the distribution's service. The add-ons use it too. Unset, both take the management side's proxy ([below](#behind-a-proxy)). |
 | Registry mirrors | `registryMirrors` | Mirrors that images are pulled from before the registry itself. |
 | Trusted CAs | `trustedCAs` | Authorities in the node OS's trust store, which the container runtime and the distribution read. A cluster that sets none gets the management cluster's site CA. Set the site CA as `siteCA` in the chart values, **Site CA** in Setup or `kubehenge appliance settings set --site-ca-file`. |
 
@@ -899,6 +899,7 @@ A change replaces every node, one at a time, as a change of the node customisati
 ### Proxy and mirrors
 
 - The proxy has no credentials in its address. `httpsUrl` names another proxy for `https://` addresses.
+- Unset, the nodes take the management side's proxy, its exceptions and its authority. `disabled: true` sends them direct.
 - `noProxy` always gains the cluster's pod, service and node networks, its API address, `localhost`, `.svc` and `.cluster.local`.
 - Mirrors are tried in order, then the registry itself. `*` stands for every registry.
 - A path in a mirror address has to end in `/v2`. The container runtime uses it as given.
@@ -973,7 +974,9 @@ Kubehenge adds these exceptions:
 
 Add the workload clusters' node networks and any internal registry.
 
-Proxmox VE downloads disk images through the datacenter's proxy. The Add-on Provider for Helm gets the authority too. The proxy does not cover clusters' own nodes.
+Proxmox VE downloads disk images through the datacenter's proxy. The Add-on Provider for Helm gets the authority too.
+
+A workload cluster that sets no proxy of its own sends its nodes and add-ons through this one, with its exceptions ([below](#sites-with-limited-access)). Its nodes trust the proxy's authority. A proxy address that holds a user name or password is not passed on, since node files and add-on settings are plain text. Those clusters go direct, with a `ProxyNotPassedOn` Warning event, unless they set a proxy address of their own. A change of the proxy replaces their nodes one at a time.
 
 The site CA reaches the same downloads and the management nodes, with or without a proxy. Behind TLS inspection without a proxy, set the site CA alone. Proxmox VE downloads disk images with each node's own trust store. Add the CA to every Proxmox VE node.
 
@@ -2224,7 +2227,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `clusterMesh` | no | For a cluster that runs Cilium ([above](#add-ons)). `enabled` (default false). `peers`, the clusters of this namespace to link with, by name. |
 | `certificates` | no | `enabled` (default false). `issuer`, `acme-dns01` (default), `acme-http01`, `ca` or `external`. `domain`, needed with `acme-dns01` and `ca`. `issuerName`, `issuerKind`, `issuerGroup`, with `external` ([above](#an-issuer-you-run)). `acme` holds `email`, `server`, `staging`, `caBundle`, `externalAccountBinding.keyID` ([above](#external-account-binding)). `dns01` holds `provider`, its settings, `existingSecret`, `sharedCredential`, `nameservers` ([above](#certificates)). |
 | `rancher` | no | `install` (default false), which needs `hostname` and at least 4 vCPUs on every node. `register` (default true), to register with the Rancher Kubehenge installed. Setting `install` back to false uninstalls it ([above](#change-settings)). |
-| `egressProxy` | no | The proxy of the nodes and of the add-ons that reach beyond the cluster ([below](#sites-with-limited-access)). `url` is an `http://` or `https://` address with a host and no path or credentials. `httpsUrl` is the proxy for `https://` addresses where it differs, and comes with `url`. `noProxy` lists up to 64 hosts, domains and networks that bypass it, beside the cluster's own ranges. `disabled: true` sends the add-ons direct and excludes `url`. Unset, the add-ons take the management side's proxy and the nodes go direct. |
+| `egressProxy` | no | The proxy of the nodes and of the add-ons that reach beyond the cluster ([below](#sites-with-limited-access)). `url` is an `http://` or `https://` address with a host and no path or credentials. `httpsUrl` is the proxy for `https://` addresses where it differs, and comes with `url`. `noProxy` lists up to 64 hosts, domains and networks that bypass it, beside the cluster's own ranges. `disabled: true` sends the nodes and add-ons direct and excludes `url`. Unset, both take the management side's proxy. |
 | `registryMirrors` | no | Up to 16 entries. `registry` is a lower-case host name with an optional port, or `*` for every registry. `endpoints` are 1 to 4 `http://` or `https://` addresses, tried in order. A path has to end in `/v2`. `caBundle` is the PEM authority of the endpoints. |
 | `trustedCAs` | no | Up to 8 PEM bundles of certificates, for the nodes' trust store. |
 | `releaseMirror` | RKE2 and k3s only | The cluster's own release mirror ([above](#a-clusters-own-release-mirror)). `url` is an `http://` or `https://` address without credentials, a query or a trailing slash. `caBundle` is the PEM authority of an `https://` mirror. Unset, the management cluster's mirror or GitHub. |

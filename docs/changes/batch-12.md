@@ -7,9 +7,11 @@
 - A cluster held before its VMs are created says why: the controller's error or what its add-ons wait for.
 - A refresh of the interface shows the fleet as the tab last read it, greyed until read again, and no cluster as healthy before its health is read.
 - `install.sh --upgrade` and `--certificate` find the cluster's appliance without `--ctid`. A plain `install.sh` upgrades the appliance on this node.
+- A management proxy with credentials in its address, which no cluster takes, gives each cluster that sets no proxy a `ProxyNotPassedOn` Warning event.
 
 ### Fixed
 
+- A cluster that sets no proxy sends its nodes through the management side's proxy, as it does its add-ons, and they trust that proxy's CA. It comes up where only the proxy leads out.
 - `kubehenge template create` builds through the proxy its environment names, and trusts the authorities in `KUBEHENGE_PROXY_CA_FILE` when it fetches repository keys.
 - A kubeadm template of a Kubernetes release whose images lack Kubernetes' signature is refused before its build, in the interface, the CLI and the refresh, naming the nearest signed release.
 - capmox gives `cloud-init status` 10 seconds to exit, not 2, so a machine on a busy host no longer stays at `WaitingForCloudInit`.
@@ -17,4 +19,5 @@
 
 ### Internal
 
+- The workload tests behind a re-signing proxy set no `egressProxy` and rely on the default.
 - The workload tests behind TLS inspection give the management cluster's module the root and its renamed copy, as the appliance does, so its nodes pull etcd.

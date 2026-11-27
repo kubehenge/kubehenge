@@ -93,8 +93,8 @@
 # pushed to by its ghcr.io path. Every cluster's nodes pull ghcr.io's images from it first, through
 # the cluster's registryMirrors, for the CSI proxy that runs from that image.
 # KUBEHENGE_E2E_NODE_PROXY_URL, when set, is the proxy the cluster's nodes and add-ons go through
-# (egressProxy), with KUBEHENGE_E2E_NO_PROXY's exceptions, and KUBEHENGE_E2E_PROXY_CA the authority of
-# a proxy that re-signs TLS (trustedCAs), as a user sets them where only a proxy leads out.
+# (egressProxy), with KUBEHENGE_E2E_NO_PROXY's exceptions, as a user sets it where the management
+# side's proxy asks for credentials. Unset, they take the management side's proxy.
 # KUBEHENGE_E2E_TALOS_VERSION and KUBEHENGE_E2E_TALOS_UPGRADE are, for kubehenge-talos, the Talos
 # release the cluster starts on and a newer one its nodes are upgraded to in place, both with a
 # template in the template pool. Talos has no SSH, no systemd and no guest agent that runs commands:
@@ -505,16 +505,12 @@ talos_variable=
 # Every cluster's CSI plugin runs Kubehenge's proxy from Kubehenge's own image, which ghcr.io holds
 # only once released. The cluster's registryMirrors, as a user sets them, send ghcr.io's pulls to the
 # registry this build was pushed to first, and ghcr.io serves the rest.
-# Unset, the nodes go direct whatever the management side uses. The exceptions hold the lab's
-# networks, and so the registry above, which the nodes reach past the proxy.
+# Unset, the nodes take the management side's proxy, its exceptions and its authority. The
+# exceptions hold the lab's networks, and so the registry above, which the nodes reach past the proxy.
 site_proxy=
 if [ -n "${KUBEHENGE_E2E_NODE_PROXY_URL:-}" ]; then
     exceptions=$(printf '%s' "${KUBEHENGE_E2E_NO_PROXY:?}" | jq -Rc 'split(",")')
     site_proxy=$(printf '      - name: egressProxy\n        value: {url: "%s", noProxy: %s}\n' "${KUBEHENGE_E2E_NODE_PROXY_URL}" "${exceptions}")
-    if [ -n "${KUBEHENGE_E2E_PROXY_CA:-}" ]; then
-        proxy_ca=$(jq -Rsc '[.]' "${KUBEHENGE_E2E_PROXY_CA}")
-        site_proxy=$(printf '%s\n      - name: trustedCAs\n        value: %s\n' "${site_proxy}" "${proxy_ca}")
-    fi
 fi
 own_registry=
 if [ -n "${KUBEHENGE_E2E_REGISTRY:-}" ]; then

@@ -1,6 +1,7 @@
 package provisioner
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -8,8 +9,10 @@ import (
 	"slices"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/yaml"
 )
 
@@ -105,7 +108,7 @@ func (e Egress) resolve(cluster *clusterv1.Cluster, v *EgressProxy) (egressEnv, 
 	case address == "" && e.URL == "":
 		return egressEnv{}, ""
 	case address == "" && hasCredentials(e.URL):
-		return egressEnv{}, "the management side's proxy holds credentials in its address, which add-on settings would show in plain text. Set egressProxy.url without them to use a proxy"
+		return egressEnv{}, "the management side's proxy holds credentials in its address, which add-on settings and node files would show in plain text, so the add-ons and nodes go direct. Set egressProxy.url without them to use a proxy"
 	case address == "":
 		address, extra = e.URL, append(slices.Clone(e.NoProxy), v.NoProxy...)
 	}
@@ -114,6 +117,19 @@ func (e Egress) resolve(cluster *clusterv1.Cluster, v *EgressProxy) (egressEnv, 
 	exceptions = append(exceptions, egressAlways...)
 	exceptions = append(exceptions, extra...)
 	return egressEnv{url: address, httpsURL: secure, noProxy: unique(exceptions)}, ""
+}
+
+// resolveEgress is resolve for the cluster, with a Warning event that says why the management side's
+// proxy is not passed on. The class leaves it out of the nodes for the same reason.
+func (r *Reconciler) resolveEgress(ctx context.Context, cluster *clusterv1.Cluster, v *EgressProxy) egressEnv {
+	env, skipped := r.Egress.resolve(cluster, v)
+	if skipped != "" {
+		ctrl.LoggerFrom(ctx).Info("proxy not passed on: " + skipped)
+		if r.Events != nil {
+			r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, "ProxyNotPassedOn", "ResolveEgress", "%s", skipped)
+		}
+	}
+	return env
 }
 
 // unique drops repeats and keeps the order, so that the same settings always give the same values.

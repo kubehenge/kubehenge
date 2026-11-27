@@ -896,7 +896,7 @@ A Helm error such as `admission webhook … denied the request` in an add-on's n
 
 - **A dial timeout** keeps Certificates `Pending`, Velero's `BackupStorageLocation` `Unavailable` or Argo CD at `ComparisonError`.
   - Check **Proxy** under the cluster's Options. With the default, the management side needs a proxy ([clusters.md](clusters.md#behind-a-proxy)).
-  - The controller's log says "add-ons go direct" when the management side's proxy holds a user name or password in its address. Set an own proxy address on the cluster, without credentials.
+  - A `ProxyNotPassedOn` Warning event on the cluster means the management side's proxy holds a user name or password in its address, so the add-ons and nodes go direct. Set an own proxy address on the cluster, without credentials.
   - `kubectl -n <namespace> get pod <pod> -o yaml` shows `HTTPS_PROXY` and `NO_PROXY` when the setting reached the pod.
 - **A host inside the network times out or answers 503 from the proxy.** The proxy was asked for something it cannot reach. Add the host to the cluster's proxy **Exceptions** (`egressProxy.noProxy`).
 - **`x509` errors from an add-on that goes through the proxy.** The proxy re-signs TLS with an authority the add-ons' pods do not trust. Use a proxy that tunnels, or add the hosts to the exceptions.

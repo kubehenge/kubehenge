@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/yaml"
 
@@ -72,6 +73,29 @@ func TestEgressResolvesFromTheClusterThenTheManagementSide(t *testing.T) {
 		if strings.Contains(skipped, "hunter2") {
 			t.Errorf("%s: the reason shows the password: %q", name, skipped)
 		}
+	}
+}
+
+// A management proxy with credentials reaches neither the add-ons nor the nodes, and the cluster
+// says why in a Warning event, without the password.
+func TestEgressNotPassedOnIsAWarningEvent(t *testing.T) {
+	t.Parallel()
+	recorder := events.NewFakeRecorder(4)
+	r := &Reconciler{Egress: Egress{URL: "http://user:hunter2@proxy.example.org:3128"}, Events: recorder} //nolint:gosec // a fake address
+	if got := r.resolveEgress(t.Context(), clusterWithRanges(), &EgressProxy{}); got.on() {
+		t.Fatalf("the proxy with credentials was passed on: %+v", got)
+	}
+	select {
+	case e := <-recorder.Events:
+		if !strings.Contains(e, "Warning ProxyNotPassedOn") || !strings.Contains(e, "add-ons and nodes go direct") || strings.Contains(e, "hunter2") {
+			t.Errorf("event %q", e)
+		}
+	default:
+		t.Fatal("no event")
+	}
+	r.Egress = Egress{URL: "http://proxy.example.org:3128"}
+	if got := r.resolveEgress(t.Context(), clusterWithRanges(), &EgressProxy{}); !got.on() || len(recorder.Events) != 0 {
+		t.Errorf("a proxy without credentials: %+v, %d events", got, len(recorder.Events))
 	}
 }
 

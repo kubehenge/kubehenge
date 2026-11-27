@@ -126,6 +126,14 @@ proxy:
   secret: ""
   ca: false
   caSecret: ""
+  # The management side's proxy as the nodes of a cluster that sets no egressProxy of its own take
+  # it, as the add-ons do: url without credentials, since node files are plain text, noProxy, its
+  # exceptions, and caBundle, the PEM authority of a proxy that re-signs TLS. Empty, those nodes go
+  # direct. The management-cluster module fills it in.
+  clusterDefault:
+    url: ""
+    noProxy: []
+    caBundle: ""
 
 # Mirrors of the chart repositories, by repository host, such as ghcr.io. Every chart a cluster
 # installs is fetched from the mirror of its host, which serves the same charts under the same

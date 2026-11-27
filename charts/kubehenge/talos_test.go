@@ -79,10 +79,14 @@ type classSpec struct {
 	Patches []classPatch `json:"patches"`
 }
 
-func renderTalosClass(t *testing.T) talosClass {
+// renderTalosClass renders the Talos class, with set as further helm arguments.
+func renderTalosClass(t *testing.T, set ...string) talosClass {
 	t.Helper()
-	cmd := exec.CommandContext(t.Context(), "helm", "template", "kubehenge", ".", "--namespace", "kubehenge-system",
-		"--values", "../../pkg/provisioner/testdata/integration-values.yaml", "--show-only", "templates/talos.yaml")
+	args := append([]string{
+		"template", "kubehenge", ".", "--namespace", "kubehenge-system",
+		"--values", "../../pkg/provisioner/testdata/integration-values.yaml", "--show-only", "templates/talos.yaml",
+	}, set...)
+	cmd := exec.CommandContext(t.Context(), "helm", args...) //nolint:gosec // the test's own arguments
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

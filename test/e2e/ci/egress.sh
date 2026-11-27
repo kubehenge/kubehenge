@@ -15,6 +15,7 @@
 #
 # A workload cluster's proxy setting takes no credentials, since node files are plain text, so behind
 # proxy its nodes go through a second listener of the same tunnelling proxy that asks for none.
+# Behind proxy-inspecting the workload cluster sets no proxy and its nodes take the management side's.
 #
 # start writes <work directory>/egress/env for run.sh to read, and mitmproxy's log, flows.log, there.
 # <source> is an address of the guests' bridge as an extended regular expression, such as
@@ -293,10 +294,10 @@ start() {
                 ;;
             *)
                 echo "export KUBEHENGE_E2E_PROXY_URL='http://${proxy_address}:${proxy_port}'"
-                echo "export KUBEHENGE_E2E_NODE_PROXY_URL='http://${proxy_address}:${node_port}'"
                 echo "export KUBEHENGE_E2E_NO_PROXY='${no_proxy}'"
                 echo "export KUBEHENGE_E2E_TIME_SERVER='${proxy_address}'"
                 if [ "${kind}" = proxy ]; then
+                    echo "export KUBEHENGE_E2E_NODE_PROXY_URL='http://${proxy_address}:${node_port}'"
                     echo "export KUBEHENGE_E2E_PROXY_USER='${proxy_user}'"
                     echo "export KUBEHENGE_E2E_PROXY_PASSWORD_FILE='${dir}/secret'"
                     url="http://${proxy_user}:${password}@${proxy_address}:${proxy_port}"

@@ -1574,11 +1574,11 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
       type: object
       description: >-
         The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero,
-        Argo CD, Flux, Headlamp and Rancher. The nodes go through it too, where it is set: the
-        container runtime, the distribution's installer and its service. Unset, the add-ons take the
-        management side's proxy, if it has one without credentials in its address, and the nodes go
-        direct. The cluster's pod, service and node networks, its API address, .svc and
-        .cluster.local always bypass it.
+        Argo CD, Flux, Headlamp and Rancher. The nodes go through it too: the container runtime, the
+        distribution's installer and its service. Unset, the add-ons and the nodes take the
+        management side's proxy, if it has one without credentials in its address, with its
+        exceptions, and the nodes trust its authority. The cluster's pod, service and node
+        networks, its API address, .svc and .cluster.local always bypass it.
       properties:
         url:
           type: string

@@ -559,10 +559,7 @@ func (r *Reconciler) addons(ctx context.Context, cluster *clusterv1.Cluster) (Ad
 	if addons.gitOpsFound, err = r.gitOpsState(ctx, cluster, &addons.GitOps); err != nil {
 		return addons, "", err
 	}
-	var skipped string
-	if addons.viaProxy, skipped = r.Egress.resolve(cluster, &addons.Egress); skipped != "" {
-		ctrl.LoggerFrom(ctx).Info("add-ons go direct: " + skipped)
-	}
+	addons.viaProxy = r.resolveEgress(ctx, cluster, &addons.Egress)
 	addons.gitOpsFound.egress = addons.viaProxy
 	if addons.monitoringFound, err = r.monitoringCredentials(ctx, cluster, &addons.Monitoring); err != nil {
 		return addons, "", err

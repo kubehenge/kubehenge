@@ -51,7 +51,7 @@ export function egressVariable(e: EgressChoice): Record<string, unknown> | undef
   return v;
 }
 
-/** egressText says in a line where the add-ons' traffic goes. */
+/** egressText says in a line where the nodes' and the add-ons' traffic goes. */
 export function egressText(e: EgressChoice, managementProxy = true): string {
   if (e.mode === "management") {
     return managementProxy ? "Management proxy" : "No proxy";
@@ -99,11 +99,11 @@ const modes: { value: EgressMode; label: string }[] = [
 ];
 
 const egressInfo =
-  "An own proxy serves the nodes and the add-ons that reach beyond the cluster. Cluster ranges always go direct.";
+  "The nodes and the add-ons that reach beyond the cluster go through this proxy. Cluster ranges always go direct.";
 
 const noProblems: Partial<Record<EgressField, string>> = {};
 
-/** EgressFields chooses the proxy that the add-ons reaching beyond the cluster go through. */
+/** EgressFields chooses the proxy that the nodes and the add-ons reaching beyond the cluster go through. */
 export function EgressFields({
   value: e,
   onChange,

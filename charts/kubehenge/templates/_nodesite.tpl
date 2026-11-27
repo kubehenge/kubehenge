@@ -105,10 +105,30 @@ valid now.
 {{- end -}}
 
 {{/*
+The Cluster API template that sets a node's proxy, $url and $https, and what comes with the
+management side's proxy, $managementNoProxy and $managementCAs (call with "root"). The cluster's own
+egressProxy wins: its address, or none when it says disabled. Without one, the nodes take the
+management side's proxy, as the add-ons do, with its exceptions and the authority of a proxy that
+re-signs TLS. One line, since enabledIf reads it too.
+*/}}
+{{- define "kubehenge.nodeProxy" -}}
+{{- $default := .root.Values.proxy.clusterDefault -}}
+{{- `{{ $url := dig "egressProxy" "url" "" . }}{{ $managementNoProxy := list }}{{ $managementCAs := list }}` -}}
+{{- if $default.url -}}
+{{- $exceptions := list -}}
+{{- range $default.noProxy }}{{ $exceptions = append $exceptions (printf " %q" .) }}{{ end -}}
+{{- printf `{{ if not (or $url (dig "egressProxy" "disabled" false .)) }}{{ $url = %q }}{{ $managementNoProxy = list%s }}` $default.url (join "" $exceptions) -}}
+{{- with $default.caBundle }}{{ printf `{{ $managementCAs = list %q }}` . }}{{ end -}}
+{{- `{{ end }}` -}}
+{{- end -}}
+{{- `{{ $https := dig "egressProxy" "httpsUrl" $url . }}` -}}
+{{- end -}}
+
+{{/*
 A Cluster API template that sets $noProxy, the exceptions of the proxy on a node (call with "pods" and
 "services", the distribution's own ranges, for a Cluster that sets none): the cluster's pod, service
-and node networks in each of its address families, its API address, its own names and the
-exceptions the cluster lists.
+and node networks in each of its address families, its API address, its own names, the management
+side's exceptions where its proxy applies and the exceptions the cluster lists.
 */}}
 {{- define "kubehenge.nodeNoProxy" -}}
 {{ printf "{{ $pods := list %q }}{{ $services := list %q }}" .pods .services }}
@@ -117,12 +137,13 @@ exceptions the cluster lists.
 {{ $nodes := list }}
 {{ with (dig "network" "gateway" "" .) }}{{ $nodes = append $nodes (printf "%s/%d" . (int (dig "network" "prefix" 24 $))) }}{{ end }}
 {{ with (dig "network" "ipv6" "gateway" "" .) }}{{ $nodes = append $nodes (printf "%s/%d" . (int (dig "network" "ipv6" "prefix" 64 $))) }}{{ end }}
-{{ $noProxy := concat (list "localhost" "127.0.0.1" "::1" ".svc" ".cluster.local" (dig "controlPlaneEndpoint" "" .)) $nodes $pods $services (dig "egressProxy" "noProxy" (list) .) | uniq | join "," }}` }}
+{{ $noProxy := concat (list "localhost" "127.0.0.1" "::1" ".svc" ".cluster.local" (dig "controlPlaneEndpoint" "" .)) $nodes $pods $services $managementNoProxy (dig "egressProxy" "noProxy" (list) .) | uniq | join "," }}` }}
 {{- end -}}
 
 {{/* The boot script of a kubeadm, RKE2 or k3s node, as the file Cluster API writes (call with the distribution and its ranges). */}}
 {{- define "kubehenge.nodeSiteFile" -}}
-{{ `{{ $mirrors := dig "registryMirrors" (list) . }}{{ $cas := or (dig "trustedCAs" (list) .) (dig "siteCAs" (list) .) }}{{ $url := dig "egressProxy" "url" "" . }}{{ $https := dig "egressProxy" "httpsUrl" $url . }}` }}
+{{ include "kubehenge.nodeProxy" . }}
+{{ `{{ $mirrors := dig "registryMirrors" (list) . }}{{ $cas := concat (or (dig "trustedCAs" (list) .) (dig "siteCAs" (list) .)) $managementCAs | uniq }}` }}
 {{ include "kubehenge.nodeNoProxy" . }}
 path: /etc/kubehenge/node-site.sh
 owner: root:root
@@ -131,13 +152,13 @@ content: |
 {{ $.root.Files.Get "files/node-site.sh.tpl" | replace "@DISTRIBUTION@" .distribution | indent 2 }}
 {{- end -}}
 
-{{/* The enabledIf of the patches: any of the three settings is set. */}}
+{{/* The enabledIf of the patches: any of the three settings is set, or the management side's proxy applies. */}}
 {{- define "kubehenge.nodeSiteEnabled" -}}
-{{ `{{ if or (dig "siteCAs" (list) .) (dig "trustedCAs" (list) .) (dig "registryMirrors" (list) .) (dig "egressProxy" "url" "" .) }}true{{ end }}` | quote }}
+{{ print (include "kubehenge.nodeProxy" .) `{{ if or (dig "siteCAs" (list) .) (dig "trustedCAs" (list) .) (dig "registryMirrors" (list) .) $url }}true{{ end }}` | quote }}
 {{- end -}}
 
 {{- define "kubehenge.nodeProxyEnabled" -}}
-{{ `{{ if dig "egressProxy" "url" "" . }}true{{ end }}` | quote }}
+{{ print (include "kubehenge.nodeProxy" .) `{{ if $url }}true{{ end }}` | quote }}
 {{- end -}}
 
 {{/*
@@ -217,7 +238,7 @@ container runtime read.
               {{- include "kubehenge.talosProxyEnv" $ | nindent 14 }}
     {{- end }}
 - name: talos-node-registries
-  enabledIf: {{ `{{ if or (dig "siteCAs" (list) .) (dig "trustedCAs" (list) .) (dig "registryMirrors" (list) .) }}true{{ end }}` | quote }}
+  enabledIf: {{ print (include "kubehenge.nodeProxy" .) `{{ if or (dig "siteCAs" (list) .) (dig "trustedCAs" (list) .) (dig "registryMirrors" (list) .) $managementCAs }}true{{ end }}` | quote }}
   definitions:
     {{- range $sel := .selectors }}
     - selector:
@@ -229,21 +250,22 @@ container runtime read.
         - op: add
           path: {{ $sel.path }}
           valueFrom:
-            template: {{ include "kubehenge.talosRegistryDocs" . | quote }}
+            template: {{ include "kubehenge.talosRegistryDocs" $ | quote }}
     {{- end }}
 {{- end -}}
 
 {{- define "kubehenge.talosProxyEnv" -}}
-{{ `{{ $url := dig "egressProxy" "url" "" . }}{{ $https := dig "egressProxy" "httpsUrl" $url . }}` }}
+{{ include "kubehenge.nodeProxy" . }}
 {{ include "kubehenge.nodeNoProxy" . }}
 {{ `{{ dict "machine" (dict "env" (dict "HTTP_PROXY" $url "HTTPS_PROXY" $https "NO_PROXY" $noProxy)) | toJson | toJson }}` }}
 {{- end -}}
 
 {{- define "kubehenge.talosRegistryDocs" -}}
+{{ include "kubehenge.nodeProxy" . }}
 {{ `{{ $docs := list }}{{ $seen := dict }}
 {{ range $m := (dig "registryMirrors" (list) .) }}{{ $eps := list }}{{ range $e := $m.endpoints }}{{ $ep := dict "url" $e }}{{ if (urlParse $e).path }}{{ $_ := set $ep "overridePath" true }}{{ end }}{{ $eps = append $eps $ep }}{{ end }}
 {{ $docs = append $docs (dict "apiVersion" "v1alpha1" "kind" "RegistryMirrorConfig" "name" $m.registry "endpoints" $eps | toJson) }}
 {{ $ca := dig "caBundle" "" $m }}{{ if $ca }}{{ range $e := $m.endpoints }}{{ $h := (urlParse $e).host }}{{ if not (hasKey $seen $h) }}{{ $_ := set $seen $h true }}{{ $docs = append $docs (dict "apiVersion" "v1alpha1" "kind" "RegistryTLSConfig" "name" $h "ca" $ca | toJson) }}{{ end }}{{ end }}{{ end }}{{ end }}
-{{ with (or (dig "trustedCAs" (list) .) (dig "siteCAs" (list) .)) }}{{ $docs = append $docs (dict "apiVersion" "v1alpha1" "kind" "TrustedRootsConfig" "name" "kubehenge" "certificates" (join "\n" .) | toJson) }}{{ end }}
+{{ with (concat (or (dig "trustedCAs" (list) .) (dig "siteCAs" (list) .)) $managementCAs | uniq) }}{{ $docs = append $docs (dict "apiVersion" "v1alpha1" "kind" "TrustedRootsConfig" "name" "kubehenge" "certificates" (join "\n" .) | toJson) }}{{ end }}
 {{ join "\n---\n" $docs | toJson }}` }}
 {{- end -}}
