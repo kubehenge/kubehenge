@@ -41,6 +41,7 @@ export function CredentialField({
   keys,
   hint,
   status,
+  onRead,
 }: {
   label: string;
   purpose: string;
@@ -49,6 +50,8 @@ export function CredentialField({
   hint?: ReactNode;
   /** What became of the credential's last use, shown while one is set. */
   status?: ReactNode;
+  /** Told whether the stored credential was read, for actions that need it. */
+  onRead?: ((read: boolean) => void) | undefined;
 }): JSX.Element {
   const namespace = cluster?.namespace;
   const name = cluster?.name;
@@ -66,10 +69,12 @@ export function CredentialField({
         const c = await api.storedCredential(purpose, refOf(namespace, name));
         if (current) {
           setStored(c);
+          onRead?.(true);
         }
       } catch (err) {
         if (current) {
           setError(errorMessage(err));
+          onRead?.(false);
         }
       }
     }
@@ -77,7 +82,7 @@ export function CredentialField({
     return () => {
       current = false;
     };
-  }, [purpose, namespace, name]);
+  }, [purpose, namespace, name, onRead]);
 
   const complete = values !== undefined && keys.every((k) => k.optional === true || filled(values[k.key]));
 

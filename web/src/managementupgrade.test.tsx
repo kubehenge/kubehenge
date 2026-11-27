@@ -37,6 +37,7 @@ const administrationPage = (setup: unknown): Record<string, Route> => ({
     body: { version: "0.2.0", available: [], settings: { policy: "off", hour: 3, timeZone: "UTC" } },
   },
   "GET /api/templates": { body: { templates: [] } },
+  "GET /api/runs": { body: [] },
 });
 
 describe("the management cluster behind the appliance", () => {

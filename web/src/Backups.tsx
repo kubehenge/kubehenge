@@ -13,6 +13,7 @@ import {
   ErrorBox,
   Field,
   Info,
+  ReadError,
   Status,
   age,
   browserZone,
@@ -711,15 +712,12 @@ export function BackupsView({
   can: boolean;
   onEdit: (a: "backups") => void;
 }): JSX.Element {
-  const {
-    data: v,
-    error,
-    reload,
-  } = usePoll(
+  const read = usePoll(
     () => api.backups(c.namespace, c.name),
     (d) => (running(d) ? pollRunning : pollIdle),
     { cache: backupsCache, key: `${c.namespace}/${c.name}` },
   );
+  const { data: v, error, reload } = read;
   const fleet = useFleet();
   const [restoring, setRestoring] = useState<BackupRun>();
   const [deleting, setDeleting] = useState<BackupRun>();
@@ -732,7 +730,7 @@ export function BackupsView({
   if (!v) {
     return (
       <div className="box">
-        <ErrorBox message={error} />
+        <ReadError read={read} />
         {!filled(error) && <Skeleton />}
       </div>
     );
@@ -777,7 +775,7 @@ export function BackupsView({
             {a.what}. {a.message}
           </p>
         ))}
-        <BackupsSummary view={v} settings={settings} readers={readers} />
+        <BackupsSummary view={v} settings={settings} readers={readers} unread={error !== undefined} />
         {filled(v.message) && <p className="warning">{v.message}</p>}
         <div className="actions">
           <button
@@ -800,7 +798,7 @@ export function BackupsView({
           ))}
         {filled(restoredInto) && <RestoredNotice namespace={c.namespace} into={restoredInto} />}
         <ErrorBox message={actionError} />
-        <ErrorBox message={error} />
+        <ReadError read={read} />
       </div>
       <SpecExport cluster={c} />
 
@@ -885,11 +883,19 @@ function BackupsSummary({
   view: v,
   settings,
   readers,
+  unread,
 }: {
   view: ClusterBackups;
   settings: BackupsValue;
   readers: string[];
+  /** A later read failed. */
+  unread: boolean;
 }): JSX.Element {
+  // Without Velero or this read, none taken is not known.
+  let last = v.reachable && !unread ? "None yet" : "Unknown";
+  if (v.lastBackup !== undefined) {
+    last = `${when(v.lastBackup)} (${age(v.lastBackup)} ago)`;
+  }
   const location = v.location === "Available" ? "Reachable" : (v.location ?? "Not checked yet");
   return (
     <dl className="summary">
@@ -907,7 +913,7 @@ function BackupsSummary({
         {filled(v.locationMessage) && <Detail>{sentence(v.locationMessage)}</Detail>}
       </dd>
       <dt>Last scheduled backup</dt>
-      <dd>{v.lastBackup === undefined ? "None yet" : `${when(v.lastBackup)} (${age(v.lastBackup)} ago)`}</dd>
+      <dd>{last}</dd>
       {v.sources.length > 0 && (
         <>
           <dt>Reads the backups of</dt>

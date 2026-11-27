@@ -3,12 +3,23 @@ import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "rea
 import { adminPath } from "./admin-views";
 import { clusterPath } from "./cluster-paths";
 import { FirstCluster } from "./FirstCluster";
-import { FleetProvider, fleetKey, groups, ranked, useFleet, type Group, type Standing } from "./fleet";
+import {
+  FleetProvider,
+  fleetKey,
+  groupLabel,
+  groups,
+  healthReadAt,
+  healthUnread,
+  ranked,
+  useFleet,
+  type Group,
+  type Standing,
+} from "./fleet";
 import { FleetBackupWarning } from "./ManagementRecovery";
 import { score } from "./Palette";
 import { Link, navigate } from "./router";
 import type { Cluster, FleetHealth } from "./types";
-import { ErrorBox, ReadError, RetryIn, Skeleton, Status, age, distributionName, filled } from "./ui";
+import { ErrorBox, ReadError, RetryIn, Skeleton, Status, age, distributionName, filled, unknownCount } from "./ui";
 
 // The privilege creating a cluster needs, as Proxmox VE names it.
 const createNeeds = "Creating clusters needs VM.Allocate on the workload pool.";
@@ -51,8 +62,10 @@ function FleetList({ canCreate, canManage }: { canCreate: boolean | undefined; c
       <FirstCluster canCreate={canCreate} canManage={canManage} />
     ) : (
       <>
-        {fleet !== null && <ReadError read={fleet.healthRead} />}
-        <Clusters clusters={shown} found={fleet?.health} failed={fleet?.healthRead.error !== undefined} />
+        {fleet !== null && (
+          <ReadError read={fleet.healthRead} readAt={fleet.healthRead.stale ? healthReadAt(fleet.health) : undefined} />
+        )}
+        <Clusters clusters={shown} found={fleet?.health} failed={fleet !== null && healthUnread(fleet)} />
       </>
     );
   // Without the clusters, the list says when it reads them again, and administrators get the
@@ -225,7 +238,12 @@ function Clusters({
             .filter((g) => g.group !== "unknown" || (rows.counts.get(g.group) ?? 0) > 0)
             .map((g) => (
               <button key={g.group} type="button" aria-pressed={show === g.group} onClick={() => setShow(g.group)}>
-                {g.label} <span className="count">{rows.counts.get(g.group) ?? 0}</span>
+                {groupLabel(g, failed)}{" "}
+                <span className="count">
+                  {failed && (g.group === "needs" || g.group === "healthy")
+                    ? unknownCount
+                    : (rows.counts.get(g.group) ?? 0)}
+                </span>
               </button>
             ))}
         </fieldset>

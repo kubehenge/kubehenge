@@ -52,6 +52,12 @@ interface State {
   path: string;
   fail?: string[];
   hang?: string[];
+  // The failing reads answer once, and fail only when read again.
+  failLater?: boolean;
+  // A text the page shows before anything is clicked or read again.
+  before?: string;
+  // What to click once the page shows the text before.
+  click?: { role: "button" | "link"; name: string };
   // A text the page shows in that state.
   ready: string;
 }
@@ -66,6 +72,91 @@ const states: State[] = [
     path: "/clusters/clusters/web",
     hang: ["/api/clusters/clusters/web"],
     ready: "Placement",
+  },
+  { file: "runs-failed.png", path: "/", fail: ["/api/runs"], ready: "Try now" },
+  { file: "runs-pending.png", path: "/clusters/clusters/web", hang: ["/api/runs"], ready: "Placement" },
+  {
+    file: "fleet-health-stale.png",
+    path: "/",
+    fail: ["/api/fleet/health"],
+    failLater: true,
+    before: "Degraded",
+    ready: "Try now",
+  },
+  { file: "remove-clusters-failed.png", path: "/administration", fail: ["/api/clusters"], ready: "Clusters not read." },
+  { file: "remove-clusters-pending.png", path: "/administration", hang: ["/api/clusters"], ready: "Danger zone" },
+  {
+    file: "cluster-read-failed.png",
+    path: "/",
+    fail: ["/api/clusters/clusters/web"],
+    before: "payments",
+    click: { role: "link", name: "web" },
+    ready: "Placement",
+  },
+  {
+    file: "placement-nodes-failed.png",
+    path: "/clusters/clusters/web",
+    fail: ["/api/proxmox/nodes"],
+    ready: "Try now",
+  },
+  {
+    file: "placement-nodes-pending.png",
+    path: "/clusters/clusters/web",
+    hang: ["/api/proxmox/nodes"],
+    ready: "Placement",
+  },
+  {
+    file: "upgrade-versions-pending.png",
+    path: "/clusters/clusters/web",
+    hang: ["/api/versions"],
+    before: "Placement",
+    click: { role: "button", name: "Upgrade" },
+    ready: "Upgrade web",
+  },
+  {
+    file: "upgrade-versions-failed.png",
+    path: "/clusters/clusters/web",
+    fail: ["/api/versions"],
+    before: "Placement",
+    click: { role: "button", name: "Upgrade" },
+    ready: "Try now",
+  },
+  {
+    file: "backups-etcd-target.png",
+    path: "/clusters/clusters/web/backups",
+    hang: ["/api/clusters/clusters/web/backups"],
+    ready: "Last taken",
+  },
+  {
+    file: "backups-etcd-failed.png",
+    path: "/clusters/clusters/web/backups",
+    fail: ["/etcd-snapshots"],
+    ready: "Try now",
+  },
+  {
+    file: "backups-velero-failed.png",
+    path: "/clusters/clusters/web/backups",
+    fail: ["/api/clusters/clusters/web/backups"],
+    ready: "Try now",
+  },
+  {
+    file: "health-failed.png",
+    path: "/clusters/clusters/web/health",
+    fail: ["/api/clusters/clusters/web/health"],
+    ready: "Try now",
+  },
+  {
+    file: "admin-backups-failed.png",
+    path: "/administration/backups",
+    fail: ["/api/appliance/etcd-backups"],
+    ready: "Try now",
+  },
+  { file: "admin-health-failed.png", path: "/administration", fail: ["/api/setup/health"], ready: "Try now" },
+  {
+    file: "notifications-targets-failed.png",
+    path: "/administration/notifications",
+    fail: ["/api/credentials/notify"],
+    ready: "Targets not read.",
   },
 ];
 
@@ -103,15 +194,32 @@ try {
   const page = await context.newPage();
   await page.clock.setFixedTime(new Date(demoTime));
   for (const state of mode === "states" ? states : []) {
+    let answered = false;
     await page.route(
       (url) => [...(state.fail ?? []), ...(state.hang ?? [])].some((p) => url.pathname.includes(p)),
       async (route) => {
-        if (state.fail?.some((p) => route.request().url().includes(p)) === true) {
-          await route.abort();
+        if (state.fail?.some((p) => route.request().url().includes(p)) !== true) {
+          return;
         }
+        if (state.failLater === true && !answered) {
+          answered = true;
+          await route.continue();
+          return;
+        }
+        await route.abort();
       },
     );
     await page.goto(origin + state.path);
+    if (state.before !== undefined) {
+      await page.getByText(state.before, { exact: true }).first().waitFor({ timeout: readyDeadline });
+    }
+    if (state.click !== undefined) {
+      await page.getByRole(state.click.role, { name: state.click.name, exact: true }).first().click();
+    }
+    // A tab shown again reads everything again.
+    if (state.failLater === true) {
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    }
     await page.getByText(state.ready, { exact: true }).first().waitFor({ timeout: readyDeadline });
     await page.waitForTimeout(settle);
     await page.screenshot({ path: join(out, state.file), animations: "disabled", caret: "hide" });

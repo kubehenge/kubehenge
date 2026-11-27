@@ -97,6 +97,7 @@ describe("staged changes", () => {
     let shown = cluster;
     const routes: Record<string, Route> = {
       "GET /api/session": { body: { user: "dev@pve", csrf: "c" } },
+      "GET /api/runs": { body: [] },
       [`GET ${path}`]: () => ({ body: shown }),
       [`POST ${path}/plan`]: planned,
       [`PATCH ${path}`]: {

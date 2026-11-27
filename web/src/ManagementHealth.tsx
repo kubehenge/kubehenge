@@ -3,7 +3,7 @@ import type { JSX } from "react";
 import { api } from "./api";
 import { nodeAdvice } from "./Placement";
 import type { BackupSummary, ManagementHealth, RebootReadiness } from "./types";
-import { Detail, ErrorBox, Said, Skeleton, Status, filled, pollCache, pollIdle, usePoll } from "./ui";
+import { Detail, ReadError, Said, Skeleton, Status, filled, pollCache, pollIdle, usePoll } from "./ui";
 
 const managementCache = pollCache<ManagementHealth>();
 const managementKept = { cache: managementCache, key: "" };
@@ -163,13 +163,14 @@ export function BackupLine({ backups }: { backups: BackupSummary }): JSX.Element
 // ManagementHealthCard is the management cluster's own health, read on its own so that it answers
 // while the cluster does not, when the Administration page is what repairs it.
 export function ManagementHealthCard(): JSX.Element {
-  const { data: h, error, stale } = usePoll(api.managementHealth, pollIdle, managementKept);
+  const read = usePoll(api.managementHealth, pollIdle, managementKept);
+  const { data: h, error, stale } = read;
   const { data: reboot } = usePoll(api.rebootReady, pollIdle, rebootKept);
   if (!h) {
     return (
       <div className="box">
         <h3>Health</h3>
-        {error === undefined ? <Skeleton rows={3} /> : <ErrorBox message={error} />}
+        {error === undefined ? <Skeleton rows={3} /> : <ReadError read={read} />}
       </div>
     );
   }

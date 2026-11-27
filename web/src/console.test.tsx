@@ -235,6 +235,7 @@ function serve(): Record<string, Route> {
     "GET /api/session": { body: { user: "alice@pve", csrf: "c1" } },
     "GET /api/clusters": { body: fleet },
     "GET /api/runs": { body: [] },
+    "GET /api/proxmox/nodes": { body: [] },
     "GET /api/fleet/health": {
       body: fleet.map((c) => ({
         namespace: c.namespace,

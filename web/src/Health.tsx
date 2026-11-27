@@ -31,6 +31,7 @@ import {
   Dialog,
   ErrorBox,
   Field,
+  ReadError,
   Status,
   abnormal,
   age,
@@ -1213,12 +1214,13 @@ function PodLog({ cluster, pod, container }: { cluster: ClusterRef; pod: UnwellP
  */
 export function HealthView({ cluster: c, headlamp }: { cluster: Cluster; headlamp?: string | undefined }): JSX.Element {
   const ref = { namespace: c.namespace, name: c.name };
-  const { data: h, error, stale } = useClusterHealth(ref);
+  const read = useClusterHealth(ref);
+  const { data: h, error, stale } = read;
   const [logsOf, setLogsOf] = useState<UnwellPod>();
   if (!h) {
     return (
       <div className="box">
-        <ErrorBox message={error} />
+        <ReadError read={read} />
         {!filled(error) && <Skeleton rows={6} shape="tiles" />}
       </div>
     );
@@ -1231,7 +1233,7 @@ export function HealthView({ cluster: c, headlamp }: { cluster: Cluster; headlam
     <>
       <div className="box">
         <Verdict cluster={c} health={h} stale={stale} />
-        <ErrorBox message={error} />
+        <ReadError read={read} />
         <Tiles health={h} stale={stale} />
       </div>
       <NeedsAttention health={h} actions={actions} cluster={ref} />

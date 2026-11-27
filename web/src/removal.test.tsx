@@ -22,22 +22,39 @@ const cluster = (name: string): object => ({
   workers: { desired: 1, ready: 1, available: 1, upToDate: 1 },
 });
 
+// noClusters answers the fleet's reads with none, as removing needs.
+const noClusters: Record<string, Route> = {
+  "GET /api/clusters": { body: [] },
+  "GET /api/fleet/health": { body: [] },
+  "GET /api/runs": { body: [] },
+};
+
 describe("removing Kubehenge", () => {
   it("leaves the clusters rule to the disabled button, not the dialog", async () => {
-    fakeServer({});
+    fakeServer(noClusters);
     const user = userEvent.setup({ delay: null });
-    render(<DangerZone running={false} onStarted={vi.fn<() => void>()} />);
+    render(
+      <FleetProvider>
+        <DangerZone running={false} onStarted={vi.fn<() => void>()} />
+      </FleetProvider>,
+    );
+    await screen.findByText("Keeps the appliance");
     await user.click(screen.getByRole("button", { name: "Remove…" }));
     expect(screen.queryByText(/Delete every cluster first/u)).not.toBeInTheDocument();
   });
 
   it("removes on Enter only once the word is typed", async () => {
-    const routes: Record<string, Route> = { "POST /api/setup/remove": { status: 202, body: {} } };
+    const routes: Record<string, Route> = { ...noClusters, "POST /api/setup/remove": { status: 202, body: {} } };
     const calls = fakeServer(routes);
     const started = vi.fn<() => void>();
     const user = userEvent.setup({ delay: null });
-    render(<DangerZone running={false} onStarted={started} />);
+    render(
+      <FleetProvider>
+        <DangerZone running={false} onStarted={started} />
+      </FleetProvider>,
+    );
 
+    await screen.findByText("Keeps the appliance");
     await user.click(screen.getByRole("button", { name: "Remove…" }));
     expect(screen.getByRole("dialog", { name: "Remove Kubehenge" })).toBeInTheDocument();
     await user.type(screen.getByLabelText("State passphrase"), "correct horse battery staple{Enter}");

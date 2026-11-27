@@ -4,7 +4,7 @@ import { api } from "./api";
 import { BootLogDialog } from "./BootLog";
 import { useClusterHealth } from "./cluster-health";
 import { clusterPath } from "./cluster-paths";
-import { offlineOf, unreachable, useProxmoxNodes } from "./offline-nodes";
+import { offlineOf, unreachable, useProxmoxNodes, useProxmoxNodesRead } from "./offline-nodes";
 import { poolLabel } from "./pool-machine";
 import { Link, useQuery } from "./router";
 import type { Cluster, HealthNode, Machine, PveNode } from "./types";
@@ -12,6 +12,7 @@ import {
   Detail,
   Dialog,
   ErrorBox,
+  ReadError,
   RowMenu,
   Said,
   Skeleton,
@@ -524,20 +525,30 @@ function hostState(h: Host): string {
  * Placement shows where a cluster's machines run: one tile per Proxmox VE node, each machine with
  * its role and state, so losing a node shows what it takes with it.
  */
-export function Placement({ cluster: c }: { cluster: Cluster }): JSX.Element {
+export function Placement({ cluster: c, failed = false }: { cluster: Cluster; failed?: boolean }): JSX.Element {
   // Only those who see the nodes get them. The others see the nodes of their machines alone.
-  const nodes = useProxmoxNodes();
+  const nodesRead = useProxmoxNodesRead();
+  const nodes = nodesRead.data;
   const health = useClusterHealth(c);
   const nodeOf = new Map((health.data?.nodes.items ?? []).map((n) => [n.machine ?? n.name, n]));
   const machines = c.machines ?? [];
   const crowded = crowding(machines);
-  // Until the cluster's machines are read, no node is known to be empty.
-  const list = c.machines === undefined ? [] : hosts(machines, nodes);
+  // Until the cluster's machines and the nodes are read, no node is known to be empty. Without the
+  // nodes, only those running the machines show.
+  const nodesPending = nodes === undefined && nodesRead.error === undefined;
+  const list = c.machines === undefined || nodesPending ? [] : hosts(machines, nodes);
+  let unread: JSX.Element | null = null;
+  if (c.machines === undefined) {
+    unread = failed ? <p className="muted">Unknown</p> : <Skeleton rows={3} shape="tiles" />;
+  } else if (nodesPending) {
+    unread = <Skeleton rows={3} shape="tiles" />;
+  }
   return (
     <section className="box placement" aria-label="Placement">
       <h3>Placement</h3>
       {crowded !== undefined && <p className="warning">{crowded}</p>}
-      {c.machines === undefined && <Skeleton rows={3} shape="tiles" />}
+      {unread}
+      {nodes === undefined && <ReadError read={nodesRead} />}
       {c.machines?.length === 0 && <p className="muted">No machines yet</p>}
       <ul className="hosts" aria-label="Proxmox VE nodes">
         {list.map((h) => (

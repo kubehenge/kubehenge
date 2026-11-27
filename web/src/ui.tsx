@@ -534,11 +534,22 @@ export function ErrorBox({ message }: { message?: string | undefined }): JSX.Ele
   );
 }
 
-/** ReadError is a failed read's error with when it is tried again and a way to try now. */
+// The en dash's code point, which stands for a count a failed read leaves unknown.
+const enDash = 0x20_13;
+
+/** unknownCount stands for a count that a failed read leaves unknown. */
+export const unknownCount = String.fromCodePoint(enDash);
+
+/**
+ * ReadError is a failed read's error with when it is tried again and a way to try now. Given when
+ * the values still shown were read, it marks them stale.
+ */
 export function ReadError({
   read,
+  readAt,
 }: {
   read: { error: string | undefined; next: () => number; reload: () => Promise<void> };
+  readAt?: string | undefined;
 }): JSX.Element | null {
   if (read.error === undefined) {
     return null;
@@ -546,12 +557,19 @@ export function ReadError({
   return (
     <div className="read-error">
       <ErrorBox message={read.error} />
-      <RetryIn
-        next={read.next}
-        onRetry={() => {
-          void read.reload();
-        }}
-      />
+      <div className="read-error-retry">
+        {readAt !== undefined && (
+          <span className="hint-warning" title={new Date(readAt).toLocaleString()}>
+            Stale, read at {new Date(readAt).toLocaleTimeString()}
+          </span>
+        )}
+        <RetryIn
+          next={read.next}
+          onRetry={() => {
+            void read.reload();
+          }}
+        />
+      </div>
     </div>
   );
 }

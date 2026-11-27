@@ -38,6 +38,8 @@ export interface Fleet {
 /** What a failed read offers: its message, when it is next read, and reading it now. */
 export interface ReadOf {
   error: string | undefined;
+  /** What is shown was read before and a later read failed. */
+  stale: boolean;
   next: () => number;
   reload: () => Promise<void>;
 }
@@ -65,12 +67,14 @@ export function FleetProvider({ reads = true, children }: { reads?: boolean; chi
   const {
     data: read,
     error: healthError,
+    stale: healthStale,
     next: nextHealth,
     reload: reloadHealth,
   } = usePoll<FleetHealth[] | undefined>(reads ? api.fleetHealth : noFleet, pollIdle);
   const {
     data: runs,
     error: runsError,
+    stale: runsStale,
     next: nextRuns,
     reload: reloadRuns,
   } = usePoll<RunInfo[] | undefined>(reads ? api.runs : noFleet, (list) =>
@@ -105,8 +109,8 @@ export function FleetProvider({ reads = true, children }: { reads?: boolean; chi
       health: read && new Map(read.map((h) => [fleetKey(h), h])),
       runs,
       error,
-      healthRead: { error: healthError, next: nextHealth, reload: reloadHealth },
-      runsRead: { error: runsError, next: nextRuns, reload: reloadRuns },
+      healthRead: { error: healthError, stale: healthStale, next: nextHealth, reload: reloadHealth },
+      runsRead: { error: runsError, stale: runsStale, next: nextRuns, reload: reloadRuns },
       stale,
       reload,
       next,
@@ -118,9 +122,11 @@ export function FleetProvider({ reads = true, children }: { reads?: boolean; chi
       runs,
       error,
       healthError,
+      healthStale,
       nextHealth,
       reloadHealth,
       runsError,
+      runsStale,
       nextRuns,
       reloadRuns,
       stale,
@@ -380,12 +386,38 @@ function finding(h: FleetHealth | undefined): Standing | undefined {
   return { group: "needs", state: worst.severity, reason, view, verdict: "Degraded" };
 }
 
-/** ClusterStatus is a cluster's badge, with what its health page found where the fleet has read it. */
-export function ClusterStatus({ cluster }: { cluster: Cluster }): JSX.Element {
+/**
+ * ClusterStatus is a cluster's badge, with what its health page found where the fleet has read it.
+ * Unread, as when the cluster's own read failed, it is Unknown whatever the fleet list says.
+ */
+export function ClusterStatus({
+  cluster,
+  unread: notRead = false,
+}: {
+  cluster: Cluster;
+  unread?: boolean;
+}): JSX.Element {
   const fleet = useFleet();
+  if (notRead) {
+    return <Status state="idle" text="Unknown" />;
+  }
   const s =
     fleet === null ? standing(cluster) : standingIn(cluster, fleet.health, fleet.healthRead.error !== undefined);
   return <Status state={s.state} text={s.verdict} />;
+}
+
+/** healthUnread is whether the fleet's health read failed with nothing read before it. */
+export const healthUnread = (fleet: Fleet): boolean =>
+  fleet.health === undefined && fleet.healthRead.error !== undefined;
+
+/** groupLabel names a group: the unknown one says Loading while the health is still being read. */
+export const groupLabel = (g: { group: Group; label: string }, failed: boolean): string =>
+  g.group === "unknown" && !failed ? "Loading" : g.label;
+
+/** healthReadAt is when the newest health shown was read. */
+export function healthReadAt(health: Map<string, FleetHealth> | undefined): string | undefined {
+  const times = [...(health?.values() ?? [])].map((h) => h.read).toSorted();
+  return times.at(-1);
 }
 
 const severity: Record<Standing["state"], number> = { error: 0, warning: 1, progress: 2, deleting: 3, ok: 4, idle: 5 };
@@ -440,8 +472,9 @@ export function FleetRail({
     fleet?.clusters === undefined
       ? undefined
       : ranked(fleet.clusters, fleet.health, fleet.healthRead.error !== undefined);
-  // The last list read stays shown, greyed, once it may no longer hold.
-  const stale = fleet?.stale === true && list !== undefined;
+  // The last list read stays shown, greyed, once it or its health may no longer hold.
+  const stale = (fleet?.stale === true || fleet?.healthRead.stale === true) && list !== undefined;
+  const failed = fleet !== null && healthUnread(fleet);
   return (
     <nav className={stale ? "rail rail-stale" : "rail"} aria-label="Fleet">
       <div className="rail-head">
@@ -463,13 +496,15 @@ export function FleetRail({
         </p>
       )}
       {stale && (
-        <p className="rail-note hint-warning" title={fleet.error}>
+        <p className="rail-note hint-warning" title={fleet.error ?? fleet.healthRead.error}>
           Stale
         </p>
       )}
       {list?.length === 0 && <p className="rail-note">No clusters yet</p>}
       {list !== undefined &&
-        groups.map(({ group, label }) => {
+        groups.map((g) => {
+          const { group } = g;
+          const label = groupLabel(g, failed);
           const members = list.filter((m) => m.standing.group === group);
           if (members.length === 0) {
             return null;

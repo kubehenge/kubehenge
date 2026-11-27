@@ -24,6 +24,7 @@ import {
   ErrorBox,
   Field,
   Info,
+  ReadError,
   Status,
   age,
   browserZone,
@@ -400,9 +401,13 @@ export function restoreState(r: EtcdRestoreStatus): { state: Health; text: strin
   return { state: "progress", text: "Replacing control-plane nodes" };
 }
 
-function snapshotState(v: ClusterEtcdSnapshots): { state: Health | "idle"; text: string } {
+function snapshotState(v: ClusterEtcdSnapshots, unread: boolean): { state: Health | "idle"; text: string } {
   if (v.condition === undefined) {
-    return { state: "idle", text: v.enabled ? "None yet" : "Off" };
+    if (!v.enabled) {
+      return { state: "idle", text: "Off" };
+    }
+    // Without a read of the snapshots or their target, none taken is not known.
+    return { state: "idle", text: unread || filled(v.message) ? "Unknown" : "None yet" };
   }
   return v.condition.status === "True" ? { state: "ok", text: "Taken" } : { state: "error", text: "Failed" };
 }
@@ -417,15 +422,12 @@ export function EtcdSnapshotsView({
   can: boolean;
   onEdit: (a: "etcdSnapshots") => void;
 }): JSX.Element {
-  const {
-    data: v,
-    error,
-    reload,
-  } = usePoll(
+  const read = usePoll(
     () => api.etcdSnapshots(c.namespace, c.name),
     (d) => (d !== undefined && (d.requested || d.restoring) ? pollRunning : pollIdle),
     { cache: snapshotsCache, key: `${c.namespace}/${c.name}` },
   );
+  const { data: v, error, reload } = read;
   const [restoring, setRestoring] = useState<EtcdSnapshot>();
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string>();
@@ -434,7 +436,7 @@ export function EtcdSnapshotsView({
     return (
       <div className="box">
         <h3>etcd snapshots</h3>
-        <ErrorBox message={error} />
+        <ReadError read={read} />
         {!filled(error) && <Skeleton />}
       </div>
     );
@@ -460,7 +462,7 @@ export function EtcdSnapshotsView({
     <>
       <div className="box">
         <h3>etcd snapshots</h3>
-        <SnapshotsSummary cluster={c} view={v} />
+        <SnapshotsSummary cluster={c} view={v} unread={error !== undefined} />
         {v.restore !== undefined && <RestoreState restore={v.restore} snapshots={v.snapshots} />}
         {filled(v.message) && <p className="warning">{v.message}</p>}
         <div className="actions">
@@ -483,7 +485,7 @@ export function EtcdSnapshotsView({
         </div>
         {v.enabled && noSnapshot !== undefined && <p className="muted">{noSnapshot}</p>}
         <ErrorBox message={actionError} />
-        <ErrorBox message={error} />
+        <ReadError read={read} />
       </div>
 
       {(v.enabled || v.snapshots.length > 0) && (
@@ -508,11 +510,19 @@ export function EtcdSnapshotsView({
   );
 }
 
-function SnapshotsSummary({ cluster: c, view: v }: { cluster: Cluster; view: ClusterEtcdSnapshots }): JSX.Element {
+function SnapshotsSummary({
+  cluster: c,
+  view: v,
+  unread,
+}: {
+  cluster: Cluster;
+  view: ClusterEtcdSnapshots;
+  unread: boolean;
+}): JSX.Element {
   if (!v.enabled) {
     return <p>etcd snapshots are off</p>;
   }
-  const s = snapshotState(v);
+  const s = snapshotState(v, unread);
   return (
     <dl className="summary">
       <dt>Kept on</dt>
