@@ -149,7 +149,7 @@ Cluster API replaces a control-plane node by adding its successor first, in ever
 
 With one control plane, etcd therefore runs on two members from the new one's promotion until the old one's removal. The API stops while either stalls for longer than etcd's election timeout.
 
-When a roll's new machine is not ready after 20 minutes, the controller sets `ControlPlaneRollStalled` on the Cluster, with whether the API still answers. Recovery resets etcd to the kept machine's own database ([troubleshooting.md](troubleshooting.md#one-control-plane-its-roll-stalled)).
+When a roll has run 20 minutes without its new machine ready, the controller sets `ControlPlaneRollStalled` on the Cluster, with whether the API still answers. The roll is timed from its start, so a new machine the health check keeps replacing still counts. Recovery resets etcd to the kept machine's own database ([troubleshooting.md](troubleshooting.md#one-control-plane-its-roll-stalled)).
 
 RKE2's and k3s's providers remove the old server's etcd member while that server still runs. Their servers' units do not start once etcd has left its tombstone in their data directory, so a removed server never joins etcd again.
 

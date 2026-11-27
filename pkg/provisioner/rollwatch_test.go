@@ -8,8 +8,12 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 // rollMachine is a control-plane machine of web made at made, whose Ready condition has status.
@@ -106,6 +110,84 @@ func TestRollWatch(t *testing.T) {
 			}
 			if cond := meta.FindStatusCondition(f.cluster().Status.Conditions, RollStalledCondition); cond != nil {
 				t.Errorf("condition %+v kept", cond)
+			}
+		})
+	}
+}
+
+// The health check replaces a successor in 20 minutes, so a roll it keeps replacing is timed from
+// the control plane's RollingOut condition. The watch reads it afresh, so a restart keeps the bound.
+func TestRollWatchReplacedSuccessors(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		rolling time.Duration
+		want    bool
+	}{
+		{name: "a roll whose successors keep being replaced", rolling: time.Hour, want: true},
+		{name: "a healthy roll", rolling: 10 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := etcdCluster(`{}`)
+			c.Spec.Topology.ControlPlane.Replicas = new(int32(1))
+			c.Spec.ControlPlaneRef = clusterv1.ContractVersionedObjectReference{APIGroup: siteControlGVK.Group, Kind: siteControlGVK.Kind, Name: "web-cp"}
+			cp := controlPlaneIn(c, rolloutState{Desired: 1})
+			cp.Object["status"] = map[string]any{"conditions": []any{map[string]any{
+				"type": clusterv1.RollingOutCondition, "status": "True", "reason": "RollingOut",
+				"lastTransitionTime": etcdNow.Add(-tc.rolling).UTC().Format(time.RFC3339),
+			}}}
+			scheme := testScheme(t)
+			scheme.AddKnownTypeWithName(siteControlGVK, &unstructured.Unstructured{})
+			mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{siteControlGVK.GroupVersion()})
+			mapper.Add(siteControlGVK, meta.RESTScopeNamespace)
+			kept := rollMachine("web-cp-old", etcdNow.Add(-24*time.Hour), metav1.ConditionTrue)
+			kube := fake.NewClientBuilder().WithScheme(scheme).WithRESTMapper(mapper).WithStatusSubresource(&clusterv1.Cluster{}).
+				WithObjects(c, cp, kept, rollMachine("web-cp-new", etcdNow.Add(-5*time.Minute), metav1.ConditionFalse)).Build()
+			look := func() (*metav1.Condition, []string) {
+				t.Helper()
+				recorder := events.NewFakeRecorder(10)
+				// A new watch each time, as after a restart of the controller.
+				w := &RollWatch{Client: kube, ClassNamespace: "kubehenge-system", APIs: &fakeAPIs{}, Events: recorder, Now: func() time.Time { return etcdNow }}
+				got := &clusterv1.Cluster{}
+				if err := kube.Get(context.Background(), client.ObjectKeyFromObject(c), got); err != nil {
+					t.Fatal(err)
+				}
+				if err := w.watch(context.Background(), got); err != nil {
+					t.Fatal(err)
+				}
+				if err := kube.Get(context.Background(), client.ObjectKeyFromObject(c), got); err != nil {
+					t.Fatal(err)
+				}
+				close(recorder.Events)
+				var said []string
+				for e := range recorder.Events {
+					said = append(said, e)
+				}
+				return meta.FindStatusCondition(got.Status.Conditions, RollStalledCondition), said
+			}
+			cond, said := look()
+			if !tc.want {
+				if cond != nil || len(said) != 0 {
+					t.Fatalf("condition %+v, events %q", cond, said)
+				}
+				return
+			}
+			if cond == nil || !strings.Contains(cond.Message, "web-cp-new, which replaces web-cp-old, has not become ready in 1h0m0s") {
+				t.Fatalf("condition %+v", cond)
+			}
+			if len(said) != 1 || !strings.Contains(said[0], "Warning "+RollStalledCondition) {
+				t.Errorf("events %q", said)
+			}
+			if cond, said := look(); cond == nil || len(said) != 0 {
+				t.Errorf("after a restart: condition %+v, events %q", cond, said)
+			}
+			// The roll ends once the old machine is gone.
+			if err := kube.Delete(context.Background(), kept); err != nil {
+				t.Fatal(err)
+			}
+			if cond, said := look(); cond != nil || len(said) != 1 || !strings.Contains(said[0], "ControlPlaneRollResumed") {
+				t.Errorf("after the roll: condition %+v, events %q", cond, said)
 			}
 		})
 	}

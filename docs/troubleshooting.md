@@ -541,7 +541,7 @@ Health shows **etcd disk slow** when an etcd member's write-ahead log syncs have
 
 An upgrade or any change to the control planes replaces a cluster's only control plane. Meanwhile etcd runs on two members, each needing the other ([architecture.md](architecture.md#control-plane-rolls)).
 
-After 20 minutes without the new machine ready (the module's `watch.stall_minutes`), the Cluster gets the condition `ControlPlaneRollStalled` and a warning event of that name. The cluster's page shows it with **Recover…**, and its **Health** view lists it.
+After 20 minutes of the roll without the new machine ready (the module's `watch.stall_minutes`), the Cluster gets the condition `ControlPlaneRollStalled` and a warning event of that name. The cluster's page shows it with **Recover…**, and its **Health** view lists it.
 
 The reason `APIUnreachable` means the API has stopped answering. `SuccessorNotReady` means it still answers. The message names both machines and why the new one is not ready.
 

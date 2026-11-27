@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -101,9 +102,11 @@ func (w *RollWatch) watch(ctx context.Context, c *clusterv1.Cluster) error {
 // stallReasonMax bounds Cluster API's reason a successor is not ready, as the message quotes it.
 const stallReasonMax = 400
 
-// roll is the two machines of a roll of one control plane: the successor, which replaces kept.
+// roll is the two machines of a roll of one control plane: the successor, which replaces kept. It
+// began at start.
 type roll struct {
 	successor, kept *clusterv1.Machine
+	start           time.Time
 }
 
 // stalled is the condition a cluster's control plane gets, nil when its roll has not stalled.
@@ -112,7 +115,7 @@ func (w *RollWatch) stalled(ctx context.Context, c *clusterv1.Cluster) (*metav1.
 	if err != nil || !ok {
 		return nil, err
 	}
-	waited := w.now().Sub(r.successor.CreationTimestamp.Time)
+	waited := w.now().Sub(r.start)
 	why := "Cluster API gives no reason"
 	if ready := meta.FindStatusCondition(r.successor.Status.Conditions, clusterv1.MachineReadyCondition); ready != nil && ready.Message != "" {
 		why = shorten(ready.Message, stallReasonMax)
@@ -138,8 +141,8 @@ func (w *RollWatch) stalled(ctx context.Context, c *clusterv1.Cluster) (*metav1.
 	}, nil
 }
 
-// stalledRoll finds the roll of a cluster's only control plane whose successor has not become
-// ready in StallAfter, and ok is false when there is none.
+// stalledRoll finds the roll of a cluster's only control plane that has not ended in StallAfter
+// with its successor ready, and ok is false when there is none.
 func (w *RollWatch) stalledRoll(ctx context.Context, c *clusterv1.Cluster) (roll, bool, error) {
 	if !c.DeletionTimestamp.IsZero() || ptr.Deref(c.Spec.Paused, false) || RestoreInProgress(c) {
 		return roll{}, false, nil
@@ -154,10 +157,40 @@ func (w *RollWatch) stalledRoll(ctx context.Context, c *clusterv1.Cluster) (roll
 		return roll{}, false, fmt.Errorf("listing the control-plane machines: %w", err)
 	}
 	r, ok := rollPair(machines.Items)
-	if !ok || machineReady(r.successor) || w.now().Sub(r.successor.CreationTimestamp.Time) < cmp.Or(w.StallAfter, DefaultStallAfter) {
+	if !ok || machineReady(r.successor) {
+		return roll{}, false, nil
+	}
+	if r.start, err = w.rollStart(ctx, c, r.successor); err != nil {
+		return roll{}, false, err
+	}
+	if w.now().Sub(r.start) < cmp.Or(w.StallAfter, DefaultStallAfter) {
 		return roll{}, false, nil
 	}
 	return r, true, nil
+}
+
+// rollStart is when a roll began: when the control plane's RollingOut condition turned true, or the
+// successor's creation when the control plane has no such condition or it is later. The health
+// check replaces a successor in StallAfter, so a roll it keeps replacing needs the roll's age, not
+// the successor's. Both are read from the objects, so a restart of the controller keeps the bound.
+func (w *RollWatch) rollStart(ctx context.Context, c *clusterv1.Cluster, successor *clusterv1.Machine) (time.Time, error) {
+	start := successor.CreationTimestamp.Time
+	cp, err := controlPlaneOf(ctx, w.Client, w.Client.RESTMapper(), c)
+	if err != nil || cp == nil {
+		return start, err
+	}
+	conditions, _, _ := unstructured.NestedSlice(cp.Object, "status", "conditions")
+	for _, raw := range conditions {
+		cond, ok := raw.(map[string]any)
+		if !ok || cond["type"] != clusterv1.RollingOutCondition || cond["status"] != string(metav1.ConditionTrue) {
+			continue
+		}
+		at, isText := cond["lastTransitionTime"].(string)
+		if since, err := time.Parse(time.RFC3339, at); isText && err == nil && since.Before(start) {
+			start = since
+		}
+	}
+	return start, nil
 }
 
 // rollPair finds the two machines of a roll of one control plane: the newest, which replaces the
