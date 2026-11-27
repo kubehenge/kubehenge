@@ -107,11 +107,7 @@ try {
       (url) => [...(state.fail ?? []), ...(state.hang ?? [])].some((p) => url.pathname.includes(p)),
       async (route) => {
         if (state.fail?.some((p) => route.request().url().includes(p)) === true) {
-          await route.fulfill({
-            status: 502,
-            contentType: "application/json",
-            body: JSON.stringify({ error: "the management cluster did not answer" }),
-          });
+          await route.abort();
         }
       },
     );
