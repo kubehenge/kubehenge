@@ -8,10 +8,10 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ### Highlights
 
-- **Persistent volumes work on shared storage such as LVM on iSCSI.**
+- **Persistent volumes work on shared storage.** LVM on iSCSI is one such storage.
 - **A cert-manager the cluster already runs is used however it was installed.** Kubehenge installs its own only when a full read finds none.
 - **The interface shows only what it has read.** A failed read shows Unknown with its error and a retry, never a healthy cluster.
-- **`kubehenge appliance health` shows each stage, the time left and a verdict.**
+- **`kubehenge appliance health` shows its progress.** Each stage, the time left and a verdict.
 
 ### Changed
 
