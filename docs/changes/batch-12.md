@@ -5,6 +5,7 @@
 - The conditions `GatewayAPIReady` and `RancherRegistered` say what the Gateway API and Rancher registration wait for, or what failed.
 - A kubelet serving certificate request left pending for an address that is not its Machine's gets a `ServingCertificatePending` Warning event naming the node and address.
 - A cluster held before its VMs are created says why: the controller's error or what its add-ons wait for.
+- A refresh of the interface shows the fleet as the tab last read it, greyed until read again, and no cluster as healthy before its health is read.
 
 ### Fixed
 

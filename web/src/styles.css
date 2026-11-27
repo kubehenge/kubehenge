@@ -3437,6 +3437,8 @@ input:read-only:not([type="checkbox"], [type="radio"]) {
 }
 
 .tiles-stale .tile,
+.fleet-kept .fleet-table,
+.status-kept,
 .management-health-stale .summary,
 .management-health-stale .health-short {
   opacity: 0.55;

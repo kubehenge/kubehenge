@@ -1,3 +1,4 @@
+import { keptUser } from "./kept-state";
 import { clearPollCaches, keepCache } from "./poll-cache";
 import type {
   ACMERequest,
@@ -325,6 +326,7 @@ async function download(method: string, path: string, body?: unknown): Promise<B
 function remember(s: Session): Session {
   ({ csrf } = s);
   sessionUser = s.user;
+  keptUser(s.user);
   return s;
 }
 

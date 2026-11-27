@@ -951,8 +951,13 @@ describe("the console", () => {
     window.history.replaceState(null, "", "/clusters/default/web");
     routes["GET /api/fleet/health"] = found([{ severity: "error", section: "backups", what: "Last backup failed" }]);
     render(<App />);
-    const backups = within(await screen.findByRole("region", { name: "Needs attention" }));
-    expect(backups.getByRole("link", { name: "Backups" })).toHaveAttribute("href", "/clusters/default/web/backups");
+    // The page shows the health the tab kept first, then this read's.
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("region", { name: "Needs attention" })).getByRole("link", { name: "Backups" }),
+      ).toHaveAttribute("href", "/clusters/default/web/backups"),
+    );
+    const backups = within(screen.getByRole("region", { name: "Needs attention" }));
     expect(backups.queryByRole("link", { name: "Health" })).not.toBeInTheDocument();
   });
 

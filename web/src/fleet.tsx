@@ -1,7 +1,8 @@
-import { createContext, use, useCallback, useEffect, useMemo, useRef, type JSX, type ReactNode } from "react";
+import { createContext, use, useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
 
 import { api } from "./api";
 import { clusterPath, type View } from "./cluster-paths";
+import { keptCache } from "./kept-state";
 import { useClusterChanges } from "./live";
 import { Link } from "./router";
 import type { Cluster, FleetHealth, Replicas, RunInfo } from "./types";
@@ -28,6 +29,8 @@ export interface Fleet {
   runsRead: ReadOf;
   /** Whether the clusters shown may no longer hold, as usePoll tells. */
   stale: boolean;
+  /** Whether what is shown is what this tab kept from before a refresh, not yet read again. */
+  kept: boolean;
   reload: () => Promise<void>;
   /** When the clusters are next read. */
   next: () => number;
@@ -51,17 +54,38 @@ const FleetContext = createContext<Fleet | null>(null);
 
 export const fleetKey = (c: { namespace: string; name: string }): string => `${c.namespace}/${c.name}`;
 
-// Until the appliance is set up there is no fleet to read.
-const noFleet = (): Promise<undefined> => Promise.resolve(undefined);
+// The fleet as this tab last read it, shown at once after a refresh.
+const keptClusters = keptCache<Cluster[]>("clusters");
+const keptHealth = keptCache<FleetHealth[]>("fleet-health");
+
+// Until the appliance is set up there is no fleet to read, and what the tab kept stays shown.
+const noFleet =
+  <T,>(cache: Map<string, T>) =>
+  (): Promise<T | undefined> =>
+    Promise.resolve(cache.get(""));
+const noRuns = (): Promise<undefined> => Promise.resolve(undefined);
 
 /**
  * FleetProvider reads the fleet for everything inside it, once `reads` is on. It stays in place
  * while it is off, so the page round it is not built again when reading starts.
  */
 export function FleetProvider({ reads = true, children }: { reads?: boolean; children: ReactNode }): JSX.Element {
+  // Which kept answers show and have not been read again since.
+  const [kept, setKept] = useState(() => ({ clusters: keptClusters.has(""), health: keptHealth.has("") }));
+  const readClusters = useCallback(async () => {
+    const list = await api.clusters();
+    setKept((k) => (k.clusters ? { ...k, clusters: false } : k));
+    return list;
+  }, []);
+  const readHealth = useCallback(async () => {
+    const found = await api.fleetHealth();
+    setKept((k) => (k.health ? { ...k, health: false } : k));
+    return found;
+  }, []);
   const { data, error, stale, reload, next, put } = usePoll<Cluster[] | undefined>(
-    reads ? api.clusters : noFleet,
+    reads ? readClusters : noFleet(keptClusters),
     (list) => (list?.every((c) => settled(c)) === true ? pollIdle : pollChanging),
+    { cache: keptClusters, key: "" },
   );
   // The clusters show without their health, which only adds why some need someone.
   const {
@@ -70,14 +94,17 @@ export function FleetProvider({ reads = true, children }: { reads?: boolean; chi
     stale: healthStale,
     next: nextHealth,
     reload: reloadHealth,
-  } = usePoll<FleetHealth[] | undefined>(reads ? api.fleetHealth : noFleet, pollIdle);
+  } = usePoll<FleetHealth[] | undefined>(reads ? readHealth : noFleet(keptHealth), pollIdle, {
+    cache: keptHealth,
+    key: "",
+  });
   const {
     data: runs,
     error: runsError,
     stale: runsStale,
     next: nextRuns,
     reload: reloadRuns,
-  } = usePoll<RunInfo[] | undefined>(reads ? api.runs : noFleet, (list) =>
+  } = usePoll<RunInfo[] | undefined>(reads ? api.runs : noRuns, (list) =>
     list?.some((r) => r.state === "running" || r.state === "stalled") === true ? pollChanging : pollIdle,
   );
   useClusterChanges(() => {
@@ -112,6 +139,7 @@ export function FleetProvider({ reads = true, children }: { reads?: boolean; chi
       healthRead: { error: healthError, stale: healthStale, next: nextHealth, reload: reloadHealth },
       runsRead: { error: runsError, stale: runsStale, next: nextRuns, reload: reloadRuns },
       stale,
+      kept: kept.clusters || kept.health,
       reload,
       next,
       show,
@@ -130,6 +158,7 @@ export function FleetProvider({ reads = true, children }: { reads?: boolean; chi
       nextRuns,
       reloadRuns,
       stale,
+      kept,
       reload,
       next,
       show,
@@ -401,9 +430,15 @@ export function ClusterStatus({
   if (notRead) {
     return <Status state="idle" text="Unknown" />;
   }
-  const s =
-    fleet === null ? standing(cluster) : standingIn(cluster, fleet.health, fleet.healthRead.error !== undefined);
-  return <Status state={s.state} text={s.verdict} />;
+  // Without a fleet, as on a page shown on its own, no health has been read.
+  const s = standingIn(cluster, fleet?.health, fleet?.healthRead.error !== undefined);
+  return fleet?.kept === true ? (
+    <span className="status-kept" aria-busy="true">
+      <Status state={s.state} text={s.verdict} />
+    </span>
+  ) : (
+    <Status state={s.state} text={s.verdict} />
+  );
 }
 
 /** groupLabel names a group: the unknown one says Loading while the health is still being read. */
@@ -490,11 +525,13 @@ export function FleetRail({
     fleet?.clusters === undefined
       ? undefined
       : ranked(fleet.clusters, fleet.health, fleet.healthRead.error !== undefined);
-  // The last list read stays shown, greyed, once it or its health may no longer hold.
+  // The last list read stays shown, greyed, once it or its health may no longer hold, and so does
+  // what the tab kept until it is read again.
   const stale = (fleet?.stale === true || fleet?.healthRead.stale === true) && list !== undefined;
+  const kept = fleet?.kept === true && list !== undefined;
   const failed = fleet?.healthRead.error !== undefined;
   return (
-    <nav className={stale ? "rail rail-stale" : "rail"} aria-label="Fleet">
+    <nav className={stale || kept ? "rail rail-stale" : "rail"} aria-label="Fleet" aria-busy={kept}>
       <div className="rail-head">
         <h2>Fleet {list !== undefined && <span className="count">{list.length}</span>}</h2>
         <button

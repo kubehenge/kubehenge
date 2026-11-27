@@ -81,8 +81,10 @@ function FleetList({ canCreate, canManage }: { canCreate: boolean | undefined; c
     }
     return <Skeleton rows={6} />;
   };
+  // What the tab kept from before a refresh shows greyed until it is read again.
+  const kept = fleet?.kept === true && clusters !== undefined;
   return (
-    <section className="panel">
+    <section className={kept ? "panel fleet-kept" : "panel"} aria-busy={kept}>
       <div className="toolbar">
         <h2>Clusters</h2>
         <span className="spacer" />
