@@ -13,6 +13,9 @@
 #   proxy                    only a CONNECT proxy that asks for credentials and tunnels leads out
 #   proxy-inspecting         only a CONNECT proxy that re-signs TLS, with no credentials, leads out
 #
+# A workload cluster's proxy setting takes no credentials, since node files are plain text, so behind
+# proxy its nodes go through a second listener of the same tunnelling proxy that asks for none.
+#
 # start writes <work directory>/egress/env for run.sh to read, and mitmproxy's log, flows.log, there.
 # <source> is an address of the guests' bridge as an extended regular expression, such as
 # 172\.20\.99\.1[1-3]: check fails unless the flow log shows each of them going through the proxy.
@@ -40,6 +43,7 @@ private_nets='10.0.0.0/8 172.16.0.0/12 192.168.0.0/16'
 proxy_address=172.21.99.1
 transparent_port=8080
 proxy_port=3128
+node_proxy_port=3129
 proxy_user=e2e
 repo=$(cd "$(dirname "$0")/../../.." && pwd)
 # The exceptions the guests get: Proxmox VE, the networks of the lab and the management cluster's
@@ -134,8 +138,10 @@ guest_nat() {
     done
     case ${kind} in
         proxy*)
-            docker exec "${pve}" iptables-nft -t nat "$1" POSTROUTING -s "${guest_net}" -o eth0 \
-                -d "${proxy_address}" -p tcp --dport "${proxy_port}" -j ACCEPT
+            for guest_nat_port in "${proxy_port}" "${node_proxy_port}"; do
+                docker exec "${pve}" iptables-nft -t nat "$1" POSTROUTING -s "${guest_net}" -o eth0 \
+                    -d "${proxy_address}" -p tcp --dport "${guest_nat_port}" -j ACCEPT
+            done
             ;;
         *) ;;
     esac
@@ -225,8 +231,9 @@ start() {
             ;;
         *) set -- --listen-host 0.0.0.0 --listen-port "${proxy_port}" ;;
     esac
+    # Appended to, as the nodes' listener behind proxy writes the same log.
     nohup mitmdump --set "confdir=${dir}/conf" --set flow_detail=1 --set termlog_verbosity=info "$@" \
-        > "${dir}/flows.log" 2>&1 &
+        >> "${dir}/flows.log" 2>&1 &
     pid=$!
     echo "${pid}" > "${dir}/pid"
     waited=0
@@ -244,6 +251,18 @@ start() {
     if ! ready "${proxy_address}" "${port}" 30; then
         cat "${dir}/flows.log" >&2
         exit 1
+    fi
+    node_port=${proxy_port}
+    if [ "${kind}" = proxy ]; then
+        node_port=${node_proxy_port}
+        nohup mitmdump --set "confdir=${dir}/conf" --set flow_detail=1 --set termlog_verbosity=info \
+            --listen-host 0.0.0.0 --listen-port "${node_port}" --ignore-hosts '.*' >> "${dir}/flows.log" 2>&1 &
+        echo "$!" > "${dir}/node-pid"
+        # shellcheck disable=SC2310 # its failure is reported with mitmproxy's log
+        if ! ready "${proxy_address}" "${node_port}" 30; then
+            cat "${dir}/flows.log" >&2
+            exit 1
+        fi
     fi
     case ${kind} in
         tls-inspection*)
@@ -267,10 +286,14 @@ start() {
             tls-inspection*)
                 echo "export KUBEHENGE_E2E_SITE_CA='${dir}/ca.pem'"
                 echo "export KUBEHENGE_E2E_STORE_CA='${dir}/store-ca.pem'"
-                echo "export KUBEHENGE_PROXY_CA_FILE='${dir}/ca.pem'" > "${dir}/template.env"
+                # The appliance gives its template builds the root and the copy it derives for Go's
+                # verifier, which podman's pulls in a build use.
+                cat "${dir}/ca.pem" "${dir}/store-ca.pem" > "${dir}/template-ca.pem"
+                echo "export KUBEHENGE_PROXY_CA_FILE='${dir}/template-ca.pem'" > "${dir}/template.env"
                 ;;
             *)
                 echo "export KUBEHENGE_E2E_PROXY_URL='http://${proxy_address}:${proxy_port}'"
+                echo "export KUBEHENGE_E2E_NODE_PROXY_URL='http://${proxy_address}:${node_port}'"
                 echo "export KUBEHENGE_E2E_NO_PROXY='${no_proxy}'"
                 echo "export KUBEHENGE_E2E_TIME_SERVER='${proxy_address}'"
                 if [ "${kind}" = proxy ]; then
@@ -301,6 +324,8 @@ stop() {
     pid=$(cat "${dir}/pid")
     kill "${pid}" 2> /dev/null || true
     rm -f "${dir}/pid"
+    [ ! -s "${dir}/node-pid" ] || kill "$(cat "${dir}/node-pid")" 2> /dev/null || true
+    rm -f "${dir}/node-pid"
     [ ! -s "${dir}/ntp.pid" ] || sudo -n kill "$(cat "${dir}/ntp.pid")" 2> /dev/null || true
     rm -f "${dir}/ntp.pid"
 }
