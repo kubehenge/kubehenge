@@ -9,6 +9,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -160,7 +161,7 @@ func (w *RollWatch) stalledRoll(ctx context.Context, c *clusterv1.Cluster) (roll
 	if !ok || machineReady(r.successor) {
 		return roll{}, false, nil
 	}
-	if r.start, err = w.rollStart(ctx, c, r.successor); err != nil {
+	if r.start, err = w.rollStart(ctx, c, r); err != nil {
 		return roll{}, false, err
 	}
 	if w.now().Sub(r.start) < cmp.Or(w.StallAfter, DefaultStallAfter) {
@@ -169,15 +170,52 @@ func (w *RollWatch) stalledRoll(ctx context.Context, c *clusterv1.Cluster) (roll
 	return r, true, nil
 }
 
-// rollStart is when a roll began: when the control plane's RollingOut condition turned true, or the
-// successor's creation when the control plane has no such condition or it is later. The health
-// check replaces a successor in StallAfter, so a roll it keeps replacing needs the roll's age, not
-// the successor's. Both are read from the objects, so a restart of the controller keeps the bound.
-func (w *RollWatch) rollStart(ctx context.Context, c *clusterv1.Cluster, successor *clusterv1.Machine) (time.Time, error) {
-	start := successor.CreationTimestamp.Time
+// RollSeenAnnotation on the machine a roll of one control plane replaces holds when the roll watch
+// first saw that roll, in RFC 3339, where the control plane has no RollingOut condition to say when
+// it began. It goes with the machine when the roll ends.
+const RollSeenAnnotation = "kubehenge.dev/roll-seen"
+
+// rollStart is when a roll began: the earliest of when the control plane's RollingOut condition
+// turned true, the kept machine's RollSeenAnnotation and the successor's creation. The health check
+// replaces a successor in StallAfter, so a roll it keeps replacing needs the roll's age, not the
+// successor's. Where the control plane has no RollingOut condition, as k3s's and Talos's do not, the
+// watch writes the annotation once. Everything is read from the objects, so a restart of the
+// controller keeps the bound.
+func (w *RollWatch) rollStart(ctx context.Context, c *clusterv1.Cluster, r roll) (time.Time, error) {
+	start := r.successor.CreationTimestamp.Time
+	rolling, err := w.rollingOutSince(ctx, c)
+	if err != nil {
+		return start, err
+	}
+	if !rolling.IsZero() && rolling.Before(start) {
+		start = rolling
+	}
+	if seen, malformed := time.Parse(time.RFC3339, r.kept.Annotations[RollSeenAnnotation]); malformed == nil {
+		if seen.Before(start) {
+			start = seen
+		}
+		return start, nil
+	}
+	if !rolling.IsZero() {
+		return start, nil
+	}
+	// The optimistic lock keeps a value another writer put first. A conflict is tried again on the
+	// next look.
+	before := r.kept.DeepCopy()
+	metav1.SetMetaDataAnnotation(&r.kept.ObjectMeta, RollSeenAnnotation, w.now().UTC().Format(time.RFC3339))
+	err = w.Client.Patch(ctx, r.kept, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}))
+	if err != nil && !apierrors.IsConflict(err) && !apierrors.IsNotFound(err) {
+		return start, fmt.Errorf("recording when the roll that replaces %s began: %w", r.kept.Name, err)
+	}
+	return start, nil
+}
+
+// rollingOutSince is when the control plane's RollingOut condition turned true, zero when it has
+// none that is true.
+func (w *RollWatch) rollingOutSince(ctx context.Context, c *clusterv1.Cluster) (time.Time, error) {
 	cp, err := controlPlaneOf(ctx, w.Client, w.Client.RESTMapper(), c)
 	if err != nil || cp == nil {
-		return start, err
+		return time.Time{}, err
 	}
 	conditions, _, _ := unstructured.NestedSlice(cp.Object, "status", "conditions")
 	for _, raw := range conditions {
@@ -186,11 +224,11 @@ func (w *RollWatch) rollStart(ctx context.Context, c *clusterv1.Cluster, success
 			continue
 		}
 		at, isText := cond["lastTransitionTime"].(string)
-		if since, err := time.Parse(time.RFC3339, at); isText && err == nil && since.Before(start) {
-			start = since
+		if since, err := time.Parse(time.RFC3339, at); isText && err == nil {
+			return since, nil
 		}
 	}
-	return start, nil
+	return time.Time{}, nil
 }
 
 // rollPair finds the two machines of a roll of one control plane: the newest, which replaces the
