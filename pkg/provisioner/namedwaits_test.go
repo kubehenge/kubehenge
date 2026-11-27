@@ -2,10 +2,13 @@ package provisioner
 
 import (
 	"context"
+	"crypto/x509"
+	"net"
 	"strings"
 	"testing"
 	"time"
 
+	certificatesv1 "k8s.io/api/certificates/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -13,6 +16,7 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 // drained is the events recorded so far.
@@ -188,6 +192,14 @@ func TestDNS01IssuerWaitsForItsCredential(t *testing.T) {
 	if err != nil || len(waits) != 1 || waits[0].line != want || waits[0].reason != AddonsWaitingCredentialMissing {
 		t.Errorf("waits %+v, %v", waits, err)
 	}
+	// A reconcile puts the line into AddonsWaiting.
+	r, kube := newReconciler(t, &fakeCloud{}, c)
+	if err := reconcile(t, r, c); err != nil {
+		t.Fatal(err)
+	}
+	if cond := clusterCondition(t, kube, c, AddonsWaitingCondition); cond == nil || !strings.Contains(cond.Message, want) {
+		t.Errorf("condition %+v", cond)
+	}
 }
 
 // The Gateway API reconciler says what it waits for on the cluster, and the release once recorded.
@@ -274,6 +286,37 @@ func TestPendingServingCertificateIsWarnedOnce(t *testing.T) {
 	a.warnHeld(c, []servingHold{held[0], {uid: "two", node: "web-md-0-def", why: "name evil.example.org is not the Machine's"}})
 	if got := drained(recorder); len(got) != 2 {
 		t.Errorf("after the first went and came back with another: %v", got)
+	}
+}
+
+// A reconcile of the approver warns of a request it leaves pending.
+func TestServingCertApproverWarnsOfAPendingRequest(t *testing.T) {
+	t.Parallel()
+	c := cluster()
+	c.Spec.Topology.ClassRef.Name = ClassPrefix + "kubeadm"
+	machines := servingMachines()
+	objs := make([]client.Object, 0, 1+len(machines))
+	objs = append(objs, c)
+	for i := range machines {
+		machines[i].Namespace, machines[i].Labels = c.Namespace, map[string]string{clusterv1.ClusterNameLabel: c.Name}
+		objs = append(objs, &machines[i])
+	}
+	_, kube := newReconciler(t, &fakeCloud{}, objs...)
+	foreign := servingRequest(t, "foreign", "web-control-plane-abc", func(r *x509.CertificateRequest, _ *certificatesv1.CertificateSigningRequestSpec) {
+		r.IPAddresses = []net.IP{net.ParseIP("192.0.2.1")}
+	})
+	workload := fake.NewClientBuilder().WithScheme(remoteScheme).WithObjects(foreign).
+		WithStatusSubresource(&certificatesv1.CertificateSigningRequest{}).Build()
+	recorder := events.NewFakeRecorder(10)
+	a := &ServingCertApprover{
+		Client: kube, ClassNamespace: "kubehenge-system", Events: recorder,
+		Remotes: &Remotes{byCluster: map[string]remote{remoteKey(c): {client: workload, until: time.Now().Add(time.Hour)}}},
+	}
+	if _, err := a.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(c)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := drained(recorder); len(got) != 1 || !strings.Contains(got[0], "web-control-plane-abc") || !strings.Contains(got[0], "192.0.2.1") {
+		t.Errorf("events %v", got)
 	}
 }
 

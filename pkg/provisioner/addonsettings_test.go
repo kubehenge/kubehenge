@@ -278,6 +278,9 @@ func TestNamespaceLabelsWaitForTheClusterAndCreateNamespacesLabelled(t *testing.
 	if err != nil || !waiting {
 		t.Fatalf("waiting %v, %v", waiting, err)
 	}
+	if want := "the add-ons in headlamp wait for the cluster's API to label their namespaces"; len(w.addons.waits) != 1 || w.addons.waits[0].line != want {
+		t.Errorf("waiting lines %+v, want %q", w.addons.waits, want)
+	}
 	if err := w.kube.Get(context.Background(), client.ObjectKey{Namespace: w.cluster.Namespace, Name: "web-headlamp"}, newProxyObject()); err == nil {
 		t.Error("headlamp was installed before its namespace carried the labels")
 	}

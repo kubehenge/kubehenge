@@ -83,6 +83,22 @@ func addonWaitAttention(c *clusterv1.Cluster, a *attention) {
 		}
 		a.add(severity, sectionAddons, what, cond.Message, cond.LastTransitionTime.Time)
 	}
+	stepAttention(c, a, provisioner.GatewayAPIReadyCondition, "Gateway API")
+	stepAttention(c, a, provisioner.RancherRegisteredCondition, "Rancher registration")
+}
+
+// stepAttention adds a step of the cluster's add-ons whose condition is False, as waiting or
+// failed. A True or absent condition adds nothing.
+func stepAttention(c *clusterv1.Cluster, a *attention, kind, step string) {
+	cond := meta.FindStatusCondition(c.Status.Conditions, kind)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		return
+	}
+	severity, what := severityProgress, step+" waits"
+	if cond.Reason == provisioner.GatewayAPIFailedReason || cond.Reason == provisioner.RancherFailedReason {
+		severity, what = severityWarning, step+" failed"
+	}
+	a.add(severity, sectionAddons, what, cond.Message, cond.LastTransitionTime.Time)
 }
 
 // vmAttention adds what the machines' VMs and their Proxmox VE hosts say.

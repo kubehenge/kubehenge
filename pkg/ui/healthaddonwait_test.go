@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -35,6 +36,39 @@ func TestHealthSaysWhatHoldsAddonsBack(t *testing.T) {
 		if len(a) != 1 || a[0] != tc.want {
 			t.Errorf("%s %s: %+v", tc.condType, tc.reason, a)
 		}
+	}
+}
+
+// A False GatewayAPIReady or RancherRegistered is a row in the add-on section, waiting or failed,
+// and a True one adds nothing.
+func TestHealthSaysWhatGatewayAPIAndRancherWaitFor(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		condType string
+		status   metav1.ConditionStatus
+		reason   string
+		want     []attentionView
+	}{
+		{provisioner.GatewayAPIReadyCondition, metav1.ConditionFalse, provisioner.GatewayAPIWaitingReason, []attentionView{{Severity: severityProgress, Section: sectionAddons, What: "Gateway API waits", Message: "said"}}},
+		{provisioner.GatewayAPIReadyCondition, metav1.ConditionFalse, provisioner.GatewayAPIFailedReason, []attentionView{{Severity: severityWarning, Section: sectionAddons, What: "Gateway API failed", Message: "said"}}},
+		{provisioner.GatewayAPIReadyCondition, metav1.ConditionTrue, provisioner.GatewayAPIRecordedReason, nil},
+		{provisioner.RancherRegisteredCondition, metav1.ConditionFalse, provisioner.RancherWaitingReason, []attentionView{{Severity: severityProgress, Section: sectionAddons, What: "Rancher registration waits", Message: "said"}}},
+		{provisioner.RancherRegisteredCondition, metav1.ConditionFalse, provisioner.RancherFailedReason, []attentionView{{Severity: severityWarning, Section: sectionAddons, What: "Rancher registration failed", Message: "said"}}},
+		{provisioner.RancherRegisteredCondition, metav1.ConditionTrue, provisioner.RancherRegisteredReason, nil},
+	} {
+		c := &clusterv1.Cluster{Name: "web", Status: clusterv1.ClusterStatus{Conditions: []metav1.Condition{{
+			Type: tc.condType, Status: tc.status, Reason: tc.reason, Message: "said",
+		}}}}
+		var a attention
+		watchAttention(c, &a)
+		if !slices.Equal(a, tc.want) {
+			t.Errorf("%s %s %s: %+v", tc.condType, tc.status, tc.reason, a)
+		}
+	}
+	var a attention
+	watchAttention(&clusterv1.Cluster{Name: "web"}, &a)
+	if len(a) != 0 {
+		t.Errorf("no condition: %+v", a)
 	}
 }
 
