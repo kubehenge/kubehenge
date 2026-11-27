@@ -93,6 +93,9 @@ import sys
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
+        # Asked as a proxy, it serves the path of the address it was asked for.
+        if self.path.startswith("http://"):
+            self.path = "/" + self.path.split("/", 3)[3]
         if self.path.startswith("/moved/"):
             self.send_response(301)
             self.send_header("Location", self.path.replace("/moved/", "/behind/", 1))
@@ -150,7 +153,8 @@ if [ "\${2:-}" = fill ]; then
     exit
 fi
 cat > /dev/null
-printf 'appstream %s\nbaseos %s\n' '${site}/mirrorlist/appstream' '${site}/mirrorlist/baseos'
+service=\${SERVICE:-${site}}
+printf 'appstream %s\nbaseos %s\n' "\${service}/mirrorlist/appstream" "\${service}/mirrorlist/baseos"
 EOF
 printf '#!/bin/sh\necho "$1" >> "%s/slept"\n' "${root}" > "${bin}/sleep"
 # The clock, which a case sets by writing ${root}/clock: each read of it then gives 25 s more.
@@ -219,6 +223,18 @@ lines "it read AppStream, then AppStream and BaseOS" "${root}/read" 3
 holds "it paused once" "${root}/slept" 10
 has "it says why" "${root}/said" "Start tag expected"
 has "and that it tries again" "${root}/said" "trying again in 10 s, on the next mirrors: dnf_reads"
+
+# Behind a proxy the build has it in its environment (pkg/templates/proxy.go), and the mirror lists
+# come through it: the service's host here resolves nowhere, and the server on loopback is the proxy.
+proxied=${root}/proxied
+mkdir "${proxied}"
+# shellcheck disable=SC2310 # a failure shows in the check below.
+(
+    export SERVICE=http://mirrors.example.invalid http_proxy="${site}"
+    unset no_proxy NO_PROXY
+    fetch_mirrors "${proxied}"
+) 2> "${root}/said" || true
+has "the mirror lists come through the proxy" "${proxied}/baseos" "${site}/two/BaseOS/\$basearch/os/"
 
 # A later step, the composition or the image's build, starts on the mirrors that worked.
 rm "${root}/read" "${root}/slept"

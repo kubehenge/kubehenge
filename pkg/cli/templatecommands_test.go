@@ -298,6 +298,63 @@ func TestConnectNeedsATokenAndAnAPI(t *testing.T) {
 	}
 }
 
+// clearProxyEnvironment leaves a test only the proxy and authorities it sets itself.
+func clearProxyEnvironment(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", templates.CAFileEnv} {
+		t.Setenv(name, "")
+	}
+}
+
+// TestBuilderFlagsConnectKeepsTheProxy: template create builds behind the proxy its environment
+// names, so the bake's guest downloads through it too, not only the keys the command fetches.
+func TestBuilderFlagsConnectKeepsTheProxy(t *testing.T) {
+	clearProxyEnvironment(t)
+	t.Setenv("HTTPS_PROXY", "http://proxy.example.test:3128")
+	t.Setenv("NO_PROXY", "10.0.0.0/8")
+	f := &builderFlags{}
+	f.builder.Node, f.builder.Storage = "pve1", "local"
+	cmd, _ := command(t.Context())
+	// The answer is Proxmox VE's, which is not there. The builder is set up before it asks.
+	_, _ = f.connect(cmd, &pve.Config{URL: "https://127.0.0.1:1", Token: testToken})
+	if p := f.builder.Proxy; !p.Enabled() || p.URL != "http://proxy.example.test:3128" || p.NoProxy != "10.0.0.0/8" {
+		t.Errorf("the builder's proxy is %+v, want the environment's", p)
+	}
+}
+
+// TestConnectTrustsTheProxyAuthorities: behind a proxy that inspects TLS, the repository keys and
+// image checksums come signed by its authority, which the file KUBEHENGE_PROXY_CA_FILE names holds.
+func TestConnectTrustsTheProxyAuthorities(t *testing.T) {
+	clearProxyEnvironment(t)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("key")) }))
+	t.Cleanup(srv.Close)
+	ca := filepath.Join(t.TempDir(), "ca.crt")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(templates.CAFileEnv, ca)
+	b, err := connect(&pve.Config{URL: "https://pve.example.test:8006", Token: testToken})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := b.Sources.HTTP.Do(req)
+	if err != nil {
+		t.Fatalf("a publisher behind the authority: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if err = os.WriteFile(ca, []byte("not PEM"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = connect(&pve.Config{URL: "https://pve.example.test:8006", Token: testToken}); err == nil || !strings.Contains(err.Error(), templates.CAFileEnv) {
+		t.Errorf("an authority file without a certificate: %v", err)
+	}
+}
+
 func TestBuilderFlagsConnect(t *testing.T) {
 	t.Parallel()
 	conn := &pve.Config{URL: "https://pve.example.test:8006", Token: testToken}

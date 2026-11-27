@@ -2,8 +2,11 @@ package cli
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/netip"
 	"strconv"
 	"strings"
@@ -44,7 +47,34 @@ func connect(conn *pve.Config) (*templates.Builder, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading the proxy and certificate authorities: %w", err)
 	}
-	return &templates.Builder{Client: api, Sources: templates.DefaultSources(provisioner.DefaultReleasePins().Talos()), Proxy: proxy}, nil
+	sources := templates.DefaultSources(provisioner.DefaultReleasePins().Talos())
+	if sources.HTTP.Transport, err = trustingTransport(proxy.CABundle); err != nil {
+		return nil, fmt.Errorf("the certificate authorities in %s: %w", templates.CAFileEnv, err)
+	}
+	return &templates.Builder{Client: api, Sources: sources, Proxy: proxy}, nil
+}
+
+// trustingTransport is the default transport, which goes through the proxy the environment names,
+// trusting the authorities the guests trust beside the system's: a proxy that inspects TLS re-signs
+// the publishers' keys and checksums too.
+func trustingTransport(caBundle string) (http.RoundTripper, error) {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil, errors.New("http.DefaultTransport has been replaced by one that cannot be cloned")
+	}
+	t := base.Clone()
+	if caBundle == "" {
+		return t, nil
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		return nil, fmt.Errorf("the system's authorities: %w", err)
+	}
+	if !pool.AppendCertsFromPEM([]byte(caBundle)) {
+		return nil, errors.New("they hold no PEM certificate")
+	}
+	t.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}
+	return t, nil
 }
 
 // poolFlag is the pool a template command works in. Clusters clone only from the templates in their
@@ -406,7 +436,7 @@ func (b *builderFlags) connect(cmd *cobra.Command, conn *pve.Config) (*templates
 	if err != nil {
 		return nil, err
 	}
-	b.builder.Client, b.builder.Sources = c.Client, c.Sources
+	b.builder.Client, b.builder.Sources, b.builder.Proxy = c.Client, c.Sources, c.Proxy
 	// Progress is best effort. A closed stderr must not fail the build.
 	b.builder.Log = func(format string, a ...any) { _, _ = fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", a...) }
 	nodes := splitNodes(b.builder.Node)
