@@ -486,9 +486,9 @@ The API token is read from KUBEHENGE_PROXMOX_TOKEN.`,
 		ValidArgs: templates.DistributionNames(),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req.Distribution = templates.Distribution(args[0])
-			t, err := templates.Plan(&req)
+			t, err := planSigned(cmd, &req)
 			if err != nil {
-				return fmt.Errorf("the template: %w", err)
+				return err
 			}
 			builder, err := flags.connect(cmd, conn)
 			if err != nil {
@@ -533,6 +533,41 @@ The API token is read from KUBEHENGE_PROXMOX_TOKEN.`,
 		return nil
 	}
 	return cmd
+}
+
+// releaseSignatureTimeout bounds one request to the registry Kubernetes' images are in.
+const releaseSignatureTimeout = 15 * time.Second
+
+// kubernetesRegistryKey carries a test's registry in place of templates.KubernetesRegistry.
+type kubernetesRegistryKey struct{}
+
+// releaseSignatures checks a Kubernetes release's signature before a kubeadm template is built.
+func releaseSignatures(ctx context.Context) *templates.ReleaseSignatures {
+	registry, ok := ctx.Value(kubernetesRegistryKey{}).(string)
+	if !ok {
+		registry = templates.KubernetesRegistry
+	}
+	return &templates.ReleaseSignatures{Registry: registry, HTTP: &http.Client{Timeout: releaseSignatureTimeout}}
+}
+
+// planSigned plans the template, and refuses a kubeadm one of a Kubernetes release whose images
+// carry no signature of Kubernetes' release, which its build would refuse.
+func planSigned(cmd *cobra.Command, req *templates.Request) (templates.Template, error) {
+	t, err := templates.Plan(req)
+	if err != nil {
+		return templates.Template{}, fmt.Errorf("the template: %w", err)
+	}
+	if req.Distribution != templates.Kubeadm {
+		return t, nil
+	}
+	note, err := releaseSignatures(cmd.Context()).Check(cmd.Context(), req.KubernetesVersion)
+	if err != nil {
+		return templates.Template{}, fmt.Errorf("--kubernetes-version: %w", err)
+	}
+	if note != "" {
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), note)
+	}
+	return t, nil
 }
 
 // parseNetwork is the static network of the VM that prepares an image.

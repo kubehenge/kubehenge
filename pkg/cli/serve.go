@@ -198,6 +198,7 @@ func (o *serveOptions) run(ctx context.Context, conn *pve.Config) error {
 	sources := templates.DefaultSources(provisioner.DefaultReleasePins().Talos())
 	sources.HTTP = savedProxyClient(o.a.Dir, conn.URL, sources.HTTP.Timeout)
 	s.TalosReleases = sources.TalosReleases
+	s.Signatures = &templates.ReleaseSignatures{Registry: templates.KubernetesRegistry, HTTP: savedProxyClient(o.a.Dir, conn.URL, releaseSignatureTimeout)}
 	if s.Log, err = o.logs.slogLogger(o.logOutput()); err != nil {
 		return err
 	}

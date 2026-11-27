@@ -351,6 +351,23 @@ func (req *templateRequest) builder() (templates.Builder, templates.Template, er
 	return b, t, nil
 }
 
+// signedRelease refuses a kubeadm template of a Kubernetes release that images.sh would refuse for
+// want of Kubernetes' signature, and gives the line to show when the registry did not say.
+func (s *Server) signedRelease(w http.ResponseWriter, r *http.Request, distribution, version string) (string, bool) {
+	if s.Signatures == nil || distribution != string(templates.Kubeadm) {
+		return "", true
+	}
+	note, err := s.Signatures.Check(r.Context(), version)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "Kubernetes version: "+err.Error())
+		return "", false
+	}
+	if note != "" {
+		s.Log.WarnContext(r.Context(), note, "version", version)
+	}
+	return note, true
+}
+
 // buildNetwork is the static address of the VM that prepares an image, none meaning DHCP, or what
 // is wrong with it, in the build dialog's terms.
 func buildNetwork(address, gateway string, dns []string) (*templates.Network, string) {
@@ -394,6 +411,10 @@ func (s *Server) createTemplate(w http.ResponseWriter, r *http.Request, u user) 
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
+	note, signed := s.signedRelease(w, r, req.Distribution, req.KubernetesVersion)
+	if !signed {
+		return
+	}
 	if req.VLAN > 0 {
 		network, networkErr := s.Accounts.Network(r.Context(), u.ticket, b.Bridge)
 		if networkErr != nil {
@@ -420,6 +441,9 @@ func (s *Server) createTemplate(w http.ResponseWriter, r *http.Request, u user) 
 		return
 	}
 	err = s.Appliance.BuildTemplate(ticket, req, func(ctx context.Context, j *appliance.Job) error { //nolint:contextcheck // the build outlives the request on purpose
+		if note != "" {
+			j.Add(note)
+		}
 		j.Add(fmt.Sprintf("Building template %s on node %s", t.Name, b.Node))
 		b.Log = func(format string, a ...any) { j.Add(fmt.Sprintf(format, a...)) }
 		retry := templates.Retry{Log: b.Log}

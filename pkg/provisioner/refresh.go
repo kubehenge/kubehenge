@@ -70,6 +70,9 @@ type TemplateRefresh struct {
 	// Again are lines to build once more though they have builds, because the newest has an older
 	// kernel than the build before. With MissingOnly, those are built too.
 	Again []templates.Request
+	// Signatures, set, leaves out a kubeadm line of a Kubernetes release whose images carry no
+	// signature of Kubernetes' release, which its build would refuse.
+	Signatures *templates.ReleaseSignatures
 }
 
 // madeBuild is a build a run made, and whether its kernel is older than the previous build's.
@@ -95,7 +98,11 @@ func (r *TemplateRefresh) Run(ctx context.Context) error {
 		return fmt.Errorf("listing the templates: %w", err)
 	}
 	patches, errs := r.patchRequests(ctx, clusters)
-	lines, err := r.toBuild(clusters, talos, patches, poolBuilds(list), poolLines(list))
+	// A line asked for that is refused fails the run. A newest patch refused is a line in the log.
+	missing, refused := r.signedOnly(ctx, r.Missing)
+	errs = append(errs, refused...)
+	patches, _ = r.signedOnly(ctx, patches)
+	lines, err := r.toBuild(clusters, talos, slices.Concat(missing, patches), poolBuilds(list), poolLines(list))
 	if err != nil {
 		return err
 	}
@@ -282,7 +289,7 @@ func (r *TemplateRefresh) talosReleases(ctx context.Context) ([]string, error) {
 // missing line asked for that has no build. A Talos release's template is made once, so it is built
 // only while the pool has none: for a release a Talos cluster boots or is upgraded to, or one asked
 // for.
-func (r *TemplateRefresh) toBuild(clusters []refreshedCluster, talos []string, patches []templates.Request, builds map[string][]templates.Built, made map[string]bool) ([]templates.Template, error) {
+func (r *TemplateRefresh) toBuild(clusters []refreshedCluster, talos []string, asked []templates.Request, builds map[string][]templates.Built, made map[string]bool) ([]templates.Template, error) {
 	var reqs []templates.Request
 	if !r.MissingOnly {
 		reqs = refreshedRequests(clusters, builds)
@@ -310,7 +317,7 @@ func (r *TemplateRefresh) toBuild(clusters []refreshedCluster, talos []string, p
 			return nil, err
 		}
 	}
-	for _, req := range slices.Concat(r.Missing, patches) {
+	for _, req := range asked {
 		if err := add(req, true); err != nil {
 			return nil, err
 		}
@@ -321,6 +328,30 @@ func (r *TemplateRefresh) toBuild(clusters []refreshedCluster, talos []string, p
 		}
 	}
 	return out, nil
+}
+
+// signedOnly leaves out of reqs each kubeadm line of a Kubernetes release that Signatures refuses.
+func (r *TemplateRefresh) signedOnly(ctx context.Context, reqs []templates.Request) ([]templates.Request, []error) {
+	if r.Signatures == nil {
+		return reqs, nil
+	}
+	var out []templates.Request
+	var errs []error
+	for _, req := range reqs {
+		if req.Distribution == templates.Kubeadm {
+			note, err := r.Signatures.Check(ctx, req.KubernetesVersion)
+			if note != "" {
+				r.logf("%s", note)
+			}
+			if err != nil {
+				r.logf("not building kubeadm %s: %v", req.KubernetesVersion, err)
+				errs = append(errs, fmt.Errorf("kubeadm %s: %w", req.KubernetesVersion, err))
+				continue
+			}
+		}
+		out = append(out, req)
+	}
+	return out, errs
 }
 
 // patchRequests are the kubeadm templates of the newest patch of each Kubernetes minor version a

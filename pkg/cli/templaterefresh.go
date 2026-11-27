@@ -141,6 +141,7 @@ func (o *templateRefreshOptions) run(cmd *cobra.Command, conn *pve.Config) error
 		Missing:        missing,
 		Again:          again,
 		MissingOnly:    o.missingOnly,
+		Signatures:     releaseSignatures(cmd.Context()),
 		Planned: func(lines []templates.Template) {
 			names := make([]string, len(lines))
 			for i := range lines {

@@ -265,6 +265,9 @@ func (s *Server) requestTemplateBuild(w http.ResponseWriter, r *http.Request, u 
 	if !s.require(w, r, u, s.workloadPoolPath(), privChange) {
 		return
 	}
+	if _, signed := s.signedRelease(w, r, req.Distribution, req.KubernetesVersion); !signed {
+		return
+	}
 	if err := s.requestBuild(r.Context(), u.kube, key, u.ticket.Username); err != nil {
 		s.kubeError(w, r, err)
 		return

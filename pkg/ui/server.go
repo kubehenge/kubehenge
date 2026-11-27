@@ -34,6 +34,7 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
 	"github.com/kubehenge/kubehenge/pkg/release"
+	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
 // Accounts is what the interface asks Proxmox VE, as the signed-in user.
@@ -154,6 +155,9 @@ type Server struct {
 	// TalosReleases lists the Talos releases this Kubehenge pins. Nil offers only those the
 	// template pool has.
 	TalosReleases func(ctx context.Context) ([]string, error)
+	// Signatures refuses a kubeadm template of a Kubernetes release whose images carry no
+	// signature of Kubernetes' release before its build starts. Nil leaves that to the build.
+	Signatures *templates.ReleaseSignatures
 	// TalosClock asks a Talos node whether its clock is synced, for the Health page. Nil asks the
 	// node's Talos API.
 	TalosClock provisioner.TalosClockProbe
