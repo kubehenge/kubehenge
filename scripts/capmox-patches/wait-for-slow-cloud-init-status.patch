@@ -1,37 +1,44 @@
 diff --git a/pkg/proxmox/goproxmox/api_client.go b/pkg/proxmox/goproxmox/api_client.go
-index 1391747..7701ad3 100644
+index 1391747..013b346 100644
 --- a/pkg/proxmox/goproxmox/api_client.go
 +++ b/pkg/proxmox/goproxmox/api_client.go
-@@ -516,6 +516,11 @@ func (c *APIClient) CloudInitStatus(ctx context.Context, vm *proxmox.VirtualMach
+@@ -515,7 +515,8 @@ func (c *APIClient) CloudInitStatus(ctx context.Context, vm *proxmox.VirtualMach
+ 		return false, errors.Wrap(err, "unable to get cloud-init status")
  	}
  
- 	status, err := vm.WaitForAgentExecExit(ctx, pid, 2)
-+	// A busy guest can take longer than the wait. Its status is then unknown, not failed, so the
-+	// caller asks again later.
-+	if errors.Is(err, proxmox.ErrTimeout) {
-+		return true, nil
-+	}
+-	status, err := vm.WaitForAgentExecExit(ctx, pid, 2)
++	// cloud-init status can take several seconds on a busy guest.
++	status, err := vm.WaitForAgentExecExit(ctx, pid, 10)
  	if err != nil {
  		return false, errors.Wrap(err, "unable to wait for agent exec")
  	}
 diff --git a/pkg/proxmox/goproxmox/api_client_test.go b/pkg/proxmox/goproxmox/api_client_test.go
-index 4fe52fd..84247cc 100644
+index 4fe52fd..0b9634f 100644
 --- a/pkg/proxmox/goproxmox/api_client_test.go
 +++ b/pkg/proxmox/goproxmox/api_client_test.go
-@@ -1059,3 +1059,27 @@ func TestProxmoxAPIClient_CloudInitStatus(t *testing.T) {
+@@ -24,6 +24,7 @@ import (
+ 	"net/url"
+ 	"strings"
+ 	"testing"
++	"time"
+ 
+ 	"github.com/go-logr/logr"
+ 	"github.com/jarcoal/httpmock"
+@@ -1059,3 +1060,36 @@ func TestProxmoxAPIClient_CloudInitStatus(t *testing.T) {
  		})
  	}
  }
 +
-+// A busy guest's cloud-init status may not exit within the wait, which is no failure.
 +func TestProxmoxAPIClient_CloudInitStatusSlowGuest(t *testing.T) {
 +	client := newTestClient(t)
++
 +	httpmock.RegisterResponder(http.MethodGet, `=~/nodes/pve/status`,
 +		newJSONResponder(200, proxmox.Node{Name: "pve"}))
 +	httpmock.RegisterResponder(http.MethodGet, `=~/nodes/pve/qemu/1111/status/current`,
-+		newJSONResponder(200, proxmox.VirtualMachine{VMID: 1111, Node: "pve"}))
++		newJSONResponder(200, proxmox.VirtualMachine{VMID: 1111, Name: "legit-worker", Node: "pve"}))
 +	httpmock.RegisterResponder(http.MethodGet, `=~/nodes/pve/qemu/1111/config`,
-+		newJSONResponder(200, proxmox.VirtualMachineConfig{}))
++		newJSONResponder(200, proxmox.VirtualMachineConfig{Name: "legit-worker"}))
++
 +	vm, err := client.GetVM(context.Background(), "pve", 1111)
 +	require.NoError(t, err)
 +
@@ -39,10 +46,18 @@ index 4fe52fd..84247cc 100644
 +		newJSONResponder(200, map[string]*proxmox.AgentOsInfo{"result": {ID: "ubuntu"}}))
 +	httpmock.RegisterResponder(http.MethodPost, `=~/nodes/pve/qemu/1111/agent/exec\z`,
 +		newJSONResponder(200, map[string]any{"pid": 12234}))
++
++	// the guest is busy and cloud-init status takes 3 seconds to exit
++	exitAt := time.Now().Add(3 * time.Second)
 +	httpmock.RegisterResponder(http.MethodGet, `=~/nodes/pve/qemu/1111/agent/exec-status\?pid=12234`,
-+		httpmock.NewJsonResponderOrPanic(200, map[string]any{"data": proxmox.AgentExecStatus{Exited: 0}}))
++		func(_ *http.Request) (*http.Response, error) {
++			if time.Now().Before(exitAt) {
++				return httpmock.NewJsonResponse(200, map[string]any{"data": proxmox.AgentExecStatus{}})
++			}
++			return httpmock.NewJsonResponse(200, map[string]any{"data": proxmox.AgentExecStatus{Exited: 1, OutData: "status: done\n"}})
++		})
 +
 +	running, err := client.CloudInitStatus(context.Background(), vm)
 +	require.NoError(t, err)
-+	require.True(t, running)
++	require.False(t, running)
 +}

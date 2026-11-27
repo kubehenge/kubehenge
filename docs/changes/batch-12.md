@@ -12,7 +12,8 @@
 
 - `kubehenge template create` builds through the proxy its environment names, and trusts the authorities in `KUBEHENGE_PROXY_CA_FILE` when it fetches repository keys.
 - A kubeadm template of a Kubernetes release whose images lack Kubernetes' signature is refused before its build, in the interface, the CLI and the refresh, naming the nearest signed release.
-- capmox reads a slow `cloud-init status` on a busy host as still running, not failed. `ControlPlaneRollStalled` times a roll from its start, so a successor the health check keeps replacing counts.
+- capmox gives `cloud-init status` 10 seconds to exit, not 2, so a machine on a busy host no longer stays at `WaitingForCloudInit`.
+- `ControlPlaneRollStalled` times a roll from its start, so a successor the health check keeps replacing counts.
 
 ### Internal
 
