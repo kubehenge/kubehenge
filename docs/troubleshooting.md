@@ -706,7 +706,7 @@ kubectl -n logging-node logs ds/alloy-node | grep out_<name>
 
 Component names are `out_<name>`, with hyphens as underscores. Alloy drops what an endpoint keeps refusing. Loki still has those logs.
 
-- **`AddonsWaiting` with the reason `CredentialMissing`**, "log output <name> waits for …", means the stored credential `<cluster>.log-<name>` is missing or lacks `username` and `password`, or `token`. Store it again under **Options**.
+- **`AddonsWaiting` with the reason `CredentialMissing`**, `log output <name> waits for …`, means the stored credential `<cluster>.log-<name>` is missing or lacks `username` and `password`, or `token`. Store it again under **Options**.
   - Alloy runs meanwhile, and the output reports an unreadable file.
 - **`401` or `403` in Alloy's log** means the endpoint refused the credential. Store a new one.
 - **`x509: certificate signed by unknown authority`.** Paste the endpoint's CA into **CA certificate**.
