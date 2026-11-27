@@ -1100,19 +1100,11 @@ func anchorCopy(p *x509.Certificate, name []byte, chain, anchors []*x509.Certifi
 	anchor, err := reissued(p, func(fields []asn1.RawValue, subject int) error {
 		fields[subject-2], fields[subject] = asn1.RawValue{FullBytes: name}, asn1.RawValue{FullBytes: name}
 		if notAfter.Before(p.NotAfter) {
-			var validity struct{ NotBefore, NotAfter asn1.RawValue }
-			if _, err := asn1.Unmarshal(fields[subject-1].FullBytes, &validity); err != nil {
-				return err //nolint:wrapcheck // reissued names the fault
-			}
-			end, err := asn1.Marshal(notAfter.UTC())
-			if err != nil {
-				return err //nolint:wrapcheck // reissued names the fault
-			}
-			der, err := derSequence(slices.Concat(validity.NotBefore.FullBytes, end))
+			validity, err := endingAt(fields[subject-1], notAfter)
 			if err != nil {
 				return err
 			}
-			fields[subject-1] = asn1.RawValue{FullBytes: der}
+			fields[subject-1] = validity
 		}
 		return withoutAuthorityKeyID(fields)
 	})
@@ -1122,6 +1114,23 @@ func anchorCopy(p *x509.Certificate, name []byte, chain, anchors []*x509.Certifi
 	return anchor
 }
 
+// endingAt is the validity field with its end moved to notAfter.
+func endingAt(validity asn1.RawValue, notAfter time.Time) (asn1.RawValue, error) {
+	var times struct{ NotBefore, NotAfter asn1.RawValue }
+	if _, err := asn1.Unmarshal(validity.FullBytes, &times); err != nil {
+		return asn1.RawValue{}, err //nolint:wrapcheck // reissued names the fault
+	}
+	end, err := asn1.Marshal(notAfter.UTC())
+	if err != nil {
+		return asn1.RawValue{}, err //nolint:wrapcheck // reissued names the fault
+	}
+	der, err := derSequence(slices.Concat(times.NotBefore.FullBytes, end))
+	if err != nil {
+		return asn1.RawValue{}, err
+	}
+	return asn1.RawValue{FullBytes: der}, nil
+}
+
 func constrainsNames(c *x509.Certificate) bool {
 	return len(c.PermittedDNSDomains)+len(c.ExcludedDNSDomains)+len(c.PermittedIPRanges)+len(c.ExcludedIPRanges)+
 		len(c.PermittedEmailAddresses)+len(c.ExcludedEmailAddresses)+len(c.PermittedURIDomains)+len(c.ExcludedURIDomains) > 0
@@ -1129,10 +1138,13 @@ func constrainsNames(c *x509.Certificate) bool {
 
 var oidAuthorityKeyID = asn1.ObjectIdentifier{2, 5, 29, 35}
 
+// tagExtensions is the context tag of a certificate's extensions.
+const tagExtensions = 3
+
 // withoutAuthorityKeyID drops the authority key ID from the extensions among a certificate's fields.
 func withoutAuthorityKeyID(fields []asn1.RawValue) error {
 	for i, f := range fields {
-		if f.Class != asn1.ClassContextSpecific || f.Tag != 3 {
+		if f.Class != asn1.ClassContextSpecific || f.Tag != tagExtensions {
 			continue
 		}
 		var extensions []asn1.RawValue
@@ -1153,7 +1165,7 @@ func withoutAuthorityKeyID(fields []asn1.RawValue) error {
 		if err != nil {
 			return err
 		}
-		wrapped, err := asn1.Marshal(asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 3, IsCompound: true, Bytes: body})
+		wrapped, err := asn1.Marshal(asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: tagExtensions, IsCompound: true, Bytes: body})
 		if err != nil {
 			return err //nolint:wrapcheck // reissued names the fault
 		}
