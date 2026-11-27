@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type JSX } from "react";
+import { useId, useState, type JSX } from "react";
 
 import { api } from "./api";
 import type { Cluster, ClusterClass, HARule, HARules, PveNode, Storage } from "./types";
@@ -15,6 +15,7 @@ import {
   useChange,
   useClasses,
   useOnce,
+  type Once,
 } from "./ui";
 import { flag, record, texts } from "./values";
 
@@ -275,28 +276,23 @@ export function offersHA(c: ClusterClass | undefined, storages: Storage[], stora
   );
 }
 
+/** HAOffer is whether an existing cluster takes part in Proxmox VE HA, and the read it waits on while unanswered. */
+export interface HAOffer {
+  offered: boolean;
+  unread?: Once<unknown>;
+}
+
 /** useHAOffered reads whether an existing cluster's class and storage take part in Proxmox VE HA. */
-export function useHAOffered(className: string, storage: string | undefined): boolean {
-  const [offered, setOffered] = useState(false);
-  useEffect(() => {
-    async function load(): Promise<void> {
-      try {
-        const [classes, storages] = await Promise.all([api.classes(), api.storages()]);
-        setOffered(
-          offersHA(
-            classes.find((c) => c.name === className),
-            storages,
-            storage,
-          ),
-        );
-      } catch {
-        // Without the classes or storages the option is not shown. The cluster keeps its setting.
-        setOffered(false);
-      }
-    }
-    void load();
-  }, [className, storage]);
-  return offered;
+export function useHAOffered(className: string, storage: string | undefined): HAOffer {
+  const storages = useOnce(api.storages);
+  // Without the classes the option is not shown, the page shows that read's error, and the cluster keeps its setting.
+  const cls = useClasses().data?.find((c) => c.name === className);
+  const offers = cls?.annotations?.[haAnnotation] === "true" && cls.variables.some((v) => v.name === "proxmoxHA");
+  // A class that offers HA waits on the storages, so its row shows that read instead of dropping.
+  if (offers && storages.data === undefined) {
+    return { offered: false, unread: storages };
+  }
+  return { offered: offersHA(cls, storages.data ?? [], storage) };
 }
 
 /** haText describes a cluster's Proxmox VE HA setting. Unset means it takes part. */

@@ -12,7 +12,7 @@ import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { type Browser, chromium } from "playwright";
+import { type Browser, type Page, chromium } from "playwright";
 
 import { demoTime, hostResolverRule, startDemo, viewport } from "./flows/demo.ts";
 
@@ -58,9 +58,15 @@ interface State {
   before?: string;
   // What to click once the page shows the text before.
   click?: { role: "button" | "link"; name: string };
+  // Annotations added to every class the page reads, for settings the demo's classes do not offer.
+  offer?: Record<string, string>;
+  // Steps through a page once it shows the text before, where one click does not reach the state.
+  act?: (page: Page) => Promise<void>;
   // A text the page shows in that state.
   ready: string;
 }
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 
 const states: State[] = [
   { file: "fleet-health-failed.png", path: "/", fail: ["/api/fleet/health"], ready: "Unknown" },
@@ -224,6 +230,28 @@ const states: State[] = [
   },
   { file: "admin-appliance-outside.png", path: "/administration/appliance", ready: "Upgrades need the appliance." },
   {
+    file: "options-storages-failed.png",
+    path: "/clusters/clusters/web/options",
+    fail: ["/api/proxmox/storages"],
+    offer: { "kubehenge.dev/proxmox-ha": "true", "kubehenge.dev/datastore-allocate": "true" },
+    ready: "Try now",
+  },
+  {
+    file: "create-upgrade-window.png",
+    path: "/clusters/new",
+    before: "Name",
+    act: async (page) => {
+      await page.getByLabel("Start from").selectOption({ label: "ci" });
+      await page.getByLabel("Name", { exact: true }).fill("fresh");
+      await page
+        .getByRole("navigation", { name: "Steps" })
+        .getByRole("button", { name: "Policies", exact: true })
+        .click();
+      await page.getByText(/^Upgrades run daily/u).scrollIntoViewIfNeeded();
+    },
+    ready: "Upgrades run daily 02:00 to 06:00, UTC time",
+  },
+  {
     file: "admin-certificate-failed.png",
     path: "/administration/certificates",
     fail: ["/api/appliance/certificate"],
@@ -269,8 +297,23 @@ try {
   for (const state of mode === "states" ? states : []) {
     let answered = false;
     await page.route(
-      (url) => [...(state.fail ?? []), ...(state.hang ?? [])].some((p) => url.pathname.includes(p)),
+      (url) =>
+        [...(state.fail ?? []), ...(state.hang ?? []), ...(state.offer ? ["/api/classes"] : [])].some((p) =>
+          url.pathname.includes(p),
+        ),
       async (route) => {
+        if (state.offer !== undefined && route.request().url().includes("/api/classes")) {
+          const answer = await route.fetch();
+          const json: unknown = await answer.json();
+          const classes: unknown[] = Array.isArray(json) ? json : [];
+          for (const c of classes) {
+            if (isRecord(c)) {
+              c["annotations"] = { ...(isRecord(c["annotations"]) ? c["annotations"] : {}), ...state.offer };
+            }
+          }
+          await route.fulfill({ response: answer, json: classes });
+          return;
+        }
         if (state.fail?.some((p) => route.request().url().includes(p)) !== true) {
           return;
         }
@@ -289,6 +332,7 @@ try {
     if (state.click !== undefined) {
       await page.getByRole(state.click.role, { name: state.click.name, exact: true }).first().click();
     }
+    await state.act?.(page);
     // A tab shown again reads everything again.
     if (state.failLater === true) {
       await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));

@@ -1,9 +1,9 @@
-import { useEffect, useId, useState, type JSX } from "react";
+import { useId, type JSX } from "react";
 
 import { api } from "./api";
-import { csiOffer, snapshotsOffer, type CSIOffer, type SnapshotsOffer } from "./create-form";
+import { csiOffer, csiOffered, snapshotsOffer, type CSIOffer, type SnapshotsOffer } from "./create-form";
 import type { Cluster } from "./types";
-import { Info, useClasses } from "./ui";
+import { Info, useClasses, useOnce, type Once } from "./ui";
 import { flag, record, text } from "./values";
 
 /** csiOn reads whether the cluster runs the plugin's newest release. */
@@ -65,30 +65,33 @@ export function CSIField({
   );
 }
 
+// anyClusters is the clusters, none where they cannot be read.
+async function anyClusters(): Promise<Cluster[]> {
+  try {
+    return await api.clusters();
+  } catch {
+    return [];
+  }
+}
+
 /** useCSIOffer reads whether an existing cluster may choose the newest release, and what stands in the way. */
-export function useCSIOffer(c: Cluster): CSIOffer {
-  const [offer, setOffer] = useState<CSIOffer>({ offered: false, problem: undefined });
-  const storage = text(c.variables["storage"]);
-  const { class: className, namespace, name } = c;
-  useEffect(() => {
-    async function load(): Promise<void> {
-      try {
-        const [classes, storages, clusters] = await Promise.all([
-          api.classes(),
-          api.storages(),
-          // The controller refuses a shared storage in any case. The list only says so sooner.
-          api.clusters().catch((): Cluster[] => []),
-        ]);
-        const cls = classes.find((x) => x.name === className);
-        setOffer(csiOffer({ cls, storages, storage, clusters, self: { namespace, name } }));
-      } catch {
-        // Without the classes or storages the option is not shown. The cluster keeps its setting.
-        setOffer({ offered: false, problem: undefined });
-      }
-    }
-    void load();
-  }, [className, namespace, name, storage]);
-  return offer;
+export function useCSIOffer(c: Cluster): CSIOffer & { unread?: Once<unknown> } {
+  const storages = useOnce(api.storages);
+  // The controller refuses a shared storage in any case. The list only says so sooner.
+  const clusters = useOnce(anyClusters);
+  // Without the classes the option is not shown, the page shows that read's error, and the cluster keeps its setting.
+  const cls = useClasses().data?.find((x) => x.name === c.class);
+  // A class that offers the release waits on the storages, so its row shows that read instead of dropping.
+  if (csiOffered(cls) && (storages.data === undefined || clusters.data === undefined)) {
+    return { offered: false, problem: undefined, unread: storages.data === undefined ? storages : clusters };
+  }
+  return csiOffer({
+    cls,
+    storages: storages.data ?? [],
+    storage: text(c.variables["storage"]),
+    clusters: clusters.data ?? [],
+    self: { namespace: c.namespace, name: c.name },
+  });
 }
 
 /** SnapshotsField chooses volume snapshots. One with a problem can be switched off, not on. */
@@ -134,11 +137,12 @@ export function SnapshotsField({
 }
 
 /** useSnapshotsOffer reads whether an existing cluster may take volume snapshots, and what stands in the way. */
-export function useSnapshotsOffer(c: Cluster): SnapshotsOffer {
-  // Without the classes the option is not shown, the page shows that read's error, and the cluster keeps its setting.
-  const { data } = useClasses();
+export function useSnapshotsOffer(c: Cluster): SnapshotsOffer & { unread?: Once<unknown> } {
+  // Until the classes answer, the row shows that read instead of dropping. The cluster keeps its setting.
+  const classes = useClasses();
+  const { data } = classes;
   if (data === undefined) {
-    return { offered: false, problem: undefined };
+    return { offered: false, problem: undefined, unread: classes };
   }
   return snapshotsOffer(
     data.find((x) => x.name === c.class),
