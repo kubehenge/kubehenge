@@ -287,10 +287,9 @@ start() {
             tls-inspection*)
                 echo "export KUBEHENGE_E2E_SITE_CA='${dir}/ca.pem'"
                 echo "export KUBEHENGE_E2E_STORE_CA='${dir}/store-ca.pem'"
-                # The appliance gives its template builds the root and the copy it derives for Go's
-                # verifier, which podman's pulls in a build use.
-                cat "${dir}/ca.pem" "${dir}/store-ca.pem" > "${dir}/template-ca.pem"
-                echo "export KUBEHENGE_PROXY_CA_FILE='${dir}/template-ca.pem'" > "${dir}/template.env"
+                # The root alone, as a user gives it: the template build derives the copy Go's verifier
+                # needs for podman's pulls itself, as the appliance does.
+                echo "export KUBEHENGE_PROXY_CA_FILE='${dir}/ca.pem'" > "${dir}/template.env"
                 ;;
             *)
                 echo "export KUBEHENGE_E2E_PROXY_URL='http://${proxy_address}:${proxy_port}'"

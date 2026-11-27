@@ -113,7 +113,7 @@ need=
             need="${need} appliance tls-inspection"
             ;;
         pkg/ui/sitecaroll.go) need="${need} ${interface_users} tls-inspection" ;;
-        pkg/provisioner/egress.go | pkg/provisioner/siteca*.go | pkg/templates/proxy.go | pkg/templates/sitecache.go | pkg/cli/proxyclient.go | \
+        pkg/provisioner/egress.go | pkg/provisioner/siteca*.go | pkg/templates/proxy.go | pkg/templates/sitecache.go | pkg/cli/proxyclient.go | pkg/cli/template.go | \
             charts/kubehenge/templates/_nodesite.tpl | charts/kubehenge/files/node-site.sh.tpl)
             need="${need} ${all} tls-inspection"
             ;;
