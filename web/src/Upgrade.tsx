@@ -64,6 +64,8 @@ export interface Check {
   text: string;
   /** The findings behind a warning, one per line. */
   detail?: string[];
+  /** Reads again what the check could not read. */
+  retry?: () => void;
 }
 
 /** useUpgradeChecks reads what the version would run into inside the cluster. */
@@ -325,6 +327,8 @@ export function useChecks({
   // Unread until the list answers, so that the plan waits for it.
   const [nodes, setNodes] = useState<NodesRead>();
   const { namespace, name } = before;
+  // Counts the times the reads were asked for again, which reads the health and the nodes anew.
+  const [tries, setTries] = useState(0);
   useEffect(() => {
     let current = true;
     async function load(): Promise<void> {
@@ -356,14 +360,23 @@ export function useChecks({
     return () => {
       current = false;
     };
-  }, [namespace, name, on]);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- tries asks for the reads again
+  }, [namespace, name, on, tries]);
   const optional = (check: Check | undefined): Check[] => (check === undefined ? [] : [check]);
+  const again = (): void => {
+    setHealth(undefined);
+    setNodes(undefined);
+    setTries((n) => n + 1);
+  };
+  // A check that could not read what it needs offers to read it again.
+  const retried = (check: Check | undefined, answer: unknown): Check | undefined =>
+    check !== undefined && typeof answer === "string" ? { ...check, retry: again } : check;
   return [
     ...(change ? [changeCheck(read)] : []),
     ...scaleChecks(before, after, nodes),
-    ...optional(nodesCheck(before, nodes)),
+    ...optional(retried(nodesCheck(before, nodes), nodes)),
     ...(version === undefined ? [] : [removedAPIsCheck(found), ...optional(webhooksCheck(found))]),
-    healthCheck(health),
+    ...optional(retried(healthCheck(health), health)),
   ];
 }
 
@@ -399,6 +412,11 @@ export function ChecksList({
                   ))}
                 </ul>
               </Detail>
+            )}
+            {ch.retry !== undefined && (
+              <button type="button" onClick={() => ch.retry?.()}>
+                Try now
+              </button>
             )}
           </dd>
         </div>

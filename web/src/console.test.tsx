@@ -235,6 +235,16 @@ function serve(): Record<string, Route> {
     "GET /api/session": { body: { user: "alice@pve", csrf: "c1" } },
     "GET /api/clusters": { body: fleet },
     "GET /api/runs": { body: [] },
+    "GET /api/proxmox/nodes": { body: [] },
+    "GET /api/fleet/health": {
+      body: fleet.map((c) => ({
+        namespace: c.namespace,
+        name: c.name,
+        read: minutesAgo(0),
+        verdict: "healthy",
+        attention: [],
+      })),
+    },
   };
   for (const c of fleet) {
     routes[`GET /api/clusters/default/${c.name}`] = { body: c };
@@ -257,16 +267,14 @@ describe("the console", () => {
     await expect(screen.findByRole("navigation", { name: "Fleet" })).resolves.toBeInTheDocument();
   });
 
-  it("says in the rail that the fleet was not read", async () => {
+  it("says in the rail that the fleet was not read, with a retry", async () => {
     window.history.replaceState(null, "", "/clusters/default/web");
     const routes = serve();
     routes["GET /api/clusters"] = { status: 502, body: { error: "the management cluster did not answer" } };
     render(<App />);
     const rail = within(await screen.findByRole("navigation", { name: "Fleet" }));
-    await expect(rail.findByText("Not read")).resolves.toHaveAttribute(
-      "title",
-      "the management cluster did not answer",
-    );
+    await expect(rail.findByRole("alert")).resolves.toHaveTextContent("The management cluster did not answer.");
+    expect(rail.getByRole("button", { name: "Try now" })).toBeInTheDocument();
   });
 
   it("greys the fleet out while reading it again fails, until a read succeeds", async () => {

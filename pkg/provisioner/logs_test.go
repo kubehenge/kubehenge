@@ -272,7 +272,7 @@ func TestReconcileSwitchesLogsAndTheirCollector(t *testing.T) {
 	c := storageCluster()
 	c.Spec.Topology.Variables = append(c.Spec.Topology.Variables,
 		variableOf("monitoring", `{"enabled":true}`), variableOf("logs", `{"enabled":true,"collector":"node"}`))
-	r, kube := newReconciler(t, &fakeCloud{}, c)
+	r, kube := newReconciler(t, &fakeCloud{}, c, readyCertManager(c))
 	if err := reconcile(t, r, c); err != nil {
 		t.Fatal(err)
 	}

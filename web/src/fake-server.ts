@@ -115,6 +115,10 @@ function effectOf(setting: string, req: unknown): string {
 
 const planPath = /^POST (?<path>.+)\/plan$/u;
 
+// What the server answers unless a test says otherwise. A cluster's options and dialogs wait for
+// the classes, so a test that names none is answered that there are none.
+const defaults: Record<string, Route> = { "GET /api/classes": { body: [] } };
+
 /**
  * fakeServer answers fetch from routes keyed by "METHOD path" and records the requests made. It
  * reads routes and headers as each request comes, so a test changes what the server says by
@@ -128,7 +132,9 @@ export function fakeServer(routes: Record<string, Route>, headers: Record<string
     calls.push({ key, body, headers: new Headers(init.headers) });
     const plan = planPath.exec(key)?.groups?.["path"];
     const planned = routes[key] === undefined && plan !== undefined ? await planOf(routes, plan, body) : undefined;
-    const route = routes[key] ?? planned ?? { status: httpNotFound, body: { error: `no route ${key}` } };
+    const route = routes[key] ??
+      planned ??
+      defaults[key] ?? { status: httpNotFound, body: { error: `no route ${key}` } };
     const answer = await Promise.race([answerOf(route, body), abortOf(init.signal)]);
     const status = answer.status ?? httpOK;
     const text =

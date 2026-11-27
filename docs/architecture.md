@@ -175,7 +175,7 @@ Cluster API sees a VM only through its node. A paused VM keeps its machine ready
 
 Kubehenge's controller therefore reads Proxmox VE's resource list every 15 seconds, with `VM.Audit` on the workload pool and `Datastore.Audit` on the clusters' storages. For a started VM, the list gives the state QEMU reports, such as paused or a disk error.
 
-The controller sets `VMsNotRunning` on a Cluster whose joined machine's VM has been stopped, paused or crashed for 3 minutes. It sets `StorageNearlyFull` while the cluster's storage is 85% full on a node its VMs run on ([troubleshooting.md](troubleshooting.md#vms-that-do-not-run-storage-nearly-full)). Resuming, starting or replacing a VM is the administrator's call.
+The controller sets `VMsNotRunning` on a Cluster whose joined machine's VM has been stopped, paused or crashed for 3 minutes. It sets `AddressUnavailable` on a Machine whose VM has run for 5 minutes since it started without its node joining and shows none of the addresses it was given on its network card, read through the guest agent. It sets `StorageNearlyFull` while the cluster's storage is 85% full on a node its VMs run on ([troubleshooting.md](troubleshooting.md#vms-that-do-not-run-storage-nearly-full)). Resuming, starting or replacing a VM is the administrator's call.
 
 #### Names and zones set back
 
@@ -213,7 +213,7 @@ Kubehenge's controller instead deletes each released persistent volume's volume 
 
 ### The CSI plugin's release
 
-Every cluster runs the plugin's last release that works with `Datastore.AllocateSpace`. Its newer releases read the storage's configuration, which takes `Datastore.Allocate`.
+Every cluster runs the plugin's last release that works with `Datastore.AllocateSpace`. Its newer releases read the storage's configuration, which takes `Datastore.Allocate`. So does the held release for a shared storage, which the cluster's proxy answers from the storage list ([the copy proxy](#the-copy-proxy)).
 
 Where the management cluster allows it (`cluster_datastore_allocate`), a cluster's `csi` variable can choose the newest release. The controller then grants the cluster's user a role on `/storage/<storage>`, unpropagated. The role holds `Datastore.Allocate`, `Datastore.AllocateSpace` and `Datastore.Audit`. It takes the role back when the variable is switched off.
 
@@ -243,17 +243,19 @@ A cluster's `csi` variable can ask for snapshots on node-local storage. They bri
 
 The admission webhook and `BeforeClusterCreate` allow them only on a node-local storage of a type the plugin copies on (`kubehenge.dev/snapshot-storages` on the ClusterClasses). The controller checks again on every reconcile. A failed check leaves the plugin reaching Proxmox VE directly, with a `VolumeSnapshotsRefused` event.
 
-Switching snapshots off removes those releases, then the proxy, its configuration and the copies' namespace once no copy is left. The CustomResourceDefinitions stay, so VolumeSnapshots left behind keep their volumes.
+Switching snapshots off removes those releases. The proxy stays. Once no copy is left, the empty holder VMs go, and so do the copies' namespace and the proxy's rights in the workload cluster. The CustomResourceDefinitions stay, so VolumeSnapshots left behind keep their volumes.
 
 #### The copy proxy
 
-The controller runs the plugin's newest release with its snapshotter sidecar. Beside the plugin's controller, as a native sidecar, it runs `kubehenge csi-proxy` from Kubehenge's own image, pinned by digest. The plugin's configuration for it, `kube-system/kubehenge-proxmox-proxied`, holds the cluster's own token and points at the proxy on `127.0.0.1:8006`.
+Every cluster runs `kubehenge csi-proxy` from Kubehenge's own image, pinned by digest, as a native sidecar beside the plugin's controller. The plugin's configuration for it, `kube-system/kubehenge-proxmox-proxied`, holds the cluster's own token and points at the proxy on `127.0.0.1:8006`.
 
-The proxy passes every call on to Proxmox VE with that token. It verifies Proxmox VE's certificate against the cluster's CA. It answers three kinds of call itself:
+The proxy passes every call on to Proxmox VE with that token. It verifies Proxmox VE's certificate against the cluster's CA. A call it cannot do gets status 500, which both of the plugin's releases take as a failure. The default release reads most other statuses as an empty success. It answers three kinds of call itself:
 
 - **A copy**, made with the cluster's token in the steps below.
 - **Deleting a copy**, through the holder (`delete=unusedN`), as the token may not delete storage content.
-- **A storage's configuration**, from the storage list. Proxmox VE shows it singly only to `Datastore.Allocate`.
+- **A storage's configuration**, from the storage list. Proxmox VE shows it singly only to `Datastore.Allocate`. A storage the list does not show gets a refusal that names the storage and `Datastore.Audit`. Only the newest release shows that text. The default release says `not found` or `not authorized to access endpoint`, so the cluster's waiting line names the cause.
+
+With snapshots, the plugin runs its newest release with the snapshotter sidecar, and the proxy makes copies. Without them the proxy only finds copies made before. Once none is left it reads no copies' records, and a storage's configuration is the only call it answers itself.
 
 #### How a copy is made
 
@@ -716,9 +718,9 @@ Adding or removing a peer restarts nothing. Switching the mesh on or off upgrade
 
 ### Certificates add-on
 
-Certificates (`certificates: {enabled: true, issuer: …, domain: …}`) installs cert-manager with its Gateway API support on, once the cluster has the Gateway API. Kubehenge's controller writes the rest into the workload cluster once cert-manager answers.
+Certificates (`certificates: {enabled: true, issuer: …, domain: …}`) installs cert-manager with its Gateway API support on, once the cluster has the Gateway API. A working cert-manager the cluster runs already is used instead, without these settings ([clusters.md](clusters.md#a-cert-manager-the-cluster-runs-already)). Kubehenge's controller writes the rest into the workload cluster once cert-manager answers.
 
-The issuer is the ClusterIssuer `kubehenge-ingress`: ACME, a CA, or none with the issuer `external`. Every certificate and cert-manager's default issuer name the one the owner gave. An Ingress annotated `kubernetes.io/tls-acme: "true"` gets its certificate from it.
+The issuer is the ClusterIssuer `kubehenge-ingress`: ACME, a CA, or none with the issuer `external`. Every certificate and the default issuer of Kubehenge's cert-manager name the one the owner gave. An Ingress annotated `kubernetes.io/tls-acme: "true"` gets its certificate from it.
 
 - ACME answers DNS-01 through one of cert-manager's DNS providers, or HTTP-01 through an HTTPRoute on Traefik's Gateway.
 - An external account binding reads its HMAC key from the Secret `kubehenge-acme-eab` in `cert-manager`, copied from the `acme-eab` credential. Without it the issuer is left out.
@@ -1438,7 +1440,7 @@ Any other change applies at once: a new proxy, a change of the cluster's variabl
 
 #### Software already in the cluster
 
-Before it first installs cert-manager, Kyverno or monitoring, the controller asks the workload cluster for the custom resource definitions of that software. It leaves the add-on out when one exists that its release does not own, and records the condition `AddonConflict`. `useExisting.certManager` leaves cert-manager's chart out, and the issuers and certificates are made in the existing install. The controller puts `namespaceLabels` on the namespaces of the proxies before it applies them. It creates a missing namespace with them.
+Before it first installs cert-manager, Kyverno or monitoring, the controller asks the workload cluster for the custom resource definitions of that software. It leaves the add-on out when one exists that its release does not own, and records the condition `AddonConflict`. cert-manager is the exception: a working one of the cluster's own is used, and Rancher, monitoring, Loki and Alloy install over it at once. One that does not work is an `AddonConflict` that says why and names the add-ons it holds back. A controller Deployment that no Kubehenge release owns counts too. Kubehenge's cert-manager release is told apart by the label `kubehenge.dev/addon` on its objects, since a hand-made release may share its name and namespace. It is made only once a complete read found no cert-manager, and a read that fails waits for the next. Its users are applied only once its release is deployed. Until then the condition `AddonsWaiting` names them and what cert-manager waits for. Their cert-manager objects carry the label `kubehenge.dev/cert-manager` with the value `kubehenge` or `cluster`. Rancher's chart labels its Issuer itself, so its Ingress carries that as an annotation. A switch between the two applies them again. A Cluster that still sets the retired `useExisting` variable has it taken off, since Cluster API refuses every change to a Cluster with a variable its class does not define. The controller puts `namespaceLabels` on the namespaces of the proxies before it applies them. It creates a missing namespace with them.
 
 ## Networking
 
@@ -1463,7 +1465,7 @@ Kubehenge's admission webhook and BeforeClusterCreate hook refuse these:
 - addresses outside the nodes' network in layer 2. In BGP mode they let routed addresses and API address through.
 - an invalid AS number or router, a router that is also an announced address, kube-vip as the load balancer and Talos
 - the gateway, the network's own or broadcast address, and the API and node addresses
-- other clusters' addresses on the same bridge and VLAN
+- other clusters' addresses, and those of the management cluster's nodes and API and of the appliance, on the same bridge and VLAN
 
 The controller frees a Service of an address outside the range, which kube-vip and MetalLB would otherwise keep. The load balancer gives the Service a new one.
 

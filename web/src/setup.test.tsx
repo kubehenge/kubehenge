@@ -22,6 +22,7 @@ import {
   setupFieldProblems,
   setupProblems,
   siteCARollText,
+  withRoots,
   type SetupForm,
 } from "./Setup";
 
@@ -106,6 +107,9 @@ const forClusters = (group: string): BoundFunctions<typeof queries> =>
 
 // A one-node Proxmox VE as it answers: local takes every kind of content, local-lvm has more room
 // for disks, and the node reaches its gateway through vmbr0.
+// fieldOf is the field a labelled control sits in.
+const fieldOf = (control: HTMLElement): HTMLElement => control.closest<HTMLElement>(".field") ?? document.body;
+
 const oneNode = {
   "GET /api/proxmox/nodes": { body: [{ node: "pve1", online: true }] },
   "GET /api/proxmox/storages": {
@@ -1837,7 +1841,7 @@ describe("setup", () => {
       bootstrapDatastore: "local",
     };
     const faults = [
-      'factory.talos.dev, ghcr.io: "CN=Inspect Two" is missing. Paste it with the root.',
+      'factory.talos.dev, ghcr.io: Intermediate "CN=Inspect Two" is not presented. Have the device send it.',
       'registry.k8s.io: "CN=Inspect Old" expired on 2026-11-25. Renew it on the device.',
     ];
     fakeServer({
@@ -1858,6 +1862,65 @@ describe("setup", () => {
     });
     expect(field).toHaveAttribute("aria-invalid", "true");
     expect(wizard.queryByRole("alert", { name: "Errors" })).not.toBeInTheDocument();
+    expect(within(fieldOf(field)).queryByRole("button", { name: /^Add /u })).not.toBeInTheDocument();
+  });
+
+  it("adds each root a host presented to the Site CA with its own button", async () => {
+    window.history.replaceState(null, "", "/administration");
+    const root = "-----BEGIN CERTIFICATE-----\nQUJD\n-----END CERTIFICATE-----\n";
+    const second = "-----BEGIN CERTIFICATE-----\nR0hJ\n-----END CERTIFICATE-----\n";
+    const own = "-----BEGIN CERTIFICATE-----\nREVG\n-----END CERTIFICATE-----\n";
+    const saved = {
+      nodes: ["pve1"],
+      imageDatastore: "local",
+      vmDatastore: "local-lvm",
+      bridge: "vmbr0",
+      nodeAddresses: ["192.0.2.11/24"],
+      apiAddress: "192.0.2.10",
+      gateway: "192.0.2.1",
+      dnsServers: ["192.0.2.1"],
+      workloadDatastores: ["local-lvm"],
+      workloadBridges: ["vmbr0"],
+      bootstrapDatastore: "local",
+      siteCA: own,
+    };
+    fakeServer({
+      ...administrator,
+      ...administration,
+      ...oneNode,
+      "GET /api/setup": { body: { appliance: true, ready: true, allowed: true, settings: saved } },
+      "POST /api/setup/check": {
+        body: {
+          errors: [
+            'Site CA: ghcr.io: Chain ends at "CN=Internal-R1" (SHA-256 AB:CD). Add that root to the Site CA.',
+            'Site CA: registry.k8s.io: Chain ends at "CN=Internal-R2" (SHA-256 EF:01). Add that root to the Site CA.',
+          ],
+          warnings: [],
+          missingRoots: [
+            { name: "Internal-R1", pem: root },
+            { name: "Internal-R2", pem: second },
+          ],
+        },
+      },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Edit settings" }));
+    const wizard = within(screen.getByRole("region", { name: "Management cluster" }));
+    await user.type(wizard.getByLabelText("State passphrase"), "correct horse battery staple");
+    await user.click(await wizard.findByRole("button", { name: "Add Internal-R2" }));
+    const field = wizard.getByLabelText("Site CA");
+    expect(field).toHaveValue(`${own}${second}`);
+    await user.click(await wizard.findByRole("button", { name: "Add Internal-R1" }));
+    expect(field).toHaveValue(`${own}${second}${root}`);
+  });
+
+  it("appends roots to a Site CA without repeating one", () => {
+    const a = "-----BEGIN CERTIFICATE-----\nQUJD\n-----END CERTIFICATE-----\n";
+    const b = "-----BEGIN CERTIFICATE-----\nREVG\n-----END CERTIFICATE-----\n";
+    expect(withRoots("", [a])).toBe(a);
+    expect(withRoots(a, [a, b])).toBe(`${a}${b}`);
+    expect(withRoots(a.trim(), [b])).toBe(`${a}${b}`);
   });
 
   it("warns that one host's loss can take every backup until a bucket target is set", async () => {

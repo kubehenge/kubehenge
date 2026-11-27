@@ -4,7 +4,14 @@ import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
 import { applyStaged, fakeServer, reads } from "./fake-server";
-import { addonChangesPendingCondition, addonConflictCondition, standing, windowTime } from "./fleet";
+import {
+  addonChangesPendingCondition,
+  addonConflictCondition,
+  addonsWaitingCondition,
+  standing,
+  volumeMissingReason,
+  windowTime,
+} from "./fleet";
 import { labelsLines, labelsText, maxLabelValue, maxNamespaceLabels, parseLabels } from "./namespace-labels";
 import type { Cluster, ClusterClass } from "./types";
 import { abnormal } from "./ui";
@@ -59,7 +66,6 @@ const rke2: ClusterClass = {
     { name: "certificates", required: false, schema: { type: "object" } },
     { name: "podSecurity", required: false, schema: { type: "object" } },
     { name: "namespaceLabels", required: false, schema: { type: "object" } },
-    { name: "useExisting", required: false, schema: { type: "object" } },
   ],
 };
 
@@ -189,6 +195,20 @@ describe("the add-on conditions", () => {
     });
   });
 
+  it("stands for an add-on volume that cannot be made as a wait, not a conflict", () => {
+    const volume: Cluster = {
+      ...web,
+      conditions: [{ type: addonsWaitingCondition, status: "True", reason: volumeMissingReason, since: opens }],
+    };
+    expect(standing(volume)).toMatchObject({
+      group: "needs",
+      state: "warning",
+      reason: "Add-ons wait for a volume",
+      view: "health",
+      verdict: "Waiting",
+    });
+  });
+
   it("leaves a cluster as it is while changes wait for the window", () => {
     const held = { ...waiting, conditions: withCondition(addonChangesPendingCondition).conditions };
     expect(standing(held)).toMatchObject({ group: "healthy", state: "ok", verdict: "Available" });
@@ -290,27 +310,21 @@ const created = (calls: ReturnType<typeof fakeServer>): Record<string, unknown> 
   record(record(calls.find((c) => c.key === "POST /api/clusters")?.body)["variables"]);
 
 describe("add-on installs of a new cluster", () => {
-  it("sends the existing cert-manager and the labels that were entered", async () => {
+  it("sends the labels that were entered", async () => {
     const calls = wizard();
     const user = userEvent.setup({ delay: null });
     render(<App />);
     await toAddOns(user);
-    const certificates = within(screen.getByRole("group", { name: "Certificates" }));
-    await user.click(certificates.getByRole("checkbox", { name: "Use existing cert-manager" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
     const podSecurity = within(screen.getByRole("group", { name: "Pod security" }));
     await user.type(podSecurity.getByLabelText("Namespace labels"), "team=payments{Enter}env = prod");
     await user.click(screen.getByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
-    expect(screen.getByText("Existing cert-manager")).toBeInTheDocument();
     expect(screen.getByText("team=payments, env=prod")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("button", { name: "Create" })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: "Create" }));
     await waitFor(() => expect(window.location.pathname).toBe("/clusters/default/web"));
-    expect(created(calls)).toMatchObject({
-      useExisting: { certManager: true },
-      namespaceLabels: { team: "payments", env: "prod" },
-    });
+    expect(created(calls)).toMatchObject({ namespaceLabels: { team: "payments", env: "prod" } });
   });
 
   it("keeps pod security on its own Policies step, after the add-ons", async () => {
@@ -338,12 +352,12 @@ describe("add-on installs of a new cluster", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Create and wait" })).toBeEnabled());
   });
 
-  it("sends neither while they are left alone", async () => {
+  it("sends no labels and no existing cert-manager while the labels are left alone", async () => {
     const calls = wizard();
     const user = userEvent.setup({ delay: null });
     render(<App />);
     await toAddOns(user);
-    expect(screen.getByRole("checkbox", { name: "Use existing cert-manager" })).not.toBeChecked();
+    expect(screen.queryByRole("checkbox", { name: "Use existing cert-manager" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
@@ -383,7 +397,7 @@ describe("add-on installs of a new cluster", () => {
     expect(labels).toHaveAccessibleDescription(new RegExp(`^At most ${maxNamespaceLabels} labels`, "u"));
   });
 
-  it("offers neither where the class defines neither", async () => {
+  it("offers no labels where the class defines none", async () => {
     window.history.replaceState(null, "", "/clusters/new");
     fakeServer({
       ...session,
@@ -398,7 +412,6 @@ describe("add-on installs of a new cluster", () => {
     await user.type(await screen.findByLabelText("Name"), "web");
     await waitFor(() => expect(screen.getByRole("option", { name: "RKE2" })).toBeInTheDocument());
     await user.selectOptions(screen.getByLabelText("Distribution"), "kubehenge-rke2");
-    expect(screen.queryByRole("checkbox", { name: "Use existing cert-manager" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Namespace labels")).not.toBeInTheDocument();
   });
 });
@@ -409,22 +422,20 @@ describe("add-on installs of a cluster", () => {
     variables: { storage: "local-lvm", namespaceLabels: { team: "payments" }, useExisting: { certManager: true } },
   };
 
-  it("lists the labels and the existing cert-manager", async () => {
+  it("lists the labels, and no existing cert-manager for a cluster that still sets one", async () => {
     window.history.replaceState(null, "", "/clusters/default/web/options");
     fakeServer({ ...session, "GET /api/clusters/default/web": () => ({ body: labelled }) });
     render(<App />);
     await expect(screen.findByText("team=payments")).resolves.toBeInTheDocument();
-    expect(screen.getByText("Existing cert-manager")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Edit existing cert-manager/iu })).not.toBeInTheDocument();
+    expect(screen.queryByText("Existing cert-manager")).not.toBeInTheDocument();
   });
 
-  it("lists no existing cert-manager unless the cluster uses one", async () => {
+  it("lists no labels where the cluster has none", async () => {
     window.history.replaceState(null, "", "/clusters/default/web/options");
     fakeServer({ ...session, "GET /api/clusters/default/web": () => ({ body: web }) });
     render(<App />);
     await screen.findByRole("button", { name: "Edit namespace labels" });
     expect(within(screen.getByRole("row", { name: /Namespace labels/u })).getByText("None")).toBeInTheDocument();
-    expect(screen.queryByText("Existing cert-manager")).not.toBeInTheDocument();
   });
 
   it("saves the labels, an empty object once they are cleared", async () => {

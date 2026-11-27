@@ -54,56 +54,65 @@ func TestInterfaceKubeconfigEndToEnd(t *testing.T) {
 	type access struct {
 		verb, group, resource, namespace string
 		want                             bool
+		// name is the one object a rule is limited to by name, when the check is of that.
+		name string
 	}
 	// One of the module's extra_cluster_namespaces, when it was given any.
 	var extra []access
 	if ns := os.Getenv("KUBEHENGE_E2E_NAMESPACE"); ns != "" {
 		extra = []access{
-			{"create", "cluster.x-k8s.io", "clusters", ns, true},
-			{"delete", "cluster.x-k8s.io", "clusters", ns, true},
-			{"get", "", "secrets", ns, true},
-			{"list", "", "secrets", ns, false},
-			{"create", "", "pods", ns, false},
+			{"create", "cluster.x-k8s.io", "clusters", ns, true, ""},
+			{"delete", "cluster.x-k8s.io", "clusters", ns, true, ""},
+			{"get", "", "secrets", ns, true, ""},
+			{"list", "", "secrets", ns, true, ""},
+			{"create", "", "pods", ns, false, ""},
 		}
 	}
 	for _, c := range append([]access{
-		{"list", "cluster.x-k8s.io", "clusters", "", true},
-		{"list", "cluster.x-k8s.io", "machines", "", true},
-		{"list", "cluster.x-k8s.io", "clusterclasses", "kubehenge-system", true},
-		{"create", "cluster.x-k8s.io", "clusters", "clusters", true},
-		{"delete", "cluster.x-k8s.io", "clusters", "clusters", true},
-		{"get", "", "secrets", "clusters", true},
-		{"create", "cluster.x-k8s.io", "clusters", "default", false},
-		{"delete", "cluster.x-k8s.io", "clusters", "default", false},
-		{"get", "", "secrets", "kubehenge-system", false},
-		{"get", "", "secrets", "default", false},
-		{"list", "", "secrets", "clusters", false},
-		{"create", "", "namespaces", "", false},
-		{"update", "cluster.x-k8s.io", "clusterclasses", "kubehenge-system", false},
-		{"create", "", "pods", "clusters", false},
-		{"list", "cluster.x-k8s.io", "machinedeployments", "", true},
-		{"list", "cluster.x-k8s.io", "machinehealthchecks", "", true},
-		{"get", "controlplane.cluster.x-k8s.io", "kubeadmcontrolplanes", "clusters", true},
-		{"get", "controlplane.cluster.x-k8s.io", "rke2controlplanes", "clusters", true},
-		{"get", "controlplane.cluster.x-k8s.io", "kthreescontrolplanes", "clusters", true},
-		{"list", "addons.cluster.x-k8s.io", "helmreleaseproxies", "", true},
-		{"list", "", "events", "clusters", true},
-		{"update", "cluster.x-k8s.io", "machinedeployments", "clusters", false},
-		{"update", "controlplane.cluster.x-k8s.io", "kubeadmcontrolplanes", "clusters", false},
-		{"delete", "cluster.x-k8s.io", "machines", "clusters", false},
-		{"get", "", "pods", "clusters", false},
-		{"create", "", "events", "clusters", false},
+		{"list", "cluster.x-k8s.io", "clusters", "", true, ""},
+		{"list", "cluster.x-k8s.io", "machines", "", true, ""},
+		{"list", "cluster.x-k8s.io", "clusterclasses", "kubehenge-system", true, ""},
+		{"create", "cluster.x-k8s.io", "clusters", "clusters", true, ""},
+		{"delete", "cluster.x-k8s.io", "clusters", "clusters", true, ""},
+		{"get", "", "secrets", "clusters", true, ""},
+		{"create", "cluster.x-k8s.io", "clusters", "default", false, ""},
+		{"delete", "cluster.x-k8s.io", "clusters", "default", false, ""},
+		{"get", "", "secrets", "kubehenge-system", false, ""},
+		{"get", "", "secrets", "default", false, ""},
+		{"list", "", "secrets", "clusters", true, ""},
+		{verb: "get", resource: "configmaps", namespace: "kubehenge-system", want: true, name: "kubehenge-release-pins"},
+		{verb: "update", resource: "configmaps", namespace: "kubehenge-system", want: true, name: "kubehenge-release-pins"},
+		{verb: "delete", resource: "configmaps", namespace: "kubehenge-system", want: false, name: "kubehenge-release-pins"},
+		{verb: "get", resource: "configmaps", namespace: "kubehenge-system", want: true, name: "kubehenge-etcd-health"},
+		{verb: "get", resource: "configmaps", namespace: "kubehenge-system", want: true, name: "kubehenge-unowned-vms"},
+		{verb: "create", resource: "configmaps", namespace: "kubehenge-system", want: false},
+		{"list", "", "pods", "kube-system", true, ""},
+		{"create", "", "namespaces", "", false, ""},
+		{"update", "cluster.x-k8s.io", "clusterclasses", "kubehenge-system", false, ""},
+		{"create", "", "pods", "clusters", false, ""},
+		{"list", "cluster.x-k8s.io", "machinedeployments", "", true, ""},
+		{"list", "cluster.x-k8s.io", "machinehealthchecks", "", true, ""},
+		{"get", "controlplane.cluster.x-k8s.io", "kubeadmcontrolplanes", "clusters", true, ""},
+		{"get", "controlplane.cluster.x-k8s.io", "rke2controlplanes", "clusters", true, ""},
+		{"get", "controlplane.cluster.x-k8s.io", "kthreescontrolplanes", "clusters", true, ""},
+		{"list", "addons.cluster.x-k8s.io", "helmreleaseproxies", "", true, ""},
+		{"list", "", "events", "clusters", true, ""},
+		{"update", "cluster.x-k8s.io", "machinedeployments", "clusters", false, ""},
+		{"update", "controlplane.cluster.x-k8s.io", "kubeadmcontrolplanes", "clusters", false, ""},
+		{"delete", "cluster.x-k8s.io", "machines", "clusters", false, ""},
+		{"get", "", "pods", "clusters", false, ""},
+		{"create", "", "events", "clusters", false, ""},
 	}, extra...) {
 		review, err := kube.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, &authorizationv1.SelfSubjectAccessReview{
 			Spec: authorizationv1.SelfSubjectAccessReviewSpec{ResourceAttributes: &authorizationv1.ResourceAttributes{
-				Verb: c.verb, Group: c.group, Resource: c.resource, Namespace: c.namespace,
+				Verb: c.verb, Group: c.group, Resource: c.resource, Namespace: c.namespace, Name: c.name,
 			}},
 		}, metav1.CreateOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if review.Status.Allowed != c.want {
-			t.Errorf("%s %s/%s in %q: allowed %v, want %v", c.verb, c.group, c.resource, c.namespace, review.Status.Allowed, c.want)
+			t.Errorf("%s %s/%s %s in %q: allowed %v, want %v", c.verb, c.group, c.resource, c.name, c.namespace, review.Status.Allowed, c.want)
 		}
 	}
 	// The interface makes its next token with the one it has, and no other account's.

@@ -185,7 +185,6 @@ const kubeadmClass = {
     { name: "rancher", required: false, schema: object },
     { name: "oidc", required: false, schema: { type: "array" } },
     { name: "namespaceLabels", required: false, schema: object },
-    { name: "useExisting", required: false, schema: object },
   ],
 };
 
@@ -908,7 +907,7 @@ const waiting = cluster("waiting", {
       { addon: "headlamp", chart: "headlamp", from: "0.30.0", to: "0.30.0" },
     ],
   },
-  variables: { namespaceLabels: { team: "payments" }, useExisting: { certManager: true } },
+  variables: { namespaceLabels: { team: "payments" } },
 });
 const waitingRoutes: Record<string, Route> = {
   ...detail,
@@ -1400,7 +1399,6 @@ const cases: Case[] = [
       await user.click(screen.getByRole("button", { name: "Remove taint 1" }));
       await user.click(screen.getByRole("button", { name: "Next" }));
       await check("Add-ons");
-      await user.click(screen.getByRole("checkbox", { name: "Use existing cert-manager" }));
       await user.click(screen.getByRole("button", { name: "Next" }));
       await check("Policies");
       await user.type(screen.getByLabelText("Namespace labels"), "team");

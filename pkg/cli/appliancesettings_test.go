@@ -74,6 +74,32 @@ func TestApplianceSettingsSetNamesTheFaultsOfTheSiteCAChain(t *testing.T) {
 	}
 }
 
+// TestApplianceSettingsSetAddsTheRootsTheHostsPresentOnlyWhenAsked names the flag that adds the roots
+// a refused save names, and with it adds them to the site CA and applies again.
+func TestApplianceSettingsSetAddsTheRootsTheHostsPresentOnlyWhenAsked(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	pem := "-----BEGIN CERTIFICATE-----\nUNROOTED\n-----END CERTIFICATE-----\n"
+	args := f.args("admin@pve", "settings", "set", "--site-ca-file", writeTemp(t, pem), "--passphrase-file", writeTemp(t, "right"))
+	_, err := f.run(args...)
+	if err == nil || !strings.Contains(err.Error(), "Chain ends at") || !strings.Contains(err.Error(), `Give --add-missing-roots to add "Inspect Root"`) {
+		t.Errorf("a refusal over a presented root: %v", err)
+	}
+	out, err := f.run(append(args, "--add-missing-roots")...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := pem + "-----BEGIN CERTIFICATE-----\nPRESENTED\n-----END CERTIFICATE-----\n"; field(savedBody(f), "siteCA") != want {
+		t.Errorf("the site CA was sent as %q, want %q", field(savedBody(f), "siteCA"), want)
+	}
+	if !strings.Contains(out, `Added "Inspect Root" to the site CA`) || !strings.Contains(out, "Applying the settings") {
+		t.Errorf("the command printed %q", out)
+	}
+	if _, sent := savedBody(f)["siteBundle"]; sent {
+		t.Errorf("the settings carried a bundle: %v", savedBody(f)["siteBundle"])
+	}
+}
+
 func TestApplianceSettingsSetAndClearTheVMIDRange(t *testing.T) {
 	t.Parallel()
 	f := newFakeInterface(t)

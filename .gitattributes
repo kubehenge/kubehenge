@@ -1,3 +1,5 @@
 * text=auto eol=lf
 # Signed upstream files: any change of bytes breaks their signatures.
 pkg/templates/testdata/** -text
+# Pinned by its SHA-256, so its bytes stay as they are.
+pkg/appliance/talosroots.crt -text

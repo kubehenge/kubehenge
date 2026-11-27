@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -98,13 +99,35 @@ type settingsChange struct {
 	siteCA, zone             string
 	vmIDRange                *provisioner.VMIDRange
 	passphrase               string
+	// addRoots adds the roots a refusal names as presented by the hosts and lacking from the site CA,
+	// and applies again.
+	addRoots bool
+}
+
+// missingRootsError is a save the interface refused over roots the hosts presented and the site CA
+// lacks.
+type missingRootsError struct {
+	message string
+	roots   []appliance.MissingRoot
+}
+
+func (e *missingRootsError) Error() string { return e.message }
+
+// rootNames are the roots' names, quoted, for a line to name them by.
+func rootNames(roots []appliance.MissingRoot) string {
+	names := make([]string, 0, len(roots))
+	for _, r := range roots {
+		names = append(names, fmt.Sprintf("%q", r.Name))
+	}
+	return strings.Join(names, ", ")
 }
 
 // apply sends the saved settings with the change to the route Setup saves through, which checks them.
-func (c *settingsChange) apply(ctx context.Context, s *applianceSession) error {
+// It returns the roots it added to the site CA.
+func (c *settingsChange) apply(ctx context.Context, s *applianceSession) ([]appliance.MissingRoot, error) {
 	settings, _, err := savedSettings(ctx, s)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if c.setCA {
 		// The interface derives the bundle from the pasted authority on every save.
@@ -116,12 +139,42 @@ func (c *settingsChange) apply(ctx context.Context, s *applianceSession) error {
 	if c.setRange {
 		settings.WorkloadVMIDRange = c.vmIDRange
 	}
-	_, err = s.call(ctx, http.MethodPost, "/api/setup", map[string]any{"settings": settings, "passphrase": c.passphrase}, nil)
-	return err
+	save := func() error {
+		_, saveErr := s.call(ctx, http.MethodPost, "/api/setup", map[string]any{"settings": settings, "passphrase": c.passphrase}, nil)
+		return saveErr
+	}
+	err = save()
+	refused, ok := errors.AsType[*missingRootsError](err)
+	switch {
+	case !ok:
+		return nil, err
+	case !c.addRoots:
+		return nil, fmt.Errorf("%w\nGive --add-missing-roots to add %s", err, rootNames(refused.roots))
+	}
+	settings.SiteCA, settings.SiteBundle = appliance.WithRoots(settings.SiteCA, refused.roots), ""
+	if err := save(); err != nil {
+		return nil, err
+	}
+	return refused.roots, nil
+}
+
+// applyAndSay applies the change and says which roots it added to the site CA.
+func (c *settingsChange) applyAndSay(ctx context.Context, cmd *cobra.Command, s *applianceSession) error {
+	added, err := c.apply(ctx, s)
+	if err != nil {
+		return err
+	}
+	if len(added) > 0 {
+		if err := say(cmd, "Added "+rootNames(added)+" to the site CA"); err != nil {
+			return err
+		}
+	}
+	return say(cmd, "Applying the settings")
 }
 
 func (o *applianceOptions) settingsSetCommand() *cobra.Command {
 	var caFile, passphraseFile, zone, vmIDs string
+	var addRoots bool
 	cmd := &cobra.Command{
 		Use:   "set",
 		Short: "Change the site CA, time zone or VM ID range and apply it to the management cluster",
@@ -130,11 +183,12 @@ management cluster, as Setup does. A setting left out keeps its value. --site-ca
 certificates. An empty file, --time-zone "" or --vm-id-range "" clears that setting. --vm-id-range is
 start-end, both included, for the VMs of new clusters and the VM templates. The checks are Setup's. A new
 site CA replaces the nodes of the clusters that inherit it, a few at a time and inside their upgrade
-windows. The state passphrase comes from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
+windows. Where the hosts present a root the site CA lacks, --add-missing-roots adds it, as Setup's
+buttons do. The state passphrase comes from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			f := cmd.Flags()
-			change := settingsChange{setCA: f.Changed("site-ca-file"), setZone: f.Changed("time-zone"), setRange: f.Changed("vm-id-range"), zone: zone}
+			change := settingsChange{setCA: f.Changed("site-ca-file"), setZone: f.Changed("time-zone"), setRange: f.Changed("vm-id-range"), zone: zone, addRoots: addRoots}
 			if !change.setCA && !change.setZone && !change.setRange {
 				return errNothingToSet
 			}
@@ -156,12 +210,7 @@ windows. The state passphrase comes from --passphrase-file or KUBEHENGE_PASSPHRA
 				}
 				change.siteCA = string(raw)
 			}
-			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
-				if err := change.apply(ctx, s); err != nil {
-					return err
-				}
-				return say(cmd, "Applying the settings")
-			})
+			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error { return change.applyAndSay(ctx, cmd, s) })
 		},
 	}
 	f := cmd.Flags()
@@ -169,5 +218,6 @@ windows. The state passphrase comes from --passphrase-file or KUBEHENGE_PASSPHRA
 	f.StringVar(&zone, "time-zone", "", "IANA time zone schedules use unless they name their own, empty to clear")
 	f.StringVar(&vmIDs, "vm-id-range", "", "VM IDs of new clusters' VMs and the VM templates, as start-end, empty to clear")
 	f.StringVar(&passphraseFile, "passphrase-file", "", passphraseFileUsage)
+	f.BoolVar(&addRoots, "add-missing-roots", false, "add the roots the hosts present that the site CA lacks, and apply again")
 	return cmd
 }

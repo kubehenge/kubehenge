@@ -37,7 +37,6 @@ const rke2: ClusterClass = {
     "rancher",
     "oidc",
     "namespaceLabels",
-    "useExisting",
     "securityGroups",
     "firewall",
   ].map((name) => ({ name, required: false, schema: object })),
@@ -126,7 +125,6 @@ const chosen: Form = {
   rancherRegister: false,
   oidc: [{ issuerURL: "https://id.example", clientID: "kubernetes" }],
   namespaceLabels: "team=payments\nenv=prod",
-  existingCertManager: true,
 };
 
 const taken = (f: Form): Partial<Form> => Object.fromEntries([...startKeys].map((k) => [k, f[k]]));

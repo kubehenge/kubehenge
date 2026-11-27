@@ -1145,7 +1145,7 @@ export function MachinesStep({
           <summary>etcd</summary>
           <Field
             label="Database limit (GiB)"
-            hint="It can be raised later, never lowered."
+            hint="Lowering it later needs every database under 60% of it."
             error={shown("etcdQuotaGiB")}
           >
             {(id) => (

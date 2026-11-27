@@ -229,19 +229,25 @@ func (s *Server) diskFull(ctx context.Context) *diskFull {
 
 // applianceID is the appliance's guest ID as the user sees it, found by its MAC addresses where
 // they are known, or the installed one. 0 when no guest the user sees has its MAC: a restore or a
-// clone took it out of their sight, and the installed ID would name another guest or none.
+// clone took it out of their sight, and the installed ID would name another guest or none. The
+// network cards of the guest it finds are recorded for the appliance.
 func (s *Server) applianceID(ctx context.Context, u user) int {
 	if len(s.ApplianceMACs) == 0 {
 		return s.ApplianceVMID
 	}
 	id, err := s.applianceIDs.get(ctx, u.ticket.Username, backupTTL, time.Now, func(ctx context.Context) int {
-		id, err := s.Accounts.ApplianceID(ctx, u.ticket, s.ApplianceVMID, s.ApplianceMACs)
+		id, config, err := s.Accounts.ApplianceID(ctx, u.ticket, s.ApplianceVMID, s.ApplianceMACs)
 		switch {
 		case errors.Is(err, pve.ErrNoAppliance):
 			return 0
 		case err != nil:
 			s.Log.WarnContext(ctx, "finding the appliance's guest ID", "error", err)
 			return s.ApplianceVMID
+		}
+		if s.Appliance != nil {
+			if err := s.Appliance.RecordNetwork(config); err != nil {
+				s.Log.WarnContext(ctx, "recording the appliance's network", "error", err)
+			}
 		}
 		return id
 	})
@@ -498,6 +504,10 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 		return
 	}
 	err = a.Apply(&req.Settings, req.Passphrase, ticket, s.applied(ticket)) //nolint:contextcheck // the job outlives the request on purpose
+	if faults, ok := errors.AsType[appliance.SiteChainError](err); ok {
+		writeJSON(w, http.StatusUnprocessableEntity, setupRefusal{Error: err.Error(), MissingRoots: faults.Roots, RequestID: w.Header().Get(requestIDHeader)})
+		return
+	}
 	switch {
 	case jobConflict(err):
 		writeError(w, http.StatusConflict, err.Error())
@@ -508,6 +518,14 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 	}
 	s.Log.InfoContext(r.Context(), "management cluster apply started", "user", u.ticket.Username)
 	writeJSON(w, http.StatusAccepted, a.Current())
+}
+
+// setupRefusal is the answer to a save its checks refuse. MissingRoots are the roots the hosts
+// presented and the Site CA lacks, for a client to add as Setup's buttons do.
+type setupRefusal struct {
+	Error        string                  `json:"error"`
+	MissingRoots []appliance.MissingRoot `json:"missingRoots,omitempty"`
+	RequestID    string                  `json:"requestId,omitempty"`
 }
 
 // jobConflict tells whether a job could not start because another one, of any kind, holds the

@@ -7,7 +7,8 @@
 #
 # Writes <work directory>/env, the settings test/e2e/ci/run.sh reads. Needs sudo for the route.
 # With KUBEHENGE_E2E_PVE_BUILT=1, the image kubehenge-e2e-pve already loaded is run as it is rather
-# than built. With KUBEHENGE_E2E_IPV6=1, the Docker network and the route to the VMs' bridge carry
+# than built. A build installs the pve-manager version in KUBEHENGE_E2E_PVE_VERSION, by default the
+# newest of the repository (scripts/pve-version.sh). With KUBEHENGE_E2E_IPV6=1, the Docker network and the route to the VMs' bridge carry
 # IPv6 as well, which a cluster with IPv6 first needs to reach its API.
 #
 # The registry serves the images test/e2e/ci/build.sh left in <work directory>/build/registry.
@@ -32,11 +33,15 @@ REGISTRY_IMAGE=registry:3.1.2@sha256:82f6ff4a7f982960c8aa51617fea3aabc485df6e55c
 mkdir -p "${work}/vz"
 work=$(readlink -f "${work}")
 if [ "${KUBEHENGE_E2E_PVE_BUILT:-}" != 1 ]; then
+    if [ -z "${KUBEHENGE_E2E_PVE_VERSION:-}" ]; then
+        found=$("${here}/../../../scripts/pve-version.sh")
+        KUBEHENGE_E2E_PVE_VERSION=${found#version=}
+    fi
     # A failed apt-get says why only in the build's own output, which -q leaves out. Debian's
     # mirrors hand out cut-short files while they sync, so a failed build is tried again a minute
     # later, as e2e-image.yml does.
     for try in 1 2 3; do
-        docker build --progress=plain -t kubehenge-e2e-pve "${here}/../pve" > "${work}/pve-build.log" 2>&1 && break
+        docker build --progress=plain --build-arg PVE_VERSION="${KUBEHENGE_E2E_PVE_VERSION}" -t kubehenge-e2e-pve "${here}/../pve" > "${work}/pve-build.log" 2>&1 && break
         tail -n 80 "${work}/pve-build.log" >&2
         [ "${try}" -lt 3 ] || exit 1
         echo "building Proxmox VE's image failed (try ${try} of 3), trying again in 60 s" >&2
@@ -84,6 +89,8 @@ until pve systemctl is-active --quiet pveproxy.service && pve pvesh get /version
     fi
     sleep 3
 done
+# Each lane's log names the version it ran on.
+pve pveversion
 # The firewall on nftables (proxmox-firewall), set before any VM starts, since a running guest moves
 # to it only once it restarts. pve-firewall cannot load the legacy iptables tables on runner kernels
 # and applies no rule. The nftables backend makes no fwbr bridges, so the NAT needs no conntrack zone.

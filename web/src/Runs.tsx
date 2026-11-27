@@ -2,11 +2,11 @@ import type { JSX } from "react";
 
 import { adminPath, type AdminView } from "./admin-views";
 import { clusterPath, type View } from "./cluster-paths";
-import { ranked, useFleet, type Standing } from "./fleet";
+import { ranked, useFleet, type Fleet, type Standing } from "./fleet";
 import { settingLabel } from "./plan-rows";
 import { Link } from "./router";
 import type { RunInfo } from "./types";
-import { age, filled } from "./ui";
+import { age, filled, ReadError, unknownCount } from "./ui";
 
 /**
  * Where a run stands in the column: under way, under way but stopped coming, failed and waiting for
@@ -165,23 +165,33 @@ export function useRuns(): Run[] {
   return [...changes, ...runs.map((r) => fromServer(r))];
 }
 
+/** hasRuns tells whether the runs panel has anything to show: runs, or why they were not read. */
+export function hasRuns(runs: Run[], fleet: Fleet | null): boolean {
+  return runs.length > 0 || fleet?.runsRead.error !== undefined;
+}
+
 /** RunsPanel follows the work under way beside whatever page is open, and folds away. */
 export function RunsPanel({ runs, onFold }: { runs: Run[]; onFold: () => void }): JSX.Element {
+  const fleet = useFleet();
   const running = runs.filter((r) => r.group === "running").length;
   const stalled = runs.filter((r) => r.group === "stalled").length;
+  // Until the runs are read, the clusters' own changes are all that shows, so no count holds.
+  const unread = fleet?.runs === undefined;
+  let count = `${running} running${stalled > 0 ? `, ${stalled} stalled` : ""}`;
+  if (unread) {
+    count = fleet?.runsRead.error === undefined ? "Loading…" : unknownCount;
+  }
   return (
     <aside className="runs" aria-label="Runs">
       <div className="runs-head">
         <h2>
-          Runs{" "}
-          <span className="count">
-            {running} running{stalled > 0 && `, ${stalled} stalled`}
-          </span>
+          Runs <span className="count">{count}</span>
         </h2>
         <button type="button" className="icon" aria-label="Hide runs" title="Hide runs (T R)" onClick={onFold}>
           ›
         </button>
       </div>
+      {fleet !== null && <ReadError read={fleet.runsRead} />}
       {runGroups.map(({ group, label }) => {
         const members = runs.filter((r) => r.group === group);
         if (members.length === 0) {

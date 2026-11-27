@@ -90,8 +90,8 @@
 # refuse a copy of a volume that is not the cluster's, checks that a deleted snapshot's copy goes
 # from its holder VM, and switches them off again, on a KUBEHENGE_E2E_STORAGE local to each node.
 # KUBEHENGE_E2E_REGISTRY, when set, is the plain-HTTP registry the controller's image under test was
-# pushed to by its ghcr.io path; the control-plane nodes pull ghcr.io's images from it first while
-# volume snapshots are on, for the copy proxy that runs from that image.
+# pushed to by its ghcr.io path. Every cluster's nodes pull ghcr.io's images from it first, through
+# the cluster's registryMirrors, for the CSI proxy that runs from that image.
 # KUBEHENGE_E2E_TALOS_VERSION and KUBEHENGE_E2E_TALOS_UPGRADE are, for kubehenge-talos, the Talos
 # release the cluster starts on and a newer one its nodes are upgraded to in place, both with a
 # template in the template pool. Talos has no SSH, no systemd and no guest agent that runs commands:
@@ -331,28 +331,6 @@ on_machines() {
         pm_vmid=$(kubectl -n "${ns}" get proxmoxmachine "${pm}" -o jsonpath='{.spec.virtualMachineID}')
         guest "${pm_node}" "${pm_vmid}" "$2"
     done
-}
-# own_image_registry "<Machine names>" [off]: the clusters pull Kubehenge's own image from ghcr.io,
-# where a build under test is not. With KUBEHENGE_E2E_REGISTRY set, containerd on those Machines
-# asks the registry the build was pushed to first and ghcr.io for anything it has not; off takes
-# that away again.
-own_image_registry() {
-    [ -n "${KUBEHENGE_E2E_REGISTRY:-}" ] || return 0
-    case ${distribution} in
-        k3s | rke2) certs=/var/lib/rancher/${distribution}/agent/etc/containerd/certs.d ;;
-        kubeadm) certs=/etc/containerd/certs.d ;;
-        *) fail "the ${distribution} nodes take no registry from the guest agent for Kubehenge's image" ;;
-    esac
-    if [ "${2:-}" = off ]; then
-        # shellcheck disable=SC2310 # a node that does not take it off fails the test with the reason.
-        on_machines "$1" "rm -f ${certs}/ghcr.io/hosts.toml" > /dev/null ||
-            fail "the registry of Kubehenge's image was not taken off the nodes"
-        return 0
-    fi
-    hosts=$(printf 'server = "https://ghcr.io"\n\n[host."http://%s"]\n  capabilities = ["pull", "resolve"]\n' "${KUBEHENGE_E2E_REGISTRY}")
-    # shellcheck disable=SC2310 # a node that does not take it fails the test with the reason.
-    on_machines "$1" "mkdir -p ${certs}/ghcr.io && printf '%s\n' '${hosts}' > ${certs}/ghcr.io/hosts.toml" > /dev/null ||
-        fail "the nodes did not take the registry of Kubehenge's image"
 }
 b64url() { base64 -w0 | tr '+/' '-_' | tr -d '='; }
 
@@ -643,6 +621,7 @@ ${network_families}
         value: {memoryMiB: ${worker_memory}, cores: ${worker_cores}}
 ${cni_variable}
 ${talos_variable}
+${own_registry}
 ${release_mirror}
       - name: oidc
         value: ${oidc}
@@ -1658,19 +1637,20 @@ if [ "${KUBEHENGE_E2E_DATASTORE_ALLOCATE:-}" = 1 ]; then
 fi
 
 if [ "${KUBEHENGE_E2E_VOLUME_SNAPSHOTS:-}" = 1 ]; then
-    # csi_controller_is <Secret> <true|false>: the CSI plugin's controller is rolled out reading its
-    # configuration from the Secret, with the snapshot sidecar and the copy proxy beside it, or
-    # without either.
+    # csi_controller_is <true|false>: the CSI plugin's controller is rolled out reading its
+    # configuration through the proxy, with the snapshot sidecar beside it or without, and the proxy
+    # making copies or reaching Proxmox VE directly.
     csi_controller_is() {
         # shellcheck disable=SC2310 # polled; a failed read is a no.
         deployments=$(wl -n kube-system get deployments -o json) || return 1
-        printf '%s' "${deployments}" | jq -e --arg s "$1" --argjson snap "$2" '
+        printf '%s' "${deployments}" | jq -e --argjson snap "$1" '
             [.items[] | select(any(.spec.template.spec.volumes[]?; .name == "cloud-config" and .secret.items[0].key == "csi.yaml"))] |
             length == 1 and all(
-                ([.spec.template.spec.volumes[] | select(.name == "cloud-config") | .secret.secretName][0] == $s) and
+                ([.spec.template.spec.volumes[] | select(.name == "cloud-config") | .secret.secretName][0] == "kubehenge-proxmox-proxied") and
                 (any(.spec.template.spec.containers[]; .name == "csi-snapshotter") == $snap) and
-                (any(.spec.template.spec.initContainers[]?; .name == "kubehenge-csi-proxy" and .restartPolicy == "Always" and
-                    (.image | test("@sha256:[0-9a-f]{64}$"))) == $snap) and
+                any(.spec.template.spec.initContainers[]?; .name == "kubehenge-csi-proxy" and .restartPolicy == "Always" and
+                    (.image | test("@sha256:[0-9a-f]{64}$")) and
+                    ([.args[]?] | index("--copies=\($snap)") != null and index("--find-copies=\($snap)") != null)) and
                 (.status.observedGeneration // 0) >= .metadata.generation and
                 (.status.updatedReplicas // 0) == .spec.replicas and (.status.readyReplicas // 0) == .spec.replicas and
                 (.status.replicas // 0) == .spec.replicas)' > /dev/null
@@ -1744,9 +1724,6 @@ if [ "${KUBEHENGE_E2E_VOLUME_SNAPSHOTS:-}" = 1 ]; then
         volumes=$(held) || return 1
         ! printf '%s\n' "${volumes}" | grep -qxF "$1"
     }
-    # The copy proxy runs beside the CSI plugin's controller on the control-plane nodes.
-    snapshot_servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
-    own_image_registry "${snapshot_servers}"
     # not_found <kubectl get arguments>: the object is not found, rather than out of reach for a
     # moment.
     not_found() {
@@ -1812,7 +1789,7 @@ EOF
     step "volume snapshots, with the copies made with the cluster's own token"
     set_variable csi '{"volumeSnapshots":true}'
     until_true 300 "the CSI plugin's configuration through the proxy, with the cluster's token" proxied
-    until_true 900 "the CSI plugin's controller with the snapshot sidecar and the copy proxy" csi_controller_is kubehenge-proxmox-proxied true
+    until_true 900 "the CSI plugin's controller with the snapshot sidecar and the copy proxy" csi_controller_is true
     until_true 300 "the copies' namespace" wl get namespace kubehenge-volume-copies
     until_true 300 "the cluster's holder VMs, stopped" holders_ready
     # shellcheck disable=SC2310 # a failed read fails the test with the reason.
@@ -1931,16 +1908,16 @@ EOF
     until_true 300 "no copy left on the holder VMs" holds 0
     until_true 300 "the copies' records deleted" none_of -n kubehenge-volume-copies configmaps -l kubehenge.dev/volume-copy
 
-    step "the CSI plugin reaching Proxmox VE directly again, without volume snapshots"
+    step "the CSI plugin reaching Proxmox VE through the proxy directly, without volume snapshots"
     set_variable csi '{"volumeSnapshots":false}'
-    until_true 900 "the CSI plugin's controller without the snapshot sidecar and the proxy, with the cluster's token" csi_controller_is kubehenge-proxmox false
-    until_true 300 "the CSI plugin's configuration through the proxy deleted" not_found -n kube-system secret kubehenge-proxmox-proxied
+    until_true 900 "the CSI plugin's controller without the snapshot sidecar, with the proxy reaching Proxmox VE directly" csi_controller_is false
+    until_true 300 "the CSI plugin's configuration through the proxy" proxied
+    until_true 300 "the proxy's Role deleted" not_found -n kube-system role kubehenge-csi-proxy
     until_true 300 "the copies' namespace deleted" not_found namespace kubehenge-volume-copies
     until_true 300 "the empty holder VMs removed" no_holders
     until_true 600 "the VolumeSnapshotClass removed" not_found volumesnapshotclass proxmox
     until_true 600 "the snapshot controller removed" none_of -n kube-system deployments -l app.kubernetes.io/name=snapshot-controller
     persistent_volume
-    own_image_registry "${snapshot_servers}" off
 fi
 
 if [ "${KUBEHENGE_E2E_HA_GROUPS:-}" = 1 ]; then
@@ -2185,8 +2162,6 @@ if [ "${restores_etcd}" = true ]; then
     wl -n default create configmap e2e-after-volume-snapshot --from-literal=marker="${lost_marker}"
     control_planes=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
     control_plane_count=$(printf '%s' "${control_planes}" | wc -w)
-    # A kubeadm, RKE2 or k3s control plane receives the snapshot in a pod of Kubehenge's own image.
-    [ "${distribution}" = talos ] || own_image_registry "${control_planes}"
     if [ "${distribution}" != talos ] && [ "${control_plane_count}" -ge 3 ]; then
         step "etcd's quorum lost on purpose, then restored from the backup volume"
         # Every member but the first drops etcd's peer traffic, so no member has a majority and the

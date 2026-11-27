@@ -137,7 +137,7 @@ headlamp_offers_actions() {
 upgrade_rolled_back() {
     upgrade "$1"
     to=$(version_of "$1")
-    if [ "${upgraded}" -eq 0 ] || ! grep -q "release ${to} did not start: the interface did not answer within .*\. Rolled back to $2\$" "${work}/upgrade.log"; then
+    if [ "${upgraded}" -eq 0 ] || ! grep -q "release ${to} did not start: the interface .*did not answer within .*\. Rolled back to $2\$" "${work}/upgrade.log"; then
         cat "${work}/upgrade.log" >&2
         fail "install.sh --upgrade to ${to} did not roll back to $2"
     fi
@@ -152,9 +152,9 @@ cli() {
     shift
     cli_ok=true
     {
-        pct exec "${ctid}" -- /usr/local/bin/kubehenge login https://127.0.0.1 --ca /etc/kubehenge/tls.crt \
+        pct exec "${ctid}" -- kubehenge login https://127.0.0.1 --ca /etc/kubehenge/tls.crt \
             --user "${who}" --password-file /root/e2e-password &&
-            pct exec "${ctid}" -- /usr/local/bin/kubehenge appliance "$@"
+            pct exec "${ctid}" -- kubehenge appliance "$@"
     } > "${work}/cli" 2>&1 < /dev/null || cli_ok=false
 }
 
@@ -370,8 +370,39 @@ setup_status
 body_is '.allowed and (.ready | not)' "the administrator may not set up"
 
 # A setup behind TLS inspection without the Site CA fails on the certificate a node rejects, and the
-# same setup with the authority added finishes on its own.
+# same setup with the authority added finishes on its own. Before that, the appliance's own trust
+# store holds the root that signs the proxy, as it does where one internal CA signs Proxmox VE and the
+# inspection device, and a Site CA of another root is refused before any Apply.
 if [ -n "${KUBEHENGE_E2E_SITE_CA_LATER:-}" ]; then
+    step "a Site CA of another root is refused before any Apply, though the appliance's store trusts the proxy's root"
+    # The store's copy names the root in the bytes the proxy's intermediate uses, so that Go in the
+    # container verifies the proxy's chains with it. The nodes trust only their own roots and the Site CA.
+    pct push "${ctid}" "${KUBEHENGE_E2E_STORE_CA:?the lane passes no copy of the root for the store}" \
+        /usr/local/share/ca-certificates/kubehenge-e2e-internal.crt --perms 0644
+    # The system pool is read once per process, so the interface restarts to see the root.
+    pct exec "${ctid}" -- sh -c 'update-ca-certificates > /dev/null && systemctl restart kubehenge.service'
+    until_true 120 "the interface to answer again" answers
+    sign_in "${work}/admin.jar" "${admin}"
+    admin_csrf=${csrf}
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 -subj /CN=kubehenge-e2e-other-root \
+        -keyout "${work}/other-root.key" -out "${work}/other-root.pem" 2> /dev/null
+    other_check=$(jq -c --rawfile ca "${work}/other-root.pem" '{settings: (. + {siteCA: $ca})}' "${work}/settings.json")
+    expect 200 "the check of a Site CA of another root" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup/check" "${other_check}"
+    body_is '.errors | any(test("Add .* to the Site CA"))' "the check does not tell the Site CA lacks the root the chain ends at"
+    body_is '.errors | any(test("Kubehenge e2e inspection root"))' "the check does not name the root the chain ends at"
+    other_setup=$(jq -c --arg p "${passphrase}" --rawfile ca "${work}/other-root.pem" '{passphrase: $p, settings: (. + {siteCA: $ca})}' "${work}/settings.json")
+    expect 422 "a setup with a Site CA of another root" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup" "${other_setup}"
+    body_is '.error | test("Add .* to the Site CA")' "the refused setup does not tell the Site CA lacks the root"
+    setup_status
+    body_is '.job == null' "the refused setup started a run"
+    # The rest of the lane runs with the container's store as installed.
+    pct exec "${ctid}" -- sh -c 'rm /usr/local/share/ca-certificates/kubehenge-e2e-internal.crt && update-ca-certificates --fresh > /dev/null && systemctl restart kubehenge.service'
+    until_true 120 "the interface to answer again" answers
+    sign_in "${work}/user.jar" "${user}"
+    user_csrf=${csrf}
+    sign_in "${work}/admin.jar" "${admin}"
+    admin_csrf=${csrf}
+
     step "a setup behind TLS inspection without the Site CA fails, naming the certificate a node rejected"
     expect 202 "starting the setup without the Site CA" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup" "${setup}"
     until_true 3600 "the setup without the Site CA to end" job_ended
@@ -395,6 +426,9 @@ body_is '[.[].name] | contains(["kubehenge-kubeadm", "kubehenge-rke2", "kubeheng
 expected_namespaces=$(jq -c '["clusters"] + (.extraClusterNamespaces // [])' "${settings}")
 expect 200 "the session" request "${work}/admin.jar" "${ui}/api/session"
 body_is ".namespace == \"clusters\" and .namespaces == ${expected_namespaces}" "the interface does not offer the namespaces ${expected_namespaces}"
+
+expect 200 "the release pins, as the interface's own account reads them" request "${work}/admin.jar" "${ui}/api/release-pins"
+body_is '.pins == []' "the release pins are not an empty list after the setup"
 
 step "an HA rule offered to a cluster creator without Sys.Audit on /, by its name and nodes alone"
 expect 200 "the HA rules for a user who may place no cluster" request "${work}/user.jar" "${ui}/api/proxmox/ha-rules"
@@ -766,7 +800,7 @@ until_true 600 "the updater to end the upgrade to ${broken_version}" updater_don
 # shellcheck disable=SC2016 # jq's variables, not the shell's.
 body_has "the updater did not roll back to ${first_version}, saying why" --arg old "${first_version}" \
     '.status.state == "failed" and .status.rolledBack and .version == $old and
-     (.status.error | test("did not start: the interface did not answer within .*; rolled back to \($old)$"))'
+     (.status.error | test("did not start: the interface .*did not answer within .*; rolled back to \($old)$"))'
 runs "${first_version}"
 cli "${admin}" upgrades
 cli_says true "rolled back to ${first_version}" "the shell does not say the upgrade was rolled back"
@@ -894,6 +928,43 @@ else
     pvesh set "/nodes/${kept_node}/qemu/${kept_vmid}/config" --protection 0
     pvesh delete "/nodes/${kept_node}/qemu/${kept_vmid}" --purge 1 > /dev/null
 fi
+
+# announcements <seconds> <count> <command...>: runs the command while tcpdump watches the node's bridge
+# for gratuitous ARP frames for the appliance's address, and prints how many it saw, up to the count
+# and within the seconds. The appliance sends three, so the count tells them from the one or two a
+# container's own network setup may send.
+announcements() {
+    capture_seconds=$1 capture_count=$2
+    shift 2
+    : > "${work}/capture"
+    timeout "${capture_seconds}" tcpdump -l -n -c "${capture_count}" -i "${KUBEHENGE_E2E_BRIDGE:-vmbr0}" \
+        "arp and ether src ${appliance_mac} and arp[14:4] = arp[24:4] and arp host ${ip}" > "${work}/capture" 2> "${work}/capture.err" &
+    capture_pid=$!
+    until_true 10 "tcpdump to listen" grep -q listening "${work}/capture.err"
+    "$@"
+    wait "${capture_pid}" || true
+    grep -c "Request who-has ${ip} tell ${ip}" "${work}/capture" || true
+}
+
+# answers: whether the appliance's interface answers within 5 seconds.
+answers() {
+    curl -sS -o /dev/null --max-time 5 --cacert "${ca}" "${ui}/api/realms" 2> /dev/null
+}
+
+# reboot_until_answering: reboots the appliance's container and waits up to 90 seconds for its interface.
+reboot_until_answering() {
+    pct reboot "${ctid}"
+    until_true 90 "the appliance to answer after its container rebooted" answers
+}
+
+step "the appliance announces its address to the network after its service restarts and after its container reboots"
+appliance_mac=$(pct config "${ctid}" | sed -n 's/^net0:.*hwaddr=\([0-9A-Fa-f:]*\).*/\1/p')
+[ -n "${appliance_mac}" ] || fail "the container's configuration has no hardware address for net0"
+command -v tcpdump > /dev/null || fail "the node has no tcpdump to capture the appliance's announcements with"
+seen=$(announcements 20 3 pct exec "${ctid}" -- systemctl restart kubehenge.service)
+[ "${seen}" -ge 3 ] || fail "the appliance sent ${seen} gratuitous ARP frames for ${ip} within 20 seconds of its service restarting, not 3"
+seen=$(announcements 120 3 reboot_until_answering)
+[ "${seen}" -ge 3 ] || fail "the appliance sent ${seen} gratuitous ARP frames for ${ip} within 120 seconds of its container rebooting, not 3"
 
 step "remove the appliance"
 pct config "${ctid}" | grep -qx 'protection: 1' || fail "the installer left the appliance unprotected"

@@ -223,3 +223,26 @@ func TestAMarkedMachineSaysWhatHoldsItsReplacementBack(t *testing.T) {
 		t.Errorf("machines %+v", v.Machines)
 	}
 }
+
+// A machine whose VM runs without its address shows why in the row's waiting text, and one that is
+// ready shows nothing of it.
+func TestMachineRowSaysTheAddressIsUnavailable(t *testing.T) {
+	t.Parallel()
+	m := clusterMachine("one", "one-cp-0")
+	m.Status.Conditions = []metav1.Condition{
+		{Type: clusterv1.MachineReadyCondition, Status: metav1.ConditionFalse, Reason: "NotReady", Message: "Waiting for the node"},
+		{Type: provisioner.AddressUnavailableCondition, Status: metav1.ConditionTrue, Reason: provisioner.AddressInUseReason, Message: "192.0.2.9 is in use by another host (02:00:00:00:00:09)"},
+	}
+	if got := machineOf(m, "pve1").Waiting; got != "192.0.2.9 is in use by another host (02:00:00:00:00:09)" {
+		t.Errorf("waiting = %q", got)
+	}
+	m.Status.Conditions[0].Status = metav1.ConditionTrue
+	if got := machineOf(m, "pve1").Waiting; got != "" {
+		t.Errorf("a ready machine waits for %q", got)
+	}
+	m.Status.Conditions[0].Status = metav1.ConditionFalse
+	m.Status.Conditions[1].Status = metav1.ConditionFalse
+	if got := machineOf(m, "pve1").Waiting; got != "Waiting for the node" {
+		t.Errorf("waiting = %q", got)
+	}
+}

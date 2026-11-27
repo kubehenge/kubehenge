@@ -1127,7 +1127,6 @@ describe("create", () => {
     taken: [],
     certificates: newForm().certificates,
     namespaceLabels: "",
-    existingCertManager: false,
     dns01Token: "",
     eabKey: "",
     gitops: newForm().gitops,

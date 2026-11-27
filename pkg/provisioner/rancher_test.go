@@ -287,7 +287,7 @@ func TestSecondRancherIsNeverInstalled(t *testing.T) {
 	if got := RancherCluster([]clusterv1.Cluster{*second, *first}, "kubehenge-system"); got.Name != "zeta" {
 		t.Fatalf("Rancher's cluster is %s, not the one created first", got.Name)
 	}
-	r, kube := newReconciler(t, &fakeCloud{}, first, second)
+	r, kube := newReconciler(t, &fakeCloud{}, first, second, readyCertManager(first), readyCertManager(second))
 	r.Remotes = &Remotes{byCluster: map[string]remote{}}
 	for _, c := range []*clusterv1.Cluster{first, second} {
 		r.Remotes.byCluster[remoteKey(c)] = remote{client: fake.NewClientBuilder().WithScheme(remoteScheme).Build(), until: time.Now().Add(time.Hour)}

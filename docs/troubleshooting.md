@@ -40,7 +40,18 @@ For more in the journal, add `KUBEHENGE_LOG_LEVEL=debug` to `/etc/kubehenge/appl
   - Each run is a Job of the CronJob of that name. Read the full run with `kubectl -n kubehenge-system logs job/<name>`.
   - "no API token" means the Secret `kubehenge-template-builder` is missing. A management cluster installed from the chart alone needs it made, or `templateRefresh.enabled` set to false.
 - **The last upgrade** shows on the Administration page, and with `kubehenge appliance upgrades` in the appliance's shell ([upgrading.md](upgrading.md#from-the-appliances-shell)). The updater keeps it in `/var/lib/kubehenge-update/status.json`.
-- **Whether the interface serves.** `pct exec <ctid> -- kubehenge appliance health` runs the upgrades' check. It passes when the interface answers over HTTPS within 2 minutes, then runs 20 seconds without a restart.
+- **Whether the interface serves.** `pct exec <ctid> -- kubehenge appliance health` runs the upgrades' check. It passes when the interface answers over HTTPS within 2 minutes on the expected certificate, then stays up for 20 seconds. It shows each stage on standard error, with the time left, and prints the verdict on standard output:
+
+  ```text
+  Connecting to 127.0.0.1:443, waiting up to 2 min
+  Certificate matches /etc/kubehenge/tls.crt
+  Answered after 4 s
+  Staying up for 20 s
+  Stayed up for 20 s
+  Healthy: Kubehenge 0.5.7 answers on 127.0.0.1:443
+  ```
+
+  A failure names the cause and one step, such as `not healthy: the interface at 127.0.0.1:443 did not answer within 2 min: ...`. `--quiet` prints nothing, for scripts, and `--json` prints the verdict as one object. The exit status is 0 only when the interface is healthy.
 - **For a monitor.** `https://<appliance>/healthz` answers `ok` without a sign-in.
 
 ### The management cluster
@@ -244,9 +255,9 @@ A run needs these:
 | --- | --- |
 | "The management cluster's nodes have no IPv6 address, so they cannot reach the Proxmox VE API at …" | The appliance reaches the API at an IPv6 address, often because [the certificate lacks the IPv4 one](install.md#an-address-the-certificate-lacks). Give the nodes IPv6 addresses, or move the appliance to an IPv4 address or name the certificate lists. The same holds for IPv4 and an IPv6-only cluster. |
 | `x509: certificate is valid for …, not …` in OpenTofu's, capmox's or the cloud controller manager's output | With the Terraform/OpenTofu module, `proxmox_endpoint` names an address the API's certificate lacks. Use a name or address it lists, or [have it list yours](install.md#an-address-the-certificate-lacks). |
-| "Site CA: … is missing", "… expired on …", "… is signed with …", "… is no CA", "… is not for servers", "… is signed by a new …" | The appliance read the chain a host presents, and the nodes would refuse it. The message names the hosts and the certificate that breaks the chain. Paste the missing certificate or the device's new root, renew the expired one, or reissue it on the device. A message that opens with "Proxy certificate:" is the same fault in a chain checked against the proxy's CA. A host that did not answer, or that the proxy would not reach, is listed in the run's log as not checked. A run that changes neither the Site CA nor the proxy's certificate keeps the last run's certificates and shows the fault as a warning. |
-| "… encodes its issuer's name … differently" | A certificate names its intermediate in other bytes than the intermediate's own name. The Site CA only ever holds roots, so reissue that certificate on the device. |
-| "Node … rejected the certificate … presents, issued by …" | A node's log holds an `x509` error for that host. The Site CA does not cover the issuer shown. Check that the Site CA holds the root of the device that signs for the host, then apply again. |
+| "Site CA: … Chain ends at …", "… Add … to the Site CA", "… Have the device send …", "… expired on …", "… is signed with …", "… is no CA", "… is not for servers", "… is signed by a new …" | The appliance read the chain a host presents, and the nodes would refuse it. The message names the hosts and the certificate that breaks the chain. "Chain ends at" names a root the host presents and the Site CA lacks, with its SHA-256 fingerprint. The check trusts only the public roots the nodes ship with and the Site CA, so a root your organisation installed in the appliance container still counts as missing. Setup offers an **Add** button beside the field for each such root. `kubehenge appliance settings set --add-missing-roots` adds them, and `POST /api/setup/check` and a refused save return them in `missingRoots`. "Add … to the Site CA" names an issuer that neither the host nor the Site CA holds: a root or an intermediate the device leaves out. Adding either works. "Have the device send …" names an intermediate between the host's certificate and a root the Site CA holds. A chain that leads to a public root never gets this advice, and its message names the fault in the chain, such as "is not for servers". Add what the message names, paste the device's new root, renew the expired certificate, or reissue it on the device. A message that opens with "Proxy certificate:" is the same fault in a chain checked against the proxy's CA. A host that did not answer, or that the proxy would not reach, is listed in the run's log as not checked. A run that changes neither the Site CA nor the proxy's certificate keeps the last run's certificates and shows the fault as a warning. |
+| "… encodes its issuer's name … differently" | A certificate names its intermediate in other bytes than the intermediate's own name. Reissue that certificate on the device. |
+| "Node … refused …'s certificate" | A node's log holds an `x509` error for that host. "Add its root" names, with its fingerprint, the self-signed root the host presents that none of the public roots, the Site CA or the proxy's CA holds. "Signed by a new …" names a root that no longer signs, as after the device made its root again. Paste the new one. "Check the Site CA" means the appliance found no root to add. The node may meet another chain than the one the appliance reads, or lack the saved Site CA. A line without Site CA advice gives Go's reason, such as an expired certificate. Apply again once it is fixed. |
 | "Bridge … has MTU …" | The MTU is above the bridge's. Its larger frames never pass. Use the bridge's MTU or less, or raise the bridge's under System, Network. |
 | "context deadline exceeded" for a `helm_release` | The release's pods did not get ready in time. Under "What the management cluster's pods wait for", the log names each pod and why, such as too little memory on the nodes. |
 | "The management cluster is being applied or removed" or "the appliance is being upgraded" | A run is going on. Wait for that to finish. |
@@ -821,12 +832,31 @@ Changes that never apply mean the window never opens. Check the `upgrades` varia
 
 ### An add-on is not installed over an existing install
 
-The Cluster has the condition `AddonConflict`. The add-on's HelmChartProxy does not exist. The message names the custom resource definition the cluster already holds, which no Kubehenge release owns. Helm refuses to install over it.
+The Cluster has the condition `AddonConflict` with the reason `CRDsExist`. The add-on's HelmChartProxy does not exist. The message names the custom resource definition the cluster already holds, which no Kubehenge release owns. Helm refuses to install over it.
 
-- **cert-manager.** Create the cluster with `useExisting.certManager`, which uses yours, or remove yours first. A cluster that exists cannot switch, since removing Kubehenge's cert-manager deletes the definitions and with them every certificate.
+- **cert-manager.** A cert-manager of the cluster's own is used when it works ([clusters.md](clusters.md#a-cert-manager-the-cluster-runs-already)). The message says what does not work and names the add-ons that wait. That is definitions without a controller, a controller outside the `cert-manager` namespace, a controller or webhook that is not Available, a version older than v1.15.0 or one that cannot be read, or cluster issuers' Secrets outside `cert-manager`. A controller Deployment with no definitions gives the reason `DeploymentExists`. Make it work, or remove it. Kubehenge's own release labels its objects `kubehenge.dev/addon=cert-manager`. The reason `SettingsNotApplied` names the certificates settings that a cert-manager of the cluster's own does not get. Set them on it.
 - **Kyverno and monitoring.** Remove the cluster's own install, or switch the add-on off.
 
 `kubectl get crd <name> -o yaml` shows who owns a definition in its `meta.helm.sh/release-name` annotation. Kubehenge installs the add-on on its next look, within ten minutes, once the definition is gone or is its own. [clusters.md](clusters.md#installs-that-collide) lists the definitions it checks.
+
+### Add-ons wait for cert-manager
+
+Rancher, monitoring and the logs add-on install only once Kubehenge's cert-manager is deployed, where the cluster runs no working cert-manager of its own. Until then the Cluster has the condition `AddonsWaiting`, and the **Health** page lists it. The message names the add-ons that wait and what cert-manager waits for.
+
+| Reason | Cause and fix |
+| --- | --- |
+| `WaitingForCertManager` | cert-manager is installing, waits for the cluster's Gateway API definitions, or waits until the cluster can be read for a cert-manager of its own. On RKE2 and k3s the Gateway API definitions come from the chart `rke2-traefik-crd` or `traefik-crd`. A wait for the read clears once the cluster's API answers. The add-ons follow once cert-manager is deployed. If cert-manager's install fails, `kubectl -n <namespace> get helmreleaseproxies` in the management cluster gives Helm's error. |
+| `GatewayAPIMissing` | No Gateway API definitions are recorded 10 minutes after the control plane came up. If the message says the chart has not deployed, read its install in the cluster: `kubectl -n kube-system logs job/helm-install-rke2-traefik-crd`, or `helm-install-traefik-crd` on k3s. If the chart is deployed, check that `kubectl get crd gateways.gateway.networking.k8s.io` answers in the cluster, and read the controller's log. |
+
+A Helm error "no matches for kind … cert-manager.io" in an add-on's message means the cluster lacks cert-manager's definitions. The add-on installs once they exist.
+
+### Add-ons wait for a volume
+
+A claim of monitoring's Prometheus or Alertmanager, or of the logs add-on's Loki, stays Pending because the CSI plugin cannot make its volume. The Cluster has the condition `AddonsWaiting` with the reason `VolumeMissing`, and the **Health** page lists it. Each line reads `<add-on> has no volume: <reason>`, and goes once the claim is bound.
+
+- **The claim's event**, in `kubectl describe pvc -n <namespace> <claim>`, gives the plugin's own words. For a storage the cluster's token cannot see, the default release says only `failed to get proxmox storage config: not authorized to access endpoint` or `failed to get proxmox storage config: not found`.
+- **The cluster's line** names the cause for those two: the storage, and `Datastore.Audit` on `/storage/<storage>`, which the token needs to see it. Check that the cluster's `storage` variable names a storage that exists, and that the cluster's token holds that privilege there.
+- **Any other reason** is the plugin's, as the claim's event gives it.
 
 ### An admission policy denies an add-on
 
@@ -915,6 +945,10 @@ Every 15 seconds the controller checks the VMs of joined machines and the cluste
 
 A warning event of the condition's name records each start and change. `VMsRunning` and `StorageFreed` record the end.
 
+- **`AddressUnavailable`**, set on a Machine rather than the cluster, means its VM ran for 5 minutes since it started without its node joining and lacks the address it was given.
+  - Another host on the network holds the address, so the VM's network manager refuses it. The message names that host's hardware address where the node's boot log has it.
+  - The Machines row shows the same text. Free the address or replace the machine with another range. The condition goes once the VM has its address or its node joins.
+  - The controller reads the VM's addresses through its guest agent once, and again every 5 minutes while the condition stays. It needs `node_boot_logs`.
 - **`VMsNotRunning`** (**VM disk error**, **VM crashed**, **VM stopped** or **VM paused**) means a VM has not run for 3 minutes. The message names each machine, its VM and node, with the worst reason.
   - Suspend-mode backups, migrations, reboots and locks for a backup, migration, snapshot or clone do not count.
   - `IOError` means QEMU paused the VM after a failed disk write, usually on a full storage. Free space, or fix the disk, then resume the VM (`qm resume <vmid>`).

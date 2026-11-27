@@ -72,6 +72,11 @@ metadata:
     # Sys.Audit on /.
     kubehenge.dev/sys-audit: "true"
     {{- end }}
+    {{- if .Values.managementEndpoint }}
+    # Tells the interface to offer the autoscaler's placement on the cluster's control planes, which
+    # reach the management cluster at managementEndpoint.
+    kubehenge.dev/management-endpoint: "true"
+    {{- end }}
     {{- include "kubehenge.etcdRestore" . | nindent 4 }}
 spec:
   infrastructure:

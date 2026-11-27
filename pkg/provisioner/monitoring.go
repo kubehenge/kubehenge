@@ -364,7 +364,7 @@ func metricsManifests(distribution templates.Distribution, proxy Image, addons *
 }
 
 func issuer(name string, spec map[string]any) map[string]any {
-	return map[string]any{apiVersionKey: certManagerAPI, "kind": clusterIssuerKind, "metadata": map[string]any{"name": name}, "spec": spec}
+	return map[string]any{apiVersionKey: certManagerAPI, "kind": clusterIssuerKind, "metadata": map[string]any{"name": name, labelsKey: servedBy()}, "spec": spec}
 }
 
 // certificate is a cert-manager Certificate of a key of its own, in a Secret of its own name.
@@ -374,7 +374,7 @@ func certificate(namespace, name, issuer string, spec map[string]any) map[string
 	spec["issuerRef"] = map[string]any{"kind": clusterIssuerKind, "name": issuer}
 	return map[string]any{
 		apiVersionKey: certManagerAPI, "kind": certificateKind,
-		"metadata": map[string]any{"name": name, "namespace": namespace}, "spec": spec,
+		"metadata": map[string]any{"name": name, "namespace": namespace, labelsKey: servedBy()}, "spec": spec,
 	}
 }
 

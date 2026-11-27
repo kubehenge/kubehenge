@@ -29,8 +29,8 @@ import {
   BreakableText,
   Detail,
   Dialog,
-  ErrorBox,
   Field,
+  ReadError,
   Status,
   abnormal,
   age,
@@ -1192,10 +1192,11 @@ function LogsDialog({
 
 // PodLog follows a container's last lines while its dialog is open, as a crash loop writes new ones.
 function PodLog({ cluster, pod, container }: { cluster: ClusterRef; pod: UnwellPod; container: string }): JSX.Element {
-  const { data: logs, error } = usePoll((): Promise<PodLogs> => api.podLogs(cluster, pod, container), pollUnwell);
+  const read = usePoll((): Promise<PodLogs> => api.podLogs(cluster, pod, container), pollUnwell);
+  const { data: logs, error } = read;
   return (
     <>
-      <ErrorBox message={error} />
+      <ReadError read={read} />
       {logs === undefined && !filled(error) && <Skeleton rows={8} />}
       {logs?.previous === true && <p className="muted">Previous run</p>}
       {logs !== undefined && (
@@ -1213,12 +1214,13 @@ function PodLog({ cluster, pod, container }: { cluster: ClusterRef; pod: UnwellP
  */
 export function HealthView({ cluster: c, headlamp }: { cluster: Cluster; headlamp?: string | undefined }): JSX.Element {
   const ref = { namespace: c.namespace, name: c.name };
-  const { data: h, error, stale } = useClusterHealth(ref);
+  const read = useClusterHealth(ref);
+  const { data: h, error, stale } = read;
   const [logsOf, setLogsOf] = useState<UnwellPod>();
   if (!h) {
     return (
       <div className="box">
-        <ErrorBox message={error} />
+        <ReadError read={read} />
         {!filled(error) && <Skeleton rows={6} shape="tiles" />}
       </div>
     );
@@ -1231,7 +1233,7 @@ export function HealthView({ cluster: c, headlamp }: { cluster: Cluster; headlam
     <>
       <div className="box">
         <Verdict cluster={c} health={h} stale={stale} />
-        <ErrorBox message={error} />
+        <ReadError read={read} />
         <Tiles health={h} stale={stale} />
       </div>
       <NeedsAttention health={h} actions={actions} cluster={ref} />

@@ -42,6 +42,9 @@ func machineOf(m *clusterv1.Machine, proxmoxNode string) machineView {
 	if ready := meta.FindStatusCondition(m.Status.Conditions, clusterv1.MachineReadyCondition); ready != nil && !mv.Ready {
 		mv.Waiting = ready.Message
 	}
+	if unavailable := meta.FindStatusCondition(m.Status.Conditions, provisioner.AddressUnavailableCondition); unavailable != nil && unavailable.Status == metav1.ConditionTrue && !mv.Ready {
+		mv.Waiting = unavailable.Message
+	}
 	if _, marked := m.Annotations[clusterv1.RemediateMachineAnnotation]; marked {
 		mv.Replacing = true
 		// What holds the replacement back, such as a control plane that would lose etcd's majority.

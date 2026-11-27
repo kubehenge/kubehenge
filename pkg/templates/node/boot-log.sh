@@ -27,7 +27,7 @@ journal() {
 }
 {
     journal cloud-init --unit 'cloud-init*' --unit cloud-config --unit cloud-final
-    for unit in containerd kubelet rke2-server rke2-agent k3s k3s-agent; do
+    for unit in NetworkManager containerd kubelet rke2-server rke2-agent k3s k3s-agent; do
         if systemctl cat "${unit}.service" > /dev/null 2>&1; then
             journal "${unit}" --unit "${unit}"
         fi

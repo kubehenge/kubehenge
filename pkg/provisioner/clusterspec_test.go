@@ -9,6 +9,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -28,6 +29,7 @@ func TestClusterSpecRoundTripsAndKeepsNoSecretValue(t *testing.T) {
 		&corev1.Secret{Name: "web-token", Namespace: "team-a", Labels: labels, Data: map[string][]byte{"token": []byte("hunter2")}},
 		&corev1.ConfigMap{Name: "web-settings", Namespace: "team-a", Labels: labels, Data: map[string]string{"a": "b"}},
 		&corev1.ConfigMap{Name: "other", Namespace: "team-a"},
+		&corev1.ConfigMap{Name: SpecSecretsConfigMap("web"), Namespace: "team-a", Data: map[string]string{specSecretsKey: "web-token"}},
 	).Build()
 	objects, err := ClusterSpecObjects(context.Background(), kube, c)
 	if err != nil {
@@ -130,6 +132,7 @@ func TestClusterSpecObjectsFollowTheClusterAndNotALabel(t *testing.T) {
 		secret("web-gitops", nil), secret("web-backup-keys", nil), secret("web-encryption", nil), secret("web-ingress-ca", nil),
 		secret("web.backup", nil), secret("web.dns01", nil), secret("web.gitops", nil), secret("web.oidc-client", nil),
 		secret("web-extra", map[string]string{ClusterSpecClusterLabel: "web"}),
+		&corev1.ConfigMap{Name: SpecSecretsConfigMap("web"), Namespace: "team-a", Data: map[string]string{specSecretsKey: "web-extra"}},
 		secret("web-kubeconfig", nil), secret("web-ca", nil), secret("web-sa", nil), secret("web-credentials", nil),
 		secret("kubehenge-backup", nil), secret("kubehenge-webhook", nil), secret("other-gitops", nil),
 	).Build()
@@ -163,5 +166,42 @@ func TestParseClusterSpecRefusesWhatIsNoCluster(t *testing.T) {
 		if _, err := ParseClusterSpec([]byte(raw)); err == nil {
 			t.Errorf("%q was taken for a cluster", raw)
 		}
+	}
+}
+
+func TestSpecSecretsRecordsTheLabelledSecretsOfEachCluster(t *testing.T) {
+	t.Parallel()
+	c := cluster()
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := clusterv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	labelled := func(name, cluster string) *corev1.Secret {
+		return &corev1.Secret{Name: name, Namespace: "team-a", Labels: map[string]string{ClusterSpecClusterLabel: cluster}}
+	}
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(c, labelled("web-b", "web"), labelled("web-a", "web"), labelled("other-a", "other")).Build()
+	record := &SpecSecrets{Client: kube}
+	if err := record.RunOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	names, err := SpecSecretNames(t.Context(), kube, c)
+	if err != nil || strings.Join(names, " ") != "web-a web-b" {
+		t.Fatalf("recorded %q, %v", names, err)
+	}
+	// A label taken off goes from the record, and a cluster with none keeps an empty one.
+	if err = kube.Delete(t.Context(), labelled("web-a", "web")); err != nil {
+		t.Fatal(err)
+	}
+	if err = kube.Delete(t.Context(), labelled("web-b", "web")); err != nil {
+		t.Fatal(err)
+	}
+	if err = record.RunOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if names, err = SpecSecretNames(t.Context(), kube, c); err != nil || len(names) != 0 {
+		t.Fatalf("recorded %q after the Secrets went, %v", names, err)
 	}
 }

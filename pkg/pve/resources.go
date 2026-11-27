@@ -780,11 +780,12 @@ type listedGuest struct {
 // ApplianceID finds the appliance's own guest ID: the container tagged kubehenge, or guest hint,
 // whose network interface has one of the MAC addresses macs. A restore to another ID or a clone
 // leaves the ID the installer recorded behind. A copy restored beside it has the same MAC, so
-// hint is tried first.
-func (a *Accounts) ApplianceID(ctx context.Context, t *Ticket, hint int, macs []string) (int, error) {
+// hint is tried first. Beside the ID it gives the entries of the container's configuration that
+// are text, by their key, such as net0.
+func (a *Accounts) ApplianceID(ctx context.Context, t *Ticket, hint int, macs []string) (int, map[string]string, error) {
 	var guests []listedGuest
 	if err := a.get(ctx, t, "/cluster/resources?type=vm", &guests); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	if i := slices.IndexFunc(guests, func(g listedGuest) bool { return g.VMID == hint }); i > 0 {
 		guests[0], guests[i] = guests[i], guests[0]
@@ -799,16 +800,36 @@ func (a *Accounts) ApplianceID(ctx context.Context, t *Ticket, hint int, macs []
 			unread = err
 			continue
 		}
-		for key, v := range config {
-			if s, ok := v.(string); ok && strings.HasPrefix(key, "net") && hasMAC(s, macs) {
-				return g.VMID, nil
-			}
+		if entries := textEntries(config); cardHasMAC(entries, macs) {
+			return g.VMID, entries, nil
 		}
 	}
 	if unread != nil {
-		return 0, unread
+		return 0, nil, unread
 	}
-	return 0, ErrNoAppliance
+	return 0, nil, ErrNoAppliance
+}
+
+// textEntries are the entries of a guest's configuration whose values are text.
+func textEntries(config map[string]any) map[string]string {
+	entries := map[string]string{}
+	for key, v := range config {
+		if s, ok := v.(string); ok {
+			entries[key] = s
+		}
+	}
+	return entries
+}
+
+// cardHasMAC tells whether a network card among a container's configuration entries has one of
+// the MAC addresses.
+func cardHasMAC(entries map[string]string, macs []string) bool {
+	for key, s := range entries {
+		if strings.HasPrefix(key, "net") && hasMAC(s, macs) {
+			return true
+		}
+	}
+	return false
 }
 
 // hasMAC tells whether a container's network interface, as its configuration gives it

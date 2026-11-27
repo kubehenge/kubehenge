@@ -375,6 +375,9 @@ func newGitOpsWorkload(t *testing.T) *gitOpsWorkload {
 			w.mu.Lock()
 			defer w.mu.Unlock()
 			ul, ok := list.(*unstructured.UnstructuredList)
+			if _, claims := list.(*corev1.PersistentVolumeClaimList); claims {
+				return nil
+			}
 			if !ok {
 				return fmt.Errorf("listed %T", list)
 			}

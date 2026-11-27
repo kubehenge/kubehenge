@@ -46,6 +46,8 @@ func newRollout(t *testing.T, now time.Time, variables ...clusterv1.ClusterVaria
 	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(c).WithStatusSubresource(&clusterv1.Cluster{}).Build()
 	w := &rollout{t: t, kube: kube, cluster: c, now: now, addons: &Addons{Headlamp: Headlamp{Enabled: true}}}
 	w.r = &Reconciler{Client: kube, Charts: testCharts, Now: func() time.Time { return w.now }}
+	// Kubehenge installs cert-manager only once the cluster answers that it runs none.
+	w.inside()
 	return w
 }
 
@@ -195,6 +197,9 @@ func TestAddonSwitchedOnInsideAClosedWindowInstallsAtOnce(t *testing.T) {
 	w := newRollout(t, outsideWindow, variableJSON("upgrades", closedWindowPolicy))
 	w.apply()
 	w.addons.Monitoring.Enabled = true
+	// Monitoring installs once cert-manager, which it makes objects of, is deployed.
+	w.apply()
+	setCertManagerReady(t, w.kube, w.cluster)
 	if held := w.apply(); len(held) != 0 {
 		t.Fatalf("held %v", held)
 	}

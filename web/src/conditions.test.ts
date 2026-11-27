@@ -19,6 +19,7 @@ describe("the Health page's condition list", () => {
       "VMIDRangeFull",
       "FirewallInactive",
       "HARulesPending",
+      "AddonsWaiting",
     ];
     expect(marked(kubehenge, "True")).toStrictEqual(kubehenge.map(() => true));
     expect(marked(kubehenge, "False")).toStrictEqual(kubehenge.map(() => false));

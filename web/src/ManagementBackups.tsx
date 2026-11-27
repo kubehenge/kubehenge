@@ -11,6 +11,7 @@ import {
   Dialog,
   ErrorBox,
   Field,
+  ReadError,
   Status,
   age,
   bytes,
@@ -41,11 +42,9 @@ const recipientLines = (text: string): string[] =>
 // lists the snapshots there and restores one. The appliance does all of it through the nodes'
 // Talos API, so a restore works while the management cluster's API is down.
 export function ManagementBackups({ running }: { running: boolean }): JSX.Element {
-  const {
-    data: b,
-    error,
-    reload,
-  } = usePoll(api.managementBackups, (v) => (v?.taking === true ? pollRunning : pollIdle));
+  const read = usePoll(api.managementBackups, (v) => (v?.taking === true ? pollRunning : pollIdle));
+  const { data: b, error, reload } = read;
+  const noRead = error === undefined ? undefined : "Backups not read.";
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string>();
@@ -62,7 +61,7 @@ export function ManagementBackups({ running }: { running: boolean }): JSX.Elemen
     }
   };
   if (!b) {
-    return error === undefined ? <p className="loading">Loading…</p> : <ErrorBox message={error} />;
+    return error === undefined ? <p className="loading">Loading…</p> : <ReadError read={read} />;
   }
   return (
     <>
@@ -79,12 +78,13 @@ export function ManagementBackups({ running }: { running: boolean }): JSX.Elemen
           <NotSetUp backups={b} onSetUp={() => setEditing(true)} />
         ) : (
           <>
-            <Summary backups={b} settings={b.settings} />
+            <Summary backups={b} settings={b.settings} unread={noRead !== undefined} />
             <div className="actions">
               <button
                 type="button"
                 className="primary"
-                disabled={busy || b.taking === true}
+                disabled={busy || b.taking === true || noRead !== undefined}
+                title={noRead}
                 onClick={() => {
                   void act(api.takeManagementSnapshot);
                 }}
@@ -106,7 +106,9 @@ export function ManagementBackups({ running }: { running: boolean }): JSX.Elemen
             </div>
           </>
         )}
+        {b.settings !== undefined && noRead !== undefined && <p className="muted">{noRead}</p>}
         <ErrorBox message={actionError} />
+        <ReadError read={read} />
       </div>
       {b.settings !== undefined && <ExportBox backups={b} />}
       {b.settings !== undefined && <Snapshots running={running} />}
@@ -219,9 +221,18 @@ function NotSetUp({ backups: b, onSetUp }: { backups: Backups; onSetUp: () => vo
   );
 }
 
-function Summary({ backups: b, settings: s }: { backups: Backups; settings: ManagementBackupSettings }): JSX.Element {
+function Summary({
+  backups: b,
+  settings: s,
+  unread,
+}: {
+  backups: Backups;
+  settings: ManagementBackupSettings;
+  /** A later read failed, so that none was taken since is not known. */
+  unread: boolean;
+}): JSX.Element {
   const failed = b.error !== undefined && b.error !== "";
-  let last = <Status state="idle" text="None yet" />;
+  let last = <Status state="idle" text={unread ? "Unknown" : "None yet"} />;
   if (b.taking === true) {
     last = <Status state="progress" text="Taking" />;
   } else if (failed) {
@@ -259,14 +270,21 @@ function Summary({ backups: b, settings: s }: { backups: Backups; settings: Mana
 }
 
 function Snapshots({ running }: { running: boolean }): JSX.Element {
-  const { data: v, error } = usePoll(api.managementSnapshots, pollIdle);
+  const read = usePoll(api.managementSnapshots, pollIdle);
+  const { data: v, error } = read;
   const [restoring, setRestoring] = useState<EtcdSnapshot>();
   const [recreating, setRecreating] = useState<EtcdSnapshot>();
   const list = v?.snapshots ?? [];
+  // Nothing is listed yet: still reading, not read, or read and none taken.
+  let empty = "None yet.";
+  if (v === undefined) {
+    empty = error === undefined ? "Loading…" : "Unknown";
+  }
   return (
     <div className="box scroll">
       <h3>Snapshots in the target</h3>
-      <ErrorBox message={error ?? v?.error} />
+      <ReadError read={read} />
+      <ErrorBox message={v?.error} />
       <table className="grid stack">
         <thead>
           <tr>
@@ -282,7 +300,7 @@ function Snapshots({ running }: { running: boolean }): JSX.Element {
           {list.length === 0 && (
             <tr>
               <td colSpan={4} className="muted">
-                {v === undefined ? "Loading…" : "None yet."}
+                {empty}
               </td>
             </tr>
           )}

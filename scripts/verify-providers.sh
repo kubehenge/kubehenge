@@ -10,7 +10,8 @@
 #   scripts/verify-providers.sh
 set -eu
 
-versions=$(cd "$(dirname "$0")/.." && pwd)/management-cluster/versions.tf
+root=$(cd "$(dirname "$0")/.." && pwd)
+versions=${root}/management-cluster/versions.tf
 work=$(mktemp -d)
 trap 'rm -rf "${work}"' EXIT
 
@@ -27,13 +28,17 @@ block() {
 forks=$(block provider_repositories | sed -n 's|^ *\([a-z0-9_]*\) *= *"kubehenge/\([^"]*\)".*|\1 \2|p')
 [ -n "${forks}" ] || fail "${versions} names no provider from Kubehenge's forks"
 
+# One trusted root for every cosign and gh verify, so none dials Sigstore's TUF server.
+"${root}/pkg/templates/node/sigstore-root.sh" "${work}/trusted_root.json" || fail "could not fetch Sigstore's trust root"
+
 while read -r component repository; do
     version=$(block tested_versions | sed -n "s/^ *${component} *= *\"\([^\"]*\)\".*/\1/p")
     [ -n "${version}" ] || fail "no tested version of ${component}"
     workflow=kubehenge/${repository}/.github/workflows/release.yaml
     attested() {
         gh attestation verify "$1" --repo "kubehenge/${repository}" --signer-workflow "${workflow}" \
-            --source-ref "refs/tags/${version}" --deny-self-hosted-runners > /dev/null ||
+            --source-ref "refs/tags/${version}" --deny-self-hosted-runners \
+            --custom-trusted-root "${work}/trusted_root.json" > /dev/null ||
             fail "$1 carries no provenance of ${workflow} at ${version}"
     }
 
@@ -70,7 +75,7 @@ EOF
     grep -q "^ *image: ghcr.io/kubehenge/${repository}[:@].*${digest}\$" "${components}" ||
         fail "the components of kubehenge/${repository} ${version} do not name ${image}"
     attested "oci://ghcr.io/kubehenge/${repository}@${digest}"
-    cosign verify "ghcr.io/kubehenge/${repository}@${digest}" \
+    cosign verify "ghcr.io/kubehenge/${repository}@${digest}" --trusted-root "${work}/trusted_root.json" \
         --certificate-identity "https://github.com/${workflow}@refs/tags/${version}" \
         --certificate-oidc-issuer https://token.actions.githubusercontent.com > "${work}/cosign.log" 2>&1 || {
         cat "${work}/cosign.log" >&2

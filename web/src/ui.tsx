@@ -18,7 +18,7 @@ import {
 import { ApiError, api, referenceMark } from "./api";
 import { keepCache } from "./poll-cache";
 import { useStaging } from "./staging-context";
-import type { ChangeRequest, Cluster } from "./types";
+import type { ChangeRequest, Cluster, ClusterClass } from "./types";
 
 // minPassphrase is the fewest characters the appliance takes for the state passphrase.
 export const minPassphrase = 16;
@@ -175,6 +175,13 @@ export interface Kept<T> {
 
 /** pollCache is a cache of one kind of answer, for usePoll's kept. */
 export const pollCache = <T,>(): Map<string, T> => keepCache(new Map<string, T>());
+
+const classesCache = pollCache<ClusterClass[]>();
+
+/** useClasses reads the clusters' classes, one answer for every view that needs them. */
+export function useClasses(): Poll<ClusterClass[]> {
+  return usePoll(api.classes, pollIdle, { cache: classesCache, key: "" });
+}
 
 export function usePoll<T>(
   load: () => Promise<T>,
@@ -348,6 +355,7 @@ const negativePolarity = new Set([
   "ScalingDown",
   "UpgradeHeld",
   "AddonConflict",
+  "AddonsWaiting",
   "ControlPlaneRollStalled",
   "ControlPlaneQuorumLost",
   "DeletionStalled",
@@ -533,6 +541,150 @@ export function ErrorBox({ message }: { message?: string | undefined }): JSX.Ele
   );
 }
 
+// The en dash's code point, which stands for a count a failed read leaves unknown.
+const enDash = 0x20_13;
+
+/** unknownCount stands for a count that a failed read leaves unknown. */
+export const unknownCount = String.fromCodePoint(enDash);
+
+/**
+ * ReadError is a failed read's error with when it is tried again and a way to try now. Given when
+ * the values still shown were read, it marks them stale.
+ */
+export function ReadError({
+  read,
+  readAt,
+}: {
+  /** next is when a poll reads again by itself. A read made once has none, so only Try now is offered. */
+  read: { error: string | undefined; next?: () => number; reload: () => Promise<void> };
+  readAt?: string | undefined;
+}): JSX.Element | null {
+  if (read.error === undefined) {
+    return null;
+  }
+  return (
+    <div className="read-error">
+      <ErrorBox message={read.error} />
+      <div className="read-error-retry">
+        {readAt !== undefined && (
+          <span className="hint-warning" title={new Date(readAt).toLocaleString()}>
+            Stale, read at {new Date(readAt).toLocaleTimeString()}
+          </span>
+        )}
+        {read.next === undefined ? (
+          <button
+            type="button"
+            onClick={() => {
+              void read.reload();
+            }}
+          >
+            Try now
+          </button>
+        ) : (
+          <RetryIn
+            next={read.next}
+            onRetry={() => {
+              void read.reload();
+            }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Once is a read made once, and again on request, for what a form needs one answer of rather than a poll. */
+export interface Once<T> {
+  data: T | undefined;
+  error: string | undefined;
+  reload: () => Promise<void>;
+}
+
+/**
+ * useOnce reads once, and again when reload is called. An answer to an earlier ask is dropped, so a
+ * slow one cannot replace a later one.
+ */
+export function useOnce<T>(load: () => Promise<T>): Once<T> {
+  const [data, setData] = useState<T>();
+  const [error, setError] = useState<string>();
+  const loadRef = useRef(load);
+  useLayoutEffect(() => {
+    loadRef.current = load;
+  });
+  const asked = useRef(0);
+  const reload = useCallback(async () => {
+    const n = ++asked.current;
+    try {
+      const d = await loadRef.current();
+      if (n === asked.current) {
+        setData(d);
+        setError(undefined);
+      }
+    } catch (err) {
+      if (n === asked.current) {
+        setError(errorMessage(err));
+      }
+    }
+  }, []);
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+  return { data, error, reload };
+}
+
+/**
+ * ReadDialog is a dialog whose form is made from what a read answered. Until it answers, the
+ * dialog shows the read's loading look, or its error with a retry, and offers no save, so that no
+ * form starts from a value it had to guess.
+ */
+export function ReadDialog<T>({
+  title,
+  read,
+  onClose,
+  children,
+}: {
+  title: string;
+  read: Pick<Poll<T>, "data" | "error" | "reload"> & { next?: () => number };
+  onClose: () => void;
+  children: (data: T) => JSX.Element;
+}): JSX.Element {
+  if (read.data !== undefined) {
+    return children(read.data);
+  }
+  return (
+    <Dialog
+      title={title}
+      onClose={onClose}
+      actions={
+        <button type="button" onClick={onClose}>
+          Cancel
+        </button>
+      }
+    >
+      {read.error === undefined ? <Skeleton rows={3} /> : <ReadError read={read} />}
+    </Dialog>
+  );
+}
+
+/**
+ * ReadSection is a part of a page made from what a read answered: the read's loading look until it
+ * answers, its error with a retry when it fails, and what it shows once it has.
+ */
+export function ReadSection<T>({
+  read,
+  children,
+}: {
+  read: Pick<Poll<T>, "data" | "error" | "reload" | "next">;
+  children: (data: T) => ReactNode;
+}): JSX.Element {
+  return (
+    <>
+      <ReadError read={read} />
+      {read.data === undefined ? read.error === undefined && <Skeleton rows={4} /> : children(read.data)}
+    </>
+  );
+}
+
 /** ErrorText is an error's message as a sentence, with its reference set apart under it. */
 export function ErrorText({ message }: { message: string }): JSX.Element {
   const at = message.lastIndexOf(referenceMark);
@@ -580,31 +732,10 @@ export interface SiteZone {
   inEffect: string;
 }
 
-/**
- * useSiteZone reads the site time zone from the server. It is undefined until the server has
- * answered, so that a form never starts in a zone it has to leave.
- */
-export function useSiteZone(): SiteZone | undefined {
-  const [zone, setZone] = useState<SiteZone>();
-  useEffect(() => {
-    let current = true;
-    async function load(): Promise<void> {
-      let zoneRead = "";
-      try {
-        zoneRead = siteZoneOf(await api.classes());
-      } catch {
-        // The browser's zone serves where the classes cannot be read.
-      }
-      if (current) {
-        setZone({ start: zoneRead || browserZone(), inEffect: zoneRead || "UTC" });
-      }
-    }
-    void load();
-    return () => {
-      current = false;
-    };
-  }, []);
-  return zone;
+/** siteZone is the site time zone the classes carry, for schedules. */
+export function siteZone(classes: ClusterClass[]): SiteZone {
+  const zone = siteZoneOf(classes);
+  return { start: zone || browserZone(), inEffect: zone || "UTC" };
 }
 
 /** timeZones lists the IANA time zones, with UTC and the current one, which the browser may not list. */

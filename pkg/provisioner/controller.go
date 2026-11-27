@@ -171,6 +171,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 func (r *Reconciler) reconcileCluster(ctx context.Context, cluster *clusterv1.Cluster) (ctrl.Result, error) {
+	if err := r.dropRetiredVariables(ctx, cluster); err != nil {
+		return ctrl.Result{}, err
+	}
 	if !cluster.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, cluster)
 	}
@@ -223,7 +226,12 @@ func (r *Reconciler) reconcileAddons(ctx context.Context, cluster *clusterv1.Clu
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if err = errors.Join(r.recordAddonChanges(ctx, cluster, &addons), r.recordAddonConflicts(ctx, cluster, addons.conflicts)); err != nil {
+	volumeWaits := r.addonVolumeWaits(ctx, cluster, &addons)
+	conflicts, err := r.recordAddonsWaiting(ctx, cluster, &addons, volumeWaits)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if err = errors.Join(r.recordAddonChanges(ctx, cluster, &addons), r.recordAddonConflicts(ctx, cluster, conflicts)); err != nil {
 		return ctrl.Result{}, err
 	}
 	bgpHeld, err := r.reconcileKubeVip(ctx, cluster, addons.LoadBalancer)
@@ -242,7 +250,7 @@ func (r *Reconciler) reconcileAddons(ctx context.Context, cluster *clusterv1.Clu
 		return ctrl.Result{}, err
 	}
 	// Nothing the waits are on changes the Cluster, so only a requeue looks again.
-	if addonWaiting || othersWaiting {
+	if addonWaiting || othersWaiting || len(volumeWaits) > 0 {
 		return ctrl.Result{RequeueAfter: waitInterval}, nil
 	}
 	return ctrl.Result{RequeueAfter: r.lookAgainIn(&addons, siteCAAgain)}, nil
@@ -263,7 +271,7 @@ func (r *Reconciler) lookAgainIn(addons *Addons, siteCAAgain time.Duration) time
 // afterTheRest does what waits on other clusters or on the workload cluster's own API, however long
 // that takes, so that nothing else of this cluster waits with it: removing Rancher, which waits on
 // every cluster registered with it, removing Istio, which waits on the cluster's workloads,
-// removing volume snapshots, which deletes the CSI plugin's proxy in the cluster, linking the
+// removing volume snapshots, which deletes their classes and controller in the cluster, linking the
 // cluster's Cluster Mesh peers, what its certificates and its load balancer need in the cluster,
 // its GitOps engine's repository and removal, and the target its RKE2 or k3s servers upload their
 // own etcd snapshots to. It reports whether any of it waits.
@@ -275,7 +283,7 @@ func (r *Reconciler) afterTheRest(ctx context.Context, cluster *clusterv1.Cluste
 	rancherWaiting := false
 	if !addons.Rancher.Install && rancherRefused == "" {
 		var with []string
-		if !addons.Monitoring.Enabled && !addons.Certificates.on() {
+		if !addons.certManager() {
 			with = append(with, certManagerProxy(cluster))
 		}
 		if rancherWaiting, err = r.removeRancherWhenFree(ctx, cluster, with...); err != nil {
@@ -699,6 +707,8 @@ func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluste
 		return false, err
 	}
 	addons.rollout, addons.pending, addons.conflicts = gate, nil, nil
+	addons.certManagerConflict, addons.certManagerWaiting = addonConflict{}, nil
+	addons.clusterCertManager, addons.certManagerUnread = false, false
 	labels := proxyNamespaces(proxies)
 	labelsWait, err := r.applyNamespaceLabels(ctx, cluster, labels, addons.NamespaceLabels)
 	if err != nil {
@@ -718,6 +728,9 @@ func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluste
 		}
 		if state != proxyReady {
 			continue
+		}
+		if addons.clusterCertManager && slices.Contains(certManagerUsers(cluster), p.GetName()) {
+			servedByClusterCertManager(p)
 		}
 		held, err := r.applyProxy(ctx, cluster, p, &gate)
 		if err != nil {
@@ -740,13 +753,26 @@ const (
 	proxyConflicts
 )
 
-// proxyState decides what the proxy does. A conflict is recorded in addons.conflicts.
+// proxyState decides what the proxy does. A conflict is recorded in addons.conflicts, cert-manager's
+// in addons.certManagerConflict. cert-manager is left out too where the cluster's own works.
 func (r *Reconciler) proxyState(ctx context.Context, cluster *clusterv1.Cluster, p *unstructured.Unstructured, addons *Addons) (proxyStates, error) {
-	conflict, err := r.conflictOf(ctx, cluster, p, addons)
+	conflict, err := r.conflictOf(ctx, cluster, p)
 	switch {
 	case err != nil:
 		return proxyReady, err
-	case conflict != "":
+	case conflict.unread:
+		addons.certManagerUnread = true
+		return proxyWaits, nil
+	case conflict.clusterOwn:
+		addons.clusterCertManager = true
+		if settings := certificatesSettings(addons); settings != "" {
+			addons.conflicts = append(addons.conflicts, addonConflict{reason: AddonConflictSettingsReason, message: settings})
+		}
+		return proxyConflicts, nil
+	case conflict.message != "" && p.GetName() == certManagerProxy(cluster):
+		addons.certManagerConflict = conflict
+		return proxyConflicts, nil
+	case conflict.message != "":
 		addons.conflicts = append(addons.conflicts, conflict)
 		return proxyConflicts, nil
 	}
@@ -759,6 +785,11 @@ func (r *Reconciler) proxyState(ctx context.Context, cluster *clusterv1.Cluster,
 
 // chartWaits reports whether the proxy named waits for what its chart needs first.
 func (r *Reconciler) chartWaits(ctx context.Context, cluster *clusterv1.Cluster, name string, addons *Addons) (bool, error) {
+	if slices.Contains(certManagerUsers(cluster), name) {
+		if waits, err := r.certManagerWaits(ctx, cluster, name, addons); waits || err != nil {
+			return waits, err
+		}
+	}
 	var wait func(context.Context, *clusterv1.Cluster) (bool, error)
 	switch name {
 	case kyvernoPoliciesProxy(cluster):

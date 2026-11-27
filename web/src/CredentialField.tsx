@@ -2,7 +2,7 @@ import { useEffect, useState, type JSX, type KeyboardEvent, type ReactNode } fro
 
 import { api } from "./api";
 import type { ClusterRef, StoredCredential } from "./types";
-import { ErrorBox, Field, Skeleton, errorMessage, filled } from "./ui";
+import { ErrorBox, Field, ReadError, Skeleton, errorMessage, filled, pollIdle, usePoll } from "./ui";
 
 /** One value a credential holds. */
 export interface CredentialKey {
@@ -29,10 +29,8 @@ const refOf = (namespace?: string, name?: string): ClusterRef | undefined =>
   namespace === undefined || name === undefined ? undefined : { namespace, name };
 
 /**
- * CredentialField stores, replaces or removes one credential: a cluster's, or with no cluster, the
- * one for every cluster. What is typed goes to the server and never comes back. The field shows
- * only whether one is set, when and by whom, and offers changes only to those who may make them.
- * It is no form of its own, so it sits in a dialog's form without submitting it.
+ * CredentialField is the field of one credential. A field whose purpose or cluster changes, as an
+ * output's does while its name is typed, is another credential's, so it reads that one at once.
  */
 export function CredentialField({
   label,
@@ -41,7 +39,23 @@ export function CredentialField({
   keys,
   hint,
   status,
-}: {
+  onRead,
+}: CredentialFieldProps): JSX.Element {
+  return (
+    <StoredCredentialField
+      key={`${purpose}/${cluster?.namespace ?? ""}/${cluster?.name ?? ""}`}
+      label={label}
+      purpose={purpose}
+      cluster={cluster}
+      keys={keys}
+      hint={hint}
+      status={status}
+      onRead={onRead}
+    />
+  );
+}
+
+interface CredentialFieldProps {
   label: string;
   purpose: string;
   cluster?: ClusterRef | undefined;
@@ -49,10 +63,29 @@ export function CredentialField({
   hint?: ReactNode;
   /** What became of the credential's last use, shown while one is set. */
   status?: ReactNode;
-}): JSX.Element {
+  /** Told whether the stored credential was read, for actions that need it. */
+  onRead?: ((read: boolean) => void) | undefined;
+}
+
+/**
+ * StoredCredentialField stores, replaces or removes one credential: a cluster's, or with no cluster, the
+ * one for every cluster. What is typed goes to the server and never comes back. The field shows
+ * only whether one is set, when and by whom, and offers changes only to those who may make them.
+ * It is no form of its own, so it sits in a dialog's form without submitting it.
+ */
+function StoredCredentialField({
+  label,
+  purpose,
+  cluster,
+  keys,
+  hint,
+  status,
+  onRead,
+}: CredentialFieldProps): JSX.Element {
   const namespace = cluster?.namespace;
   const name = cluster?.name;
-  const [stored, setStored] = useState<StoredCredential>();
+  const read = usePoll(async () => api.storedCredential(purpose, refOf(namespace, name)), pollIdle);
+  const { data: stored, error: readError, put } = read;
   // The values being typed. None while the field only shows what is stored.
   const [values, setValues] = useState<Record<string, string>>();
   const [confirming, setConfirming] = useState(false);
@@ -60,24 +93,12 @@ export function CredentialField({
   const [error, setError] = useState<string>();
 
   useEffect(() => {
-    let current = true;
-    async function load(): Promise<void> {
-      try {
-        const c = await api.storedCredential(purpose, refOf(namespace, name));
-        if (current) {
-          setStored(c);
-        }
-      } catch (err) {
-        if (current) {
-          setError(errorMessage(err));
-        }
-      }
+    if (readError !== undefined) {
+      onRead?.(false);
+    } else if (stored !== undefined) {
+      onRead?.(true);
     }
-    void load();
-    return () => {
-      current = false;
-    };
-  }, [purpose, namespace, name]);
+  }, [stored, readError, onRead]);
 
   const complete = values !== undefined && keys.every((k) => k.optional === true || filled(values[k.key]));
 
@@ -85,7 +106,8 @@ export function CredentialField({
     setBusy(true);
     setError(undefined);
     try {
-      setStored(await step());
+      const now = await step();
+      put(() => now);
       // What was typed does not linger in the page once the server has it.
       setValues(undefined);
       setConfirming(false);
@@ -122,7 +144,7 @@ export function CredentialField({
     <fieldset className="group">
       <legend>{label}</legend>
       {hint !== undefined && <p className="hint">{hint}</p>}
-      {stored === undefined && !filled(error) && <Skeleton rows={1} />}
+      {stored === undefined && !filled(readError) && <Skeleton rows={1} />}
       {stored !== undefined && <p className="muted">{setText(stored)}</p>}
       {stored?.set === true && status}
       {values !== undefined && (
@@ -183,6 +205,7 @@ export function CredentialField({
           </button>
         </div>
       )}
+      <ReadError read={read} />
       <ErrorBox message={error} />
     </fieldset>
   );

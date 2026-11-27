@@ -27,6 +27,8 @@ import {
   Detail,
   Dialog,
   ErrorBox,
+  ReadError,
+  ReadSection,
   Said,
   Status,
   Field,
@@ -297,16 +299,12 @@ export function ClusterDetail({
   headlamp?: number | undefined;
 }): JSX.Element {
   const { listed, relist } = useListed(namespace, name);
-  const {
-    data: c,
-    error,
-    errorStatus,
-    reload,
-  } = usePoll(
+  const read = usePoll(
     () => api.cluster(namespace, name),
     (shown) => (shown && settled(shown) ? pollIdle : pollChanging),
     { cache: clusterCache, key: `${namespace}/${name}`, seed: listed },
   );
+  const { data: c, error, errorStatus, reload } = read;
   useClusterChanges(() => {
     void reload();
   });
@@ -347,7 +345,7 @@ export function ClusterDetail({
   if (!c) {
     return (
       <section className="panel">
-        <ErrorBox message={error} />
+        <ReadError read={read} />
         {!filled(error) && <Skeleton rows={6} />}
       </section>
     );
@@ -373,7 +371,7 @@ export function ClusterDetail({
         <div className="page-head">
           <div className="page-title">
             <h2>
-              <span className="id">{c.name}</span> <ClusterStatus cluster={c} />
+              <span className="id">{c.name}</span> <ClusterStatus cluster={c} unread={error !== undefined} />
             </h2>
             <Facts cluster={c} />
           </div>
@@ -429,7 +427,7 @@ export function ClusterDetail({
         {pageNote(c) !== undefined && <p className="muted page-note">{pageNote(c)}</p>}
         <HeldUp cluster={c} />
         <AddonConflict cluster={c} />
-        <ErrorBox message={error} />
+        <ReadError read={read} />
         <ErrorBox message={downloadError} />
         <Deleting
           cluster={c}
@@ -459,9 +457,10 @@ export function ClusterDetail({
           <div className="object-view">
             {view === "" && (
               <>
-                <Placement cluster={c} />
+                <Placement cluster={c} failed={error !== undefined} />
                 <Summary
                   cluster={c}
+                  unread={error !== undefined}
                   can={can}
                   why={why}
                   onChanged={() => {
@@ -482,6 +481,7 @@ export function ClusterDetail({
                   cluster={c}
                   can={can}
                   why={why}
+                  failed={error !== undefined}
                   onChanged={() => {
                     void reload();
                   }}
@@ -653,7 +653,9 @@ function OptionsView({
   can: boolean;
   onEdit: (a: Action) => void;
 }): JSX.Element {
-  const offered = (useClassTargets(c.class) ?? []).length > 0;
+  // Rows stay listed while the class's targets are not known, so a failed read hides none.
+  const { targets, read: classesRead } = useClassTargets(c.class);
+  const offered = targets === undefined || targets.length > 0;
   const staged = useStaging()?.staged?.plan.cluster;
   const more = (shown: Cluster): OptionRow<"backups" | "etcdSnapshots" | "autoscaler">[] => [
     ...backupsRows(shown, offered),
@@ -666,16 +668,23 @@ function OptionsView({
       name: "the autoscaler",
     },
   ];
-  return <Options cluster={c} staged={staged} can={can} onEdit={onEdit} more={more} />;
+  return (
+    <ReadSection read={classesRead}>
+      {() => <Options cluster={c} staged={staged} can={can} onEdit={onEdit} more={more} />}
+    </ReadSection>
+  );
 }
 
 function Summary({
   cluster: c,
+  unread,
   can,
   why,
   onChanged,
 }: {
   cluster: Cluster;
+  /** The cluster's own read failed, so its status is not known. */
+  unread: boolean;
   can: boolean;
   why: string | undefined;
   onChanged: () => void;
@@ -685,7 +694,7 @@ function Summary({
       <dl className="summary">
         <dt>Status</dt>
         <dd>
-          <ClusterStatus cluster={c} />
+          <ClusterStatus cluster={c} unread={unread} />
         </dd>
         <dt>Distribution</dt>
         <dd>{distributionName(c.distribution)}</dd>
@@ -791,23 +800,23 @@ function preferredTarget(targets: string[], held: string[], running: string): st
   return sorted[0] ?? running;
 }
 
+// offeredOf is what the versions read offers. A failed read leaves the version to be typed in, as
+// when the server has none to offer. Pending, nothing is offered yet.
+function offeredOf(read: { data: Versions | undefined; error: string | undefined }): Versions | undefined {
+  if (read.data !== undefined || read.error === undefined) {
+    return read.data;
+  }
+  return { versions: [] };
+}
+
 function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
   // Until one is chosen, the newest the cluster may move to.
   const [chosen, setChosen] = useState<string>();
-  const [offered, setOffered] = useState<Versions>();
   const { busy, error, send } = useChange(c, onClose);
   // A kubeadm cluster moves only to versions with a template on its node OS.
   const kubeadmOS = c.distribution === "kubeadm" && c.nodeOS ? nodeOSKey(c.nodeOS) : undefined;
-  useEffect(() => {
-    async function loadVersions(): Promise<void> {
-      try {
-        setOffered(await api.versions(c.distribution, kubeadmOS));
-      } catch (err) {
-        setOffered({ versions: [], error: errorMessage(err) });
-      }
-    }
-    void loadVersions();
-  }, [c.distribution, kubeadmOS]);
+  const versionsRead = usePoll(async () => api.versions(c.distribution, kubeadmOS), pollIdle);
+  const offered = offeredOf(versionsRead);
   const targets = upgradeTargets(c.version, [...(offered?.versions ?? []), ...(offered?.older ?? [])]);
   const talos = useTalosReleases(c.talos !== undefined);
   const running = c.talos?.version ?? "";
@@ -835,8 +844,15 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
       }
     >
       <Field label="Kubernetes version" hint="One minor version at a time">
-        {(id) =>
-          targets.length > 0 ? (
+        {(id) => {
+          if (offered === undefined) {
+            return (
+              <p id={id} className="muted">
+                Loading…
+              </p>
+            );
+          }
+          return targets.length > 0 ? (
             <select id={id} value={version} onChange={(e) => setChosen(e.target.value)}>
               <option value={c.version} disabled>
                 {c.version} (running)
@@ -849,12 +865,13 @@ function UpgradeDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () 
             </select>
           ) : (
             <input id={id} value={version} onChange={(e) => setChosen(e.target.value.trim())} />
-          )
-        }
+          );
+        }}
       </Field>
-      {offered && targets.length === 0 && (
+      <ReadError read={versionsRead} />
+      {versionsRead.data && targets.length === 0 && (
         <p className="muted">
-          {offered.error ??
+          {versionsRead.data.error ??
             (c.distribution === "kubeadm"
               ? "No newer VM template. Build one under Administration."
               : "No newer version")}

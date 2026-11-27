@@ -30,6 +30,10 @@ const (
 	ApplianceAddressesName = "kubehenge-appliance-addresses"
 	// ApplianceAddressesKey holds the appliance's addresses, comma-separated.
 	ApplianceAddressesKey = "addresses"
+	// ApplianceNetworksKey holds the network each of the appliance's addresses is on, as
+	// comma-separated "<address>=<bridge>/<vlan>", with a VNet by its name and 0 for no VLAN. An
+	// address it does not name is on a network the appliance does not know.
+	ApplianceNetworksKey = "networks"
 	// FirewallSourcesAnnotation names, on the ProxmoxCluster of a firewalled cluster, the addresses
 	// beside the cluster's own that Kubehenge's capmox build keeps in each node's IPSet kubehenge:
 	// the management cluster's nodes, the appliance and the nodes and pods of the clusters it is
@@ -77,7 +81,15 @@ type FirewallSources struct {
 	Namespace string
 	// Management are the management cluster's node addresses, which its module sets.
 	Management []string
-	Interval   time.Duration
+	// API is the management cluster's API as workload clusters reach it, such as
+	// https://192.0.2.10:6443, and Bridge and VLAN the network the management cluster's nodes are
+	// on. Without a bridge, no cluster is held off the management side's addresses (Held).
+	API    string
+	Bridge string
+	VLAN   int
+	// Nodes names the management nodes by address, for the refusal of an address one of them holds.
+	Nodes    map[string]string
+	Interval time.Duration
 	// Datacenter reads whether Proxmox VE's datacenter firewall is on. Nil, no condition is kept.
 	Datacenter APIReach
 	// unreached counts the runs in a row whose read of the datacenter firewall got no answer.
@@ -112,17 +124,45 @@ func (f *FirewallSources) Start(ctx context.Context) error {
 // for them too, so that it holds the same addresses the firewall keeps.
 func (f *FirewallSources) Addresses(ctx context.Context) ([]string, error) {
 	sources := slices.Clone(f.Management)
-	cm := &corev1.ConfigMap{}
-	err := f.Reader.Get(ctx, client.ObjectKey{Namespace: f.Namespace, Name: ApplianceAddressesName}, cm)
-	if err != nil && !apierrors.IsNotFound(err) {
-		return nil, fmt.Errorf("reading the appliance's addresses: %w", err)
+	own, err := f.applianceAddresses(ctx)
+	if err != nil {
+		return nil, err
 	}
-	for address := range strings.SplitSeq(cm.Data[ApplianceAddressesKey], ",") {
-		if address = strings.TrimSpace(address); address != "" && !slices.Contains(sources, address) {
+	for _, address := range own {
+		if !slices.Contains(sources, address) {
 			sources = append(sources, address)
 		}
 	}
 	return sources, nil
+}
+
+// applianceAddresses are the addresses the appliance recorded for itself, none while it has not.
+func (f *FirewallSources) applianceAddresses(ctx context.Context) ([]string, error) {
+	own, _, err := f.appliance(ctx)
+	return own, err
+}
+
+// appliance is what the appliance recorded of itself: its addresses, and the network of each as
+// "<bridge>/<vlan>" by the address, where it recorded one.
+func (f *FirewallSources) appliance(ctx context.Context) ([]string, map[string]string, error) {
+	cm := &corev1.ConfigMap{}
+	err := f.Reader.Get(ctx, client.ObjectKey{Namespace: f.Namespace, Name: ApplianceAddressesName}, cm)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return nil, nil, fmt.Errorf("reading the appliance's addresses: %w", err)
+	}
+	var own []string
+	for address := range strings.SplitSeq(cm.Data[ApplianceAddressesKey], ",") {
+		if address = strings.TrimSpace(address); address != "" {
+			own = append(own, address)
+		}
+	}
+	segments := map[string]string{}
+	for entry := range strings.SplitSeq(cm.Data[ApplianceNetworksKey], ",") {
+		if address, segment, ok := strings.Cut(strings.TrimSpace(entry), "="); ok && address != "" && segment != "" {
+			segments[address] = segment
+		}
+	}
+	return own, segments, nil
 }
 
 func (f *FirewallSources) runOnce(ctx context.Context) error {

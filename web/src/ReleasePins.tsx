@@ -2,12 +2,13 @@ import { useState, type JSX } from "react";
 
 import { api } from "./api";
 import type { ReleasePin } from "./types";
-import { ErrorBox, Field, errorMessage, filled, pollIdle, usePoll } from "./ui";
+import { ErrorBox, Field, errorMessage, filled, pollIdle, usePoll, ReadError } from "./ui";
 
 // ReleasePins lists the RKE2 and k3s releases an administrator pinned beside the ones this Kubehenge
 // carries. A release is pinned only after its digests are shown.
 export function ReleasePins(): JSX.Element {
-  const { data, error, reload } = usePoll(api.releasePins, () => pollIdle);
+  const read = usePoll(api.releasePins, () => pollIdle);
+  const { data, reload } = read;
   const [version, setVersion] = useState("");
   const [shown, setShown] = useState<ReleasePin>();
   const [problem, setProblem] = useState("");
@@ -28,7 +29,7 @@ export function ReleasePins(): JSX.Element {
   return (
     <div className="box">
       <h3>Release pins</h3>
-      <ErrorBox message={error} />
+      <ReadError read={read} />
       {data && data.pins.length === 0 && <p>No releases pinned</p>}
       {data && data.pins.length > 0 && (
         <table className="grid stack">

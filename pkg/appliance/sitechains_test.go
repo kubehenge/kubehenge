@@ -19,7 +19,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -98,7 +101,7 @@ type issuance struct {
 	leaf      bool
 	// notCA and noSign make an intermediate that may not sign.
 	notCA, noSign bool
-	// clientOnly makes a leaf for client authentication alone.
+	// clientOnly makes a leaf, or an intermediate, for client authentication alone.
 	clientOnly bool
 	notAfter   time.Time
 	sig        x509.SignatureAlgorithm
@@ -123,6 +126,9 @@ func (a *testAuthority) issue(t *testing.T, o issuance) *testAuthority {
 	}
 	if o.noSign {
 		tmpl.KeyUsage = x509.KeyUsageDigitalSignature
+	}
+	if o.clientOnly && !o.leaf {
+		tmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
 	}
 	if o.leaf {
 		tmpl.KeyUsage = x509.KeyUsageDigitalSignature
@@ -272,7 +278,7 @@ func TestSiteBundleNamesAnIntermediateTheHostDoesNotPresent(t *testing.T) {
 	t.Parallel()
 	c := newInspected(t)
 	_, err := bundleFor(c.root, c.leaf)
-	if err == nil || err.Error() != `Site CA: host.example: "CN=Inspect Intermediate" is missing. Paste it with the root.` {
+	if err == nil || err.Error() != `Site CA: host.example: Add "CN=Inspect Intermediate" to the Site CA.` {
 		t.Errorf("a chain missing its intermediate: %v", err)
 	}
 }
@@ -470,6 +476,7 @@ func TestSiteBundleHoldsOnlyThePastedRootsAndTheirRenamedCopies(t *testing.T) {
 // matches, and an intermediate that may not sign, rather than the leaf's issuer each time.
 func TestSiteBundleNamesTheCertificateThatBreaksTheChain(t *testing.T) {
 	t.Parallel()
+	other := newTestRoot(t, "Other Root")
 	root := newTestRoot(t, "Inspect Root")
 	one := root.issue(t, issuance{cn: "Inspect One", issuerTag: asn1.TagUTF8String})
 	two := one.issue(t, issuance{cn: "Inspect Two"})
@@ -483,10 +490,10 @@ func TestSiteBundleNamesTheCertificateThatBreaksTheChain(t *testing.T) {
 		chain []*testAuthority
 		want  string
 	}{
-		"a middle intermediate missing":               {[]*testAuthority{leaf, three, one}, `"CN=Inspect Two" is missing. Paste it with the root.`},
+		"a middle intermediate missing":               {[]*testAuthority{leaf, three, one}, `Have the device send "CN=Inspect Two", or add it to the Site CA.`},
 		"an intermediate that is no CA":               {[]*testAuthority{underNotCA, notCA}, `"CN=Inspect NotCA" is no CA. Reissue it as a CA on the device.`},
 		"an intermediate without certificate signing": {[]*testAuthority{underNoSigning, noSigning}, `"CN=Inspect NoSign" may not sign certificates. Reissue it with the certificate signing key usage.`},
-		"a root that was not pasted":                  {[]*testAuthority{newTestRoot(t, "Other Root")}, `"CN=Other Root" is a root that was not pasted. Paste that root.`},
+		"a root that was not pasted":                  {[]*testAuthority{other}, "Chain ends at \"CN=Other Root\" (SHA-256 " + Fingerprint(other.cert) + "). Add that root to the Site CA."},
 	} {
 		if _, err := bundleFor(root, tc.chain...); err == nil || err.Error() != "Site CA: host.example: "+tc.want {
 			t.Errorf("%s: %v, want %q", name, err, tc.want)
@@ -494,9 +501,9 @@ func TestSiteBundleNamesTheCertificateThatBreaksTheChain(t *testing.T) {
 	}
 }
 
-// TestSiteChainErrorsGroupTheHostsAndStayShort gives one line per fault, the hosts with the same fault on
+// TestSiteChainErrorGroupTheHostsAndStayShort gives one line per fault, the hosts with the same fault on
 // it, in at most 16 words and without semicolons.
-func TestSiteChainErrorsGroupTheHostsAndStayShort(t *testing.T) {
+func TestSiteChainErrorGroupTheHostsAndStayShort(t *testing.T) {
 	t.Parallel()
 	c := newInspected(t)
 	weakRoot := newTestRoot(t, "Weak Root")
@@ -508,14 +515,14 @@ func TestSiteChainErrorsGroupTheHostsAndStayShort(t *testing.T) {
 	s := &Settings{SiteCA: c.root.pem() + weakRoot.pem()}
 	_, err := a.ResolveSite(t.Context(), s)
 	want := []string{
-		`Site CA: factory.talos.dev, ghcr.io: "CN=Inspect Intermediate" is missing. Paste it with the root.`,
+		`Site CA: factory.talos.dev, ghcr.io: Add "CN=Inspect Intermediate" to the Site CA.`,
 		`Site CA: tuf-repo-cdn.sigstore.dev: "CN=Inspect Weak" is signed with ECDSA-SHA1. Nodes refuse that. Reissue it with SHA-256.`,
 	}
-	faults, ok := errors.AsType[SiteChainErrors](err)
-	if !ok || !slices.Equal(faults, want) {
+	faults, ok := errors.AsType[SiteChainError](err)
+	if !ok || !slices.Equal(faults.Lines, want) {
 		t.Fatalf("faults %q, want %q", err, want)
 	}
-	for _, line := range faults {
+	for _, line := range faults.Lines {
 		if words := faultWords(line); words > 16 || strings.Contains(line, ";") {
 			t.Errorf("%q has %d words", line, words)
 		}
@@ -904,7 +911,7 @@ func TestAnUnattendedRunKeepsTheLastBundleThroughAChainFault(t *testing.T) {
 	}
 
 	a.SiteChains = fakeChains(map[string][]*x509.Certificate{"ghcr.io": certs(c.leaf)})
-	const fault = `Site CA: ghcr.io: "CN=Inspect Intermediate" is missing. Paste it with the root.`
+	const fault = `Site CA: ghcr.io: Add "CN=Inspect Intermediate" to the Site CA.`
 	if err := a.KeepUnattended(Unattended{Passphrase: "correct horse battery staple", Token: upgraderAPI}); err != nil {
 		t.Fatal(err)
 	}
@@ -964,7 +971,7 @@ func TestSiteBundleNamesARootTheDeviceMadeAgain(t *testing.T) {
 		want  string
 	}{
 		"without the new root": {[]*testAuthority{c.leaf, c.intermediate}, `"CN=Inspect Intermediate" is signed by a new "CN=Inspect Root". Paste the new root.`},
-		"with the new root":    {[]*testAuthority{c.leaf, c.intermediate, c.root}, `"CN=Inspect Root" is a root that was not pasted. Paste that root.`},
+		"with the new root":    {[]*testAuthority{c.leaf, c.intermediate, c.root}, "Chain ends at \"CN=Inspect Root\" (SHA-256 " + Fingerprint(c.root.cert) + "). Add that root to the Site CA."},
 	} {
 		if _, err := bundleFor(pasted, tc.chain...); err == nil || err.Error() != "Site CA: host.example: "+tc.want {
 			t.Errorf("%s: %v, want %q", name, err, tc.want)
@@ -980,7 +987,7 @@ func (fakeNodeLogs) ServiceLog(context.Context, string) ([]string, error) { retu
 
 func (fakeNodeLogs) Close() error { return nil }
 
-func TestAFailedApplyNamesTheNodeTheHostAndTheIssuerOfARejectedCertificate(t *testing.T) {
+func TestAFailedApplyNamesTheNodeAndTheHostOfARejectedCertificate(t *testing.T) {
 	t.Parallel()
 	c := newInspected(t)
 	a, _ := newAppliance(t)
@@ -998,9 +1005,34 @@ func TestAFailedApplyNamesTheNodeTheHostAndTheIssuerOfARejectedCertificate(t *te
 		t.Fatal(err)
 	}
 	j := waitFor(t, a)
-	want := "Node 10.0.0.11 rejected the certificate tuf-repo-cdn.sigstore.dev presents, issued by CN=Inspect Intermediate. Check the Site CA. The run failed:"
+	want := "Node 10.0.0.11 refused tuf-repo-cdn.sigstore.dev's certificate: certificate signed by unknown authority. Check the Site CA. The run failed:"
 	if j.State != StateFailed || !strings.HasPrefix(j.Error, want) || strings.Contains(j.Error, "10.0.0.12") {
 		t.Errorf("job error %q, want it to hold %q", j.Error, want)
+	}
+}
+
+// TestAFailedApplyNamesTheRootTheRejectedChainEndsAt names the root the host presents at the end of
+// the chain the node refused, with its fingerprint, and not the first issuer.
+func TestAFailedApplyNamesTheRootTheRejectedChainEndsAt(t *testing.T) {
+	t.Parallel()
+	c := newInspected(t)
+	a, _ := newAppliance(t)
+	a.SiteChains = fakeChains(map[string][]*x509.Certificate{"tuf-repo-cdn.sigstore.dev": certs(c.leaf, c.intermediate, c.root)})
+	a.TalosLogs = func(_ context.Context, _ []byte, address string) (provisioner.TalosLogs, error) {
+		if address != "10.0.0.11" {
+			return fakeNodeLogs{lines: []string{"[talos] booted"}}, nil
+		}
+		return fakeNodeLogs{lines: []string{
+			`[talos] controller failed {"controller": "security.TUFTrustedRootController", "error": "Get \"https://tuf-repo-cdn.sigstore.dev/root.json\": tls: failed to verify certificate: x509: certificate signed by unknown authority"}`,
+		}}, nil
+	}
+	if err := a.Apply(settings("fail"), "correct horse battery staple", ticket(), func(context.Context, []byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	j := waitFor(t, a)
+	want := "Node 10.0.0.11 refused tuf-repo-cdn.sigstore.dev's certificate. Add its root \"CN=Inspect Root\" (SHA-256 " + Fingerprint(c.root.cert) + ") to the Site CA. The run failed:"
+	if j.State != StateFailed || !strings.HasPrefix(j.Error, want) {
+		t.Errorf("job error %q, want it to start with %q", j.Error, want)
 	}
 }
 
@@ -1038,7 +1070,7 @@ func TestSiteFaultNamesAnIssuerInUniversalString(t *testing.T) {
 	root := newTestRoot(t, "Inspect Root")
 	intermediate := root.issue(t, issuance{cn: "Inspect Intermediate", tag: tagUniversalString})
 	leaf := intermediate.issue(t, issuance{cn: "host.example", leaf: true})
-	const want = `Site CA: host.example: "CN=Inspect Intermediate" is missing. Paste it with the root.`
+	const want = `Site CA: host.example: Add "CN=Inspect Intermediate" to the Site CA.`
 	if _, err := bundleFor(root, leaf); err == nil || err.Error() != want {
 		t.Errorf("got %v, want %q", err, want)
 	}
@@ -1076,8 +1108,8 @@ func TestASaveThatKeepsTheSiteCAGoesOnPastAChainFault(t *testing.T) {
 	again := settings("pve1")
 	again.SiteCA, again.TimeZone = c.root.pem(), "Europe/Zurich"
 	fault := `Site CA: registry.k8s.io: "CN=Inspect Old" expired on ` + old.cert.NotAfter.UTC().Format(time.DateOnly) + ". Renew it on the device."
-	if errs, warnings := a.CheckSite(t.Context(), again); len(errs) != 0 || !slices.Equal(warnings, []string{fault}) {
-		t.Errorf("the live check gave errors %q and warnings %q, want the warning %q", errs, warnings, fault)
+	if got := a.CheckSite(t.Context(), again); len(got.Errors) != 0 || !slices.Equal(got.Warnings, []string{fault}) {
+		t.Errorf("the live check gave errors %q and warnings %q, want the warning %q", got.Errors, got.Warnings, fault)
 	}
 	j := apply(again)
 	saved := a.SavedSettings()
@@ -1097,7 +1129,7 @@ func TestASaveThatChangesTheSiteCARefusesAChainFault(t *testing.T) {
 	a, ready := newAppliance(t)
 	a.sitePublic = x509.NewCertPool()
 	missing := fakeChains(map[string][]*x509.Certificate{"ghcr.io": certs(c.leaf)})
-	const fault = `Site CA: ghcr.io: "CN=Inspect Intermediate" is missing. Paste it with the root.`
+	const fault = `Site CA: ghcr.io: Add "CN=Inspect Intermediate" to the Site CA.`
 	a.SiteChains = missing
 	first := settings("pve1")
 	first.SiteCA = c.root.pem()
@@ -1116,8 +1148,8 @@ func TestASaveThatChangesTheSiteCARefusesAChainFault(t *testing.T) {
 	a.SiteChains = missing
 	changed := settings("pve1")
 	changed.SiteCA = c.root.pem()
-	if errs, warnings := a.CheckSite(t.Context(), changed); !slices.Equal(errs, []string{fault}) || len(warnings) != 0 {
-		t.Errorf("the live check gave errors %q and warnings %q", errs, warnings)
+	if got := a.CheckSite(t.Context(), changed); !slices.Equal(got.Errors, []string{fault}) || len(got.Warnings) != 0 {
+		t.Errorf("the live check gave errors %q and warnings %q", got.Errors, got.Warnings)
 	}
 	if err := a.Apply(changed, "correct horse battery staple", ticket(), func(context.Context, []byte) error { return nil }); err == nil || err.Error() != fault {
 		t.Errorf("a changed Site CA gave %v", err)
@@ -1154,5 +1186,288 @@ func TestSiteCheckReadsThroughAnHTTPSProxyThatNeedsTheKeptCopy(t *testing.T) {
 	}
 	if got := asked(); len(got) != len(s.siteHosts()) {
 		t.Errorf("the proxy was asked %q", got)
+	}
+}
+
+// presentedRootFault is the line a chain that ends at a root the Site CA lacks gets.
+func presentedRootFault(hosts string, root *testAuthority) string {
+	return "Site CA: " + hosts + ": Chain ends at \"CN=" + root.cn + "\" (SHA-256 " + Fingerprint(root.cert) + "). Add that root to the Site CA."
+}
+
+// TestSiteCheckNamesThePresentedRootTheSiteCALacksAndPassesOnceItIsAdded judges a chain that ends at
+// a self-signed root the host presents, against a Site CA of another root. The appliance's own trust
+// store is no part of it. The fault hands the root over as PEM, and a Site CA that holds it passes.
+func TestSiteCheckNamesThePresentedRootTheSiteCALacksAndPassesOnceItIsAdded(t *testing.T) {
+	t.Parallel()
+	inspection := newTestRoot(t, "Internal-R1")
+	intermediate := inspection.issue(t, issuance{cn: "Inspect Intermediate", issuerTag: asn1.TagPrintableString})
+	leaf := intermediate.issue(t, issuance{cn: "host.example", leaf: true})
+	chain := certs(leaf, intermediate, inspection)
+	a := &Appliance{SiteChains: fakeChains(map[string][]*x509.Certificate{"ghcr.io": chain, "registry.k8s.io": chain})}
+	other := newTestRoot(t, "Internal-R2")
+
+	got := a.CheckSite(t.Context(), &Settings{SiteCA: other.pem()})
+	if want := []string{presentedRootFault("ghcr.io, registry.k8s.io", inspection)}; !slices.Equal(got.Errors, want) {
+		t.Fatalf("errors %q, want %q", got.Errors, want)
+	}
+	if want := []MissingRoot{{Name: "Internal-R1", PEM: inspection.pem()}}; !slices.Equal(got.MissingRoots, want) {
+		t.Fatalf("missing roots %q, want %q", got.MissingRoots, want)
+	}
+	if words := faultWords(got.Errors[0]); words > 16 {
+		t.Errorf("%q has %d words", got.Errors[0], words)
+	}
+
+	for name, siteCA := range map[string]string{
+		"the offered root appended": WithRoots(other.pem(), got.MissingRoots),
+		"the root alone":            inspection.pem(),
+		"several roots, one right":  other.pem() + newTestRoot(t, "Internal-R3").pem() + inspection.pem(),
+	} {
+		if again := a.CheckSite(t.Context(), &Settings{SiteCA: siteCA}); len(again.Errors) != 0 || len(again.Warnings) != 0 || len(again.MissingRoots) != 0 {
+			t.Errorf("%s: %+v", name, again)
+		}
+	}
+}
+
+// TestWithRootsAppendsEachRootOnce adds the roots a check hands over to a Site CA, none it holds and
+// none twice.
+func TestWithRootsAppendsEachRootOnce(t *testing.T) {
+	t.Parallel()
+	a, b := newTestRoot(t, "Internal-R1"), newTestRoot(t, "Internal-R2")
+	ra, rb := MissingRoot{Name: "Internal-R1", PEM: a.pem()}, MissingRoot{Name: "Internal-R2", PEM: b.pem()}
+	for name, tc := range map[string]struct {
+		siteCA string
+		roots  []MissingRoot
+		want   string
+	}{
+		"an empty Site CA":    {"", []MissingRoot{ra}, a.pem()},
+		"one held, one new":   {a.pem(), []MissingRoot{ra, rb}, a.pem() + b.pem()},
+		"the same root twice": {"", []MissingRoot{rb, rb}, b.pem()},
+		"no final line break": {strings.TrimSpace(a.pem()), []MissingRoot{rb}, a.pem() + b.pem()},
+	} {
+		if got := WithRoots(tc.siteCA, tc.roots); got != tc.want {
+			t.Errorf("%s: %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+// TestSiteCheckOffersNoRootTheHostDidNotPresent names the issuer of the topmost certificate and has
+// no PEM to hand over.
+func TestSiteCheckOffersNoRootTheHostDidNotPresent(t *testing.T) {
+	t.Parallel()
+	c := newInspected(t)
+	a := &Appliance{SiteChains: fakeChains(map[string][]*x509.Certificate{"ghcr.io": certs(c.leaf, c.intermediate)})}
+	got := a.CheckSite(t.Context(), &Settings{SiteCA: newTestRoot(t, "Internal-R2").pem()})
+	if want := []string{`Site CA: ghcr.io: Add "CN=Inspect Root" to the Site CA.`}; !slices.Equal(got.Errors, want) || len(got.MissingRoots) != 0 {
+		t.Errorf("got %+v, want errors %q and no roots", got, want)
+	}
+}
+
+// TestTheNodesPublicRootsAreMozillasAndNotTheContainers holds a public root and none of the roots
+// a test generates, so that the container's own store never decides a chain is public.
+func TestTheNodesPublicRootsAreMozillasAndNotTheContainers(t *testing.T) {
+	t.Parallel()
+	a := &Appliance{}
+	pool := a.publicRoots()
+	subjects := pool.Subjects() //nolint:staticcheck // reads names only, for a pool built from roots
+	found := slices.ContainsFunc(subjects, func(s []byte) bool { return bytes.Contains(s, []byte("ISRG Root X1")) })
+	if !found {
+		t.Errorf("the nodes' roots lack ISRG Root X1 among %d roots", len(subjects))
+	}
+	private := newTestRoot(t, "Internal-R1")
+	leaf := private.issue(t, issuance{cn: "host.example", leaf: true})
+	if verifyChain(certs(leaf), pool, time.Now()) == nil {
+		t.Error("a chain of a generated root verifies against the nodes' roots")
+	}
+}
+
+// TestAChainSignedByARootOnlyTheContainerTrustsIsAFault reads the chain of a generated root that the
+// process's system store holds, as the appliance container's does after the installer added it, and
+// judges it against a Site CA of another root. The system store is set through SSL_CERT_FILE, which
+// only Linux reads, so the check runs in a child process there.
+func TestAChainSignedByARootOnlyTheContainerTrustsIsAFault(t *testing.T) {
+	t.Parallel()
+	if dir := os.Getenv("KUBEHENGE_TEST_CHAIN_DIR"); dir != "" {
+		chain, err := parseCertificates(readTestFile(t, filepath.Join(dir, "chain.pem")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		system, err := x509.SystemCertPool()
+		if err != nil || verifyChain(chain, system, time.Now()) != nil {
+			t.Fatalf("the system store does not trust the chain: %v", err)
+		}
+		a := &Appliance{SiteChains: fakeChains(map[string][]*x509.Certificate{"ghcr.io": chain})}
+		got := a.CheckSite(t.Context(), &Settings{SiteCA: readTestFile(t, filepath.Join(dir, "site.pem"))})
+		want := "Site CA: ghcr.io: Chain ends at \"CN=Internal-R1\" (SHA-256 " + Fingerprint(chain[len(chain)-1]) + "). Add that root to the Site CA."
+		if !slices.Equal(got.Errors, []string{want}) {
+			t.Fatalf("errors %q, want %q", got.Errors, want)
+		}
+		return
+	}
+	if runtime.GOOS != "linux" {
+		t.Skip("the system store is set through SSL_CERT_FILE, which only Linux reads")
+	}
+	inspection := newTestRoot(t, "Internal-R1")
+	leaf := inspection.issue(t, issuance{cn: "host.example", leaf: true})
+	dir := t.TempDir()
+	for name, content := range map[string]string{"chain.pem": leaf.pem() + inspection.pem(), "root.pem": inspection.pem(), "site.pem": newTestRoot(t, "Internal-R2").pem()} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.CommandContext(t.Context(), os.Args[0], //nolint:gosec // this test binary, run again for one test
+		"-test.run=^TestAChainSignedByARootOnlyTheContainerTrustsIsAFault$")
+	cmd.Env = append(os.Environ(), "KUBEHENGE_TEST_CHAIN_DIR="+dir, "SSL_CERT_FILE="+filepath.Join(dir, "root.pem"), "SSL_CERT_DIR="+dir+"/none")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("the child run failed: %v\n%s", err, out)
+	}
+}
+
+func readTestFile(t *testing.T, path string) string {
+	t.Helper()
+	raw, err := os.ReadFile(path) //nolint:gosec // a file the test wrote
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// TestSiteCheckTellsAMissingIntermediateFromAMissingRoot asks the device for an intermediate only
+// where a certificate it presents above the gap leads to a pasted root. Else it names the missing
+// issuer to add, which works for a root and an intermediate alike.
+func TestSiteCheckTellsAMissingIntermediateFromAMissingRoot(t *testing.T) {
+	t.Parallel()
+	c := newInspected(t)
+	stray := newTestRoot(t, "Stray Root").issue(t, issuance{cn: "Stray Intermediate"})
+	for name, tc := range map[string]struct {
+		siteCA string
+		chain  []*x509.Certificate
+		want   string
+	}{
+		"the root pasted, no intermediate sent": {c.root.pem(), certs(c.leaf), `Add "CN=Inspect Intermediate" to the Site CA.`},
+		"the root pasted, another one sent":     {c.root.pem(), certs(c.leaf, stray), `Add "CN=Inspect Intermediate" to the Site CA.`},
+		"another root pasted, the chain whole":  {newTestRoot(t, "Internal-R2").pem(), certs(c.leaf, c.intermediate), `Add "CN=Inspect Root" to the Site CA.`},
+	} {
+		a := &Appliance{sitePublic: x509.NewCertPool(), SiteChains: fakeChains(map[string][]*x509.Certificate{"ghcr.io": tc.chain})}
+		got := a.CheckSite(t.Context(), &Settings{SiteCA: tc.siteCA})
+		if want := []string{"Site CA: ghcr.io: " + tc.want}; !slices.Equal(got.Errors, want) || len(got.MissingRoots) != 0 {
+			t.Errorf("%s: %+v, want %q", name, got, want)
+		}
+	}
+}
+
+// TestAProxyChainEndingAtARootItsCALacksNamesTheProxyField names the proxy's field and hands no root
+// over, since the button adds to the Site CA.
+func TestAProxyChainEndingAtARootItsCALacksNamesTheProxyField(t *testing.T) {
+	t.Parallel()
+	c := newInspected(t)
+	stray := newTestRoot(t, "Stray Root")
+	leaf := stray.issue(t, issuance{cn: "host.example", leaf: true})
+	a := &Appliance{sitePublic: x509.NewCertPool(), SiteChains: fakeChains(map[string][]*x509.Certificate{"ghcr.io": certs(leaf, stray)})}
+	got := a.CheckSite(t.Context(), &Settings{Proxy: &Proxy{URL: "http://proxy.example:3128", CABundle: c.root.pem()}})
+	want := "Proxy certificate: ghcr.io: Chain ends at \"CN=Stray Root\" (SHA-256 " + Fingerprint(stray.cert) + "). Add that root to the proxy's CA."
+	if !slices.Equal(got.Errors, []string{want}) || len(got.MissingRoots) != 0 {
+		t.Errorf("got %+v, want the error %q and no roots", got, want)
+	}
+}
+
+// TestSiteCheckHandsOverTheMissingRootWithAWarning offers the root a host presents also where the
+// save would go on past the fault with the last run's certificates.
+func TestSiteCheckHandsOverTheMissingRootWithAWarning(t *testing.T) {
+	t.Parallel()
+	c := newInspected(t)
+	a, ready := newAppliance(t)
+	a.sitePublic = x509.NewCertPool()
+	a.SiteChains = fakeChains(map[string][]*x509.Certificate{"ghcr.io": certs(c.leaf, c.intermediate)})
+	s := settings("pve1")
+	s.SiteCA = c.root.pem()
+	if err := a.Apply(s, "correct horse battery staple", ticket(), func(_ context.Context, k []byte) error { ready <- k; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if j := waitFor(t, a); j.State != StateSucceeded {
+		t.Fatalf("the first run %s: %s", j.State, j.Error)
+	}
+	<-ready
+	other := newTestRoot(t, "Internal-R1")
+	leaf := other.issue(t, issuance{cn: "host.example", leaf: true})
+	a.SiteChains = fakeChains(map[string][]*x509.Certificate{"ghcr.io": certs(c.leaf, c.intermediate), "registry.k8s.io": certs(leaf, other)})
+	again := settings("pve1")
+	again.SiteCA = c.root.pem()
+	got := a.CheckSite(t.Context(), again)
+	if len(got.Errors) != 0 || !slices.Equal(got.Warnings, []string{presentedRootFault("registry.k8s.io", other)}) || !slices.Equal(got.MissingRoots, []MissingRoot{{Name: "Internal-R1", PEM: other.pem()}}) {
+		t.Errorf("got %+v, want the warning and the root", got)
+	}
+}
+
+// lineWords counts the words of a message as web/WRITING.md does, a quoted value as one.
+func lineWords(line string) int {
+	return len(strings.Fields(regexp.MustCompile(`"[^"]*"`).ReplaceAllString(line, "value")))
+}
+
+// TestAFailedRunLineFollowsTheNodesLog builds the line from what the node logged first, and from
+// the chain the host presents now only where the node named no authority and no public root signs
+// that chain. No line tells the person to add a public root.
+func TestAFailedRunLineFollowsTheNodesLog(t *testing.T) {
+	t.Parallel()
+	c := newInspected(t)
+	const host = "tuf-repo-cdn.sigstore.dev"
+	logLine := func(x509Error string) string {
+		return `[talos] controller failed {"controller": "security.TUFTrustedRootController", "error": "Get \"https://` + host + `/root.json\": tls: failed to verify certificate: x509: ` + x509Error + `"}`
+	}
+	candidate := func(name string) string {
+		return logLine(`certificate signed by unknown authority (possibly because of \"x509: invalid signature\" while trying to verify candidate authority certificate \"` + name + `\")`)
+	}
+	unknown := logLine("certificate signed by unknown authority")
+	public := newTestRoot(t, "Public Root")
+	publicChain := certs(public.issue(t, issuance{cn: "host.example", leaf: true}), public)
+	for name, tc := range map[string]struct {
+		line   string
+		chain  []*x509.Certificate
+		public *x509.CertPool
+		want   string
+	}{
+		"a candidate the Site CA holds, the live chain public": {
+			candidate("Corp Inspection CA"), publicChain, poolOf(certs(public)),
+			`Node 10.0.0.11 refused ` + host + `'s certificate, signed by a new "Corp Inspection CA". Paste the new root.`,
+		},
+		"a candidate that is a public root": {
+			candidate("ISRG Root X1"), certs(c.leaf, c.intermediate, c.root), nil,
+			`Node 10.0.0.11 refused ` + host + `'s certificate: certificate signed by unknown authority.`,
+		},
+		"another reason": {
+			logLine("certificate has expired or is not yet valid: current time 2026-11-26T10:00:00Z is after 2026-11-25T00:00:00Z"), certs(c.leaf, c.intermediate, c.root), nil,
+			`Node 10.0.0.11 refused ` + host + `'s certificate: certificate has expired or is not yet valid.`,
+		},
+		"no candidate, a live chain a public root signs": {
+			unknown, publicChain, poolOf(certs(public)),
+			`Node 10.0.0.11 refused ` + host + `'s certificate: certificate signed by unknown authority. Check the Site CA.`,
+		},
+		"no candidate, no live chain": {
+			unknown, nil, nil,
+			`Node 10.0.0.11 refused ` + host + `'s certificate: certificate signed by unknown authority. Check the Site CA.`,
+		},
+		"no candidate, a presented root": {
+			unknown, certs(c.leaf, c.intermediate, c.root), nil,
+			`Node 10.0.0.11 refused ` + host + `'s certificate. Add its root "CN=Inspect Root" (SHA-256 ` + Fingerprint(c.root.cert) + `) to the Site CA.`,
+		},
+		"no candidate, the root not presented": {
+			unknown, certs(c.leaf, c.intermediate), nil,
+			`Node 10.0.0.11 refused ` + host + `'s certificate: certificate signed by unknown authority. Check the Site CA.`,
+		},
+	} {
+		a := &Appliance{sitePublic: tc.public}
+		if tc.chain != nil {
+			a.SiteChains = fakeChains(map[string][]*x509.Certificate{host: tc.chain})
+		}
+		r, found := rejectedCertificate([]string{"[talos] booted", tc.line})
+		if !found {
+			t.Fatalf("%s: no rejection found", name)
+		}
+		got := a.refusalLine(t.Context(), &Settings{}, "10.0.0.11", r)
+		if got != tc.want {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, tc.want)
+		}
+		if words := lineWords(got); words > 16 || strings.Contains(got, ";") {
+			t.Errorf("%s: %q has %d words", name, got, words)
+		}
 	}
 }

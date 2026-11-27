@@ -150,3 +150,45 @@ func TestAnswered(t *testing.T) {
 		t.Fatal("answered tells a refused or made connection from one that reached no host wrongly")
 	}
 }
+
+// An address a known host holds, such as the management cluster's or the appliance's, is marked as
+// answering without a probe, and the rest of those typed are probed.
+func TestAnsweringMarksKnownHostsWithoutProbing(t *testing.T) {
+	t.Parallel()
+	hosts := &answeringOn{hosts: map[netip.Addr]bool{netip.MustParseAddr("10.0.0.12"): true}}
+	s := &Server{Probe: hosts.probe}
+	known := [][2]netip.Addr{{netip.MustParseAddr("10.0.0.9"), netip.MustParseAddr("10.0.0.9")}}
+	check := []netip.Addr{netip.MustParseAddr("10.0.0.9"), netip.MustParseAddr("10.0.0.10"), netip.MustParseAddr("10.0.0.12")}
+	got := s.answering(t.Context(), check, known)
+	if len(got) != 2 || !got[netip.MustParseAddr("10.0.0.9")] || !got[netip.MustParseAddr("10.0.0.12")] {
+		t.Errorf("answering = %v", got)
+	}
+	if want := []netip.Addr{netip.MustParseAddr("10.0.0.10"), netip.MustParseAddr("10.0.0.12")}; !slices.Equal(hosts.probed, want) {
+		t.Errorf("probed %v, want %v", hosts.probed, want)
+	}
+}
+
+// A typed address a Proxmox VE node holds is marked as answering without a probe, as the
+// appliance's and the management cluster's are, and the rest are probed.
+func TestFreeAddressesMarkKnownHostsWithoutProbing(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	hosts := &answeringOn{hosts: map[netip.Addr]bool{netip.MustParseAddr("10.0.0.41"): true}}
+	h.server.Probe = hosts.probe
+	b := h.browser()
+	b.signIn("dev@pve")
+	rec := b.do("POST", "/api/proxmox/nodes/pve1/bridges/vmbr0/free", `{"nodes":0,"check":["10.0.0.5","10.0.0.41","10.0.0.42"]}`)
+	expect(t, rec, http.StatusOK)
+	var view freeView
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"10.0.0.5", "10.0.0.41"}; !slices.Equal(view.Answering, want) {
+		t.Errorf("answering = %v, want %v", view.Answering, want)
+	}
+	hosts.mu.Lock()
+	defer hosts.mu.Unlock()
+	if slices.Contains(hosts.probed, netip.MustParseAddr("10.0.0.5")) {
+		t.Error("the node's own address was probed")
+	}
+}

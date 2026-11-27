@@ -25,6 +25,13 @@ import (
 // apiPrefix is where the Proxmox VE API's JSON calls are.
 const apiPrefix = "/api2/json"
 
+// failed is the status of a call the proxy cannot answer. The plugin's held release takes only
+// 400, 401, 403, 500 and 501 as errors and reads any other status as an empty success, which
+// would detach or delete nothing while saying it had. Its newest release takes every status from
+// 400 on as an error. Its message names nothing as missing, which the newest release would read as
+// a volume already gone.
+const failed = http.StatusInternalServerError
+
 // holdersTTL is how long the list of holder VMs is taken as current for checking the records:
 // Kubehenge's controller adds a holder at most every few minutes.
 const holdersTTL = time.Minute
@@ -46,9 +53,10 @@ var (
 //     returns once the copy is done, as the plugin would have waited for Proxmox VE's task.
 //   - Deleting a copy, which the token may not through the storage, it does through the holder.
 //   - A storage's configuration, which Proxmox VE shows singly only to Datastore.Allocate, it reads
-//     from the list of storages, which shows it to a token that may use the storage.
+//     from the list of storages, which shows it to a token that may use the storage. For a storage
+//     the list does not show, it refuses and names the right the token lacks.
 //
-// Everything else goes on as it came, but for the copies' names: Proxmox VE chooses a copy's name
+// Everything else goes on as it came, but for the copies' names, and Direct reads no records at all: Proxmox VE chooses a copy's name
 // itself, vm-<holder>-disk-<n>, so the proxy turns the plugin's name of each copy into the real
 // one in the path, the query and the form, and back in every answer.
 type Proxy struct {
@@ -65,6 +73,9 @@ type Proxy struct {
 	Pool, Holders string
 	// Copies lets the proxy make copies. Without it, it only finds those made before.
 	Copies bool
+	// Direct is for a cluster that makes no copies and has none left: the proxy then reads no
+	// records and passes every call but a storage's configuration on as it came.
+	Direct bool
 	// Pod is the proxy's own, which its events are about. When empty, it records none.
 	Pod types.NamespacedName
 	// Poll is how often a copy's task is looked at.
@@ -91,6 +102,10 @@ func (p *Proxy) Handler() http.Handler {
 		ModifyResponse: modifyResponse,
 		Transport:      p.Transport,
 		ErrorLog:       slog.NewLogLogger(p.Log.Handler(), slog.LevelWarn),
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+			p.Log.Warn("reaching Proxmox VE", "error", err.Error())
+			writeError(w, failed, "Proxmox VE did not answer the proxy")
+		},
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path, ok := strings.CutPrefix(r.URL.Path, apiPrefix)
@@ -102,11 +117,15 @@ func (p *Proxy) Handler() http.Handler {
 			p.storageConfig(w, r, m[1], forward)
 			return
 		}
+		if p.Direct {
+			forward.ServeHTTP(w, r)
+			return
+		}
 		c := p.pveFor(r)
 		copies, err := p.copies(r.Context(), c)
 		if err != nil {
 			p.Log.Error("reading the volume copies", "error", err.Error())
-			writeError(w, http.StatusServiceUnavailable, "the volume copies cannot be read")
+			writeError(w, failed, "the volume copies cannot be read")
 			return
 		}
 		n := newNames(copies)
@@ -218,12 +237,12 @@ func (p *Proxy) deleteVolume(w http.ResponseWriter, r *http.Request, copies map[
 	switch {
 	case err != nil:
 		p.Log.Error("reading a volume copy's record", "volume", storage+":"+volume, "error", err.Error())
-		writeError(w, http.StatusServiceUnavailable, "the volume copies cannot be read")
+		writeError(w, failed, "the volume copies cannot be read")
 		return true
 	case !found:
 		return false
 	case rec.State != stateDone:
-		writeError(w, http.StatusConflict, "the volume is still being copied")
+		writeError(w, failed, "the volume is still being copied")
 		return true
 	}
 	if _, ok := copies[rec.PluginID()]; !ok {
@@ -294,8 +313,9 @@ func isJSON(h http.Header) bool {
 	return err == nil && (t == "application/json" || strings.HasSuffix(t, "+json"))
 }
 
-// storageConfig answers with the storage's entry of the storage list, or passes the call on when
-// the list does not show it.
+// storageConfig answers with the storage's entry of the storage list. A storage the list does not
+// show is one the token holds neither Datastore.Audit nor Datastore.AllocateSpace on, or that does
+// not exist, which the answer says. A list that cannot be read passes the call on.
 func (p *Proxy) storageConfig(w http.ResponseWriter, r *http.Request, storage string, forward http.Handler) {
 	var list []json.RawMessage
 	if err := p.pveFor(r).call(r.Context(), http.MethodGet, "/storage", nil, &list); err != nil {
@@ -312,7 +332,7 @@ func (p *Proxy) storageConfig(w http.ResponseWriter, r *http.Request, storage st
 			return
 		}
 	}
-	forward.ServeHTTP(w, r)
+	writeErrors(w, http.StatusForbidden, map[string]string{"storage": "storage " + storage + " is not shown to the cluster's token: it needs Datastore.Audit on /storage/" + storage + ", or the storage does not exist"})
 }
 
 // writeData answers as Proxmox VE does, with the data in an envelope.

@@ -179,6 +179,30 @@ func newUpdater(t *testing.T, rs *releaseServer) (*Updater, *int) {
 	}, &restarts
 }
 
+// The installer links /usr/bin/kubehenge to the binary for `pct exec`. The update replaces the
+// file the link names, so the link must reach the new release.
+func TestUpdateKeepsTheLinkOnPctExecPath(t *testing.T) {
+	t.Parallel()
+	rs := newReleaseServer(t)
+	u, _ := newUpdater(t, rs)
+	link := filepath.Join(u.Root, "usr", "bin", "kubehenge")
+	if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(u.binary("kubehenge"), link); err != nil {
+		t.Skipf("no symbolic links here: %v", err)
+	}
+	if err := u.Spool.Request(UpdateRequest{Version: "0.2.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, link); got != "binary 0.2.0" {
+		t.Fatalf("the link reads %q", got)
+	}
+}
+
 func TestUpdateWaitsForTheRunToEnd(t *testing.T) {
 	t.Parallel()
 	rs := newReleaseServer(t)

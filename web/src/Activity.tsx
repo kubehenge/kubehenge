@@ -4,7 +4,7 @@ import { api } from "./api";
 import { clusterPath } from "./cluster-paths";
 import { Link } from "./router";
 import type { Activity, ActivityEntry, HealthEvent, HealthSection } from "./types";
-import { age, Detail, ErrorBox, filled, pollIdle, Said, Skeleton, Status, usePoll } from "./ui";
+import { age, Detail, ErrorBox, filled, pollIdle, Said, Skeleton, Status, usePoll, ReadError } from "./ui";
 
 const windows = [
   { days: 1, label: "Last day" },
@@ -62,7 +62,8 @@ function Read({
   withCluster: boolean;
   choice: JSX.Element;
 }): JSX.Element {
-  const { data, error } = usePoll(load, pollIdle);
+  const read = usePoll(load, pollIdle);
+  const { data, error } = read;
   return (
     <>
       <div className="box scroll">
@@ -70,7 +71,8 @@ function Read({
           <h3>Who did what</h3>
           {choice}
         </div>
-        {!data && (error === undefined ? <Skeleton rows={6} /> : <ErrorBox message={error} />)}
+        <ReadError read={read} />
+        {!data && error === undefined && <Skeleton rows={6} />}
         {data && <ErrorBox message={data.error} />}
         {data && <Entries entries={data.entries} withCluster={withCluster} />}
       </div>

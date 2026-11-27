@@ -77,7 +77,6 @@ export const startKeys: ReadonlySet<keyof Form> = new Set<keyof Form>([
   "etcdSnapshots",
   "etcdFields",
   "namespaceLabels",
-  "existingCertManager",
 ]);
 
 function machineOf(v: unknown, fallback: Machine): Machine {

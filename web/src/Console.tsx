@@ -6,7 +6,7 @@ import { FleetRail, ranked, useFleet } from "./fleet";
 import logo from "./logo.svg";
 import { Palette, ShortcutsDialog, useShortcuts, type Command, type Shortcut } from "./Palette";
 import { Link, navigate } from "./router";
-import { RunsPanel, useRuns } from "./Runs";
+import { RunsPanel, hasRuns, useRuns } from "./Runs";
 import { setTheme, themes, useTheme, type Theme } from "./theme";
 import type { Cluster } from "./types";
 
@@ -181,6 +181,8 @@ export function Console({
 }): JSX.Element {
   const fleet = useFleet();
   const runs = useRuns();
+  // A failed runs read shows in the panel, with its retry, even with nothing else to list.
+  const anyRuns = hasRuns(runs, fleet);
   const [palette, setPalette] = useState(false);
   const [keys, setKeys] = useState(false);
   // undefined follows the window's width. true or false is the user's own choice.
@@ -246,7 +248,7 @@ export function Console({
         path={path}
         demo={demo}
         running={runs.filter((r) => r.group === "running").length}
-        anyRuns={runs.length > 0}
+        anyRuns={anyRuns}
         runsShown={runsShown}
         open={open}
         onSignOut={onSignOut}
@@ -257,7 +259,7 @@ export function Console({
       <main className="content" ref={main} tabIndex={-1}>
         {children}
       </main>
-      {!settingUp && runs.length > 0 && <RunsPanel runs={runs} onFold={() => setRunsShown(false)} />}
+      {!settingUp && anyRuns && <RunsPanel runs={runs} onFold={() => setRunsShown(false)} />}
       {palette && <Palette commands={commands} onClose={() => setPalette(false)} />}
       {keys && <ShortcutsDialog shortcuts={shortcuts.filter((s) => s.on !== false)} onClose={() => setKeys(false)} />}
     </div>

@@ -46,6 +46,7 @@ import type {
   FreeAddresses,
   Job,
   ManagementSettings,
+  MissingRoot,
   NodeDNS,
   OIDCProvider,
   PveNode,
@@ -74,6 +75,7 @@ import {
   weekdayName,
   weekdays,
   Skeleton,
+  ReadError,
 } from "./ui";
 import { vmIDRangeOf, vmIDRangeProblem, vmIDRangeVariable } from "./VmidRange";
 
@@ -1257,7 +1259,8 @@ const running = (s: SetupStatus): s is SetupStatus & { job: Job } =>
 // Setup is the appliance's first run: it creates the management cluster with the signed-in
 // administrator's Proxmox VE session.
 export function Setup({ onReady }: { onReady?: () => void }): JSX.Element {
-  const { data: status, error, reload } = usePoll(api.setupStatus, (s) => (s && running(s) ? pollRunning : pollIdle));
+  const read = usePoll(api.setupStatus, (s) => (s && running(s) ? pollRunning : pollIdle));
+  const { data: status, error, reload } = read;
   const ready = status?.ready;
   useEffect(() => {
     if (ready === true) {
@@ -1266,7 +1269,12 @@ export function Setup({ onReady }: { onReady?: () => void }): JSX.Element {
   }, [ready, onReady]);
 
   if (!status) {
-    return <section className="panel">{filled(error) ? <ErrorBox message={error} /> : <Skeleton rows={6} />}</section>;
+    return (
+      <section className="panel">
+        <ReadError read={read} />
+        {!filled(error) && <Skeleton rows={6} />}
+      </section>
+    );
   }
   if (!status.allowed) {
     return (
@@ -2130,7 +2138,7 @@ function BootLogsChoice({ form, set }: Omit<FieldsProps, "shown">): JSX.Element 
         Shows why a kubeadm, RKE2 or k3s node does not join. Talos nodes&apos; logs come through Talos either way.
       </Info>
       <p className="hint" id={hint}>
-        Grants VM.GuestAgent.FileRead on the clusters&apos; pool.
+        Grants VM.GuestAgent.FileRead and VM.GuestAgent.Audit on the clusters&apos; pool.
       </p>
     </fieldset>
   );
@@ -2292,9 +2300,16 @@ function ProxyPassword({ form, set }: FieldsProps): JSX.Element {
   );
 }
 
+// withRoots is the Site CA with each root the hosts presented appended, none twice.
+export function withRoots(siteCA: string, roots: string[]): string {
+  const have = siteCA.trim();
+  const added = roots.map((r) => r.trim()).filter((r) => !have.includes(r));
+  return `${[have, ...added].filter((r) => r !== "").join("\n")}\n`;
+}
+
 // SiteFields are what a proxied or offline site fills first: the site's CA and time zone, the mirrors
 // and the proxy.
-export function SiteFields({ form, set, shown }: FieldsProps): JSX.Element {
+export function SiteFields({ form, set, shown, siteRoots }: FieldsProps & { siteRoots?: MissingRoot[] }): JSX.Element {
   return (
     <>
       <Field
@@ -2334,6 +2349,11 @@ export function SiteFields({ form, set, shown }: FieldsProps): JSX.Element {
           <>
             PEM, root only.
             <SiteCARollNote siteCA={form.siteCA} />
+            {siteRoots?.map((root) => (
+              <button key={root.pem} type="button" onClick={() => set("siteCA", withRoots(form.siteCA, [root.pem]))}>
+                Add {root.name}
+              </button>
+            ))}
           </>
         }
         info="Everything that names no other CA trusts it, the management cluster included. Proxmox VE's own downloads do not."
@@ -2696,6 +2716,7 @@ function SetupWizard({
     firstRun,
     advancedOpen,
     rangeWarnings: rangeWarningsOf(findings),
+    siteRoots: findings?.missingRoots ?? [],
     handleAdvanced: setAdvancedOpen,
     handleAskRestore: () => setAskingRestore(true),
     missing,
@@ -3205,6 +3226,7 @@ function setupFields({
   firstRun: boolean;
   advancedOpen: boolean;
   rangeWarnings: string[];
+  siteRoots: MissingRoot[];
   handleAdvanced: (open: boolean) => void;
   handleAskRestore: () => void;
   missing: { images: string | undefined; isos: string | undefined };
@@ -3366,7 +3388,7 @@ function setupFields({
         </Field>
         <fieldset className="group">
           <legend>Site</legend>
-          <SiteFields form={form} set={set} shown={shown} />
+          <SiteFields form={form} set={set} shown={shown} siteRoots={more.siteRoots} />
         </fieldset>
         <AdvancedFields
           form={form}

@@ -5,7 +5,8 @@ name: e2e image
 # cache saved on main is read by every branch and pull request, so the next pull request run after
 # the change finds it. Without this, every lane of every run until the nightly run would build it
 # again.
-# - Proxmox VE's image (test/e2e/pve), under its files' hash. Built in a lane it comes from Proxmox
+# - Proxmox VE's image (test/e2e/pve), under its files' hash and the newest pve-manager version of
+#   its repository (scripts/pve-version.sh). Built in a lane it comes from Proxmox
 #   VE's repository, where one refused connection fails the lane.
 # - Go's and npm's caches, under the hash of go.sum and the frontend's lockfile.
 # - The templates of kubeadm, RKE2 and k3s a pull request's tests bake, each under a hash of its
@@ -31,22 +32,37 @@ jobs:
     name: Build
     runs-on: ubuntu-26.04
     timeout-minutes: 30
+    outputs:
+      prefix: ${{ steps.pve.outputs.prefix }}
+      version: ${{ steps.pve.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The newest pve-manager of Proxmox VE's repository is in the key, so a release made after the
+      # image was cached finds no entry and builds it again.
+      - id: pve
+        env:
+          FILES_HASH: ${{ hashFiles('test/e2e/pve/**') }}
+        run: |
+          found=$(scripts/pve-version.sh "$FILES_HASH")
+          echo "$found"
+          echo "$found" >> "$GITHUB_OUTPUT"
       - id: kept
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/pve-image.tar.zst
-          key: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-${{ github.run_id }}
-          restore-keys: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-
+          key: ${{ steps.pve.outputs.prefix }}${{ github.run_id }}
+          restore-keys: ${{ steps.pve.outputs.prefix }}
           lookup-only: true
       - name: Proxmox VE's image
         if: steps.kept.outputs.cache-matched-key == ''
+        env:
+          PVE_VERSION: ${{ steps.pve.outputs.version }}
         run: |
           for try in 1 2 3; do
-            docker build --progress=plain -t kubehenge-e2e-pve test/e2e/pve && break
+            docker build --progress=plain --build-arg PVE_VERSION="$PVE_VERSION" \
+              -t kubehenge-e2e-pve test/e2e/pve && break
             [ "${try}" = 3 ] && exit 1
             sleep 60
           done
@@ -55,7 +71,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/pve-image.tar.zst
-          key: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-${{ github.run_id }}
+          key: ${{ steps.pve.outputs.prefix }}${{ github.run_id }}
 
   # Go's and npm's caches of e2e.yml's build job, once go.sum or the frontend's lockfile changes or
   # the entry was evicted. Saved by the nightly run alone, pull requests found none until then.
@@ -175,8 +191,8 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/pve-image.tar.zst
-          key: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-${{ github.run_id }}
-          restore-keys: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-
+          key: ${{ needs.build.outputs.prefix }}${{ github.run_id }}
+          restore-keys: ${{ needs.build.outputs.prefix }}
       - if: steps.pve-cache.outputs.cache-matched-key != ''
         run: |
           zstd -dc "$RUNNER_TEMP/pve-image.tar.zst" | docker load -q
@@ -194,6 +210,8 @@ jobs:
           sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
           test -c /dev/kvm
       - name: Proxmox VE
+        env:
+          KUBEHENGE_E2E_PVE_VERSION: ${{ needs.build.outputs.version }}
         run: test/e2e/ci/up.sh "$RUNNER_TEMP/e2e"
       - name: Bake
         env:

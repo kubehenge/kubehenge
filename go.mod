@@ -29,6 +29,7 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/letsencrypt/pebble/v2 v2.10.3
 	github.com/luthermonson/go-proxmox v0.10.0
+	github.com/mdlayher/netlink v1.11.2
 	github.com/miekg/dns v1.1.73
 	github.com/minio/minio-go/v7 v7.4.1
 	github.com/prometheus/client_golang v1.25.0
@@ -249,7 +250,6 @@ require (
 	github.com/mattn/go-runewidth v0.0.31 // indirect
 	github.com/mdlayher/ethtool v0.7.0 // indirect
 	github.com/mdlayher/genetlink v1.4.0 // indirect
-	github.com/mdlayher/netlink v1.11.2 // indirect
 	github.com/mdlayher/socket v0.8.0 // indirect
 	github.com/mimuret/golang-iij-dpf v0.9.1 // indirect
 	github.com/minio/crc64nvme v1.1.1 // indirect

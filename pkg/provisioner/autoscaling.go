@@ -78,11 +78,24 @@ func autoscaled(cluster *clusterv1.Cluster) bool {
 	})
 }
 
+// placedInCluster tells whether the cluster's autoscaler is set to run on its own control planes.
+func placedInCluster(c *clusterv1.Cluster) bool {
+	settings, err := autoscalerSettingsOf(c)
+	return err == nil && settings.Placement == PlacementWorkload
+}
+
 // validateAutoscaling holds each autoscaled pool to bounds the autoscaler can work with, and to
 // leaving its replicas unset: Cluster API would otherwise set them back on every change of the
-// cluster. That undoes what the autoscaler did.
-func validateAutoscaling(c *clusterv1.Cluster) field.ErrorList {
+// cluster. That undoes what the autoscaler did. An autoscaler placed on the cluster's control planes
+// reaches the management cluster at managementAPI, so with none a new cluster, a change of the
+// placement to them, or autoscaling switched on there, is refused. A cluster already autoscaled there
+// keeps its other changes.
+func validateAutoscaling(old, c *clusterv1.Cluster, managementAPI string) field.ErrorList {
 	var errs field.ErrorList
+	if managementAPI == "" && autoscaled(c) && placedInCluster(c) && (old == nil || !placedInCluster(old) || !autoscaled(old)) {
+		errs = append(errs, field.Forbidden(field.NewPath("spec", "topology", "variables").Key(AutoscalerVariable).Child("placement"),
+			"the autoscaler cannot run inside the cluster: Kubehenge was installed without the management cluster's address (managementEndpoint)"))
+	}
 	pools := field.NewPath("spec", "topology", "workers", "machineDeployments")
 	for i := range c.Spec.Topology.Workers.MachineDeployments {
 		md := &c.Spec.Topology.Workers.MachineDeployments[i]

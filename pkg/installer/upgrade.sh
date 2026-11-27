@@ -62,6 +62,10 @@ fi
 
 rm -rf "${aside}" "${share}/kubehenge.new"
 mkdir -p "${aside}/units" "${share}/kubehenge.new"
+# `pct exec` runs its command on the caller's PATH, which need not hold /usr/local/bin. Appliances
+# made before the link existed get it here.
+mkdir -p "${R}/usr/bin"
+ln -sfn /usr/local/bin/kubehenge "${R}/usr/bin/kubehenge"
 cp -p "${bin}/kubehenge" "${env}" "${aside}/"
 [ ! -e "${bin}/tofu.new" ] || cp -p "${bin}/tofu" "${aside}/"
 for unit in ${units}; do
@@ -126,7 +130,7 @@ systemctl restart kubehenge.service
 # The next visit starts the new Headlamp.
 systemctl stop kubehenge-headlamp.service
 
-if reason=$("${bin}/kubehenge" appliance health --cert "${R}/etc/kubehenge/tls.crt" 2>&1); then
+if reason=$("${bin}/kubehenge" appliance health --quiet --cert "${R}/etc/kubehenge/tls.crt" 2>&1); then
     rm -rf "${aside}"
     exit 0
 fi

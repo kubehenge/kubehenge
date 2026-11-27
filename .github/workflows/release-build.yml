@@ -420,13 +420,15 @@ jobs:
       HELM_ADDON: ${{ needs.build.outputs.helm-addon }}
       PROXMOX_CSI: ${{ needs.build.outputs.proxmox-csi }}
     steps:
-      # The two files of the repository this job runs, which install cosign and check its digest.
+      # The files of the repository this job runs: they install cosign, check its digest and fetch
+      # Sigstore's trust material.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           sparse-checkout: |
             scripts/tools.sh
             scripts/fetch.sh
+            pkg/templates/node/sigstore-root.sh
           sparse-checkout-cone-mode: false
       - name: cosign
         env:
@@ -457,7 +459,12 @@ jobs:
         run: |
           set -eu
           echo "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          cosign sign --yes "$CONTROLLER_REPOSITORY@$CONTROLLER" "$CAPMOX_REPOSITORY@$CAPMOX" \
+          # Only this fetch is retried, never the sign: a sign run twice logs every signature twice.
+          pkg/templates/node/sigstore-root.sh "$RUNNER_TEMP/trusted_root.json" \
+            "$RUNNER_TEMP/signing_config.json"
+          cosign sign --yes --trusted-root "$RUNNER_TEMP/trusted_root.json" \
+            --signing-config "$RUNNER_TEMP/signing_config.json" \
+            "$CONTROLLER_REPOSITORY@$CONTROLLER" "$CAPMOX_REPOSITORY@$CAPMOX" \
             "$HELM_ADDON_REPOSITORY@$HELM_ADDON" "$PROXMOX_CSI_REPOSITORY@$PROXMOX_CSI"
 
       - name: Provenance of the files

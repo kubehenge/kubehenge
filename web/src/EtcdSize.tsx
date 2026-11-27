@@ -29,22 +29,21 @@ export function etcdQuotaProblem(value: string): string | undefined {
   return undefined;
 }
 
-/** The quota can be raised and not lowered, which the class refuses once the cluster runs. */
+/** The quota can be lowered only below what the members' databases leave room for, which the webhook decides. */
 export function EtcdDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
   const current = etcdQuotaOf(c.variables["etcd"]);
   const [value, setValue] = useState(String(current));
   const [touched, setTouched] = useState(false);
   const { busy, error, send } = useChange(c, onClose);
   const problem = etcdQuotaProblem(value);
-  const lowered = problem === undefined && Number(value) < current;
-  const shown = touched ? (problem ?? (lowered ? `Not lower than ${current}` : undefined)) : undefined;
+  const shown = touched ? problem : undefined;
   return (
     <Dialog
       title="Edit etcd"
       onClose={onClose}
       onSubmit={() => {
         setTouched(true);
-        if (problem !== undefined || lowered) {
+        if (problem !== undefined) {
           return;
         }
         void send({ variables: { etcd: { quotaGiB: Number(value) } } });
@@ -60,7 +59,11 @@ export function EtcdDialog({ cluster: c, onClose }: { cluster: Cluster; onClose:
         </>
       }
     >
-      <Field label="Database limit (GiB)" hint="It can be raised, never lowered." error={shown}>
+      <Field
+        label="Database limit (GiB)"
+        hint="Lowering needs every database under 60% of the new limit."
+        error={shown}
+      >
         {(id) => (
           <input
             id={id}

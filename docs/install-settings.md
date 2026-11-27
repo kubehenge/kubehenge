@@ -172,8 +172,9 @@ A node that never joins its cluster says why in its boot log ([troubleshooting.m
 
 ### Privilege and reach
 
-- **What it grants:** the controller's token holds `VM.GuestAgent.FileRead` on the workload pool, propagated.
-  - With it, the token may read files in every cluster VM through the guest agent. It runs no commands and writes nothing.
+- **What it grants:** the controller's token holds `VM.GuestAgent.FileRead` and `VM.GuestAgent.Audit` on the workload pool, propagated.
+  - With them, the token may read files in every cluster VM through the guest agent, and the network addresses the agent reports. It runs no commands and writes nothing.
+  - The addresses show which machines' VMs lack the address they were given, as when another host holds it.
 - **What it reaches:** only the files the node's guest agent may open.
   - Kubehenge's node templates allow the agent to read cloud-init's output and the node's copy of its journals (`/var/log/kubehenge`, root's alone).
   - Their SELinux policy keeps it from the rest of `/var/log` and from the node's keys and kubeconfigs.
@@ -418,7 +419,7 @@ The management cluster's module, `management-cluster/`, takes these variables. T
 | `template_refresh` | [below](#template_refresh-fields) | The weekly build of the node OS VM templates ([templates.md](templates.md#the-weekly-build)) and its own API token ([details](#what-the-template-builds-may-do)). |
 | `cluster_sys_audit` | `true` | Give each cluster the cloud controller manager's HA rule labels unless it switches them off. This gives the cluster's token `Sys.Audit` on `/`, unpropagated, through a group the controller adds its user to. It reads the Proxmox VE cluster's configuration and changes nothing ([details](#ha-rule-labels)). `false` gives no cluster `Sys.Audit` on `/`. |
 | `watch` | `stall_minutes = 20` | `stall_minutes` (1 to 1440) is how long Kubehenge's controller waits before it reports a stall on the Cluster and the Health page. That covers a new machine in the roll of a cluster's only control plane becoming ready ([troubleshooting.md](troubleshooting.md#one-control-plane-its-roll-stalled)) and a cluster's deletion finishing ([troubleshooting.md](troubleshooting.md#a-cluster-does-not-finish-deleting)). |
-| `node_boot_logs` | `true` | Let the controller read kubeadm, RKE2 and k3s nodes' boot logs through their guest agents (files only). Its token gets `VM.GuestAgent.FileRead` on the workload pool ([details](#nodes-boot-logs)). `false` takes the privilege away. Talos nodes' boot logs are read through their Talos API either way. |
+| `node_boot_logs` | `true` | Let the controller read kubeadm, RKE2 and k3s nodes' boot logs through their guest agents (files only). Its token gets `VM.GuestAgent.FileRead` and `VM.GuestAgent.Audit` on the workload pool ([details](#nodes-boot-logs)). `false` takes the privilege away. Talos nodes' boot logs are read through their Talos API either way. |
 | `extra_cluster_namespaces` | `[]` | Namespaces the interface creates and manages clusters in beside `clusters` ([clusters.md](clusters.md#more-namespaces-for-clusters)). Each is created if missing and kept when taken off the list. `default`, `cert-manager`, `kube-*` and `*-system` are refused. |
 | `etcd_restore` | `false` | Have the controller restore clusters' etcd itself through the VMs' guest agents. It uses a token holding `VM.Audit` and `VM.GuestAgent.Unrestricted` on the workload pool that only a short-lived Job per step holds ([details](#etcd-restores)). Without it, the interface shows the steps to restore by hand. |
 | `headlamp_sign_in` | `false` | Have the appliance's shared Headlamp sign those who may download a cluster's admin kubeconfig in as cluster-admin. It does so through two ServiceAccounts the controller keeps in every cluster of the interface's namespaces ([details](#headlamp-sign-in)). Without the appliance it does nothing but keep those accounts. |

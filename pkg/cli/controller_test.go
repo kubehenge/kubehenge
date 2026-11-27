@@ -16,6 +16,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	addonsv1 "sigs.k8s.io/cluster-api/api/addons/v1beta2"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
@@ -150,5 +152,23 @@ func TestControllerRefusesAFlagBeforeItStarts(t *testing.T) {
 				t.Errorf("run gave %v; want %q", err, c.want)
 			}
 		})
+	}
+}
+
+// hooksManager is the part of a manager newHooks reads.
+type hooksManager struct{ manager.Manager }
+
+func (hooksManager) GetAPIReader() client.Reader { return nil } //nolint:ireturn // manager.Manager's own signature
+func (hooksManager) GetClient() client.Client    { return nil }
+
+func TestHooksKnowTheManagementClustersAddress(t *testing.T) {
+	t.Parallel()
+	o, _ := validControllerOptions("https://pve.example.test:8006", "")
+	if h := o.newHooks(hooksManager{}, nil, nil, provisioner.KubernetesMinors{}); h.ManagementAPI != "" {
+		t.Errorf("without --management-endpoint: %q", h.ManagementAPI)
+	}
+	o.autoscaler.Management.Server = "https://192.0.2.10:6443"
+	if h := o.newHooks(hooksManager{}, nil, nil, provisioner.KubernetesMinors{}); h.ManagementAPI != o.autoscaler.Management.Server {
+		t.Errorf("with --management-endpoint: %q", h.ManagementAPI)
 	}
 }

@@ -4,6 +4,7 @@ import { api } from "./api";
 import { autoscales, controlPlaneSizes, mostWorkers, variable } from "./create-form";
 import type { StepProps } from "./CreateSteps";
 import { addressCount, whole } from "./network";
+import { useAutoscalerInCluster } from "./Placement";
 import { poolSize, poolSuffix as suffixOf } from "./pool-machine";
 import type {
   AutoscalerSettings,
@@ -475,6 +476,7 @@ export function AutoscalerDialog({ cluster: c, onClose }: { cluster: Cluster; on
   const [delay, setDelay] = useState(String(current.scaleDownDelayAfterAddMinutes));
   const [unneeded, setUnneeded] = useState(String(current.scaleDownUnneededMinutes));
   const { busy, error, send } = useChange(c, onClose);
+  const inCluster = useAutoscalerInCluster(c);
   const next: Required<AutoscalerSettings> = {
     ...value,
     scaleDownDelayAfterAddMinutes: number(delay),
@@ -518,7 +520,9 @@ export function AutoscalerDialog({ cluster: c, onClose }: { cluster: Cluster; on
             }
           >
             <option value="management">Management cluster (recommended)</option>
-            <option value="workload">Cluster&apos;s control planes</option>
+            {(inCluster || current.placement === "workload") && (
+              <option value="workload">Cluster&apos;s control planes</option>
+            )}
           </select>
         )}
       </Field>

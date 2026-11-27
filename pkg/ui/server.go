@@ -89,7 +89,7 @@ type Guests interface {
 	VMLoad(ctx context.Context, t *pve.Ticket, node string, vmid int) ([]pve.LoadPoint, error)
 	Templates(ctx context.Context, t *pve.Ticket, pool string) ([]pve.Member, error)
 	BackupCovers(ctx context.Context, t *pve.Ticket, vmid int) (bool, error)
-	ApplianceID(ctx context.Context, t *pve.Ticket, hint int, macs []string) (int, error)
+	ApplianceID(ctx context.Context, t *pve.Ticket, hint int, macs []string) (int, map[string]string, error)
 	NodeTime(ctx context.Context, t *pve.Ticket, node string) (time.Time, error)
 }
 

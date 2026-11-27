@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type JSX } from "react";
+import { useId, useState, type JSX } from "react";
 
 import { api, etcdSnapshotURL } from "./api";
 import {
@@ -9,7 +9,7 @@ import {
   scheduleText,
   targetProblem,
   TargetScheduleFields,
-  useClassTargets,
+  classTargets,
   volumeName,
   volumeTarget,
   type OfferedTarget,
@@ -17,18 +17,30 @@ import {
 import type { OptionRow } from "./ClusterOptions";
 import { CredentialField } from "./CredentialField";
 import { RemovedSnapshots } from "./RemovedSnapshots";
-import type { Cluster, ClusterEtcdSnapshots, EtcdRestorePlan, EtcdRestoreStatus, EtcdSnapshot } from "./types";
+import type {
+  Cluster,
+  ClusterClass,
+  ClusterEtcdSnapshots,
+  EtcdRestorePlan,
+  EtcdRestoreStatus,
+  EtcdSnapshot,
+} from "./types";
 import {
   Detail,
   Dialog,
   ErrorBox,
   Field,
   Info,
+  ReadError,
   Status,
   age,
   browserZone,
   type SiteZone,
-  useSiteZone,
+  siteZone,
+  ReadDialog,
+  useClasses,
+  useOnce,
+  type Poll,
   bytes,
   distributionName,
   errorMessage,
@@ -260,29 +272,37 @@ export function EtcdSnapshotFieldset({
 }
 
 /** EtcdSnapshotsDialog switches a cluster's etcd snapshots on or off and changes how they run. */
-export function EtcdSnapshotsDialog({
-  cluster: c,
-  onClose,
-}: {
-  cluster: Cluster;
-  onClose: () => void;
-}): JSX.Element | null {
-  const zone = useSiteZone();
-  return zone === undefined ? null : <EtcdSnapshotsForm cluster={c} zone={zone} onClose={onClose} />;
+export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+  const read = useClasses();
+  return (
+    <ReadDialog title="Edit etcd snapshots" read={read} onClose={onClose}>
+      {(classes) => (
+        <EtcdSnapshotsForm
+          cluster={c}
+          zone={siteZone(classes)}
+          targets={classTargets(classes.find((x) => x.name === c.class))}
+          classesRead={read}
+          onClose={onClose}
+        />
+      )}
+    </ReadDialog>
+  );
 }
 
 function EtcdSnapshotsForm({
   cluster: c,
   zone,
+  targets,
+  classesRead,
   onClose,
 }: {
   cluster: Cluster;
   zone: SiteZone;
+  targets: OfferedTarget[];
+  classesRead: Poll<ClusterClass[]>;
   onClose: () => void;
 }): JSX.Element {
   const current = etcdSnapshotsOf(c.variables["etcdSnapshots"]);
-  const offered = useClassTargets(c.class);
-  const targets = offered ?? [];
   const [enabled, setEnabled] = useState(current.enabled);
   const [typed, setTyped] = useState<EtcdSnapshotFields>(() => etcdFieldsOf(current, zone.start, zone.inEffect));
   const { busy, error, send } = useChange(c, onClose);
@@ -344,6 +364,7 @@ function EtcdSnapshotsForm({
       {current.enabled && !enabled && (
         <p className="warning">Stops snapshots. Existing ones stay and can be restored.</p>
       )}
+      <ReadError read={classesRead} />
       <ErrorBox message={error} />
     </Dialog>
   );
@@ -400,9 +421,13 @@ export function restoreState(r: EtcdRestoreStatus): { state: Health; text: strin
   return { state: "progress", text: "Replacing control-plane nodes" };
 }
 
-function snapshotState(v: ClusterEtcdSnapshots): { state: Health | "idle"; text: string } {
+function snapshotState(v: ClusterEtcdSnapshots, unread: boolean): { state: Health | "idle"; text: string } {
   if (v.condition === undefined) {
-    return { state: "idle", text: v.enabled ? "None yet" : "Off" };
+    if (!v.enabled) {
+      return { state: "idle", text: "Off" };
+    }
+    // Without a read of the snapshots or their target, none taken is not known.
+    return { state: "idle", text: unread || filled(v.message) ? "Unknown" : "None yet" };
   }
   return v.condition.status === "True" ? { state: "ok", text: "Taken" } : { state: "error", text: "Failed" };
 }
@@ -417,15 +442,12 @@ export function EtcdSnapshotsView({
   can: boolean;
   onEdit: (a: "etcdSnapshots") => void;
 }): JSX.Element {
-  const {
-    data: v,
-    error,
-    reload,
-  } = usePoll(
+  const read = usePoll(
     () => api.etcdSnapshots(c.namespace, c.name),
     (d) => (d !== undefined && (d.requested || d.restoring) ? pollRunning : pollIdle),
     { cache: snapshotsCache, key: `${c.namespace}/${c.name}` },
   );
+  const { data: v, error, reload } = read;
   const [restoring, setRestoring] = useState<EtcdSnapshot>();
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string>();
@@ -434,14 +456,15 @@ export function EtcdSnapshotsView({
     return (
       <div className="box">
         <h3>etcd snapshots</h3>
-        <ErrorBox message={error} />
+        <ReadError read={read} />
         {!filled(error) && <Skeleton />}
       </div>
     );
   }
 
   const pool = poolName(c.pool);
-  const noSnapshot = v.canSnapshot ? undefined : `Taking snapshots needs VM.Allocate on pool ${pool}.`;
+  const noRead = error === undefined ? undefined : "Snapshots not read.";
+  const noSnapshot = noRead ?? (v.canSnapshot ? undefined : `Taking snapshots needs VM.Allocate on pool ${pool}.`);
   const noRestore = v.canRestore ? undefined : `Download and restore need Sys.Modify on pool ${pool}.`;
   const take = async (): Promise<void> => {
     setBusy(true);
@@ -459,14 +482,14 @@ export function EtcdSnapshotsView({
     <>
       <div className="box">
         <h3>etcd snapshots</h3>
-        <SnapshotsSummary cluster={c} view={v} />
+        <SnapshotsSummary cluster={c} view={v} unread={error !== undefined} />
         {v.restore !== undefined && <RestoreState restore={v.restore} snapshots={v.snapshots} />}
         {filled(v.message) && <p className="warning">{v.message}</p>}
         <div className="actions">
           {v.enabled ? (
             <button
               type="button"
-              disabled={busy || !v.canSnapshot || v.requested || v.restoring}
+              disabled={busy || !v.canSnapshot || v.requested || v.restoring || noRead !== undefined}
               title={noSnapshot}
               onClick={() => {
                 void take();
@@ -482,7 +505,7 @@ export function EtcdSnapshotsView({
         </div>
         {v.enabled && noSnapshot !== undefined && <p className="muted">{noSnapshot}</p>}
         <ErrorBox message={actionError} />
-        <ErrorBox message={error} />
+        <ReadError read={read} />
       </div>
 
       {(v.enabled || v.snapshots.length > 0) && (
@@ -507,11 +530,19 @@ export function EtcdSnapshotsView({
   );
 }
 
-function SnapshotsSummary({ cluster: c, view: v }: { cluster: Cluster; view: ClusterEtcdSnapshots }): JSX.Element {
+function SnapshotsSummary({
+  cluster: c,
+  view: v,
+  unread,
+}: {
+  cluster: Cluster;
+  view: ClusterEtcdSnapshots;
+  unread: boolean;
+}): JSX.Element {
   if (!v.enabled) {
     return <p>etcd snapshots are off</p>;
   }
-  const s = snapshotState(v);
+  const s = snapshotState(v, unread);
   return (
     <dl className="summary">
       <dt>Kept on</dt>
@@ -750,18 +781,8 @@ export function EtcdRestoreDialog({
 // RestoreSteps lists the commands that restore the cluster by hand, for a management cluster whose
 // controller does not reach the VMs' guest agent.
 function RestoreSteps({ cluster: c, snapshot }: { cluster: Cluster; snapshot: EtcdSnapshot }): JSX.Element {
-  const [plan, setPlan] = useState<EtcdRestorePlan>();
-  const [error, setError] = useState<string>();
-  useEffect(() => {
-    async function load(): Promise<void> {
-      try {
-        setPlan(await api.etcdRestorePlan(c.namespace, c.name, snapshot.name));
-      } catch (err) {
-        setError(errorMessage(err));
-      }
-    }
-    void load();
-  }, [c.namespace, c.name, snapshot.name]);
+  const read = useOnce(async (): Promise<EtcdRestorePlan> => api.etcdRestorePlan(c.namespace, c.name, snapshot.name));
+  const { data: plan, error } = read;
   return (
     <div className="restore-steps">
       <p>
@@ -777,7 +798,7 @@ function RestoreSteps({ cluster: c, snapshot }: { cluster: Cluster; snapshot: Et
           like an admin kubeconfig.
         </span>
       </p>
-      <ErrorBox message={error} />
+      <ReadError read={read} />
       {plan === undefined && !filled(error) && <Skeleton rows={2} />}
       {plan !== undefined && <PlanSteps plan={plan} />}
     </div>

@@ -234,6 +234,9 @@ current-context: web
 		t.Fatal(err)
 	}
 	current.Spec.Topology.Variables = append(current.Spec.Topology.Variables, clusterv1.ClusterVariable{Name: "monitoring", Value: apiextensionsv1.JSON{Raw: []byte(`{"enabled":true}`)}})
+	if err := kube.Create(ctx, readyCertManager(c)); err != nil {
+		t.Fatal(err)
+	}
 	if err := kube.Update(ctx, current); err != nil {
 		t.Fatal(err)
 	}

@@ -881,7 +881,7 @@ export interface ManagementSettings {
   templateRefresh?: TemplateRefreshSettings;
   /** Clusters have the cloud controller manager's HA rule labels unless they switch them off, with Sys.Audit on / for their token. Absent, they have them. */
   clusterSysAudit?: boolean;
-  /** Kubehenge's controller reads nodes' boot logs through their guest agents, with VM.GuestAgent.FileRead. Absent, it does. */
+  /** Kubehenge's controller reads nodes' boot logs through their guest agents, with VM.GuestAgent.FileRead and VM.GuestAgent.Audit. Absent, it does. */
   nodeBootLogs?: boolean;
   /** The management cluster's API server logs the changes people make, which the activity page shows. */
   apiAuditLog?: boolean;
@@ -1417,9 +1417,17 @@ export interface SiteCARoll {
   waiting: number;
 }
 
+/** A root a host presented that the Site CA lacks. */
+export interface MissingRoot {
+  /** Its common name, else its organisation, else its subject. */
+  name: string;
+  pem: string;
+}
+
 export interface SetupFindings {
   errors: string[];
   warnings: string[];
+  missingRoots?: MissingRoot[];
   podRanges?: string[];
   serviceRanges?: string[];
 }

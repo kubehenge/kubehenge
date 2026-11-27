@@ -13,11 +13,13 @@ import {
   ErrorBox,
   Field,
   Info,
+  ReadError,
   Status,
   age,
   browserZone,
   type SiteZone,
-  useSiteZone,
+  siteZone,
+  ReadDialog,
   errorMessage,
   filled,
   pollCache,
@@ -30,6 +32,8 @@ import {
   stageLabel,
   useChange,
   usePoll,
+  useClasses,
+  type Poll,
   Skeleton,
 } from "./ui";
 import { oneOf, quantity, record, records, text, texts } from "./values";
@@ -148,21 +152,17 @@ export function targetText(t: OfferedTarget): string {
   return `bucket ${t.bucket} at ${URL.canParse(t.endpoint) ? new URL(t.endpoint).host : t.endpoint}`;
 }
 
-/** useClassTargets reads the targets an existing cluster's class offers. Undefined until known. */
-export function useClassTargets(className: string): OfferedTarget[] | undefined {
-  const [targets, setTargets] = useState<OfferedTarget[]>();
-  useEffect(() => {
-    async function load(): Promise<void> {
-      try {
-        const classes = await api.classes();
-        setTargets(classTargets(classes.find((c) => c.name === className)));
-      } catch {
-        setTargets([]);
-      }
-    }
-    void load();
-  }, [className]);
-  return targets;
+/**
+ * useClassTargets reads the targets an existing cluster's class offers, undefined until known, with
+ * the read of the classes for its error.
+ */
+export function useClassTargets(className: string): {
+  targets: OfferedTarget[] | undefined;
+  read: Poll<ClusterClass[]>;
+} {
+  const read = useClasses();
+  const targets = read.data === undefined ? undefined : classTargets(read.data.find((c) => c.name === className));
+  return { targets, read };
 }
 
 const weekdayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -572,23 +572,37 @@ export function backupsRows(c: Cluster, offered: boolean): OptionRow<"backups">[
 }
 
 /** BackupsDialog switches a cluster's backups on or off and changes how they run. */
-export function BackupsDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element | null {
-  const zone = useSiteZone();
-  return zone === undefined ? null : <BackupsForm cluster={c} zone={zone} onClose={onClose} />;
+export function BackupsDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+  const read = useClasses();
+  return (
+    <ReadDialog title="Edit backups" read={read} onClose={onClose}>
+      {(classes) => (
+        <BackupsForm
+          cluster={c}
+          zone={siteZone(classes)}
+          targets={classTargets(classes.find((x) => x.name === c.class))}
+          classesRead={read}
+          onClose={onClose}
+        />
+      )}
+    </ReadDialog>
+  );
 }
 
 function BackupsForm({
   cluster: c,
   zone,
+  targets,
+  classesRead,
   onClose,
 }: {
   cluster: Cluster;
   zone: SiteZone;
+  targets: OfferedTarget[];
+  classesRead: Poll<ClusterClass[]>;
   onClose: () => void;
 }): JSX.Element {
   const current = backupsOf(c.variables["backups"]);
-  const offered = useClassTargets(c.class);
-  const targets = offered ?? [];
   const [enabled, setEnabled] = useState(current.enabled);
   const [typed, setTyped] = useState<BackupFields>(() => backupFieldsOf(current, zone.start, zone.inEffect));
   const { busy, error, send } = useChange(c, onClose);
@@ -605,7 +619,7 @@ function BackupsForm({
     ? backupsVariable(backupFieldsOf(current), current.existingSecret)
     : current;
   const changed = JSON.stringify(next) !== JSON.stringify(before);
-  const none = offered !== undefined && targets.length === 0 && !current.enabled;
+  const none = targets.length === 0 && !current.enabled;
   return (
     <Dialog
       title="Edit backups"
@@ -659,6 +673,7 @@ function BackupsForm({
         />
       )}
       {current.enabled && !enabled && <p className="warning">Removes Velero. Backups stay in the target.</p>}
+      <ReadError read={classesRead} />
       <ErrorBox message={error} />
     </Dialog>
   );
@@ -701,6 +716,9 @@ function readersOf(c: Cluster, clusters: Cluster[] | null | undefined): string[]
     .toSorted();
 }
 
+// unreadBackups is why nothing is done with the backups while their read fails.
+const unreadBackups = "Backups not read.";
+
 /** BackupsView lists a cluster's backups and restores, and starts either. */
 export function BackupsView({
   cluster: c,
@@ -711,15 +729,12 @@ export function BackupsView({
   can: boolean;
   onEdit: (a: "backups") => void;
 }): JSX.Element {
-  const {
-    data: v,
-    error,
-    reload,
-  } = usePoll(
+  const read = usePoll(
     () => api.backups(c.namespace, c.name),
     (d) => (running(d) ? pollRunning : pollIdle),
     { cache: backupsCache, key: `${c.namespace}/${c.name}` },
   );
+  const { data: v, error, reload } = read;
   const fleet = useFleet();
   const [restoring, setRestoring] = useState<BackupRun>();
   const [deleting, setDeleting] = useState<BackupRun>();
@@ -732,7 +747,7 @@ export function BackupsView({
   if (!v) {
     return (
       <div className="box">
-        <ErrorBox message={error} />
+        <ReadError read={read} />
         {!filled(error) && <Skeleton />}
       </div>
     );
@@ -753,7 +768,9 @@ export function BackupsView({
     );
   }
 
-  const { noBackUp, noRestore, noDelete } = refusals(v, poolName(c.pool));
+  const refused = refusals(v, poolName(c.pool));
+  const { noRestore, noDelete } = refused;
+  const noBackUp = error === undefined ? refused.noBackUp : unreadBackups;
   const backUp = async (): Promise<void> => {
     setBusy(true);
     setActionError(undefined);
@@ -777,12 +794,12 @@ export function BackupsView({
             {a.what}. {a.message}
           </p>
         ))}
-        <BackupsSummary view={v} settings={settings} readers={readers} />
+        <BackupsSummary view={v} settings={settings} readers={readers} unread={error !== undefined} />
         {filled(v.message) && <p className="warning">{v.message}</p>}
         <div className="actions">
           <button
             type="button"
-            disabled={busy || !v.canBackUp || !v.reachable}
+            disabled={busy || !v.canBackUp || !v.reachable || error !== undefined}
             title={noBackUp}
             onClick={() => {
               void backUp();
@@ -800,7 +817,7 @@ export function BackupsView({
           ))}
         {filled(restoredInto) && <RestoredNotice namespace={c.namespace} into={restoredInto} />}
         <ErrorBox message={actionError} />
-        <ErrorBox message={error} />
+        <ReadError read={read} />
       </div>
       <SpecExport cluster={c} />
 
@@ -810,6 +827,7 @@ export function BackupsView({
         backups={own}
         noRestore={noRestore}
         noDelete={noDelete}
+        unread={error !== undefined}
         onRestore={setRestoring}
         onDelete={setDeleting}
       />
@@ -820,6 +838,7 @@ export function BackupsView({
           view={v}
           backups={v.backups.filter((b) => b.from === s.cluster)}
           noRestore={noRestore}
+          unread={error !== undefined}
           onRestore={setRestoring}
         />
       ))}
@@ -885,11 +904,19 @@ function BackupsSummary({
   view: v,
   settings,
   readers,
+  unread,
 }: {
   view: ClusterBackups;
   settings: BackupsValue;
   readers: string[];
+  /** A later read failed. */
+  unread: boolean;
 }): JSX.Element {
+  // Without Velero or this read, none taken is not known.
+  let last = v.reachable && !unread ? "None yet" : "Unknown";
+  if (v.lastBackup !== undefined) {
+    last = `${when(v.lastBackup)} (${age(v.lastBackup)} ago)`;
+  }
   const location = v.location === "Available" ? "Reachable" : (v.location ?? "Not checked yet");
   return (
     <dl className="summary">
@@ -899,7 +926,7 @@ function BackupsSummary({
       <dd>{backupsText(settings)}</dd>
       <dt>Target status</dt>
       <dd>
-        {v.reachable ? (
+        {v.reachable && !unread ? (
           <Status state={v.location === "Available" ? "ok" : "error"} text={location} />
         ) : (
           <Status state="idle" text="Unknown" />
@@ -907,7 +934,7 @@ function BackupsSummary({
         {filled(v.locationMessage) && <Detail>{sentence(v.locationMessage)}</Detail>}
       </dd>
       <dt>Last scheduled backup</dt>
-      <dd>{v.lastBackup === undefined ? "None yet" : `${when(v.lastBackup)} (${age(v.lastBackup)} ago)`}</dd>
+      <dd>{last}</dd>
       {v.sources.length > 0 && (
         <>
           <dt>Reads the backups of</dt>
@@ -946,6 +973,7 @@ function BackupsTable({
   backups,
   noRestore,
   noDelete,
+  unread,
   onRestore,
   onDelete,
 }: {
@@ -954,10 +982,15 @@ function BackupsTable({
   backups: BackupRun[];
   noRestore: string | undefined;
   noDelete?: string | undefined;
+  /** The list's last read failed, so what it shows may be gone: none of it is restored or deleted. */
+  unread: boolean;
   onRestore: (backup: BackupRun) => void;
   /** Unset for another cluster's backups, which are deleted where they are made. */
   onDelete?: (backup: BackupRun) => void;
 }): JSX.Element {
+  // why says why a backup's button is off: the list unread, the cluster's refusal, or the backup unfinished.
+  const why = (refusal: string | undefined, done: boolean): string | undefined =>
+    unread ? unreadBackups : (refusal ?? (done ? undefined : "Backup not finished"));
   return (
     <div className="box scroll">
       <h3>{title}</h3>
@@ -1014,8 +1047,8 @@ function BackupsTable({
                 <td className="row-action">
                   <button
                     type="button"
-                    disabled={!v.canRestore || !restorable(b) || b.deleting === true}
-                    title={noRestore ?? (restorable(b) ? undefined : "Backup not finished")}
+                    disabled={unread || !v.canRestore || !restorable(b) || b.deleting === true}
+                    title={why(noRestore, restorable(b))}
                     aria-label={`Restore ${b.name}`}
                     onClick={() => onRestore(b)}
                   >
@@ -1027,8 +1060,10 @@ function BackupsTable({
                       <button
                         type="button"
                         className="danger"
-                        disabled={!mayDelete}
-                        title={noDelete ?? (deletable(b) ? undefined : "Backup not finished")}
+                        disabled={unread || !mayDelete}
+                        title={
+                          unread ? unreadBackups : (noDelete ?? (deletable(b) ? undefined : "Backup not finished"))
+                        }
                         aria-label={`Delete ${b.name}`}
                         onClick={() => onDelete(b)}
                       >

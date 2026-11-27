@@ -102,7 +102,8 @@ func wantedFamilies(names []string) (bool, bool, error) {
 
 // freeAddresses suggests addresses for a new cluster on a bridge that no other cluster holds and no
 // host answers on, and tells which of the addresses typed a host answers on. It is advice: the
-// controller refuses only addresses another cluster holds, as it cannot see the network.
+// controller refuses the addresses other clusters and the management side hold, as it cannot see
+// the network.
 func (s *Server) freeAddresses(w http.ResponseWriter, r *http.Request, u user) {
 	var req freeRequest
 	if !readJSON(w, r, &req) {
@@ -144,14 +145,15 @@ func (s *Server) freeAddresses(w http.ResponseWriter, r *http.Request, u user) {
 		writeError(w, http.StatusInternalServerError, "could not read the other clusters' addresses")
 		return
 	}
-	taken = append(taken, s.knownHosts(ctx, u)...)
+	known := s.knownHosts(ctx, u)
+	taken = append(taken, known...)
 	var check []netip.Addr
 	for _, f := range []bridgeFamily{v4, v6} {
 		if f.network.IsValid() {
 			check = append(check, checked(req.Check, f.network)...)
 		}
 	}
-	answering := s.probe(ctx, check)
+	answering := s.answering(ctx, check, known)
 	for _, a := range slices.SortedFunc(maps.Keys(answering), netip.Addr.Compare) {
 		view.Answering = append(view.Answering, a.String())
 	}
@@ -166,6 +168,24 @@ func (s *Server) freeAddresses(w http.ResponseWriter, r *http.Request, u user) {
 		view.Full6 = req.Nodes > 0 && view.Addresses6 == ""
 	}
 	writeJSON(w, http.StatusOK, view)
+}
+
+// answering is the typed addresses a host answers on: those a known host holds, which need no
+// probe, and those a probe finds a host on.
+func (s *Server) answering(ctx context.Context, check []netip.Addr, known [][2]netip.Addr) map[netip.Addr]bool {
+	answering := map[netip.Addr]bool{}
+	var probe []netip.Addr
+	for _, a := range check {
+		if slices.ContainsFunc(known, func(k [2]netip.Addr) bool { return k[0].Compare(a) <= 0 && a.Compare(k[1]) <= 0 }) {
+			answering[a] = true
+		} else {
+			probe = append(probe, a)
+		}
+	}
+	for a := range s.probe(ctx, probe) {
+		answering[a] = true
+	}
+	return answering
 }
 
 // suggest is a free endpoint and a free run of node addresses on a family's network, empty where
@@ -259,7 +279,7 @@ func searchedIn(bridge bridgeFamily, family, gateway string, prefix int) bridgeF
 	return bridgeFamily{network: network, reserved: append(slices.Clone(bridge.reserved), [2]netip.Addr{gw, gw})}
 }
 
-// knownHosts are the addresses the Proxmox VE nodes report and the management cluster's VMs take,
+// knownHosts are the addresses the Proxmox VE nodes report, the management cluster's VMs take and the appliance holds,
 // which no new cluster may take. Nodes whose addresses cannot be read are left to the probe.
 func (s *Server) knownHosts(ctx context.Context, u user) [][2]netip.Addr {
 	var known []netip.Addr
@@ -273,6 +293,11 @@ func (s *Server) knownHosts(ctx context.Context, u user) [][2]netip.Addr {
 	if s.Appliance != nil {
 		if saved := s.Appliance.SavedSettings(); saved != nil {
 			known = append(known, setupAddresses(saved)...)
+		}
+		for _, text := range s.Appliance.OwnAddresses() {
+			if ip, err := netip.ParseAddr(text); err == nil {
+				known = append(known, ip)
+			}
 		}
 	}
 	out := make([][2]netip.Addr, 0, len(known))

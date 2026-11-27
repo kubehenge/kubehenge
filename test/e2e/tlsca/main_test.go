@@ -50,6 +50,15 @@ func TestOpenSSLAcceptsGoRefuses(t *testing.T) {
 	if !errors.As(err, new(x509.UnknownAuthorityError)) {
 		t.Errorf("Go's verifier: %v, want an unknown authority", err)
 	}
+	// The copy for a trust store carries the chain for Go, as a root the host's own store holds.
+	store := x509.NewCertPool()
+	store.AddCert(a.storeRoot)
+	if _, err = leaf.Verify(x509.VerifyOptions{Roots: store, Intermediates: intermediates, DNSName: "registry.example"}); err != nil {
+		t.Errorf("Go's verifier with the store's copy: %v", err)
+	}
+	if !bytes.Equal(a.storeRoot.RawSubject, a.intermediate.RawIssuer) || !bytes.Equal(a.storeRoot.RawSubjectPublicKeyInfo, a.root.RawSubjectPublicKeyInfo) {
+		t.Error("the store's copy is not the root's key under the intermediate's issuer bytes")
+	}
 
 	dir := t.TempDir()
 	for name, cert := range map[string]*x509.Certificate{"root.pem": a.root, "intermediate.pem": a.intermediate, "leaf.pem": leaf} {
@@ -98,5 +107,12 @@ func TestWrite(t *testing.T) {
 	}
 	if block, rest := pem.Decode(root); block == nil || !bytes.Equal(block.Bytes, a.root.Raw) || len(bytes.TrimSpace(rest)) > 0 {
 		t.Error("root.pem is not the root alone")
+	}
+	stored, err := os.ReadFile(filepath.Join(dir, "store-root.pem")) //nolint:gosec // the test's own directory
+	if err != nil {
+		t.Fatal(err)
+	}
+	if block, rest := pem.Decode(stored); block == nil || !bytes.Equal(block.Bytes, a.storeRoot.Raw) || len(bytes.TrimSpace(rest)) > 0 {
+		t.Error("store-root.pem is not the store's copy alone")
 	}
 }

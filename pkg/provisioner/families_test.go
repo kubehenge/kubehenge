@@ -80,6 +80,8 @@ func TestAddressFamiliesStayAsCreated(t *testing.T) {
 	errs := validateFamilies(old, c).ToAggregate()
 	if errs == nil || !strings.Contains(errs.Error(), "the address families are chosen when the cluster is created") {
 		t.Errorf("IPv4 to dual-stack: %v", errs)
+	} else if !strings.Contains(errs.Error(), "the cluster's API address and the pods' ranges were made for this network") {
+		t.Errorf("no reason given: %v", errs)
 	}
 	if errs := validateFamilies(c, c.DeepCopy()); len(errs) > 0 {
 		t.Errorf("an unchanged dual-stack cluster: %v", errs)
@@ -104,6 +106,8 @@ func TestBridgeAndVLANStayAsCreated(t *testing.T) {
 				t.Errorf("refused: %v", errs)
 			case tc.want != "" && (errs == nil || !strings.Contains(errs.Error(), tc.want)):
 				t.Errorf("got %v, want %q", errs, tc.want)
+			case tc.want != "" && !strings.Contains(errs.Error(), "the pods' ranges were made for this network"):
+				t.Errorf("no reason given: %v", errs)
 			}
 		})
 	}

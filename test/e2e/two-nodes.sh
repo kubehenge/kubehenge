@@ -129,6 +129,7 @@ spec:
           name: md-0
           replicas: 1
     variables:
+${own_registry}
       - name: controlPlaneEndpoint
         value: ${KUBEHENGE_E2E_ENDPOINT}
       - name: network

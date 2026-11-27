@@ -4,7 +4,7 @@ import { AlertingFields, alertingOf, alertingText, alertingVariable, type Alerti
 import { api } from "./api";
 import { CertificatesDialog, certificatesOf, certificatesText } from "./Certificates";
 import { ClusterMeshDialog, meshText, runsCilium } from "./ClusterMesh";
-import { UpgradesDialog, describe, refreshesNodes, upgradePolicy } from "./ClusterUpgrades";
+import { UpgradesDialog, describe, inZone, refreshesNodes, upgradePolicy } from "./ClusterUpgrades";
 import { CredentialField } from "./CredentialField";
 import { csiOn, csiWith, snapshotsOn, useCSIOffer, useSnapshotsOffer } from "./CsiPlugin";
 import { EgressDialog, egressOf, egressText } from "./EgressProxy";
@@ -51,6 +51,9 @@ import {
   ErrorBox,
   Field,
   Info,
+  ReadError,
+  Skeleton,
+  type Once,
   clusterCNI,
   errorMessage,
   filled,
@@ -68,7 +71,9 @@ import {
   snapshotsText,
   stageLabel,
   useChange,
-  Skeleton,
+  ReadDialog,
+  siteZone,
+  useClasses,
 } from "./ui";
 import { flag, record, text, texts } from "./values";
 import { VMIDRangeDialog, vmIDRangeOf, vmIDRangeText, vmIDVariable } from "./VmidRange";
@@ -113,6 +118,8 @@ export interface OptionRow<A extends string = OptionAction> {
   name?: string;
   /** A setting that is on or off, switched in its row instead of through a dialog. */
   toggle?: Toggle;
+  /** The read the row waits on: shown, loading or failed with a retry, in place of its value. */
+  read?: Once<unknown>;
 }
 
 /** The parts of the Options view, in their order. */
@@ -225,6 +232,12 @@ export interface Offered {
   snapshotsProblem?: string | undefined;
   /** The management cluster's release mirror, empty for GitHub, undefined while unknown. */
   releaseMirror?: string | undefined;
+  /** The zone an upgrade window naming none runs in, UTC while unknown. */
+  zone?: string | undefined;
+  /** The reads a row waits on while they have not answered, so that it shows them instead of dropping. */
+  haRead?: Once<unknown> | undefined;
+  csiRead?: Once<unknown> | undefined;
+  snapshotsRead?: Once<unknown> | undefined;
 }
 
 /** everything offers every setting, for a list that has to show whatever a change sets. */
@@ -240,8 +253,13 @@ export function useOffered(c: Cluster): Offered {
   const snapshots = useSnapshotsOffer(c);
   const haGroups = useHAGroupsOffered(c);
   const releaseMirror = useReleaseMirrorDefault(c.class);
+  const classes = useClasses().data;
   return {
-    ha,
+    zone: classes === undefined ? undefined : siteZone(classes).inEffect,
+    ha: ha.offered,
+    haRead: ha.unread,
+    csiRead: csi.unread,
+    snapshotsRead: snapshots.unread,
     csi: csi.offered,
     snapshots: snapshots.offered,
     haGroups,
@@ -284,6 +302,44 @@ const snapshotsToggle = (problem: string | undefined): Toggle => ({
   problem,
   consequence: "Copies stay on their volume's node",
 });
+
+// offeredRows are the rows of the settings a class or the user's rights offer only at times.
+function offeredRows(c: Cluster, offered: Offered): OptionRow[] {
+  const rows: OptionRow[] = [];
+  if (offered.ha || offered.haRead) {
+    rows.push({
+      label: "Proxmox VE HA",
+      value: haText(haOn(c)),
+      group: "Nodes",
+      toggle: haToggle,
+      ...(offered.haRead && { read: offered.haRead }),
+    });
+  }
+  // A cluster that runs the newest release keeps the row after its administrator withdraws the
+  // choice, so that it can be switched back.
+  if (offered.csi || csiOn(c) || offered.csiRead) {
+    rows.push({
+      label: "CSI plugin",
+      value: csiText(csiOn(c)),
+      group: "Storage",
+      toggle: csiToggle(offered.csiProblem),
+      ...(offered.csiRead && { read: offered.csiRead }),
+    });
+  }
+  if (offered.snapshots || snapshotsOn(c) || offered.snapshotsRead) {
+    rows.push({
+      label: "Volume snapshots",
+      value: snapshotsText(snapshotsOn(c)),
+      group: "Storage",
+      toggle: snapshotsToggle(offered.snapshotsProblem),
+      ...(offered.snapshotsRead && { read: offered.snapshotsRead }),
+    });
+  }
+  if (offered.haGroups || haGroupsOn(c)) {
+    rows.push({ label: "HA rule labels", value: haGroupsText(haGroupsOn(c)), group: "Nodes", toggle: haGroupsToggle });
+  }
+  return rows;
+}
 
 /**
  * optionRows are what can be set on a cluster after it was created. more are the rows of settings
@@ -359,32 +415,7 @@ export function optionRows<A extends string = never>(
       action: "vmIDRange",
       name: "the VM ID range",
     },
-  ];
-  if (offered.ha) {
-    rows.push({ label: "Proxmox VE HA", value: haText(haOn(c)), group: "Nodes", toggle: haToggle });
-  }
-  // A cluster that runs the newest release keeps the row after its administrator withdraws the
-  // choice, so that it can be switched back.
-  if (offered.csi || csiOn(c)) {
-    rows.push({
-      label: "CSI plugin",
-      value: csiText(csiOn(c)),
-      group: "Storage",
-      toggle: csiToggle(offered.csiProblem),
-    });
-  }
-  if (offered.snapshots || snapshotsOn(c)) {
-    rows.push({
-      label: "Volume snapshots",
-      value: snapshotsText(snapshotsOn(c)),
-      group: "Storage",
-      toggle: snapshotsToggle(offered.snapshotsProblem),
-    });
-  }
-  if (offered.haGroups || haGroupsOn(c)) {
-    rows.push({ label: "HA rule labels", value: haGroupsText(haGroupsOn(c)), group: "Nodes", toggle: haGroupsToggle });
-  }
-  rows.push(
+    ...offeredRows(c, offered),
     {
       label: "Headlamp",
       value: headlampText(headlamp.enabled === true, headlamp.hostname, headlamp.access === "view"),
@@ -411,11 +442,6 @@ export function optionRows<A extends string = never>(
       action: "certificates",
       name: "certificates",
     },
-  );
-  if (flag(record(c.variables["useExisting"])["certManager"]) === true) {
-    rows.push({ label: "Existing cert-manager", value: "Yes", group: "Add-ons" });
-  }
-  rows.push(
     {
       label: "Pod security",
       value: podSecurityText(podSecurity),
@@ -431,7 +457,7 @@ export function optionRows<A extends string = never>(
       name: "namespace labels",
     },
     { label: "Istio", value: istioText(istioOn(c)), group: "Add-ons", toggle: istioToggle },
-  );
+  ];
   if (runsCilium(c)) {
     rows.push({
       label: "Cluster Mesh",
@@ -498,7 +524,7 @@ export function optionRows<A extends string = never>(
     },
     {
       label: "Automatic upgrades",
-      value: describe(upgrades, refreshesNodes(upgrades), c.distribution),
+      value: describe(inZone(upgrades, offered.zone), refreshesNodes(upgrades), c.distribution),
       group: "Maintenance",
       action: "upgrades",
       name: "automatic upgrades",
@@ -583,8 +609,37 @@ interface RowAt<A extends string> {
   onEdit: (a: A) => void;
 }
 
+// RowRead is a row's read while it has not answered: its loading look, or its error with a retry.
+function RowRead({ read }: { read: Once<unknown> }): JSX.Element {
+  return read.error === undefined ? <Skeleton rows={1} /> : <ReadError read={read} />;
+}
+
+// RowValue is a row's value, switched in place where it is a switch.
+function RowValue<A extends string>({
+  label,
+  value,
+  toggle,
+  after,
+  at,
+}: {
+  label: string;
+  value: string;
+  toggle: Toggle | undefined;
+  after: string | undefined;
+  at: RowAt<A>;
+}): JSX.Element {
+  return toggle === undefined ? (
+    <>
+      {value}
+      <StagedValue now={value} after={after} />
+    </>
+  ) : (
+    <Switch toggle={toggle} label={label} text={after ?? value} at={at} />
+  );
+}
+
 function OptionLine<A extends string>({
-  row: { label, value, action, button = "Edit", name = label, toggle },
+  row: { label, value, action, button = "Edit", name = label, toggle, read },
   after,
   at,
 }: {
@@ -596,17 +651,14 @@ function OptionLine<A extends string>({
     <tr>
       <th scope="row">{label}</th>
       <td>
-        {toggle === undefined ? (
-          <>
-            {value}
-            <StagedValue now={value} after={after} />
-          </>
+        {read === undefined ? (
+          <RowValue label={label} value={value} toggle={toggle} after={after} at={at} />
         ) : (
-          <Switch toggle={toggle} label={label} text={after ?? value} at={at} />
+          <RowRead read={read} />
         )}
       </td>
       <td className="row-action">
-        {action !== undefined && (
+        {read === undefined && action !== undefined && (
           <button type="button" disabled={!at.can} aria-label={`${button} ${name}`} onClick={() => at.onEdit(action)}>
             {button}
           </button>
@@ -707,31 +759,29 @@ function nodeOSNote(o: NodeOSChoice, oses: NodeOSChoice[], c: Cluster): string |
 }
 
 function NodeOSDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+  const read = useClasses();
+  return (
+    <ReadDialog title="Edit node OS" read={read} onClose={onClose}>
+      {(classes) => (
+        <NodeOSForm cluster={c} oses={classes.find((x) => x.name === c.class)?.nodeOSes ?? []} onClose={onClose} />
+      )}
+    </ReadDialog>
+  );
+}
+
+function NodeOSForm({
+  cluster: c,
+  oses,
+  onClose,
+}: {
+  cluster: Cluster;
+  oses: NodeOSChoice[];
+  onClose: () => void;
+}): JSX.Element {
   const running = c.nodeOS === undefined ? "" : nodeOSKey(c.nodeOS);
-  const [oses, setOses] = useState<NodeOSChoice[]>();
-  const [loadError, setLoadError] = useState<string>();
   const [chosen, setChosen] = useState(running);
   const { busy, error, send } = useChange(c, onClose);
   const group = useId();
-  useEffect(() => {
-    let current = true;
-    async function load(): Promise<void> {
-      try {
-        const classes = await api.classes();
-        if (current) {
-          setOses(classes.find((x) => x.name === c.class)?.nodeOSes ?? []);
-        }
-      } catch (err) {
-        if (current) {
-          setLoadError(errorMessage(err));
-        }
-      }
-    }
-    void load();
-    return () => {
-      current = false;
-    };
-  }, [c.class]);
   const os = findNodeOS(oses, chosen);
   return (
     <Dialog
@@ -758,38 +808,34 @@ function NodeOSDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
       }
     >
       <p className="muted">Replaces every node, one at a time.</p>
-      {oses === undefined && !filled(loadError) && <Skeleton rows={2} />}
-      <ErrorBox message={loadError} />
-      {oses !== undefined && (
-        <div role="radiogroup" aria-label="Node OS">
-          {oses.map((o, i) => {
-            const key = nodeOSKey(o);
-            const note = key === running ? undefined : nodeOSNote(o, oses, c);
-            const noteId = `${group}-${i}`;
-            return (
-              <Fragment key={key}>
-                <label className="check">
-                  <input
-                    type="radio"
-                    name={group}
-                    checked={chosen === key}
-                    disabled={key !== running && !movable(o, c)}
-                    aria-describedby={note === undefined ? undefined : noteId}
-                    onChange={() => setChosen(key)}
-                  />{" "}
-                  {o.title}
-                  {key === running && " (running)"}
-                </label>
-                {note !== undefined && (
-                  <p className="hint" id={noteId}>
-                    {note}
-                  </p>
-                )}
-              </Fragment>
-            );
-          })}
-        </div>
-      )}
+      <div role="radiogroup" aria-label="Node OS">
+        {oses.map((o, i) => {
+          const key = nodeOSKey(o);
+          const note = key === running ? undefined : nodeOSNote(o, oses, c);
+          const noteId = `${group}-${i}`;
+          return (
+            <Fragment key={key}>
+              <label className="check">
+                <input
+                  type="radio"
+                  name={group}
+                  checked={chosen === key}
+                  disabled={key !== running && !movable(o, c)}
+                  aria-describedby={note === undefined ? undefined : noteId}
+                  onChange={() => setChosen(key)}
+                />{" "}
+                {o.title}
+                {key === running && " (running)"}
+              </label>
+              {note !== undefined && (
+                <p className="hint" id={noteId}>
+                  {note}
+                </p>
+              )}
+            </Fragment>
+          );
+        })}
+      </div>
       <ErrorBox message={error} />
     </Dialog>
   );

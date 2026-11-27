@@ -93,7 +93,7 @@ func needsOn(path string, privs ...string) []Need {
 func ControllerNeeds(p *Places) []Need {
 	pool := []string{"Pool.Allocate", "Pool.Audit", "Permissions.Modify", "VM.Allocate", privVMAudit, "VM.Config.Disk", "VM.Config.Options", "VM.Migrate"}
 	if p.BootLogs {
-		pool = append(pool, "VM.GuestAgent.FileRead")
+		pool = append(pool, "VM.GuestAgent.Audit", "VM.GuestAgent.FileRead")
 	}
 	needs := slices.Concat(
 		needsOn(pathRoot, privSysAudit),

@@ -2870,6 +2870,23 @@ fieldset.choices legend {
   margin: 10px 0;
 }
 
+/* A failed read's retry row lines up under its error. */
+.read-error-retry {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+
+  margin: 0 10px 10px;
+}
+
+.dialog-body .read-error-retry,
+.rail-note .read-error-retry,
+.wizard .read-error-retry,
+.box .read-error-retry {
+  margin-inline: 0;
+}
+
 .warning {
   margin: 0 0 12px;
   padding: 8px 10px;

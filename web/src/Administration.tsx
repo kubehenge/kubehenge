@@ -6,7 +6,7 @@ import { api } from "./api";
 import { ManagementBehind } from "./ManagementUpgrade";
 import { Link } from "./router";
 import type { Job } from "./types";
-import { ErrorBox, Skeleton, pollIdle, pollRunning, usePoll, Views } from "./ui";
+import { Skeleton, pollIdle, pollRunning, usePoll, Views, ReadError } from "./ui";
 
 // What a run of the management cluster does, other than applying it.
 const runningWhat: Partial<Record<NonNullable<Job["kind"]>, string>> = {
@@ -19,11 +19,8 @@ const runningWhat: Partial<Record<NonNullable<Job["kind"]>, string>> = {
 // backups, VM templates, the interface's certificate and the DNS-01 credential for every cluster. One poll of the setup status
 // serves them all, so they agree on whether a run is going on.
 export function Administration({ view, onSetupChanged }: { view: AdminView; onSetupChanged: () => void }): JSX.Element {
-  const {
-    data: status,
-    error,
-    reload,
-  } = usePoll(api.setupStatus, (s) => (s?.job?.state === "running" ? pollRunning : pollIdle));
+  const read = usePoll(api.setupStatus, (s) => (s?.job?.state === "running" ? pollRunning : pollIdle));
+  const { data: status, error, reload } = read;
   // Once a removal is over there is nothing left to administer here: the setup takes over.
   const gone =
     status !== undefined && !status.ready && status.job?.kind === "remove" && status.job.state === "succeeded";
@@ -35,7 +32,10 @@ export function Administration({ view, onSetupChanged }: { view: AdminView; onSe
 
   if (!status) {
     return (
-      <section className="panel">{error === undefined ? <Skeleton rows={6} /> : <ErrorBox message={error} />}</section>
+      <section className="panel">
+        <ReadError read={read} />
+        {error === undefined && <Skeleton rows={6} />}
+      </section>
     );
   }
   const running = status.job?.state === "running";
@@ -53,7 +53,7 @@ export function Administration({ view, onSetupChanged }: { view: AdminView; onSe
           </Link>
         ))}
       </Views>
-      <ErrorBox message={error} />
+      <ReadError read={read} />
       <ManagementBehind
         status={status}
         onStarted={() => {

@@ -88,6 +88,8 @@ check "its share directory is in place" grep -qx next "${root}/usr/local/share/k
 check "its binary is in place" grep -q 'appliance health' "${root}/usr/local/bin/kubehenge"
 check "its units are in place" grep -qx 'new kubehenge.service' "${root}/etc/systemd/system/kubehenge.service"
 check "nothing is left aside" [ ! -e "${root}/usr/local/share/.kubehenge-rollback" ]
+linked=$(readlink "${root}/usr/bin/kubehenge" || true)
+check "pct exec's PATH finds the binary" [ "${linked}" = /usr/local/bin/kubehenge ]
 check "the appliance's settings gained its ID" grep -qx KUBEHENGE_APPLIANCE_VMID=900 "${root}/etc/kubehenge/appliance.env"
 check "the interface was restarted" grep -qx 'restart kubehenge.service' "${work}/systemctl.log"
 
@@ -115,6 +117,8 @@ check "a release that does not serve is rolled back (status ${status})" [ "${sta
 check "the reason is told (${said})" [ "${said}" = "the interface did not answer within 2m0s" ]
 check "the old share directory is back" grep -qx 0.1.0 "${root}/usr/local/share/kubehenge/VERSION"
 check "the old binary is back" grep -qx 'echo old' "${root}/usr/local/bin/kubehenge"
+linked=$(readlink "${root}/usr/bin/kubehenge" || true)
+check "and still on pct exec's PATH" [ "${linked}" = /usr/local/bin/kubehenge ]
 check "the old units are back" grep -qx 'old kubehenge.service' "${root}/etc/systemd/system/kubehenge.service"
 settings=$(cat "${root}/etc/kubehenge/appliance.env")
 check "the old settings are back" [ "${settings}" = KUBEHENGE_PROXMOX_URL=https://pve.example:8006 ]
@@ -152,8 +156,11 @@ mkdir -p "${root}/usr/local/share/kubehenge"
 echo half > "${root}/usr/local/share/kubehenge/VERSION"
 printf '#!/bin/sh\necho half\n' > "${root}/usr/local/bin/kubehenge"
 : > "${aside}/shell-pending"
+mkdir -p "${root}/var/lib/kubehenge"
+echo "net0: name=eth0,bridge=vmbr1,tag=30" > "${root}/var/lib/kubehenge/network"
 upgrade "${root}"
 check "the release that fails afterwards is rolled back (status ${status})" [ "${status}" -eq 76 ]
+check "the appliance's network stays" grep -qx "net0: name=eth0,bridge=vmbr1,tag=30" "${root}/var/lib/kubehenge/network"
 check "to the old binary, not the half-upgraded one" grep -qx 'echo old' "${root}/usr/local/bin/kubehenge"
 check "and the old share directory" grep -qx 0.1.0 "${root}/usr/local/share/kubehenge/VERSION"
 

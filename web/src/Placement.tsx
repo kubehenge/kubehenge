@@ -1,8 +1,22 @@
-import { useEffect, useId, useState, type JSX } from "react";
+import { useId, useState, type JSX } from "react";
 
 import { api } from "./api";
 import type { Cluster, ClusterClass, HARule, HARules, PveNode, Storage } from "./types";
-import { Detail, Dialog, ErrorBox, Field, Info, Status, errorMessage, filled, stageLabel, useChange } from "./ui";
+import {
+  Detail,
+  Dialog,
+  ErrorBox,
+  Field,
+  Info,
+  ReadError,
+  Status,
+  filled,
+  stageLabel,
+  useChange,
+  useClasses,
+  useOnce,
+  type Once,
+} from "./ui";
 import { flag, record, texts } from "./values";
 
 /** Where a cluster's VMs may run: any node, the nodes of an HA rule, or nodes chosen one by one. */
@@ -48,6 +62,8 @@ export function placeProblem(p: Place): string | undefined {
 export interface HARulesRead {
   haRules: HARules | undefined;
   haRulesError: string | undefined;
+  /** Reads the rules again, after a failure. */
+  reload?: () => Promise<void>;
 }
 
 /**
@@ -55,19 +71,8 @@ export interface HARulesRead {
  * on nodes chosen, so a failure shows only where the rules would be offered.
  */
 export function useHARules(): HARulesRead {
-  const [haRules, setHARules] = useState<HARules>();
-  const [haRulesError, setHARulesError] = useState<string>();
-  useEffect(() => {
-    async function load(): Promise<void> {
-      try {
-        setHARules(await api.haRules());
-      } catch (err) {
-        setHARulesError(errorMessage(err));
-      }
-    }
-    void load();
-  }, []);
-  return { haRules, haRulesError };
+  const { data, error, reload } = useOnce(api.haRules);
+  return { haRules: data, haRulesError: error, reload };
 }
 
 // ruleLabel names a rule with what it keeps the cluster to.
@@ -75,12 +80,22 @@ const ruleLabel = (r: HARule): string =>
   `${r.rule}${filled(r.comment) ? ` (${r.comment})` : ""}: ${r.allowed.join(", ")}${r.strict === true ? ", strict" : ""}`;
 
 // rulesHint says why no HA rule can be chosen. A read failure's message sits behind Detail.
-function rulesHint({ haRules, haRulesError }: HARulesRead): JSX.Element | undefined {
+function rulesHint({ haRules, haRulesError, reload }: HARulesRead): JSX.Element | undefined {
   if (filled(haRulesError)) {
     return (
       <>
         Couldn&apos;t read the HA rules
         <Detail>{haRulesError}</Detail>
+        {reload !== undefined && (
+          <button
+            type="button"
+            onClick={() => {
+              void reload();
+            }}
+          >
+            Try now
+          </button>
+        )}
       </>
     );
   }
@@ -94,6 +109,9 @@ function rulesHint({ haRules, haRulesError }: HARulesRead): JSX.Element | undefi
 }
 
 const noNodes: string[] = [];
+
+// While the nodes are not read, only the cluster's own are offered.
+const noPveNodes: PveNode[] = [];
 
 /** nodeNote says after a node's name why it cannot take VMs: down, or a member whose forwarded calls fail. */
 export const nodeNote = (n: PveNode): string => {
@@ -258,28 +276,23 @@ export function offersHA(c: ClusterClass | undefined, storages: Storage[], stora
   );
 }
 
+/** HAOffer is whether an existing cluster takes part in Proxmox VE HA, and the read it waits on while unanswered. */
+export interface HAOffer {
+  offered: boolean;
+  unread?: Once<unknown>;
+}
+
 /** useHAOffered reads whether an existing cluster's class and storage take part in Proxmox VE HA. */
-export function useHAOffered(className: string, storage: string | undefined): boolean {
-  const [offered, setOffered] = useState(false);
-  useEffect(() => {
-    async function load(): Promise<void> {
-      try {
-        const [classes, storages] = await Promise.all([api.classes(), api.storages()]);
-        setOffered(
-          offersHA(
-            classes.find((c) => c.name === className),
-            storages,
-            storage,
-          ),
-        );
-      } catch {
-        // Without the classes or storages the option is not shown. The cluster keeps its setting.
-        setOffered(false);
-      }
-    }
-    void load();
-  }, [className, storage]);
-  return offered;
+export function useHAOffered(className: string, storage: string | undefined): HAOffer {
+  const storages = useOnce(api.storages);
+  // Without the classes the option is not shown, the page shows that read's error, and the cluster keeps its setting.
+  const cls = useClasses().data?.find((c) => c.name === className);
+  const offers = cls?.annotations?.[haAnnotation] === "true" && cls.variables.some((v) => v.name === "proxmoxHA");
+  // A class that offers HA waits on the storages, so its row shows that read instead of dropping.
+  if (offers && storages.data === undefined) {
+    return { offered: false, unread: storages };
+  }
+  return { offered: offersHA(cls, storages.data ?? [], storage) };
 }
 
 /** haText describes a cluster's Proxmox VE HA setting. Unset means it takes part. */
@@ -314,20 +327,10 @@ export function PlacementDialog({ cluster: c, onClose }: { cluster: Cluster; onC
   const kept = texts(c.variables["allowedNodes"]);
   const initial = placeOf(kept);
   const [value, setValue] = useState(initial);
-  const [nodes, setNodes] = useState<PveNode[]>([]);
-  const [nodesError, setNodesError] = useState<string>();
+  const nodesRead = useOnce(api.nodes);
+  const nodes = nodesRead.data ?? noPveNodes;
   const rules = useHARules();
   const { busy, error, send } = useChange(c, onClose);
-  useEffect(() => {
-    async function load(): Promise<void> {
-      try {
-        setNodes(await api.nodes());
-      } catch (err) {
-        setNodesError(errorMessage(err));
-      }
-    }
-    void load();
-  }, []);
   const problem = placeProblem(value);
   const next = allowedNodes(value) ?? null;
   const changed = JSON.stringify(next) !== JSON.stringify(allowedNodes(initial) ?? null);
@@ -359,7 +362,8 @@ export function PlacementDialog({ cluster: c, onClose }: { cluster: Cluster; onC
         rules={rules}
         framed={false}
       />
-      <ErrorBox message={nodesError ?? error} />
+      <ReadError read={nodesRead} />
+      <ErrorBox message={error} />
     </Dialog>
   );
 }
@@ -374,6 +378,16 @@ export const sysAuditAnnotation = "kubehenge.dev/sys-audit";
  */
 export const offersHAGroups = (cls: ClusterClass | undefined): boolean =>
   cls?.annotations?.[sysAuditAnnotation] === "true" && cls.variables.some((v) => v.name === "ccm");
+
+/** managementEndpointAnnotation marks the classes of a Kubehenge installed with the management cluster's address. */
+export const managementEndpointAnnotation = "kubehenge.dev/management-endpoint";
+
+/** useAutoscalerInCluster reads whether an existing cluster's autoscaler may run on its own control planes. */
+export function useAutoscalerInCluster(c: Cluster): boolean {
+  // Without the classes the option is not shown, the page shows that read's error, and the cluster keeps its setting.
+  const { data } = useClasses();
+  return data?.find((x) => x.name === c.class)?.annotations?.[managementEndpointAnnotation] === "true";
+}
 
 /** haGroupsOn reads whether the cluster's nodes are labelled with their Proxmox VE HA groups. */
 export const haGroupsOn = (c: Cluster): boolean => flag(record(c.variables["ccm"])["haGroups"]) === true;
@@ -406,19 +420,6 @@ export function HAGroupsField({
 
 /** useHAGroupsOffered reads whether an existing cluster may have the HA rule labels. */
 export function useHAGroupsOffered(c: Cluster): boolean {
-  const [offered, setOffered] = useState(false);
-  const className = c.class;
-  useEffect(() => {
-    async function load(): Promise<void> {
-      try {
-        const classes = await api.classes();
-        setOffered(offersHAGroups(classes.find((x) => x.name === className)));
-      } catch {
-        // Without the classes the option is not shown. The cluster keeps its setting.
-        setOffered(false);
-      }
-    }
-    void load();
-  }, [className]);
-  return offered;
+  // Without the classes the option is not shown, the page shows that read's error, and the cluster keeps its setting.
+  return offersHAGroups(useClasses().data?.find((x) => x.name === c.class));
 }

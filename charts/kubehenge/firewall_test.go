@@ -149,6 +149,21 @@ func TestTheFirewallAcceptsTheManagementCluster(t *testing.T) {
 	}
 }
 
+// The controller holds clusters off the management side's addresses on the management cluster's
+// bridge and VLAN, so it is told them, and with no bridge it is told nothing.
+func TestTheControllerKnowsTheManagementNetwork(t *testing.T) {
+	t.Parallel()
+	controller := helmTemplate(t, "templates/controller.yaml", "managementNetwork.bridge=vmbr1", "managementNetwork.vlan=30", "managementNetwork.nodes.192\\.0\\.2\\.11=kubehenge-cp-0", "managementNetwork.nodes.2001:db8::11=kubehenge-cp-0")
+	for _, want := range []string{"--management-bridge=vmbr1", "--management-vlan=30", "--management-nodes=192.0.2.11=kubehenge-cp-0,2001:db8::11=kubehenge-cp-0"} {
+		if !strings.Contains(controller, want) {
+			t.Errorf("the controller is not given %s", want)
+		}
+	}
+	if controller := helmTemplate(t, "templates/controller.yaml"); strings.Contains(controller, "--management-bridge") || strings.Contains(controller, "--management-vlan") || strings.Contains(controller, "--management-nodes") {
+		t.Error("the controller is given a management network without one set")
+	}
+}
+
 func TestSecurityGroupsFollowProxmoxVEsNames(t *testing.T) {
 	t.Parallel()
 	class := renderClass(t, "kubeadm.yaml")

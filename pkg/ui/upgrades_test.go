@@ -325,6 +325,30 @@ func TestSetupFindsTheApplianceByItsMAC(t *testing.T) {
 	}
 }
 
+// An appliance upgraded from the interface alone is told its network cards by the configuration of
+// its guest that the setup reads, and one whose guest the user does not see keeps what it holds.
+func TestSetupRecordsTheAppliancesNetwork(t *testing.T) {
+	t.Parallel()
+	for mac, want := range map[string]string{
+		"bc:24:11:00:01:50": "net0: name=eth0,bridge=vmbr1,hwaddr=BC:24:11:00:01:50,ip=dhcp,tag=30,type=veth\nnet1: name=eth1,bridge=vmbr0,hwaddr=BC:24:11:00:01:51,ip=dhcp,type=veth\n",
+		"bc:24:11:00:01:99": "net0: name=eth0,bridge=vmbr7\n",
+	} {
+		h := newHarness(t)
+		h.server.Appliance = &appliance.Appliance{Dir: t.TempDir()}
+		if err := os.WriteFile(filepath.Join(h.server.Appliance.Dir, appliance.NetworkFile), []byte("net0: name=eth0,bridge=vmbr7\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		h.server.ApplianceVMID, h.server.ApplianceMACs = 105, []string{mac}
+		a := h.browser()
+		a.signIn("admin@pve")
+		a.do("GET", "/api/setup", "")
+		got, err := os.ReadFile(filepath.Join(h.server.Appliance.Dir, appliance.NetworkFile))
+		if err != nil || string(got) != want {
+			t.Errorf("MAC %s: the appliance's network is %q, %v, want %q", mac, got, err, want)
+		}
+	}
+}
+
 // A DHCP lease that changed leaves the certificate for the old address. Reached by a name the
 // certificate is for, the appliance still serves without a warning, so nothing is said.
 func TestSetupTellsAdministratorsWhenTheAddressMoved(t *testing.T) {

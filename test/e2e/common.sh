@@ -650,3 +650,12 @@ stuck_state() {
         | "\(.metadata.name), deleted at \(.metadata.deletionTimestamp)\n"
           + ([.status.conditions[]? | select(.status == "True") | "  \(.type): \(.message)"] | join("\n"))' >&2 || true
 }
+
+# Every cluster's CSI plugin runs Kubehenge's proxy from Kubehenge's own image, which ghcr.io holds
+# only once released. The cluster's registryMirrors, as a user sets them, send ghcr.io's pulls to the
+# registry this build was pushed to first, and ghcr.io serves the rest.
+# own_registry is that variable, for a Cluster's topology.variables, or nothing without a registry.
+own_registry=
+if [ -n "${KUBEHENGE_E2E_REGISTRY:-}" ]; then
+    own_registry=$(printf '      - name: registryMirrors\n        value: [{registry: ghcr.io, endpoints: ["http://%s"]}]\n' "${KUBEHENGE_E2E_REGISTRY}")
+fi

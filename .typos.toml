@@ -106,8 +106,8 @@ extend-ignore-identifiers-re = [
 ]
 
 [type.ts]
-# SVG's colour keyword and the DOM's scrolling option.
-extend-ignore-identifiers-re = ["^currentColor$"]
+# SVG's colour keyword, the DOM's scrolling option and Playwright's route method.
+extend-ignore-identifiers-re = ["^currentColor$", "^fulfill$"]
 extend-ignore-re = [
   "block: \"center\"",
   # Velero's backup phases.

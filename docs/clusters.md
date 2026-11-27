@@ -106,7 +106,7 @@ Where a node reports the bridge's network, the wizard fills in the API address a
 - the gateway, the node and every other cluster's addresses on the bridge
 - any address where a host answers the management cluster's ping, or its connection on port 22, 80, 443, 6443, 8006 or 50000
 
-Addresses you type are probed the same way and marked **In use** where a host answers. A host that answers no probe looks free, so the probe is only advice. The controller refuses only addresses another cluster holds.
+Addresses you type are probed the same way and marked **In use** where a host answers. A host that answers no probe looks free, so the probe is only advice. The controller refuses addresses another cluster holds, the management cluster's node and API addresses on its bridge and VLAN, and the appliance's addresses on the bridge and VLAN of each of its network cards.
 
 The interface's pod pings without privileges through the `net.ipv4.ping_group_range` sysctl. Without it, only the connections are tried.
 
@@ -190,7 +190,7 @@ With one, each such Service takes its own address from the load-balancer address
 
 ##### Load-balancer addresses
 
-In layer 2, the addresses must be unused and on the nodes' network. Kubehenge refuses the node addresses, the API address, the gateway and the network's own and broadcast addresses (on IPv6, its first). It also refuses another cluster's addresses on the same bridge and VLAN, on creation and on every change.
+In layer 2, the addresses must be unused and on the nodes' network. Kubehenge refuses the node addresses, the API address, the gateway and the network's own and broadcast addresses (on IPv6, its first). It also refuses another cluster's addresses, and the management cluster's and the appliance's, on the same bridge and VLAN, on creation and on every change.
 
 On k3s, a load balancer switches servicelb off. The load balancer can be switched or given other addresses later ([below](#change-settings)). Services outside the new range then take new addresses. A switch from MetalLB to kube-vip gives every Service a new address.
 
@@ -336,7 +336,7 @@ Kubehenge refuses a cluster short of that room on creation and when an add-on or
 | frr-k8s, added where the load balancer announces over BGP | 176 MiB | 176 MiB | none | none | 45 millicores |
 | GitOps with Argo CD | 512 MiB | 352 MiB | 432 MiB | 360 MiB | 90 millicores |
 | GitOps with Flux | 384 MiB | 320 MiB | none | none | 50 millicores |
-| cert-manager, with monitoring, Rancher or certificates | 192 MiB | 160 MiB | 48 MiB | none | 30 millicores |
+| cert-manager, with monitoring, logs, Rancher or certificates | 192 MiB | 160 MiB | 48 MiB | none | 30 millicores |
 | Rancher | 2048 MiB | 640 MiB | 512 MiB | 512 MiB | 120 millicores |
 | Rancher's agent, in every cluster that registers | 512 MiB | 192 MiB | none | none | 30 millicores |
 
@@ -412,7 +412,7 @@ Every cluster can also be opened in the appliance's shared Headlamp, without thi
 
 #### Monitoring
 
-Prometheus, Alertmanager and Grafana, with kube-prometheus-stack's dashboards and alerts for every node and control-plane component. It installs cert-manager too. It takes about 1.5 GiB of the workers' memory ([Machines](#machines)) and a 20 GiB volume.
+Prometheus, Alertmanager and Grafana, with kube-prometheus-stack's dashboards and alerts for every node and control-plane component. It installs cert-manager too, unless the cluster runs a working one of its own ([below](#a-cert-manager-the-cluster-runs-already)). It installs once cert-manager is deployed. It takes about 1.5 GiB of the workers' memory ([Machines](#machines)) and a 20 GiB volume.
 
 - Each component is scraped over verified, authenticated TLS ([architecture.md](architecture.md#add-ons)).
 - Grafana's `admin` password is in the `kube-prometheus-stack-grafana` Secret of the `monitoring` namespace.
@@ -423,7 +423,7 @@ Prometheus, Alertmanager and Grafana, with kube-prometheus-stack's dashboards an
 
 #### Logs
 
-Loki keeps the cluster's logs on a volume of its own. Grafana Alloy collects them. Monitoring's Grafana reads them ([architecture.md](architecture.md#add-ons)). Logs need monitoring, which cannot be switched off while they are on.
+Loki keeps the cluster's logs on a volume of its own. Grafana Alloy collects them. Monitoring's Grafana reads them ([architecture.md](architecture.md#add-ons)). Logs need monitoring, which cannot be switched off while they are on. Loki and Alloy install once cert-manager, which monitoring brings, is deployed.
 
 Logs are kept for 7 days in a 10 GiB volume unless set otherwise. Loki deletes by age, not by size. Size the volume, which only grows, for the days kept.
 
@@ -500,7 +500,7 @@ Under a NetworkPolicy that denies by default, allow ztunnel's port 15008/TCP bet
 
 #### Add-ons' proxy
 
-**Proxy** (Management proxy, Own proxy or No proxy) is the proxy for the add-ons that reach beyond the cluster. Those are cert-manager (ACME and DNS providers), Velero (server and node agents), Argo CD, Flux's controllers, Headlamp and Rancher.
+**Proxy** (Management proxy, Own proxy or No proxy) is the proxy for the add-ons that reach beyond the cluster. Those are cert-manager (ACME and DNS providers), Velero (server and node agents), Argo CD, Flux's controllers, Headlamp and Rancher. A cert-manager the cluster runs already does not get it ([below](#a-cert-manager-the-cluster-runs-already)).
 
 - The management side's proxy ([below](#behind-a-proxy)) and its exceptions are the default.
 - Add-on settings are plain text, so a proxy address holding a user name or password is not passed on. Give the cluster its own address without credentials.
@@ -836,7 +836,7 @@ A cluster runs the cluster autoscaler release of its Kubernetes minor version, s
 
 By default each cluster's autoscaler runs in the management cluster, in the `kubehenge-autoscaler` namespace. It reaches its cluster with a token of its own there. The cluster holds no credential of the management cluster. Each autoscaler asks for 64 MiB of memory, with a limit of 512 MiB.
 
-Setting **Runs** to **Cluster's control planes** (under **Options**, **Edit** beside Autoscaler) moves it into the cluster. That spares the management cluster the memory. The management cluster's API must then be reachable from the cluster's nodes.
+Setting **Runs** to **Cluster's control planes** (under **Options**, **Edit** beside Autoscaler) moves it into the cluster. That spares the management cluster the memory. The option appears when Kubehenge was installed with `managementEndpoint`, or for a cluster already placed there. The management cluster's API must then be reachable from the cluster's nodes.
 
 Without the management cluster's address, set by its module, the autoscaler stays out with an `AutoscalerNotPlaced` event.
 
@@ -1147,7 +1147,7 @@ The sections below cover the add-ons and sign-in.
 ### Monitoring settings
 
 - **Monitoring:** switch it on or off, set or clear Grafana's host name, and choose where alerts and samples go ([Monitoring alerts and remote write](#monitoring-alerts-and-remote-write)). The credentials are stored in the dialog at once, the rest with **Save**.
-  - Switching it off uninstalls it with its metrics proxies and certificates. It also uninstalls cert-manager, unless Rancher or the certificates add-on runs in the cluster.
+  - Switching it off uninstalls it with its metrics proxies and certificates. It also uninstalls cert-manager, unless Rancher or the certificates add-on runs in the cluster. Switching off logs alone leaves cert-manager in place.
   - The volumes and CRDs stay, as the dialog notes ([What stays](#what-stays-after-an-add-on-is-switched-off)). With logs on, the dialog switches them off too.
 
 ### Backup settings
@@ -1346,6 +1346,8 @@ spec:
       secretName: shop-tls
 ```
 
+`kubernetes.io/tls-acme` uses cert-manager's default issuer, which Kubehenge sets only on its own cert-manager ([A cert-manager the cluster runs already](#a-cert-manager-the-cluster-runs-already)).
+
 A Gateway of your own asks for its listeners' certificates with `cert-manager.io/cluster-issuer: kubehenge-ingress` on the Gateway.
 
 ### The ACME server
@@ -1364,7 +1366,7 @@ Some ACME servers accept only accounts tied to one their operator made: a step-c
 
 ### An issuer you run
 
-With `issuer: external`, Kubehenge makes no issuer. It points every certificate it asks for at yours: the default certificate, the add-ons' Ingresses and cert-manager's default for Ingresses that name none. It also leaves out the ACME account, the DNS-01 credential and the cluster's CA.
+With `issuer: external`, Kubehenge makes no issuer. It points every certificate it asks for at yours: the default certificate, the add-ons' Ingresses and the default of Kubehenge's cert-manager for Ingresses that name none. It also leaves out the ACME account, the DNS-01 credential and the cluster's CA.
 
 | Variable | Meaning |
 | --- | --- |
@@ -1399,7 +1401,7 @@ The credential comes from one of three places, the first that applies:
 
 Kubehenge's controller copies the stored credential into the `cert-manager` namespace of the workload cluster (`kubehenge-dns01`). The copy follows any change of the stored credential. A cluster without a credential gets a `NoDNS01Credential` event. Its certificates wait.
 
-With split-horizon DNS, the domain answers differently inside the network than outside. `dns01.nameservers` then names the servers (host:port) cert-manager checks the challenge's record with, such as the domain's authoritative servers.
+With split-horizon DNS, the domain answers differently inside the network than outside. `dns01.nameservers` then names the servers (host:port) cert-manager checks the challenge's record with, such as the domain's authoritative servers. Only Kubehenge's own cert-manager gets them.
 
 ## Monitoring alerts and remote write
 
@@ -1478,6 +1480,10 @@ The create wizard and the change checks warn when a cluster has fewer workers th
 ### The CSI plugin's newest release
 
 By default a cluster runs the last release of the Proxmox VE CSI plugin that needs no more than `Datastore.AllocateSpace` on the cluster's storage. Its newer releases read the storage's configuration and need `Datastore.Allocate` there. That lets the cluster's token delete any volume on that storage and change the storage's definition.
+
+Both releases read a shared storage's configuration when they create a volume, which Proxmox VE shows singly only to `Datastore.Allocate`. The proxy beside the plugin, `kubehenge-csi-proxy` ([volume snapshots](#how-copies-are-made)), answers that read from the storage list, which the token may read with `Datastore.Audit` or `Datastore.AllocateSpace`. Every cluster runs it, so none needs `Datastore.Allocate` for it. In a cluster that takes no snapshots and has no copies left, it reads nothing in the cluster and passes every other call on as it came.
+
+A claim of monitoring's Prometheus or Alertmanager, or of the logs add-on's Loki, that stays Pending because its volume cannot be made shows on the cluster as `<add-on> has no volume: <reason>`, under the condition `AddonsWaiting` ([troubleshooting.md](troubleshooting.md#add-ons-wait-for-a-volume)). The claim's own event gives the plugin's words. For a storage the token cannot see, the default release says only `not authorized to access endpoint` or `not found` there, so the cluster's line names the storage and `Datastore.Audit` instead.
 
 Where the administrator lets clusters choose it ([install-settings.md](install-settings.md#csi-plugin)), a cluster can run the newest release instead. Choose it with **Newest CSI plugin release**, or the `csi` variable's `datastoreAllocate`. Its token then gets `Datastore.Allocate` on the cluster's storage. It loses it again when switched off.
 
@@ -1600,7 +1606,7 @@ The spec collects these by name, whatever labels they carry:
 
 The providers use a Secret that exists when the control plane is created. `create --from` restores these before the Cluster.
 
-Anything labelled `kubehenge.dev/cluster-name: <name>`, ConfigMaps included, is kept too.
+Anything labelled `kubehenge.dev/cluster-name: <name>`, ConfigMaps included, is kept too. A Secret is picked up within half a minute of its label.
 
 The controller makes the rest again. These are left out:
 
@@ -1676,8 +1682,8 @@ A copy takes as long as Proxmox VE needs, up to a day.
 
 Switching it off removes the sidecar, the VolumeSnapshotClass and the snapshot controller.
 
-- The proxy stays while any copy is left, since only it knows their names. It makes no copies.
-- Once the last restored or cloned claim and snapshot is deleted, the proxy goes with its namespace and the empty holder VMs. The plugin reaches Proxmox VE directly with the cluster's token again.
+- The proxy stays, as it does for every cluster, and makes no copies. While any copy is left, only it knows their names, and the plugin keeps its newest release.
+- Once the last restored or cloned claim and snapshot is deleted, the empty holder VMs go, and so do the namespace `kubehenge-volume-copies` and the proxy's rights. The proxy then reads nothing in the cluster. The plugin returns to the earlier release unless the cluster chose the newest.
 - The CustomResourceDefinitions stay, so VolumeSnapshots still in the cluster keep their copies. Delete them while the option is on, or they go when the cluster is deleted.
 
 #### When it is refused
@@ -1690,7 +1696,7 @@ A copy the proxy refuses or that fails shows as a `VolumeCopyFailed` event on th
 
 Every cluster gives etcd a database limit and periodic compaction. At its limit etcd refuses every write while the API server still answers reads.
 
-The `etcd` variable sets the limit as `quotaGiB`, from 2 to 8 GiB, default 8. It can be raised and not lowered. A change replaces the control-plane nodes one at a time. The wizard sets it under **etcd** on the Machines step, and Options under Maintenance changes it. With the CLI, `kubehenge cluster etcd set NAME --quota-gib 6`.
+The `etcd` variable sets the limit as `quotaGiB`, from 2 to 8 GiB, default 8. It can be raised, and lowered while every member's database stays under 60% of the new limit. Lowering needs a read of every member from the last 18 minutes. A change replaces the control-plane nodes one at a time. The wizard sets it under **etcd** on the Machines step, and Options under Maintenance changes it. With the CLI, `kubehenge cluster etcd set NAME --quota-gib 6`.
 
 Every ten minutes the controller reads each member's database size and the part in use. The **etcd size** section of the Backups view shows them with the limit. The Health view warns above 60 percent of the limit and when a member has a `NOSPACE` alarm. An `EtcdDatabaseLarge` event says the same.
 
@@ -1918,7 +1924,7 @@ Change the labels under **Options**, with `kubehenge cluster namespace-labels NA
 
 ### Installs that collide
 
-Helm refuses to install over objects that another release or tool owns. An add-on therefore cannot share its custom resource definitions with the cluster's own install of the same software. Before it installs cert-manager, Kyverno or monitoring, Kubehenge asks the cluster for the definitions in the last column below. If one exists and no Kubehenge release owns it, the add-on is not installed. The cluster's `AddonConflict` condition names the definition and what to do.
+Helm refuses to install over objects that another release or tool owns. An add-on therefore cannot share its custom resource definitions with the cluster's own install of the same software. Before it installs cert-manager, Kyverno or monitoring, Kubehenge asks the cluster for the definitions in the last column below. If one exists and no Kubehenge release owns it, the add-on is not installed. The cluster's `AddonConflict` condition names the definition and what to do. A working cert-manager is used instead ([below](#a-cert-manager-the-cluster-runs-already)).
 
 <!-- addon-owned:start -->
 
@@ -1948,11 +1954,28 @@ Helm refuses to install over objects that another release or tool owns. An add-o
 
 <!-- addon-owned:end -->
 
-### Using a cert-manager you run
+### A cert-manager the cluster runs already
 
-To use a cert-manager the cluster runs already, choose **Use existing cert-manager** under Certificates when you create the cluster, or set `useExisting.certManager`. Kubehenge then installs no cert-manager and still makes its issuers and certificates in yours, for the certificates add-on, monitoring and Rancher. It is fixed once the cluster exists, since switching would delete the definitions with every certificate. The existing cert-manager must run with its custom resource definitions installed.
+Kubehenge installs cert-manager for the certificates add-on, monitoring, logs and Rancher, unless the cluster already runs one that works. That one is used as it is, from the static manifest, a Helm release of your own or any other install. Kubehenge never installs, upgrades, changes or deletes it.
 
-Kyverno and the Prometheus Operator have no such choice. Remove the cluster's own install, or switch the add-on off.
+Kubehenge installs its own only once the cluster has answered in full that it runs none. While the cluster cannot be read, `AddonsWaiting` says cert-manager waits until it can, and the next look reads it again.
+
+It works when it serves `cert-manager.io/v1` and its controller and webhook Deployments run in the `cert-manager` namespace and are Available. Its version, read from its `app.kubernetes.io/version` label or its image's tag, must be v1.15.0 or newer, Rancher's minimum. It must keep cluster issuers' Secrets in `cert-manager`.
+
+The certificates add-on sets these only on Kubehenge's own cert-manager. Set them on yours yourself:
+
+- the default issuer `kubehenge-ingress` for Ingresses that ask with `kubernetes.io/tls-acme`, or the issuer you named with `external`
+- `dns01.nameservers` as its recursive nameservers
+- the add-ons' proxy
+- the Gateway API, which `acme-http01` needs
+
+While certificates is on, `AddonConflict` with the reason `SettingsNotApplied` names those of the first three that the cluster's settings call for.
+
+A cert-manager that does not work holds its users back. `AddonConflict` names what is wrong and the add-ons that wait, such as definitions left without a controller after an uninstall, a webhook that is not Available, a version too old or one that cannot be read. Make it work, or remove it and Kubehenge installs its own. Either takes effect on the next look, within ten minutes. When the cert-manager in use changes, Rancher, monitoring and logs are applied again, so their certificates and issuers come back.
+
+Only Kubehenge's own release labels its objects `kubehenge.dev/addon=cert-manager`. That one keeps getting Kubehenge's upgrades.
+
+For Kyverno and the Prometheus Operator, remove the cluster's own install, or switch the add-on off.
 
 ## Who may do what
 
@@ -2150,7 +2173,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
   - 1, 3, 5 or 7 control-plane nodes, and 0 to 100 workers in each pool.
   - Enough node addresses for every machine at once plus one for a rollout.
   - Node addresses and a control-plane endpoint on the gateway's network, with the endpoint outside the node addresses.
-  - None of another cluster's addresses on the same bridge and VLAN.
+  - None of the addresses of another cluster, the management cluster or the appliance on the same bridge and VLAN.
 
 ### Namespaces and ranges
 
@@ -2198,7 +2221,6 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `podSecurity` | no | `admission`, the level Pod Security Admission enforces in every namespace that labels none of its own: `privileged`, `baseline` (default) or `restricted`. Changing it replaces the control-plane machines. `kyverno`, the level Kyverno enforces in every namespace: `off` (default), `baseline` or `restricted` ([above](#add-ons)). |
 | `istio` | no | `enabled` (default false): Istio in ambient mode ([above](#add-ons)). |
 | `namespaceLabels` | no | Up to 20 labels, as key and value, put on the namespaces the add-ons install into ([above](#add-ons-and-your-policies)). Keys and values follow Kubernetes' label syntax. The webhook refuses `kubernetes.io/metadata.name`. |
-| `useExisting` | no | `certManager` (default false) uses the cert-manager the cluster runs and installs none ([above](#installs-that-collide)). The webhook refuses a change once the cluster exists. |
 | `clusterMesh` | no | For a cluster that runs Cilium ([above](#add-ons)). `enabled` (default false). `peers`, the clusters of this namespace to link with, by name. |
 | `certificates` | no | `enabled` (default false). `issuer`, `acme-dns01` (default), `acme-http01`, `ca` or `external`. `domain`, needed with `acme-dns01` and `ca`. `issuerName`, `issuerKind`, `issuerGroup`, with `external` ([above](#an-issuer-you-run)). `acme` holds `email`, `server`, `staging`, `caBundle`, `externalAccountBinding.keyID` ([above](#external-account-binding)). `dns01` holds `provider`, its settings, `existingSecret`, `sharedCredential`, `nameservers` ([above](#certificates)). |
 | `rancher` | no | `install` (default false), which needs `hostname` and at least 4 vCPUs on every node. `register` (default true), to register with the Rancher Kubehenge installed. Setting `install` back to false uninstalls it ([above](#change-settings)). |

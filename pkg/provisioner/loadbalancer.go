@@ -797,7 +797,18 @@ func (h *Hooks) checkAddresses(ctx context.Context, cluster *clusterv1.Cluster) 
 	if err := h.Reader.List(ctx, clusters); err != nil {
 		return fmt.Errorf("listing the clusters: %w", err)
 	}
-	return checkAddresses(cluster, clusters.Items)
+	return joinProblems(checkAddresses(cluster, clusters.Items), h.checkManagement(ctx, cluster))
+}
+
+// joinProblems is the refusal that holds both of two, either of which may be nil.
+func joinProblems(a, b error) error {
+	switch {
+	case a == nil:
+		return b
+	case b == nil:
+		return a
+	}
+	return fmt.Errorf("%w, %w", a, b)
 }
 
 // checkBGP holds a cluster that announces its addresses over BGP to what that can do. Its

@@ -939,22 +939,6 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
             The level Kyverno's Pod Security Standards policies enforce, in every namespace and
             whatever its labels say, with a policy report of what falls short; off leaves Kyverno
             out of the cluster.
-- name: useExisting
-  required: false
-  schema:
-    openAPIV3Schema:
-      type: object
-      description: >-
-        Installs the cluster already runs that the add-ons use instead of their own, so that they
-        do not collide with the company's. Chosen when the cluster is created and fixed after.
-      properties:
-        certManager:
-          type: boolean
-          default: false
-          description: >-
-            Use the cert-manager the cluster runs. Kubehenge installs none, and still makes its
-            issuers and certificates in it. Rancher, monitoring and certificates need cert-manager
-            0.15 or newer with its custom resource definitions installed.
 - name: namespaceLabels
   required: false
   schema:
@@ -2140,10 +2124,7 @@ write. 8 GiB is the most etcd's documentation suggests.
           minimum: 2
           maximum: 8
           default: 8
-          description: The most one member's database may reach, in GiB. It can be raised, not lowered.
-      x-kubernetes-validations:
-        - rule: "!has(oldSelf.quotaGiB) || !has(self.quotaGiB) || self.quotaGiB >= oldSelf.quotaGiB"
-          message: The etcd limit can be raised, not lowered, since a database above it stops accepting writes
+          description: The most one member's database may reach, in GiB. Lowering it needs every database under 60% of the new limit.
 {{- end -}}
 
 {{/*

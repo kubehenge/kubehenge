@@ -86,13 +86,23 @@ jobs:
           persist-credentials: false
       # The image of Proxmox VE as the nightly run or a change on main (e2e-image.yml) last built
       # it. Its packages are a day old at most. The nightly run builds it afresh.
+      # It is named by its files' hash and the newest pve-manager version of the repository, so a
+      # release made since it was built finds no entry and builds it afresh.
+      - id: pve
+        if: env.E2E_RUN == 'true'
+        env:
+          FILES_HASH: ${{ hashFiles('test/e2e/pve/**') }}
+        run: |
+          found=$(scripts/pve-version.sh "$FILES_HASH")
+          echo "$found"
+          echo "$found" >> "$GITHUB_OUTPUT"
       - id: pve-cache
         if: env.E2E_RUN == 'true' && github.event_name != 'schedule'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/pve-image.tar.zst
-          key: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-${{ github.run_id }}
-          restore-keys: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-
+          key: ${{ steps.pve.outputs.prefix }}${{ github.run_id }}
+          restore-keys: ${{ steps.pve.outputs.prefix }}
       # Sound runners load it in 10 to 20 seconds, whatever their CPU.
       - name: Load Proxmox VE's image
         id: load
@@ -292,6 +302,7 @@ jobs:
         env:
           # A cluster with IPv6 first reaches its API over IPv6, which the runner routes only then.
           KUBEHENGE_E2E_IPV6: ${{ contains(inputs.test, '+ipv6-first') && '1' || '' }}
+          KUBEHENGE_E2E_PVE_VERSION: ${{ steps.pve.outputs.version }}
         run: test/e2e/ci/up.sh "$RUNNER_TEMP/e2e"
       # One nightly job keeps what the others read: the lane of the management cluster's test.
       - name: Keep Proxmox VE's image
@@ -305,7 +316,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/pve-image.tar.zst
-          key: e2e-pve-${{ hashFiles('test/e2e/pve/**') }}-${{ github.run_id }}
+          key: ${{ steps.pve.outputs.prefix }}${{ github.run_id }}
       # Under the job's limit, so that a test past it fails and Collect still runs; a job stopped at
       # its own limit keeps neither its log nor its artifacts. In a session of its own, which the
       # guard ends.

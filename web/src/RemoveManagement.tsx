@@ -9,8 +9,16 @@ import { Dialog, ErrorBox, Field, errorMessage, passphraseShort } from "./ui";
 // Every cluster has to be deleted first.
 export function DangerZone({ running, onStarted }: { running: boolean; onStarted: () => void }): JSX.Element {
   const [open, setOpen] = useState(false);
-  // The server refuses a removal while clusters exist, so the page does not offer one.
-  const clusters = useFleet()?.clusters?.length ?? 0;
+  // The server refuses a removal while clusters exist, so the page does not offer one, nor while
+  // it does not know whether any do.
+  const fleet = useFleet();
+  const clusters = fleet?.clusters?.length;
+  let note = "Keeps the appliance";
+  if (clusters === undefined) {
+    note = fleet?.error === undefined ? "Loading…" : "Clusters not read.";
+  } else if (clusters > 0) {
+    note = `Delete ${clusters} ${clusters === 1 ? "cluster" : "clusters"} first`;
+  }
   return (
     <section className="panel danger-zone" aria-labelledby="danger-zone">
       <div className="box">
@@ -18,13 +26,9 @@ export function DangerZone({ running, onStarted }: { running: boolean; onStarted
         <div className="danger-row">
           <div>
             <strong>Remove Kubehenge</strong>
-            <p className="muted">
-              {clusters > 0
-                ? `Delete ${clusters} ${clusters === 1 ? "cluster" : "clusters"} first`
-                : "Keeps the appliance"}
-            </p>
+            <p className="muted">{note}</p>
           </div>
-          <button type="button" className="danger" disabled={running || clusters > 0} onClick={() => setOpen(true)}>
+          <button type="button" className="danger" disabled={running || clusters !== 0} onClick={() => setOpen(true)}>
             Remove…
           </button>
         </div>

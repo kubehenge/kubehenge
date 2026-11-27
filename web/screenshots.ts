@@ -1,7 +1,10 @@
 // Takes the documentation's screenshots of the interface: starts `kubehenge serve --demo` on a
 // loopback port, opens each view in a headless Chromium and writes it as a PNG.
 //
-//   node screenshots.ts <kubehenge binary> <output directory>
+//   node screenshots.ts <kubehenge binary> <output directory> [states]
+//
+// With "states" it writes instead the pages whose reads fail or have not answered, to check that
+// they state nothing they have not read.
 //
 // The window, the colour scheme and both clocks are fixed, so a run gives the same images as the
 // one before unless the interface or the demo changed.
@@ -9,7 +12,7 @@ import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { type Browser, chromium } from "playwright";
+import { type Browser, type Page, chromium } from "playwright";
 
 import { demoTime, hostResolverRule, startDemo, viewport } from "./flows/demo.ts";
 
@@ -43,9 +46,222 @@ const shots: Shot[] = [
   },
 ];
 
-const [binary, outArg] = process.argv.slice(2);
+// A page with some of its reads made to fail (answered 502) or never answered.
+interface State {
+  file: string;
+  path: string;
+  fail?: string[];
+  hang?: string[];
+  // The failing reads answer once, and fail only when read again.
+  failLater?: boolean;
+  // A text the page shows before anything is clicked or read again.
+  before?: string;
+  // What to click once the page shows the text before.
+  click?: { role: "button" | "link"; name: string };
+  // Annotations added to every class the page reads, for settings the demo's classes do not offer.
+  offer?: Record<string, string>;
+  // Steps through a page once it shows the text before, where one click does not reach the state.
+  act?: (page: Page) => Promise<void>;
+  // A text the page shows in that state.
+  ready: string;
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
+
+const states: State[] = [
+  { file: "fleet-health-failed.png", path: "/", fail: ["/api/fleet/health"], ready: "Unknown" },
+  { file: "fleet-health-pending.png", path: "/", hang: ["/api/fleet/health"], ready: "Loading…" },
+  { file: "run-failed.png", path: "/runs/change/clusters/edge", fail: ["/api/runs"], ready: "Try now" },
+  { file: "run-pending.png", path: "/runs/change/clusters/edge", hang: ["/api/runs"], ready: "Run" },
+  {
+    file: "cluster-placement-pending.png",
+    path: "/clusters/clusters/web",
+    hang: ["/api/clusters/clusters/web"],
+    ready: "Placement",
+  },
+  { file: "runs-failed.png", path: "/", fail: ["/api/runs"], ready: "Try now" },
+  { file: "runs-pending.png", path: "/clusters/clusters/web", hang: ["/api/runs"], ready: "Placement" },
+  {
+    file: "fleet-health-stale.png",
+    path: "/",
+    fail: ["/api/fleet/health"],
+    failLater: true,
+    before: "Degraded",
+    ready: "Try now",
+  },
+  { file: "remove-clusters-failed.png", path: "/administration", fail: ["/api/clusters"], ready: "Clusters not read." },
+  { file: "remove-clusters-pending.png", path: "/administration", hang: ["/api/clusters"], ready: "Danger zone" },
+  {
+    file: "cluster-read-failed.png",
+    path: "/",
+    fail: ["/api/clusters/clusters/web"],
+    before: "payments",
+    click: { role: "link", name: "web" },
+    ready: "Placement",
+  },
+  {
+    file: "placement-nodes-failed.png",
+    path: "/clusters/clusters/web",
+    fail: ["/api/proxmox/nodes"],
+    ready: "Try now",
+  },
+  {
+    file: "placement-nodes-pending.png",
+    path: "/clusters/clusters/web",
+    hang: ["/api/proxmox/nodes"],
+    ready: "Placement",
+  },
+  {
+    file: "upgrade-versions-pending.png",
+    path: "/clusters/clusters/web",
+    hang: ["/api/versions"],
+    before: "Placement",
+    click: { role: "button", name: "Upgrade" },
+    ready: "Upgrade web",
+  },
+  {
+    file: "upgrade-versions-failed.png",
+    path: "/clusters/clusters/web",
+    fail: ["/api/versions"],
+    before: "Placement",
+    click: { role: "button", name: "Upgrade" },
+    ready: "Try now",
+  },
+  {
+    file: "backups-etcd-target.png",
+    path: "/clusters/clusters/web/backups",
+    hang: ["/api/clusters/clusters/web/backups"],
+    ready: "Last taken",
+  },
+  {
+    file: "backups-etcd-failed.png",
+    path: "/clusters/clusters/web/backups",
+    fail: ["/etcd-snapshots"],
+    ready: "Try now",
+  },
+  {
+    file: "backups-velero-failed.png",
+    path: "/clusters/clusters/web/backups",
+    fail: ["/api/clusters/clusters/web/backups"],
+    ready: "Try now",
+  },
+  {
+    file: "health-failed.png",
+    path: "/clusters/clusters/web/health",
+    fail: ["/api/clusters/clusters/web/health"],
+    ready: "Try now",
+  },
+  {
+    file: "admin-backups-failed.png",
+    path: "/administration/backups",
+    fail: ["/api/appliance/etcd-backups"],
+    ready: "Try now",
+  },
+  { file: "admin-health-failed.png", path: "/administration", fail: ["/api/setup/health"], ready: "Try now" },
+  {
+    file: "notifications-targets-failed.png",
+    path: "/administration/notifications",
+    fail: ["/api/credentials/notify"],
+    ready: "Targets not read.",
+  },
+  {
+    file: "backups-velero-stale.png",
+    path: "/clusters/clusters/web/backups",
+    fail: ["/api/clusters/clusters/web/backups"],
+    failLater: true,
+    before: "Reachable",
+    ready: "Backups not read.",
+  },
+  {
+    file: "machines-cluster-failed.png",
+    path: "/clusters/clusters/web/machines",
+    fail: ["/api/clusters/clusters/web"],
+    ready: "Try now",
+  },
+  {
+    file: "options-classes-failed.png",
+    path: "/clusters/clusters/web/options",
+    fail: ["/api/classes"],
+    ready: "Try now",
+  },
+  { file: "admin-setup-failed.png", path: "/administration", fail: ["/api/setup"], ready: "Try now" },
+  { file: "rail-health-failed.png", path: "/clusters/clusters/web", fail: ["/api/fleet/health"], ready: "Try now" },
+  { file: "admin-activity-failed.png", path: "/administration/activity", fail: ["/api/activity"], ready: "Try now" },
+  {
+    file: "cluster-activity-failed.png",
+    path: "/clusters/clusters/web/activity",
+    fail: ["/api/clusters/clusters/web/activity"],
+    ready: "Try now",
+  },
+  {
+    file: "admin-appliance-failed.png",
+    path: "/administration/appliance",
+    fail: ["/api/appliance/upgrades"],
+    ready: "Try now",
+  },
+  { file: "admin-templates-failed.png", path: "/administration/templates", fail: ["/api/templates"], ready: "Try now" },
+  {
+    file: "admin-release-pins-failed.png",
+    path: "/administration/templates",
+    fail: ["/api/release-pins"],
+    ready: "Try now",
+  },
+  {
+    file: "options-classes-pending.png",
+    path: "/clusters/clusters/web/options",
+    hang: ["/api/classes"],
+    ready: "Loading…",
+  },
+  {
+    file: "dlg-backups-classes-failed.png",
+    path: "/clusters/clusters/ci/backups",
+    fail: ["/api/classes"],
+    before: "Backups are off",
+    click: { role: "button", name: "Set up backups…" },
+    ready: "Try now",
+  },
+  {
+    file: "dlg-backups-classes-pending.png",
+    path: "/clusters/clusters/ci/backups",
+    hang: ["/api/classes"],
+    before: "Backups are off",
+    click: { role: "button", name: "Set up backups…" },
+    ready: "Edit backups",
+  },
+  { file: "admin-appliance-outside.png", path: "/administration/appliance", ready: "Upgrades need the appliance." },
+  {
+    file: "options-storages-failed.png",
+    path: "/clusters/clusters/web/options",
+    fail: ["/api/proxmox/storages"],
+    offer: { "kubehenge.dev/proxmox-ha": "true", "kubehenge.dev/datastore-allocate": "true" },
+    ready: "Try now",
+  },
+  {
+    file: "create-upgrade-window.png",
+    path: "/clusters/new",
+    before: "Name",
+    act: async (page) => {
+      await page.getByLabel("Start from").selectOption({ label: "ci" });
+      await page.getByLabel("Name", { exact: true }).fill("fresh");
+      await page
+        .getByRole("navigation", { name: "Steps" })
+        .getByRole("button", { name: "Policies", exact: true })
+        .click();
+      await page.getByText(/^Upgrades run daily/u).scrollIntoViewIfNeeded();
+    },
+    ready: "Upgrades run daily 02:00 to 06:00, UTC time",
+  },
+  {
+    file: "admin-certificate-failed.png",
+    path: "/administration/certificates",
+    fail: ["/api/appliance/certificate"],
+    ready: "Try now",
+  },
+];
+
+const [binary, outArg, mode] = process.argv.slice(2);
 if (binary === undefined || outArg === undefined) {
-  console.error("usage: node screenshots.ts <kubehenge binary> <output directory>");
+  console.error("usage: node screenshots.ts <kubehenge binary> <output directory> [states]");
   process.exit(2);
 }
 const out = resolve(outArg);
@@ -64,6 +280,8 @@ try {
       "--disable-skia-runtime-opts",
       "--force-color-profile=srgb",
       "--disable-lcd-text",
+      // No view plays sound on the machine that takes the shots.
+      "--mute-audio",
     ],
   });
   const context = await browser.newContext({
@@ -76,7 +294,56 @@ try {
   });
   const page = await context.newPage();
   await page.clock.setFixedTime(new Date(demoTime));
-  for (const shot of shots) {
+  for (const state of mode === "states" ? states : []) {
+    let answered = false;
+    await page.route(
+      (url) =>
+        [...(state.fail ?? []), ...(state.hang ?? []), ...(state.offer ? ["/api/classes"] : [])].some((p) =>
+          url.pathname.includes(p),
+        ),
+      async (route) => {
+        if (state.offer !== undefined && route.request().url().includes("/api/classes")) {
+          const answer = await route.fetch();
+          const json: unknown = await answer.json();
+          const classes: unknown[] = Array.isArray(json) ? json : [];
+          for (const c of classes) {
+            if (isRecord(c)) {
+              c["annotations"] = { ...(isRecord(c["annotations"]) ? c["annotations"] : {}), ...state.offer };
+            }
+          }
+          await route.fulfill({ response: answer, json: classes });
+          return;
+        }
+        if (state.fail?.some((p) => route.request().url().includes(p)) !== true) {
+          return;
+        }
+        if (state.failLater === true && !answered) {
+          answered = true;
+          await route.continue();
+          return;
+        }
+        await route.abort();
+      },
+    );
+    await page.goto(origin + state.path);
+    if (state.before !== undefined) {
+      await page.getByText(state.before, { exact: true }).first().waitFor({ timeout: readyDeadline });
+    }
+    if (state.click !== undefined) {
+      await page.getByRole(state.click.role, { name: state.click.name, exact: true }).first().click();
+    }
+    await state.act?.(page);
+    // A tab shown again reads everything again.
+    if (state.failLater === true) {
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    }
+    await page.getByText(state.ready, { exact: true }).first().waitFor({ timeout: readyDeadline });
+    await page.waitForTimeout(settle);
+    await page.screenshot({ path: join(out, state.file), animations: "disabled", caret: "hide" });
+    console.log(`wrote ${state.file}`);
+    await page.unrouteAll();
+  }
+  for (const shot of mode === "states" ? [] : shots) {
     await page.goto(origin + shot.path);
     try {
       await page.getByText(shot.ready, { exact: true }).first().waitFor({ timeout: readyDeadline });

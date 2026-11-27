@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kubehenge/kubehenge/pkg/appliance"
 )
 
 // StepState is where a step of the run stands.
@@ -125,6 +127,9 @@ type Runner struct {
 }
 
 const keyDir = "/var/lib/kubehenge-keys"
+
+// stateDir is the interface's state directory in the container.
+const stateDir = "/var/lib/kubehenge"
 
 // aptTimeouts cuts each try at a mirror an air-gapped or filtered network drops without an answer
 // to 20 seconds, from apt's default of 120. Apt keeps its 3 retries with a backoff of 1, 2 and 4
@@ -233,8 +238,11 @@ var gatewayRE = regexp.MustCompile(`(?m)^default via (\S+)`)
 
 func isAddress(s string) bool { return net.ParseIP(s) != nil }
 
+// The link in /usr/bin is there because `pct exec` starts its command on the PATH of the caller's
+// shell, which need not hold /usr/local/bin. The link follows the binary the updater replaces.
 const swapScript = `
 set -e
+ln -sfn /usr/local/bin/kubehenge /usr/bin/kubehenge
 rm -rf /usr/local/share/kubehenge.new && mkdir /usr/local/share/kubehenge.new
 tar -xf /tmp/share.tar -C /usr/local/share/kubehenge.new && rm /tmp/share.tar
 rm -rf /usr/local/share/kubehenge.old
@@ -1019,6 +1027,9 @@ func (r *Runner) stepService(ctx context.Context) error {
 		return r.serviceFailure(ctx, "the service did not start")
 	}
 	r.started = true
+	if err := r.recordNetwork(ctx); err != nil {
+		return userErr("recording container "+c.CTID+"'s network failed", "See "+r.LogPath+" for the command's message")
+	}
 	r.Sleep(stepPause)
 	if _, err := r.inCT(ctx, "systemctl", "is-active", "--quiet", "kubehenge.service"); err != nil {
 		return r.serviceFailure(ctx, "the service did not start")
@@ -1199,4 +1210,35 @@ func tarDir(dir, dest string) error {
 		return fmt.Errorf("close archive: %w", err)
 	}
 	return nil
+}
+
+// recordNetwork writes the network cards Proxmox VE configures for the container into the
+// appliance's appliance.NetworkFile, where it reads the bridge and VLAN each of its addresses is
+// on. A configuration that cannot be read, or holds no card, leaves the file as it is.
+func (r *Runner) recordNetwork(ctx context.Context) error {
+	conf, err := r.pct(ctx, "config", r.S.Cfg.CTID)
+	if err != nil {
+		return nil //nolint:nilerr // what was recorded stays, and the interface records it again
+	}
+	cards := appliance.NetworkCards(configEntries(conf))
+	if len(cards) == 0 {
+		return nil
+	}
+	return r.pushData(ctx, appliance.NetworkFile, cards, stateDir+"/"+appliance.NetworkFile, "0644")
+}
+
+// configEntries are the keys and values of a guest's configuration as pct config prints it. The
+// snapshots' sections after it are not the guest's.
+func configEntries(conf string) map[string]string {
+	entries := map[string]string{}
+	for line := range strings.Lines(conf) {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") {
+			break
+		}
+		if key, value, ok := strings.Cut(line, ": "); ok {
+			entries[key] = value
+		}
+	}
+	return entries
 }

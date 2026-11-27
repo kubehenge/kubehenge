@@ -14,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -54,6 +55,9 @@ const (
 	etcdMemberTimeout = 2 * time.Minute
 	// etcdReadTimeout bounds reading every member, which are asked in turn.
 	etcdReadTimeout = 2 * etcdMemberTimeout
+	// etcdStatusFresh is how old a recorded read may be and still be trusted: one interval and its
+	// read, with one more read's time to spare.
+	etcdStatusFresh = etcdReadInterval + 2*etcdReadTimeout
 	// etcdDefragMemberTimeout bounds the defragmentation of one member, which takes far longer than
 	// reading it.
 	etcdDefragMemberTimeout = 5 * etcdMemberTimeout
@@ -135,6 +139,62 @@ type EtcdStatus struct {
 	Members    []EtcdMember `json:"members"`
 	// Error is why some member could not be read.
 	Error string `json:"error,omitempty"`
+}
+
+// validateEtcd holds a cluster's etcd limit and its etcd snapshots to their rules.
+func validateEtcd(old, c *clusterv1.Cluster, class *clusterv1.ClusterClass, now time.Time) field.ErrorList {
+	errs := validateEtcdQuota(old, c, now)
+	if err := checkEtcdSnapshots(old, c, class); err != nil {
+		errs = append(errs, field.Invalid(field.NewPath("spec", "topology", "variables").Key(etcdSnapshotsVariable), etcdSnapshotsVariable, err.Error()))
+	}
+	return errs
+}
+
+// percentOf is the whole in percent.
+const percentOf = 100
+
+// validateEtcdQuota refuses a lower etcd limit unless every member's database stays under EtcdWarnPercent
+// of it, as the controller last read them. A database above the limit stops accepting writes. Without a
+// recent read of every member, lowering is refused.
+func validateEtcdQuota(old, c *clusterv1.Cluster, at time.Time) field.ErrorList {
+	if old == nil {
+		return nil
+	}
+	was, wasErr := EtcdSettingsOf(old)
+	now, nowErr := EtcdSettingsOf(c)
+	if errors.Join(wasErr, nowErr) != nil || now.QuotaGiB >= was.QuotaGiB {
+		return nil
+	}
+	path := field.NewPath("spec", "topology", "variables").Key(etcdVariable)
+	status, ok := LastEtcdStatus(old)
+	if reason := etcdSizesUntrusted(old, &status, ok, at); reason != "" {
+		return field.ErrorList{field.Forbidden(path, "the etcd limit cannot be lowered without a recent read of every member's database size: "+reason)}
+	}
+	var errs field.ErrorList
+	for i := range status.Members {
+		m := &status.Members[i]
+		if m.DBSize*percentOf > now.QuotaBytes()*EtcdWarnPercent {
+			errs = append(errs, field.Forbidden(path, fmt.Sprintf("etcd member %s's database is %.1f GiB, too large for a limit of %d GiB: it must stay under %d%% of the limit",
+				m.Name, float64(m.DBSize)/float64(bytesPerGiB), now.QuotaGiB, EtcdWarnPercent)))
+		}
+	}
+	return errs
+}
+
+// etcdSizesUntrusted says why the recorded sizes cannot be trusted to lower the limit, or is "": none
+// recorded, a member unread or missing, or a read older than etcdStatusFresh.
+func etcdSizesUntrusted(c *clusterv1.Cluster, status *EtcdStatus, recorded bool, now time.Time) string {
+	switch replicas := c.Spec.Topology.ControlPlane.Replicas; {
+	case !recorded || len(status.Members) == 0:
+		return "none is recorded"
+	case status.Error != "":
+		return "the last read failed: " + status.Error
+	case replicas != nil && len(status.Members) < int(*replicas):
+		return fmt.Sprintf("%d of %d members were read", len(status.Members), *replicas)
+	case now.Sub(status.At) > etcdStatusFresh:
+		return "the last read is from " + status.At.UTC().Format(time.RFC3339)
+	}
+	return ""
 }
 
 // LastEtcdStatus reads a cluster's recorded etcd status.
@@ -400,7 +460,8 @@ func (m *EtcdMaintainer) visit(ctx context.Context, c *clusterv1.Cluster, status
 	return done
 }
 
-// afterDefrag reads the members again, and clears the NOSPACE alarm once every database is under the
+// afterDefrag reads the members again, stamping the status with that read's time so a lower etcd limit
+// can trust it, and clears the NOSPACE alarm once every database is under the
 // quota: etcd keeps refusing writes until the alarm is cleared, whatever space was freed.
 func (m *EtcdMaintainer) afterDefrag(ctx context.Context, c *clusterv1.Cluster, status *EtcdStatus, done *EtcdDefrag) {
 	if len(done.Members) == 0 {
@@ -412,7 +473,7 @@ func (m *EtcdMaintainer) afterDefrag(ctx context.Context, c *clusterv1.Cluster, 
 	if err != nil {
 		return
 	}
-	status.Members = members
+	status.Members, status.At = members, m.now().UTC()
 	alarmed := slices.ContainsFunc(members, func(x EtcdMember) bool { return x.Alarmed() })
 	full := slices.ContainsFunc(members, func(x EtcdMember) bool { return x.DBSize >= status.QuotaBytes })
 	if !alarmed || full {

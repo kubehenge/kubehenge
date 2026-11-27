@@ -5,7 +5,8 @@ import { describe, expect, it } from "vitest";
 import { App } from "./App";
 import { poolChange, poolEntry, poolProblems, roomFor, roomWarning, scaledCluster } from "./Autoscaling";
 import { applyStaged, fakeServer } from "./fake-server";
-import type { Cluster, PveNode, WorkerPool } from "./types";
+import { managementEndpointAnnotation } from "./Placement";
+import type { Cluster, ClusterClass, PveNode, WorkerPool } from "./types";
 
 const gib = 1024 * 1024 * 1024;
 
@@ -38,6 +39,14 @@ const web: Cluster = {
 };
 
 const autoscaled: Cluster = { ...web, workerPools: [scaledPool] };
+
+const k3s = (annotations: Record<string, string>): ClusterClass => ({
+  name: "kubehenge-k3s",
+  distribution: "k3s",
+  versionFormat: { pattern: String.raw`^v1\.\d+\.\d+\+k3s\d+$` },
+  annotations,
+  variables: [],
+});
 
 // mostRaised is a change of c's autoscaled pool to max workers at most, as the Scale dialog makes it.
 const mostRaised = (c: Cluster, max: string): { before: Cluster; after: Cluster } => ({
@@ -205,11 +214,50 @@ describe("the pools' checks", () => {
 });
 
 describe("the autoscaler's options", () => {
+  it("offers no placement in the cluster without the management cluster's address", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web/options");
+    const calls = fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": { body: autoscaled },
+      "GET /api/classes": { body: [k3s({})] },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Edit the autoscaler" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit autoscaler" });
+    await waitFor(() => expect(calls.map((c) => c.key)).toContain("GET /api/classes"));
+    expect(within(dialog).queryByRole("option", { name: "Cluster's control planes" })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("option", { name: "Management cluster (recommended)" })).toBeInTheDocument();
+  });
+
+  it("keeps the placement in the cluster for a cluster already there", async () => {
+    window.history.replaceState(null, "", "/clusters/default/web/options");
+    const inCluster: Cluster = {
+      ...autoscaled,
+      variables: { ...autoscaled.variables, autoscaler: { placement: "workload" } },
+    };
+    const calls = fakeServer({
+      ...signedIn,
+      "GET /api/clusters/default/web": { body: inCluster },
+      "GET /api/classes": { body: [k3s({})] },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "Edit the autoscaler" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit autoscaler" });
+    await waitFor(() => expect(calls.map((c) => c.key)).toContain("GET /api/classes"));
+    expect(within(dialog).getByLabelText("Runs")).toHaveValue("workload");
+    expect(within(dialog).getByRole("option", { name: "Cluster's control planes" })).toBeInTheDocument();
+    await user.selectOptions(within(dialog).getByLabelText("Runs"), "management");
+    expect(within(dialog).getByRole("option", { name: "Cluster's control planes" })).toBeInTheDocument();
+  });
+
   it("tunes the autoscaler and moves it into the cluster", async () => {
     window.history.replaceState(null, "", "/clusters/default/web/options");
     const calls = fakeServer({
       ...signedIn,
       "GET /api/clusters/default/web": { body: autoscaled },
+      "GET /api/classes": { body: [k3s({ [managementEndpointAnnotation]: "true" })] },
       "PATCH /api/clusters/default/web": { body: autoscaled },
     });
     const user = userEvent.setup({ delay: null });
@@ -221,6 +269,9 @@ describe("the autoscaler's options", () => {
     const dialog = screen.getByRole("dialog", { name: "Edit autoscaler" });
     expect(within(dialog).getByRole("button", { name: "Add to plan" })).toBeDisabled();
     const runs = within(dialog).getByLabelText("Runs");
+    await expect(
+      within(dialog).findByRole("option", { name: "Cluster's control planes" }),
+    ).resolves.toBeInTheDocument();
     await user.selectOptions(runs, "workload");
     expect(runs).toHaveAccessibleDescription("Its token reads the machines of the namespace's clusters");
     const unneeded = within(dialog).getByLabelText("Unneeded for (minutes)");

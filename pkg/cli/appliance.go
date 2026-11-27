@@ -41,6 +41,8 @@ const (
 type applianceOptions struct {
 	check appliance.ServiceCheck
 	json  bool
+	// quiet is health's --quiet.
+	quiet bool
 }
 
 // applianceSession is the client the commands reach the interface with, as the login's user.
@@ -119,9 +121,11 @@ func (o *applianceOptions) healthCommand() *cobra.Command {
 		Short: "Check that the interface answers and stays up, as after an upgrade",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return o.check.Healthy(cmd.Context())
+			return o.runHealth(cmd)
 		},
 	}
+	cmd.Flags().BoolVar(&o.quiet, "quiet", false, "print nothing, for scripts: the exit status is the answer")
+	cmd.Flags().BoolVar(&o.json, "json", false, "print the verdict as one JSON object")
 	cmd.Flags().StringVar(&o.check.CertFile, "cert", appliance.InstallerCertificatePath, "certificate the interface must present")
 	cmd.Flags().StringVar(&o.check.StoredFile, "stored-cert", appliance.InterfaceCertificatePath, "certificate an administrator gave the interface, which it must present instead while the file reads cleanly")
 	cmd.Flags().StringVar(&o.check.Address, "address", "127.0.0.1:443", "where the interface listens")

@@ -52,7 +52,7 @@ import { offersHA, offersHAGroups, useHARules } from "./Placement";
 import { navigate } from "./router";
 import { clusterKey, fromCluster, startable, startKeys } from "./start-from";
 import type { Bridge, Cluster, ClusterClass, NodeDNS, PveNode, Storage, Versions } from "./types";
-import { CopiedFrom, Detail, Dialog, ErrorBox, errorMessage, filled, siteZoneOf, sole } from "./ui";
+import { CopiedFrom, Detail, Dialog, ErrorBox, ReadError, errorMessage, filled, siteZoneOf, sole } from "./ui";
 import { record } from "./values";
 
 // customisationRefusal is the server's error where it names the node customisation, which then shows with it.
@@ -91,7 +91,6 @@ const raising = new Set<keyof Form>([
   "rancherRegister",
   "backups",
   "certificates",
-  "existingCertManager",
 ]);
 
 const haControlPlanes = 3;
@@ -208,6 +207,15 @@ export function CreateCluster({
   const datacenterFirewall = useDatacenterFirewall();
   const [step, setStep] = useState<Step>("General");
   const [error, setError] = useState<string>();
+  // The error of the last read the wizard builds its steps from, and the reads that failed, to try again.
+  const [readError, setReadError] = useState<string>();
+  const failedReads = useRef<(() => Promise<void>)[]>([]);
+  const readAgain = async (): Promise<void> => {
+    const again = failedReads.current;
+    failedReads.current = [];
+    setReadError(undefined);
+    await Promise.all(again.map(async (load) => load()));
+  };
   // The server's own words for the credentials that were not stored, behind the error's Detail.
   const [reasons, setReasons] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -280,14 +288,16 @@ export function CreateCluster({
         }
         setClasses(listed);
       } catch (err) {
-        setError(errorMessage(err));
+        failedReads.current.push(loadClasses);
+        setReadError(errorMessage(err));
       }
     }
     async function loadStorages(): Promise<void> {
       try {
         setStorages(await api.storages());
       } catch (err) {
-        setError(errorMessage(err));
+        failedReads.current.push(loadStorages);
+        setReadError(errorMessage(err));
       }
     }
     async function loadBridges(node: string): Promise<void> {
@@ -301,7 +311,8 @@ export function CreateCluster({
         setNodes(listed);
         await Promise.all(listed.filter((x) => x.online).map(async ({ node }) => loadBridges(node)));
       } catch (err) {
-        setError(errorMessage(err));
+        failedReads.current.push(loadNodes);
+        setReadError(errorMessage(err));
       }
     }
     async function loadClusters(): Promise<void> {
@@ -600,6 +611,7 @@ export function CreateCluster({
               />
             )}
 
+            <ReadError read={{ error: readError, reload: readAgain }} />
             <ErrorBox message={error} />
             {reasons.length > 0 && <Detail>{reasons.join(" ")}</Detail>}
             {created === undefined ? (

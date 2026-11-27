@@ -57,6 +57,23 @@ func startInterface(t *testing.T) (*harness, client.Client) {
 	return h, api.Client
 }
 
+// checkReleasePins lists, checks, adds and removes a release pin as the interface's account, which
+// only the chart's rule for the pins' ConfigMap lets it do.
+func checkReleasePins(t *testing.T, h *harness, b *browser) {
+	t.Helper()
+	srv := releaseServer(t)
+	h.server.PinChecks = &provisioner.ReleaseChecksums{HTTP: srv.Client(), GitHub: srv.URL, Raw: srv.URL}
+	expect(t, b.do("GET", "/api/release-pins", ""), http.StatusOK)
+	rec := b.do("POST", "/api/release-pins/check", `{"version":"`+pinnedK3s+`"}`)
+	expect(t, rec, http.StatusOK)
+	var shown releasePinView
+	if err := json.Unmarshal(rec.Body.Bytes(), &shown); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, b.do("POST", "/api/release-pins", fmt.Sprintf(`{"version":%q,"file":%q,"script":%q}`, pinnedK3s, shown.File, shown.Script)), http.StatusCreated)
+	expect(t, b.do("DELETE", "/api/release-pins/"+strings.ReplaceAll(pinnedK3s, "+", "%2B"), ""), http.StatusNoContent)
+}
+
 // createRequest is the body the interface's create form sends for a cluster of class on a network
 // of its own, 10.1.<net>.0/24, with variables on top as JSON members.
 func createRequestBody(name, class, version string, net int, variables string) string {
@@ -196,6 +213,7 @@ func TestIntegrationInterfaceRequests(t *testing.T) { //nolint:paralleltest // s
 	}
 
 	checkHandKeptBundles(t, b, admin)
+	checkReleasePins(t, h, b)
 
 	for _, tc := range []struct{ name, vars, want string }{
 		{"rule", `"backups":{"enabled":true}`, "Backups need a target."},

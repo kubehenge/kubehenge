@@ -1,10 +1,9 @@
-import { useEffect, useState, type JSX } from "react";
+import { useState, type JSX } from "react";
 
-import { api } from "./api";
 import { list } from "./network";
 import { certificateBundleProblem, sentence } from "./pem";
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, Field, stageLabel, useChange } from "./ui";
+import { Dialog, ErrorBox, Field, ReadDialog, stageLabel, useChange, useClasses } from "./ui";
 import { record, records, text, texts } from "./values";
 
 /** One registry mirror as the interface edits it: where the nodes pull a registry's images from. */
@@ -287,25 +286,8 @@ export const releaseMirrorFound = (p: ReleaseMirrorProblems): boolean =>
 
 /** useReleaseMirrorDefault is the management cluster's release mirror the class's nodes take by default. */
 export function useReleaseMirrorDefault(className: string): string | undefined {
-  const [fallback, setFallback] = useState<string>();
-  useEffect(() => {
-    let current = true;
-    async function load(): Promise<void> {
-      try {
-        const classes = await api.classes();
-        if (current) {
-          setFallback(classes.find((x) => x.name === className)?.releaseMirror ?? "");
-        }
-      } catch {
-        // Without the classes the default is not named. The cluster keeps its setting.
-      }
-    }
-    void load();
-    return () => {
-      current = false;
-    };
-  }, [className]);
-  return fallback;
+  const { data } = useClasses();
+  return data === undefined ? undefined : (data.find((x) => x.name === className)?.releaseMirror ?? "");
 }
 
 /** ReleaseMirrorFields edit the mirror a cluster's nodes download their release from. */
@@ -348,10 +330,32 @@ export function ReleaseMirrorFields({
 }
 
 export function ReleaseMirrorDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+  const read = useClasses();
+  return (
+    <ReadDialog title="Edit release mirror" read={read} onClose={onClose}>
+      {(classes) => (
+        <ReleaseMirrorForm
+          cluster={c}
+          fallback={classes.find((x) => x.name === c.class)?.releaseMirror ?? ""}
+          onClose={onClose}
+        />
+      )}
+    </ReadDialog>
+  );
+}
+
+function ReleaseMirrorForm({
+  cluster: c,
+  fallback,
+  onClose,
+}: {
+  cluster: Cluster;
+  fallback: string;
+  onClose: () => void;
+}): JSX.Element {
   const current = releaseMirrorOf(c.variables["releaseMirror"]);
   const [value, setValue] = useState(current);
   const [attempted, setAttempted] = useState(false);
-  const fallback = useReleaseMirrorDefault(c.class);
   const { busy, error, send } = useChange(c, onClose);
   const found = releaseMirrorProblems(value);
   // A field's problem shows once it is edited, as in the wizard. The address decides whether a

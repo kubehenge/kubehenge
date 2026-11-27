@@ -617,6 +617,11 @@ run "controller_and_clusters_are_least_privilege" {
       managementEndpoint = "https://192.0.2.10:6443"
       # Every workload cluster's firewall accepts these.
       managementAddresses = ["192.0.2.11", "192.0.2.12", "192.0.2.13"]
+      managementNetwork = {
+        bridge = var.bridge
+        vlan   = 0
+        nodes  = { "192.0.2.11" = "kubehenge-cp-0", "192.0.2.12" = "kubehenge-cp-1", "192.0.2.13" = "kubehenge-cp-2" }
+      }
     }
     error_message = "the Kubehenge chart's values differ"
   }
@@ -819,7 +824,8 @@ run "node_boot_logs" {
   assert {
     condition = (
       contains(proxmox_virtual_environment_role.provisioner_pools.privileges, "VM.GuestAgent.FileRead") &&
-      length([for p in proxmox_virtual_environment_role.provisioner_pools.privileges : p if startswith(p, "VM.GuestAgent.") && p != "VM.GuestAgent.FileRead"]) == 0 &&
+      contains(proxmox_virtual_environment_role.provisioner_pools.privileges, "VM.GuestAgent.Audit") &&
+      length([for p in proxmox_virtual_environment_role.provisioner_pools.privileges : p if startswith(p, "VM.GuestAgent.") && !contains(["VM.GuestAgent.FileRead", "VM.GuestAgent.Audit"], p)]) == 0 &&
       proxmox_acl.provisioner["/pool/${var.workload_pool} kubehenge-provisioner-pools"].propagate &&
       yamldecode(helm_release.kubehenge.values[0]).proxmox.bootLogs
     )
@@ -1070,6 +1076,11 @@ run "vnets_are_granted_in_their_zones" {
   assert {
     condition     = alltrue([for vm in proxmox_virtual_environment_vm.node : vm.network_device[0].bridge == "mgmt"])
     error_message = "the management VMs attach to the VNet by its name"
+  }
+
+  assert {
+    condition     = yamldecode(helm_release.kubehenge.values[0]).managementNetwork.bridge == "mgmt"
+    error_message = "the controller holds the management side's addresses on the VNet by its name, as clusters name it"
   }
 }
 
@@ -2217,6 +2228,14 @@ run "dual_stack_ipv4_first" {
   assert {
     condition     = output.api_endpoint == "https://192.0.2.10:6443"
     error_message = "an IPv4-first cluster's endpoint is the IPv4 virtual IP"
+  }
+
+  assert {
+    condition = yamldecode(helm_release.kubehenge.values[0]).managementNetwork.nodes == {
+      "192.0.2.11"     = "kubehenge-cp-0", "192.0.2.12" = "kubehenge-cp-1", "192.0.2.13" = "kubehenge-cp-2",
+      "2001:db8:1::11" = "kubehenge-cp-0", "2001:db8:1::12" = "kubehenge-cp-1", "2001:db8:1::13" = "kubehenge-cp-2",
+    }
+    error_message = "the controller names each management node by its address of either family"
   }
 }
 

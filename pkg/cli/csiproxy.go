@@ -28,16 +28,16 @@ type csiProxyOptions struct {
 	pool    string
 	holders string
 	copies  bool
+	find    bool
 }
 
 func newCSIProxyCommand(conn *pve.Config) *cobra.Command {
 	var o csiProxyOptions
 	cmd := &cobra.Command{
 		Use:   "csi-proxy",
-		Short: "Proxy a workload cluster's CSI plugin to the Proxmox VE API, for volume snapshots",
+		Short: "Proxy a workload cluster's CSI plugin to the Proxmox VE API",
 		Long: `Proxy a workload cluster's Proxmox VE CSI plugin to the Proxmox VE API. It runs in the workload
-cluster beside the plugin's controller, with the plugin's service account, in clusters that take
-volume snapshots.
+cluster beside the plugin's controller, with the plugin's service account.
 
 Every call goes on to the API with the cluster's own token, which the call carries. Proxmox VE lets
 only root@pam copy a volume, so the proxy makes the copy with that token instead. It imports the
@@ -57,6 +57,7 @@ through its holder. POD_NAME and POD_NAMESPACE name the pod its events are about
 	f.StringVar(&o.pool, "pool", "", "the cluster's Proxmox VE pool, where its holder VMs are")
 	f.StringVar(&o.holders, "holders", "", "name of the cluster's holder VMs, which keep the copies as unused disks")
 	f.BoolVar(&o.copies, "copies", true, "make the copies the plugin asks for. Off, the proxy only finds copies made before")
+	f.BoolVar(&o.find, "find-copies", true, "find copies made before. Off with --copies off, the proxy reads no copies' records and passes every call but a storage's configuration on as it came")
 	return cmd
 }
 
@@ -79,7 +80,7 @@ func runCSIProxy(ctx context.Context, conn *pve.Config, o *csiProxyOptions) erro
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	p := &csiproxy.Proxy{
 		Upstream: upstream, Transport: transport, Client: c, Log: log, Poll: csiProxyPoll,
-		Owner: o.owner, Pool: o.pool, Holders: o.holders, Copies: o.copies,
+		Owner: o.owner, Pool: o.pool, Holders: o.holders, Copies: o.copies, Direct: !o.copies && !o.find,
 		Pod: types.NamespacedName{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("POD_NAME")},
 	}
 	srv := &http.Server{
@@ -95,7 +96,7 @@ func runCSIProxy(ctx context.Context, conn *pve.Config, o *csiProxyOptions) erro
 		defer done()
 		_ = srv.Shutdown(shutdown)
 	}()
-	log.Info("serving", "address", o.listen, "proxmox", upstream.String(), "volumeOwner", o.owner, "pool", o.pool, "copies", o.copies)
+	log.Info("serving", "address", o.listen, "proxmox", upstream.String(), "volumeOwner", o.owner, "pool", o.pool, "copies", o.copies, "direct", p.Direct)
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serving: %w", err)
 	}

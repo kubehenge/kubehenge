@@ -1,12 +1,15 @@
 import { api } from "./api";
 import type { PveNode } from "./types";
-import { filled, pollCache, pollIdle, usePoll } from "./ui";
+import { filled, pollCache, pollIdle, usePoll, type Poll } from "./ui";
 
 /** nodesKept keeps the Proxmox VE nodes for every view of every cluster that places machines on them. */
 export const nodesKept = { cache: pollCache<PveNode[]>(), key: "nodes" };
 
-/** useProxmoxNodes reads the Proxmox VE nodes, as every cluster view shares them. */
-export const useProxmoxNodes = (): PveNode[] | undefined => usePoll(api.nodes, pollIdle, nodesKept).data;
+/** useProxmoxNodesRead reads the Proxmox VE nodes, as every cluster view shares them, with how the read went. */
+export const useProxmoxNodesRead = (): Poll<PveNode[]> => usePoll(api.nodes, pollIdle, nodesKept);
+
+/** useProxmoxNodes is the Proxmox VE nodes as read. */
+export const useProxmoxNodes = (): PveNode[] | undefined => useProxmoxNodesRead().data;
 
 /**
  * unreachable is whether Proxmox VE lists a node as online while a call the appliance forwards to it

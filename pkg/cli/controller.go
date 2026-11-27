@@ -78,6 +78,9 @@ const (
 	// cluster seconds after the credential.
 	credentialOrphansInterval = time.Minute
 	credentialOrphansGrace    = 10 * time.Minute
+	// specSecretsInterval is how often the Secrets labelled for a cluster are recorded for the
+	// interface, which cannot list them.
+	specSecretsInterval = 30 * time.Second
 	// certificateWatchInterval is how often the clusters' certificates are looked at, a few reads
 	// each: they are renewed weeks before they run out, and RKE2 and k3s report theirs every half hour.
 	certificateWatchInterval = 5 * time.Minute
@@ -113,6 +116,9 @@ type controllerOptions struct {
 	// is every interface.
 	extensionHost     string
 	managementAddrs   []string
+	managementNodes   map[string]string
+	managementBridge  string
+	managementVLAN    int
 	certDir           string
 	healthAddr        string
 	metricsAddr       string
@@ -223,6 +229,9 @@ chart's PodTemplate, the only pod that mounts that token.`,
 	f.StringVar(&o.podSecurityExempt, "pod-security-exempt", "{}", "namespaces exempt from pod security, in Kyverno's policies and the ClusterClasses' Pod Security Admission alike, as a JSON object of lists keyed by what runs there: always, calico, monitoring, logs, backups, istio, metallb, rancher, rancherAgent")
 	f.StringArrayVar(&o.classProviders, "class-providers", nil, "namespaces of the Cluster API providers that only one ClusterClass's clusters use, as <class>=<namespace>,<namespace>. They run only while such a cluster exists (repeatable)")
 	f.BoolVar(&o.offerHARules, "offer-ha-rules", false, "offer Proxmox VE's HA node-affinity rules, their names and nodes only, to those who may create a cluster but not read the rules, through the ConfigMap "+provisioner.HARulesName)
+	f.StringVar(&o.managementBridge, "management-bridge", "", "the bridge the management cluster's nodes are on, as the network variable names it. With it, no cluster's addresses on that bridge and VLAN may be the management cluster's, its API's or the appliance's")
+	f.IntVar(&o.managementVLAN, "management-vlan", 0, "the VLAN tag of the management cluster's nodes, 0 for none")
+	f.StringToStringVar(&o.managementNodes, "management-nodes", nil, "the management cluster's nodes' names by address, as <address>=<name>, for the refusal of an address one of them holds (comma-separated)")
 	f.StringSliceVar(&o.managementAddrs, "management-addresses", nil, "the management cluster's node addresses, which the firewall of every firewalled cluster accepts beside the appliance's (comma-separated)")
 	f.StringSliceVar(&o.headlampSignIn, "headlamp-sign-in-namespaces", nil, "the interface's namespaces whose clusters the appliance's shared Headlamp signs users in to as cluster-admin, if they may download the admin kubeconfig (comma-separated). Empty signs nobody in and removes the identities")
 	f.DurationVar(&o.upgradeInterval, "upgrade-interval", defaultUpgradeInterval, "how often clusters are checked for an automatic upgrade due in their window")
@@ -240,7 +249,7 @@ chart's PodTemplate, the only pod that mounts that token.`,
 	f.StringVar(&o.healthAddr, "health-address", ":8081", "address of the liveness and readiness probes")
 	f.StringVar(&o.metricsAddr, "metrics-address", ":8443", "address of the Prometheus metrics, served over HTTPS to callers the API server authorises for /metrics, or 0 for none")
 	o.logs.addFlags(f, "log in development mode, with stack traces from warnings up and a panic on what should never happen. Lines stay in JSON")
-	f.BoolVar(&o.bootLogs, "boot-logs", true, "read the boot logs of kubeadm, RKE2 and k3s nodes through their guest agents with this controller's token, which then needs VM.GuestAgent.FileRead on the workload pool")
+	f.BoolVar(&o.bootLogs, "boot-logs", true, "read the boot logs of kubeadm, RKE2 and k3s nodes through their guest agents with this controller's token, which then needs VM.GuestAgent.FileRead and VM.GuestAgent.Audit on the workload pool. The second lets it name the machines whose VMs lack their address")
 	f.BoolVar(&o.leaderElect, "leader-elect", true, "elect one active controller among replicas")
 	return cmd
 }
@@ -263,7 +272,7 @@ func (o *controllerOptions) addonFlags(f *pflag.FlagSet) {
 	f.StringVar(&o.timeZone, "time-zone", provisioner.DefaultTimeZone, "the IANA time zone that schedules without one of their own run in, such as a cluster's etcd snapshots")
 	f.StringVar(&o.egressProxy, "egress-proxy", os.Getenv("HTTPS_PROXY"), "the proxy the add-ons of clusters that set none of their own go through (env HTTPS_PROXY). An address with credentials is not passed on")
 	f.StringVar(&o.egressNoProxy, "egress-no-proxy", os.Getenv("NO_PROXY"), "the exceptions to --egress-proxy, comma-separated (env NO_PROXY)")
-	f.StringVar(&o.certManagerChart, "cert-manager-chart", "", "cert-manager chart, installed with Rancher and with monitoring, as <repository>/<name>:<version>@sha256:<digest>")
+	f.StringVar(&o.certManagerChart, "cert-manager-chart", "", "cert-manager chart, installed with Rancher, monitoring, logs and certificates, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.rancherChart, "rancher-chart", "", "Rancher chart, for the cluster that installs it, as <repository>/<name>:<version>@sha256:<digest>")
 	f.StringVar(&o.rancherKubernetes, "rancher-kubernetes", "", "Kubernetes minor versions the Rancher chart runs on, as <min>-<max>, such as 34-36")
 	f.StringVar(&o.turtlesImage, "rancher-turtles-image", "", "the image of the Turtles release Rancher installs, as <registry>/<repository>:<tag>@sha256:<digest>")
@@ -427,8 +436,10 @@ func (o *controllerOptions) newHooks(mgr ctrl.Manager, registrar *provisioner.Re
 		SecurityGroups:    cloud,
 		APIReach:          cloud,
 		Endpoint:          o.r.Endpoint.URL,
+		ManagementAPI:     o.autoscaler.Management.Server,
 		Management: &provisioner.FirewallSources{
 			Reader: mgr.GetAPIReader(), Namespace: o.r.ClassNamespace, Management: o.managementAddrs,
+			API: o.autoscaler.Management.Server, Bridge: o.managementBridge, VLAN: o.managementVLAN, Nodes: o.managementNodes,
 		},
 		DatastoreAllocate: o.r.DatastoreAllocate,
 		SysAuditGroup:     o.r.SysAuditGroup,
@@ -818,6 +829,9 @@ func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *pro
 	if err = mgr.Add(&provisioner.CredentialOrphans{Client: mgr.GetClient(), Interval: credentialOrphansInterval, Grace: credentialOrphansGrace}); err != nil {
 		return fmt.Errorf("the credentials stored ahead of their clusters: %w", err)
 	}
+	if err = mgr.Add(&provisioner.SpecSecrets{Client: mgr.GetClient(), Interval: specSecretsInterval}); err != nil {
+		return fmt.Errorf("the record of the Secrets labelled for clusters: %w", err)
+	}
 	if err = o.addAutoscalers(mgr, registrar.Remotes); err != nil {
 		return err
 	}
@@ -1057,6 +1071,9 @@ func (o *controllerOptions) addWatches(mgr manager.Manager, remotes *provisioner
 		Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), ClassNamespace: o.r.ClassNamespace, WorkloadPool: o.r.WorkloadPool,
 		Proxmox: c, Workloads: remotes, Events: mgr.GetEventRecorder("kubehenge"),
 		Interval: vmWatchInterval,
+	}
+	if o.bootLogs {
+		vms.Files = &provisioner.ProxmoxGuestFiles{Client: c}
 	}
 	if err := mgr.Add(vms); err != nil {
 		return fmt.Errorf("the VM watch: %w", err)

@@ -7,7 +7,7 @@ import { Link } from "./router";
 import { TryAgain } from "./RunAgain";
 import { runTitle, runView } from "./Runs";
 import type { HealthEvent, Job, RunInfo, RunStep } from "./types";
-import { age, ErrorBox, logLines, pollIdle, pollRunning, Skeleton, Status, usePoll } from "./ui";
+import { age, ErrorBox, logLines, pollIdle, pollRunning, ReadError, Skeleton, Status, usePoll } from "./ui";
 
 const states: Record<RunInfo["state"], { state: "progress" | "warning" | "ok" | "error"; text: string }> = {
   running: { state: "progress", text: "Running" },
@@ -50,14 +50,15 @@ export function RunPage({ id }: { id: string }): JSX.Element {
   const [retryError, setRetryError] = useState<string>();
   const run = fleet?.runs?.find((r) => r.id === id);
   if (run === undefined) {
+    const unread = fleet?.runs === undefined;
     return (
       <section className="page">
         <div className="page-head">
           <h2>Run</h2>
         </div>
-        <p className="muted">
-          {fleet?.runs === undefined ? "Loading…" : "Run no longer kept. Runs stay 1 h, failed ones 1 day."}
-        </p>
+        {unread && fleet?.runsRead.error === undefined && <Skeleton rows={3} />}
+        {unread && fleet !== null && <ReadError read={fleet.runsRead} />}
+        {!unread && <p className="muted">Run no longer kept. Runs stay 1 h, failed ones 1 day.</p>}
       </section>
     );
   }
@@ -162,11 +163,12 @@ function BackupLog({ run }: { run: RunInfo }): JSX.Element | null {
 function VeleroLogBox({ run, namespace, cluster }: { run: RunInfo; namespace: string; cluster: string }): JSX.Element {
   const name = run.id.split("/").at(-1) ?? "";
   const read = run.kind === "restore" ? api.restoreLog : api.backupLog;
-  const { data: log, error } = usePoll(async () => read(namespace, cluster, name), pollIdle);
+  const logRead = usePoll(async () => read(namespace, cluster, name), pollIdle);
+  const { data: log, error } = logRead;
   return (
     <section className="box run-log">
       <h3>Log</h3>
-      <ErrorBox message={error} />
+      <ReadError read={logRead} />
       {log === undefined && error === undefined && <Skeleton rows={6} />}
       {log !== undefined && (
         <pre className="log" aria-label="Log">

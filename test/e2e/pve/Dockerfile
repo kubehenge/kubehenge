@@ -6,6 +6,9 @@ FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f0
 ARG KEY_URL=https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg
 ARG KEY_SHA256=136673be77aba35dcce385b28737689ad64fd785a797e57897589aed08db6e45
 ENV DEBIAN_FRONTEND=noninteractive container=docker
+# The pve-manager version the image is built for: the newest in the repository, which the cache key of
+# the image names too (scripts/pve-version.sh). Required, so that no image holds another.
+ARG PVE_VERSION
 
 # The container runs on the host's kernel, so nothing may pull Proxmox VE's.
 COPY no-kernel.pref /etc/apt/preferences.d/no-kernel.pref
@@ -15,7 +18,8 @@ SHELL ["/bin/bash", "-o", "errexit", "-o", "pipefail", "-c"]
 # The tests are of the current Proxmox VE, and its repository keeps no older versions to pin to; the
 # base image is pinned by digest.
 # hadolint ignore=DL3008
-RUN apt-get update -qq \
+RUN : "${PVE_VERSION:?build with --build-arg PVE_VERSION=<version>, as scripts/pve-version.sh prints}" \
+    && apt-get update -qq \
     && apt-get install -y -qq --no-install-recommends ca-certificates curl \
     && curl -fsSL --proto '=https' --retry 8 --retry-all-errors -o /usr/share/keyrings/proxmox-archive-keyring.gpg "$KEY_URL" \
     && echo "$KEY_SHA256  /usr/share/keyrings/proxmox-archive-keyring.gpg" | sha256sum -c --quiet - \
@@ -34,12 +38,14 @@ RUN apt-get update -qq \
     # it goes to, this node too; e2fsprogs, which every full Debian has and pve-container leaves
     # undeclared, formats a container's disk on directory storage; ifupdown2 brings up the VMs'
     # bridge and dnsmasq answers their name lookups there; openssl for the appliance's installer and
-    # jq for its test, which run on the node. proxmox-firewall, which pve-manager only recommends, is
+    # jq and tcpdump for its test, which run on the node. proxmox-firewall, which pve-manager only recommends, is
     # the firewall on nftables: pve-firewall needs the legacy iptables tables and br_netfilter, which
     # runner kernels lack, and then applies no rule at all (test/e2e/ci/up.sh turns it on).
     && apt-get install -y -qq --no-install-recommends systemd systemd-sysv dbus kmod procps iproute2 \
-        ifupdown2 iptables dnsmasq pve-manager qemu-server pve-container pve-cluster postfix socat \
-        openssh-server e2fsprogs openssl jq proxmox-firewall \
+        ifupdown2 iptables dnsmasq "pve-manager=${PVE_VERSION}" qemu-server pve-container pve-cluster postfix socat \
+        openssh-server e2fsprogs openssl jq tcpdump proxmox-firewall \
+    # The version the cache key names, or the image would be cached under a key it does not match.
+    && test "$(pveversion | cut -d/ -f1-2)" = "pve-manager/${PVE_VERSION}" \
     # Installing pve-manager adds the subscription-only repository, which answers 401 without a
     # subscription and fails every later apt-get update.
     && rm -f /etc/apt/sources.list.d/pve-enterprise.sources \

@@ -172,8 +172,8 @@ The CPU and requested memory figures are the requests of the pinned charts and d
     - The proxy refuses a copy of a node VM's disk, with a `VolumeCopyFailed` event and nothing left behind.
     - Deleting the snapshot removes its copy from its holder VM. Deleting the claims then leaves no copy or record.
 15. Switch volume snapshots off.
-    - The plugin reaches Proxmox VE directly with the cluster's token again.
-    - Its snapshotter sidecar, the proxy, the copies' namespace, the empty holder VMs, the VolumeSnapshotClass and the snapshot controller are gone.
+    - The proxy stays with `kubehenge-proxmox-proxied` and passes the plugin's calls straight to Proxmox VE, answering only the storage configuration read.
+    - The snapshotter sidecar, the proxy's Role, the copies' namespace, the empty holder VMs, the VolumeSnapshotClass and the snapshot controller are gone.
 
 #### Add-ons
 
@@ -332,7 +332,7 @@ CI runs the end-to-end tier with Proxmox VE in a container (`.github/workflows/e
 Four options put the guests behind mitmproxy (`test/e2e/ci/egress.sh`). The appliance and the workload tests take one each, after a `+`. The runner's rules touch only the guests' bridge, and they go when the test ends.
 
 - `+tls-inspection`: nft redirects the guests' port 443 to mitmproxy in transparent mode, which re-signs each connection with an intermediate and sends it in the chain. The Site CA is the root alone, whose name the intermediate gives in another string encoding (`test/e2e/tlsca`). Plain HTTP and DNS go as before.
-- `+tls-inspection-recovery`: the appliance's first setup lacks the Site CA and must fail with the interface naming a certificate a node rejected. The same setup with the CA then finishes with no node touched.
+- `+tls-inspection-recovery`: the appliance's own store holds a copy of the proxy's root that Go links its intermediate to. A Site CA of another root must be refused before any Apply, naming the root. The first setup then lacks the Site CA and must fail with the interface naming a certificate a node rejected. The same setup with the CA then finishes with no node touched.
 - `+proxy`: nft drops the guests' direct egress, and the only way out is a CONNECT proxy that asks for credentials and only tunnels. Kubehenge's proxy setting names it. Its time server setting names the runner's NTP server on the bridge (`test/e2e/ntp`), since the default one is out of reach.
 - `+proxy-inspecting`: the same with a proxy that re-signs TLS and asks for none. Its CA is the proxy's CA bundle.
 
@@ -560,7 +560,7 @@ The management cluster's talosconfig comes from the module's state. In the appli
 
 ### The Proxmox VE container
 
-`up.sh` builds `test/e2e/pve`, a one-node Proxmox VE on Debian 13 that runs on the machine's own kernel and starts VMs on its KVM. Like every node it runs an SSH server and reaches itself over SSH as root, which `up.sh` checks. Proxmox VE copies a volume, such as a CSI volume snapshot, through SSH even within one node.
+`up.sh` builds `test/e2e/pve`, a one-node Proxmox VE on Debian 13 that runs on the machine's own kernel and starts VMs on its KVM. The build installs the newest pve-manager of Proxmox VE's repository (`scripts/pve-version.sh`) and fails unless `pveversion` reports it. The cached image's key holds that version, so a release made since it was built gets a new image, and `up.sh` prints the version each lane runs on. Like every node it runs an SSH server and reaches itself over SSH as root, which `up.sh` checks. Proxmox VE copies a volume, such as a CSI volume snapshot, through SSH even within one node.
 
 `up.sh` gives the VMs the bridge 172.20.99.0/24 with a name server that asks this machine's own, so they need no public one. It gives the containers 172.21.99.0/24, routes this machine to the bridge (with `sudo`) and writes the settings `run.sh` reads.
 

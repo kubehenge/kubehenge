@@ -281,6 +281,8 @@ func CertificatesOf(cluster *clusterv1.Cluster) (Certificates, error) {
 func certManagerValues(c *Certificates) map[string]any {
 	values := map[string]any{
 		"crds": map[string]any{"enabled": true},
+		// Tells Kubehenge's release from a cert-manager installed by hand under the same name.
+		globalKey: map[string]any{"commonLabels": map[string]any{addonLabel: certManagerAddon}},
 		// A Secret goes with its Certificate, so that nothing an add-on asked for outlives it.
 		"enableCertificateOwnerRef": true,
 		configKey:                   map[string]any{"gatewayAPI": map[string]any{"enabled": true}},
@@ -298,6 +300,28 @@ func certManagerValues(c *Certificates) map[string]any {
 		values["dns01RecursiveNameserversOnly"] = true
 	}
 	return values
+}
+
+// certificatesSettings says which of the certificates add-on's settings that only Kubehenge's
+// cert-manager carries (certManagerValues, the egress proxy) are not applied where the cluster's
+// own cert-manager is used, or nothing.
+func certificatesSettings(addons *Addons) string {
+	c := &addons.Certificates
+	if !c.on() {
+		return ""
+	}
+	settings := []string{"the default issuer for tls-acme Ingresses"}
+	if c.issuer() == IssuerACMEDNS01 && len(c.DNS01.Nameservers) > 0 {
+		settings = append(settings, "dns01.nameservers")
+	}
+	if addons.viaProxy.on() {
+		settings = append(settings, "the egress proxy")
+	}
+	them := "them"
+	if len(settings) == 1 {
+		them = "it"
+	}
+	return "certificates uses the cluster's own cert-manager, which Kubehenge does not give " + andJoined(settings) + ". Set " + them + " on that cert-manager"
 }
 
 // addonIngress is the TLS and the annotations of an add-on's Ingress for hostname. A certificate

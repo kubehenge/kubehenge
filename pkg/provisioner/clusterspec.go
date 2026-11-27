@@ -267,8 +267,9 @@ func SpecSecretBelongs(c *clusterv1.Cluster, s *SpecSecret) bool {
 
 // ClusterSpecObjects collects what a cluster is rebuilt from besides itself, in a fixed order: the
 // Secrets named by ClusterSpecSecretNames, and every ConfigMap and Secret labelled
-// kubehenge.dev/cluster-name for the cluster, for what a user wants kept besides. The Secrets keep
-// their values, which ClusterSpecYAML seals or leaves out.
+// kubehenge.dev/cluster-name for the cluster, for what a user wants kept besides. The labelled
+// Secrets are found by the names in the cluster's SpecSecretsConfigMap, since the reader may get a
+// Secret but not list them. The Secrets keep their values, which ClusterSpecYAML seals or leaves out.
 func ClusterSpecObjects(ctx context.Context, kube client.Reader, c *clusterv1.Cluster) ([]client.Object, error) {
 	in := client.InNamespace(c.Namespace)
 	label := client.MatchingLabels{ClusterSpecClusterLabel: c.Name}
@@ -276,9 +277,9 @@ func ClusterSpecObjects(ctx context.Context, kube client.Reader, c *clusterv1.Cl
 	if err := kube.List(ctx, &maps, in, label); err != nil {
 		return nil, fmt.Errorf("listing the cluster's ConfigMaps: %w", err)
 	}
-	var secrets corev1.SecretList
-	if err := kube.List(ctx, &secrets, in, label); err != nil {
-		return nil, fmt.Errorf("listing the cluster's Secrets: %w", err)
+	labelled, err := SpecSecretNames(ctx, kube, c)
+	if err != nil {
+		return nil, err
 	}
 	have := map[string]bool{}
 	var out []client.Object
@@ -288,11 +289,7 @@ func ClusterSpecObjects(ctx context.Context, kube client.Reader, c *clusterv1.Cl
 		cm.Annotations = withoutKubectl(cm.Annotations)
 		out = append(out, cm)
 	}
-	for i := range secrets.Items {
-		have[secrets.Items[i].Name] = true
-		out = append(out, &secrets.Items[i])
-	}
-	for _, name := range ClusterSpecSecretNames(c) {
+	for _, name := range slices.Concat(labelled, ClusterSpecSecretNames(c)) {
 		if have[name] {
 			continue
 		}
@@ -303,6 +300,7 @@ func ClusterSpecObjects(ctx context.Context, kube client.Reader, c *clusterv1.Cl
 		case err != nil:
 			return nil, fmt.Errorf("reading Secret %s: %w", name, err)
 		}
+		have[name] = true
 		out = append(out, s)
 	}
 	for _, o := range out {

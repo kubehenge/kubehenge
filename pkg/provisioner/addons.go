@@ -63,6 +63,7 @@ const (
 	nonRootKey        = "runAsNonRoot"
 	readOnlyRootKey   = "readOnlyRootFilesystem"
 	configKey         = "config"
+	globalKey         = "global"
 	regionKey         = "region"
 	defaultKey        = "default"
 	installCRDsKey    = "installCRDs"
@@ -199,8 +200,6 @@ type Addons struct {
 	viaProxy egressEnv
 	// CIS is the cluster's cis variable, which the add-ons make room for.
 	CIS bool
-	// UseExisting names the installs of the cluster that the add-ons use instead of their own.
-	UseExisting UseExisting
 	// NamespaceLabels are put on the namespaces the add-ons install into.
 	NamespaceLabels map[string]string
 	// CSINewest runs the CSI plugin's newest release, once the cluster's user holds
@@ -210,8 +209,8 @@ type Addons struct {
 	// beside it, once nothing stands in the way of what the cluster's csi variable asks.
 	VolumeSnapshots bool
 
-	// copyProxy is the proxy the CSI plugin reaches Proxmox VE through: with VolumeSnapshots, and
-	// after them while a copy made for them is left.
+	// copyProxy is the proxy the CSI plugin reaches Proxmox VE through: for every cluster, making
+	// copies with VolumeSnapshots, and finding them while one made for them is left.
 	copyProxy copyProxy
 	// backupTarget is the target the backups name, found in the cluster's class. Nil while it is
 	// not, when Velero is neither installed nor removed.
@@ -227,7 +226,15 @@ type Addons struct {
 	rollout rolloutGate
 	pending []AddonChange
 	// conflicts are the add-ons left out because the cluster holds an install of their software.
-	conflicts []string
+	// certManagerConflict is cert-manager's, and certManagerWaiting the add-ons that wait for its
+	// release.
+	// clusterCertManager is set where the cluster's own cert-manager works and serves them instead,
+	// and certManagerUnread where the cluster could not be read in full for one.
+	conflicts           []addonConflict
+	certManagerConflict addonConflict
+	certManagerWaiting  []string
+	clusterCertManager  bool
+	certManagerUnread   bool
 	// talosServing is set when every controller manager and scheduler of a Talos cluster serves a
 	// certificate of the cluster CA (talosServesControlPlaneMetrics), so that their metrics are
 	// scraped as on the other distributions.
@@ -275,9 +282,6 @@ func addonsOf(cluster *clusterv1.Cluster) (Addons, error) {
 	if a.Egress, _, err = optionalVariable[EgressProxy](cluster, egressVariable); err != nil {
 		return a, err
 	}
-	if a.UseExisting, _, err = optionalVariable[UseExisting](cluster, useExistingVariable); err != nil {
-		return a, err
-	}
 	if a.NamespaceLabels, _, err = optionalVariable[map[string]string](cluster, namespaceLabelsVariable); err != nil {
 		return a, err
 	}
@@ -285,10 +289,10 @@ func addonsOf(cluster *clusterv1.Cluster) (Addons, error) {
 	return a, err
 }
 
-// certManager reports whether Kubehenge installs cert-manager, which Rancher, monitoring and the
-// certificates add-on each need, unless the cluster brings its own.
+// certManager reports whether Kubehenge installs cert-manager: an add-on makes cert-manager
+// objects, which Rancher, monitoring, its logs and the certificates add-on do.
 func (a *Addons) certManager() bool {
-	return !a.UseExisting.CertManager && (a.Rancher.Install || a.Monitoring.Enabled || a.Certificates.on())
+	return a.Rancher.Install || a.Monitoring.Enabled || a.logsOn() || a.Certificates.on()
 }
 
 // certManagerProxy names the cluster's cert-manager proxy, installed for whichever add-ons need it.
@@ -332,7 +336,10 @@ func rancherValues(r Rancher, base map[string]any) map[string]any {
 		"hostname":     r.Hostname,
 		"replicas":     replicas,
 		"agentTLSMode": "strict",
-		ingressKey:     map[string]any{"tls": map[string]any{"source": "rancher"}},
+		// Rancher's chart labels its Issuer only with its own labels. The mark goes on the Ingress
+		// that asks for its certificate instead, so a switch of cert-manager still applies the
+		// release again and brings the Issuer back.
+		ingressKey:     map[string]any{"tls": map[string]any{"source": "rancher"}, "extraAnnotations": servedBy()},
 		"extraEnv":     append(env, map[string]any{"name": "CATTLE_SERVER_URL", valueKey: "https://" + r.Hostname}),
 		"startupProbe": map[string]any{"timeoutSeconds": probeTimeout, "periodSeconds": probePeriod, "failureThreshold": probeFailures},
 		"resources":    reserved("50m", "128Mi"),
@@ -450,7 +457,7 @@ type proxmoxCluster struct {
 }
 
 // resourceSetSecret wraps the workload cluster's Secrets for a ClusterResourceSet, which applies
-// every key of its Secret as a manifest: workloadSecret, and with the copy proxy the proxied
+// every key of its Secret as a manifest: workloadSecret, and with the proxy the proxied
 // configuration of the CSI plugin and the proxy's namespace and rights (copyProxyManifests).
 func resourceSetSecret(cluster *clusterv1.Cluster, endpoint Endpoint, c Credentials, addons *Addons) (*corev1.Secret, error) {
 	pve := proxmoxCluster{URL: endpoint.URL + "/api2/json", Insecure: endpoint.Insecure, TokenID: c.TokenID, TokenSecret: c.TokenSecret, Region: c.Region}
@@ -469,7 +476,7 @@ func resourceSetSecret(cluster *clusterv1.Cluster, endpoint Endpoint, c Credenti
 	}
 	data := map[string][]byte{workloadSecret + ".yaml": manifest}
 	if addons.copyProxy.on {
-		proxied, err := copyProxyManifests(c)
+		proxied, err := copyProxyManifests(c, &addons.copyProxy)
 		if err != nil {
 			return nil, err
 		}
@@ -1074,7 +1081,9 @@ func proxmoxValues(storage string, addons *Addons) (map[string]any, map[string]a
 	}
 	if addons.copyProxy.on {
 		config = proxiedWorkloadSecret
-		csi["timeout"] = csiCopyTimeout
+		if addons.copyProxy.copied {
+			csi["timeout"] = csiCopyTimeout
+		}
 		csi["initContainers"] = []any{csiProxyContainer(&addons.copyProxy)}
 	}
 	csi["existingConfigSecret"] = config
@@ -1089,11 +1098,11 @@ func proxmoxValues(storage string, addons *Addons) (map[string]any, map[string]a
 func proxmoxCharts(charts *Charts, distribution templates.Distribution, storage string, addons *Addons) []chartProxy {
 	ccm, csi := proxmoxValues(storage, addons)
 	csiChart := charts.CSI
-	// The proxy answers the newest release's read of the storage's configuration from what the
-	// cluster's token may see and deletes the copies through their holders, and the controller the
-	// plugin's other volumes through the owner VM as for the held release, so the token needs
-	// nothing more for it.
-	if addons.CSINewest || addons.copyProxy.on {
+	// The proxy answers either release's read of the storage's configuration from what the
+	// cluster's token may see. The newest release also makes and finds copies, which the proxy
+	// makes and deletes through their holders, and the controller the plugin's other volumes
+	// through the owner VM as for the held release, so the token needs nothing more for it.
+	if addons.CSINewest || addons.copyProxy.copied {
 		csiChart = charts.CSINewest
 	}
 	wanted := []chartProxy{

@@ -91,6 +91,9 @@ type Hooks struct {
 	// refuse security groups that would cut those off. Either nil, no such check is made.
 	APIReach   APIReach
 	Management ManagementAddresses
+	// ManagementAPI is the management cluster's API as workload clusters reach it. Empty, an
+	// autoscaler cannot run on a cluster's own control planes.
+	ManagementAPI string
 	// Endpoint is the Proxmox VE API address, which says which of the addresses reach it.
 	Endpoint string
 	// Releases has RKE2 and k3s nodes install their release from files checked against its pins,
@@ -227,7 +230,7 @@ func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.Bef
 		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, err.Error()
 		return
 	}
-	if errs := validateAutoscaling(cluster); len(errs) > 0 {
+	if errs := validateAutoscaling(nil, cluster, h.ManagementAPI); len(errs) > 0 {
 		resp.Status, resp.Message = runtimehooksv1.ResponseStatusFailure, errs.ToAggregate().Error()
 		return
 	}
