@@ -126,7 +126,8 @@ jobs:
             --pattern "kubehenge_${version}.intoto.jsonl"
           gh attestation verify "$archive" --bundle "$latest/kubehenge_${version}.intoto.jsonl" \
             --repo "$GITHUB_REPOSITORY" --signer-workflow "$SIGNER" --source-ref "refs/tags/$tag" \
-            --deny-self-hosted-runners --custom-trusted-root "$RUNNER_TEMP/sigstore/trusted_root.json"
+            --deny-self-hosted-runners \
+            --custom-trusted-root "$RUNNER_TEMP/sigstore/trusted_root.json"
           tar -xzf "$archive" -C "$RUNNER_TEMP" ./bin/kubehenge
           kubehenge=$RUNNER_TEMP/bin/kubehenge
           # A build without renew prints its group's help for "renew --help" and exits 0, so the
@@ -160,7 +161,9 @@ jobs:
     needs: [trusted-root, index]
     # A pull request and a dispatched check skip the index; the site is built all the same. A failed
     # trusted root skips the index, and the site must not then go out without it.
-    if: ${{ !cancelled() && needs.trusted-root.result != 'failure' && needs.index.result != 'failure' }}
+    if: >-
+      ${{ !cancelled() && needs.trusted-root.result != 'failure'
+        && needs.index.result != 'failure' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:

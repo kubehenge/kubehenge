@@ -61,7 +61,8 @@ jobs:
           PVE_VERSION: ${{ steps.pve.outputs.version }}
         run: |
           for try in 1 2 3; do
-            docker build --progress=plain --build-arg PVE_VERSION="$PVE_VERSION" -t kubehenge-e2e-pve test/e2e/pve && break
+            docker build --progress=plain --build-arg PVE_VERSION="$PVE_VERSION" \
+              -t kubehenge-e2e-pve test/e2e/pve && break
             [ "${try}" = 3 ] && exit 1
             sleep 60
           done
