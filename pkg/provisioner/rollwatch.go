@@ -159,7 +159,7 @@ func (w *RollWatch) stalledRoll(ctx context.Context, c *clusterv1.Cluster) (roll
 	}
 	r, ok := rollPair(machines.Items)
 	if !ok || machineReady(r.successor) {
-		return roll{}, false, nil
+		return roll{}, false, w.forgetRoll(ctx, c, machines.Items, r)
 	}
 	if r.start, err = w.rollStart(ctx, c, r); err != nil {
 		return roll{}, false, err
@@ -208,6 +208,46 @@ func (w *RollWatch) rollStart(ctx context.Context, c *clusterv1.Cluster, r roll)
 		return start, fmt.Errorf("recording when the roll that replaces %s began: %w", r.kept.Name, err)
 	}
 	return start, nil
+}
+
+// forgetRoll takes RollSeenAnnotation off the control-plane machines once their roll is over, so
+// a later roll on the same machine is timed afresh. A roll is over when its successor is ready, or
+// when no roll pair is left, no machine is being deleted and the control plane has every machine up
+// to date. Without those last two, the moment between a replaced successor and the next one would
+// end the roll and lose its bound. r is the roll whose successor is ready, if there is one. A
+// conflict is tried again on the next look.
+func (w *RollWatch) forgetRoll(ctx context.Context, c *clusterv1.Cluster, machines []clusterv1.Machine, r roll) error {
+	succeeded := r.successor != nil
+	var marked []*clusterv1.Machine
+	for i := range machines {
+		if !machines[i].DeletionTimestamp.IsZero() && !succeeded {
+			return nil
+		}
+		if _, ok := machines[i].Annotations[RollSeenAnnotation]; ok {
+			marked = append(marked, &machines[i])
+		}
+	}
+	if len(marked) == 0 {
+		return nil
+	}
+	if !succeeded {
+		cp, err := controlPlaneOf(ctx, w.Client, w.Client.RESTMapper(), c)
+		if err != nil || cp == nil {
+			return err
+		}
+		if upToDate, desired := replicasOf(cp); upToDate == nil || desired == nil || *upToDate < *desired {
+			return nil
+		}
+	}
+	for _, m := range marked {
+		before := m.DeepCopy()
+		delete(m.Annotations, RollSeenAnnotation)
+		err := w.Client.Patch(ctx, m, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}))
+		if err != nil && !apierrors.IsConflict(err) && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("taking the roll mark off %s: %w", m.Name, err)
+		}
+	}
+	return nil
 }
 
 // rollingOutSince is when the control plane's RollingOut condition turned true, zero when it has

@@ -280,6 +280,69 @@ func TestRollWatchRollSeen(t *testing.T) {
 	}
 }
 
+// A mark left on a machine whose roll is over goes, so a later roll on it is timed afresh. It stays
+// while the control plane is not up to date, as between a replaced successor and the next.
+func TestRollWatchForgetsRoll(t *testing.T) {
+	t.Parallel()
+	hourAgo := etcdNow.Add(-time.Hour).UTC().Format(time.RFC3339)
+	for _, tc := range []struct {
+		name     string
+		upToDate int32
+		wantSeen string
+	}{
+		{name: "the roll is over", upToDate: 1},
+		{name: "between successors", wantSeen: hourAgo},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := etcdCluster(`{}`)
+			c.Spec.Topology.ControlPlane.Replicas = new(int32(1))
+			c.Spec.ControlPlaneRef = clusterv1.ContractVersionedObjectReference{APIGroup: siteControlGVK.Group, Kind: siteControlGVK.Kind, Name: "web-cp"}
+			cp := controlPlaneIn(c, rolloutState{Desired: 1, UpToDate: tc.upToDate})
+			scheme := testScheme(t)
+			scheme.AddKnownTypeWithName(siteControlGVK, &unstructured.Unstructured{})
+			mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{siteControlGVK.GroupVersion()})
+			mapper.Add(siteControlGVK, meta.RESTScopeNamespace)
+			kept := rollMachine("web-cp-old", etcdNow.Add(-24*time.Hour), metav1.ConditionTrue)
+			kept.Annotations = map[string]string{RollSeenAnnotation: hourAgo}
+			kube := fake.NewClientBuilder().WithScheme(scheme).WithRESTMapper(mapper).WithStatusSubresource(&clusterv1.Cluster{}).
+				WithObjects(c, cp, kept).Build()
+			look := func() (*metav1.Condition, string) {
+				t.Helper()
+				w := &RollWatch{Client: kube, ClassNamespace: "kubehenge-system", APIs: &fakeAPIs{}, Now: func() time.Time { return etcdNow }}
+				got := &clusterv1.Cluster{}
+				if err := kube.Get(context.Background(), client.ObjectKeyFromObject(c), got); err != nil {
+					t.Fatal(err)
+				}
+				if err := w.watch(context.Background(), got); err != nil {
+					t.Fatal(err)
+				}
+				if err := kube.Get(context.Background(), client.ObjectKeyFromObject(c), got); err != nil {
+					t.Fatal(err)
+				}
+				m := &clusterv1.Machine{}
+				if err := kube.Get(context.Background(), client.ObjectKeyFromObject(kept), m); err != nil {
+					t.Fatal(err)
+				}
+				return meta.FindStatusCondition(got.Status.Conditions, RollStalledCondition), m.Annotations[RollSeenAnnotation]
+			}
+			if _, seen := look(); seen != tc.wantSeen {
+				t.Fatalf("seen %q, want %q", seen, tc.wantSeen)
+			}
+			if tc.wantSeen != "" {
+				return
+			}
+			// A later roll is timed from when it was first seen, not from the old mark.
+			if err := kube.Create(context.Background(), rollMachine("web-cp-new", etcdNow.Add(-5*time.Minute), metav1.ConditionFalse)); err != nil {
+				t.Fatal(err)
+			}
+			if cond, seen := look(); cond != nil || seen != etcdNow.UTC().Format(time.RFC3339) {
+				t.Errorf("later roll: condition %+v, seen %q", cond, seen)
+			}
+		})
+	}
+}
+
 func TestRollPair(t *testing.T) {
 	t.Parallel()
 	old, _ := controlPlane("a", 1, "pve1")
