@@ -129,6 +129,25 @@ func TestTalosNodesTakeTheManagementProxyByDefault(t *testing.T) {
 	}
 }
 
+// Cluster API refuses a class whose patch has an enabledIf longer than 256 bytes, so the chart would
+// not install. A management proxy with an authority must not make one longer.
+func TestEveryEnabledIfFitsClusterAPI(t *testing.T) {
+	t.Parallel()
+	const most = 256
+	set, _ := withManagementProxy(t)
+	for _, args := range [][]string{nil, set} {
+		patches := renderTalosClass(t, args...).patches
+		for _, file := range []string{"kubeadm.yaml", "rke2.yaml", "k3s.yaml"} {
+			patches = append(patches, renderClass(t, file, args...).patches...)
+		}
+		for _, p := range patches {
+			if len(p.EnabledIf) > most {
+				t.Errorf("patch %s, management proxy %t: enabledIf is %d bytes: %s", p.Name, args != nil, len(p.EnabledIf), p.EnabledIf)
+			}
+		}
+	}
+}
+
 // Without a management proxy, an unset egressProxy leaves the nodes as they were.
 func TestNodesGoDirectWithoutAManagementProxy(t *testing.T) {
 	t.Parallel()

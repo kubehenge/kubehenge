@@ -109,7 +109,7 @@ The Cluster API template that sets a node's proxy, $url and $https, and what com
 management side's proxy, $managementNoProxy and $managementCAs (call with "root"). The cluster's own
 egressProxy wins: its address, or none when it says disabled. Without one, the nodes take the
 management side's proxy, as the add-ons do, with its exceptions and the authority of a proxy that
-re-signs TLS. One line, since enabledIf reads it too.
+re-signs TLS.
 */}}
 {{- define "kubehenge.nodeProxy" -}}
 {{- $default := .root.Values.proxy.clusterDefault -}}
@@ -152,13 +152,27 @@ content: |
 {{ $.root.Files.Get "files/node-site.sh.tpl" | replace "@DISTRIBUTION@" .distribution | indent 2 }}
 {{- end -}}
 
+{{/*
+The test, in a patch's enabledIf, that the management side's proxy serves the nodes (call with "root",
+and "ca" to ask also that the proxy has an authority). Cluster API takes an enabledIf of at most 256
+bytes, so the test names no value of the proxy, which would not fit.
+*/}}
+{{- define "kubehenge.nodeDefaultProxyTest" -}}
+{{- $default := .root.Values.proxy.clusterDefault -}}
+{{- if and $default.url (or (not .ca) $default.caBundle) -}}
+(not (or (dig "egressProxy" "url" "" .) (dig "egressProxy" "disabled" false .)))
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
 {{/* The enabledIf of the patches: any of the three settings is set, or the management side's proxy applies. */}}
 {{- define "kubehenge.nodeSiteEnabled" -}}
-{{ print (include "kubehenge.nodeProxy" .) `{{ if or (dig "siteCAs" (list) .) (dig "trustedCAs" (list) .) (dig "registryMirrors" (list) .) $url }}true{{ end }}` | quote }}
+{{ printf `{{ if or (dig "siteCAs" (list) .) (dig "trustedCAs" (list) .) (dig "registryMirrors" (list) .) (dig "egressProxy" "url" "" .) %s }}true{{ end }}` (include "kubehenge.nodeDefaultProxyTest" .) | quote }}
 {{- end -}}
 
 {{- define "kubehenge.nodeProxyEnabled" -}}
-{{ print (include "kubehenge.nodeProxy" .) `{{ if $url }}true{{ end }}` | quote }}
+{{ printf `{{ if or (dig "egressProxy" "url" "" .) %s }}true{{ end }}` (include "kubehenge.nodeDefaultProxyTest" .) | quote }}
 {{- end -}}
 
 {{/*
@@ -238,7 +252,7 @@ container runtime read.
               {{- include "kubehenge.talosProxyEnv" $ | nindent 14 }}
     {{- end }}
 - name: talos-node-registries
-  enabledIf: {{ print (include "kubehenge.nodeProxy" .) `{{ if or (dig "siteCAs" (list) .) (dig "trustedCAs" (list) .) (dig "registryMirrors" (list) .) $managementCAs }}true{{ end }}` | quote }}
+  enabledIf: {{ printf `{{ if or (dig "siteCAs" (list) .) (dig "trustedCAs" (list) .) (dig "registryMirrors" (list) .) %s }}true{{ end }}` (include "kubehenge.nodeDefaultProxyTest" (dict "root" .root "ca" true)) | quote }}
   definitions:
     {{- range $sel := .selectors }}
     - selector:
