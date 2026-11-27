@@ -57,7 +57,7 @@ through its holder. POD_NAME and POD_NAMESPACE name the pod its events are about
 	f.StringVar(&o.pool, "pool", "", "the cluster's Proxmox VE pool, where its holder VMs are")
 	f.StringVar(&o.holders, "holders", "", "name of the cluster's holder VMs, which keep the copies as unused disks")
 	f.BoolVar(&o.copies, "copies", true, "make the copies the plugin asks for. Off, the proxy only finds copies made before")
-	f.BoolVar(&o.find, "find-copies", true, "find copies made before. Off with --copies off, the proxy reads no copies' records and passes every call but a storage's configuration on as it came")
+	f.BoolVar(&o.find, "find-copies", true, "find copies made before. With this and --copies off, the proxy reads no copies' records and passes on every call but a storage's configuration")
 	return cmd
 }
 

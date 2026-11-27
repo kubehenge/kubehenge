@@ -15,29 +15,31 @@ Versions follow [Semantic Versioning](https://semver.org/). Before 1.0.0 a minor
 
 ### Changed
 
-- A working cert-manager the cluster already runs is used however it was installed, so the **Use existing cert-manager** option is gone. A cluster that set `useExisting` has it taken off.
+- A working cert-manager the cluster already runs is used however it was installed. The **Use existing cert-manager** option is gone, and a cluster's `useExisting` is taken off.
 - `kubehenge appliance health` shows each stage, the time left and a verdict. `--quiet` keeps it silent and `--json` prints one object.
 
 ### Fixed
 
 - A kubeadm cluster with registry mirrors comes up on a node OS with containerd 1.x. Its node templates need a rebuild.
 - Persistent volumes work on shared storage such as LVM on iSCSI. A Pending add-on claim shows under `AddonsWaiting` as `<add-on> has no volume: <reason>`.
-- Kubehenge installs its own cert-manager only once a full read of the cluster finds none, and never takes over one installed by hand under the release name `cert-manager`.
+- Kubehenge installs its own cert-manager only once a full read of the cluster finds none. It never takes over one installed by hand under the release name `cert-manager`.
 - A cluster being deleted while it sets `useExisting` finishes deleting.
-- Monitoring, logs and Rancher install once cert-manager is deployed. `AddonsWaiting` and the Health page name what they wait for, and a cluster's own cert-manager that does not work is a conflict.
+- Monitoring, logs and Rancher install once cert-manager is deployed. `AddonsWaiting` and the Health page name what they wait for.
+- A cert-manager of the cluster's own that does not work shows as `AddonConflict`.
 - Release pins on the VM templates page work on an appliance, and so do the other pages the interface's account could not read.
 - Setup refuses a Site CA that lacks the root a host's chain ends at, also when the appliance itself trusts that root. It names the root with its fingerprint and offers to add it.
-- For a chain that ends at a public root, Setup names the fault, such as a certificate that is not for servers, and no longer offers to add that root.
+- For a chain that ends at a public root, Setup names the fault, such as a certificate that is not for servers. It no longer offers to add that root.
 - After a restart the appliance's interface answers at once, without waiting for the container to send traffic first.
 - `pct exec <ctid> -- kubehenge` finds the command.
 - Template builds retry a dropped connection to Sigstore instead of failing.
-- A cluster can no longer be given the management cluster's, its API's or the appliance's address, and a machine whose VM lacks its address after boot says so.
+- A cluster can no longer be given the address of a management node, the management cluster's API or the appliance.
+- A machine whose VM lacks its address after boot says so.
 - The refusal of a management node's address names the node once the management cluster's module is applied again.
 - Each of the appliance's addresses is refused on the bridge and VLAN of its own network card. Existing appliances learn theirs at the next `install.sh --upgrade` or once an administrator signs in.
 - Without `managementEndpoint`, the autoscaler can no longer be put on a cluster's control planes. A cluster whose autoscaler runs there already keeps its other changes.
 - Refusing a change of address families, bridge or VLAN says why: the API address and the pods' ranges were made for that network.
-- An etcd limit can be lowered while every member's database stays under 60% of the new one, as read from every member in the last 18 minutes. Before, it could only rise.
-- The interface no longer shows values it has not read, so a failed health read leaves no cluster Available. A pending read shows loading, a failed one Unknown with its error and a retry.
+- An etcd limit can be lowered while every member's database, read in the last 18 minutes, stays under 60% of the new one. Before, it could only rise.
+- The interface shows a pending read as loading and a failed one as Unknown with its error and a retry. A failed health read no longer leaves a cluster Available.
 
 ## [0.5.7] - 2026-11-26
 
