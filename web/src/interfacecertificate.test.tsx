@@ -427,7 +427,7 @@ describe("interface certificate", () => {
       }),
     );
     const user = userEvent.setup({ delay: null });
-    render(<InterfaceCertificate ctid={105} />);
+    render(<InterfaceCertificate />);
     await user.click(await screen.findByRole("button", { name: "Change address" }));
     const dialog = within(screen.getByRole("dialog", { name: "Change public address" }));
     const field = dialog.getByRole("textbox", { name: "Name or address" });
@@ -667,7 +667,7 @@ describe("interface certificate", () => {
     await waitFor(() => expect(screen.queryByText(/certificate expires on/u)).not.toBeInTheDocument());
   });
 
-  it("15: gives the node's command for a certificate the cluster's CA signs, naming this appliance", async () => {
+  it("15: gives the node's command for a certificate the cluster's CA signs", async () => {
     window.history.replaceState(null, "", "/administration/certificates");
     const calls = fakeServer({
       ...signedIn,
@@ -680,7 +680,7 @@ describe("interface certificate", () => {
     const user = userEvent.setup({ delay: null });
     render(<App />);
     await user.click(await screen.findByRole("radio", { name: "Proxmox VE CA" }));
-    expect(screen.getByText("sh install.sh --certificate --ctid 105", { selector: "code" })).toBeInTheDocument();
+    expect(screen.getByText("sh install.sh --certificate", { selector: "code" })).toBeInTheDocument();
     expect(calls.filter((c) => !c.key.startsWith("GET "))).toHaveLength(0);
   });
 

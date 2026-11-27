@@ -48,6 +48,20 @@ func executeOn(ctx context.Context, env *Env, cfg *Config, streams ioStreams, in
 	var err error
 	s := &Session{Node: env.Node, Cfg: *cfg}
 	newRunner := func(emit func(Event)) *Runner { return env.NewRunner(s, emit) }
+	if cfg.Mode() == ModeInstall && !cfg.DryRun && len(s.Node.ApplianceContainers(ctx)) > 0 {
+		// The cluster has its appliance, which an install would only refuse to duplicate. A dry run
+		// keeps that refusal, since an upgrade changes the container.
+		s.Cfg.Upgrade = true
+		if err = s.Cfg.Validate(); err != nil {
+			return err
+		}
+		r := newRunner(nil)
+		if err = r.requireAppliance(ctx); err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(stdout, "Upgrading the appliance in container %s\n", s.Cfg.CTID)
+		return maintain(ctx, s, r, stdout)
+	}
 	if cfg.Mode() != ModeInstall {
 		return maintain(ctx, s, newRunner(nil), stdout)
 	}

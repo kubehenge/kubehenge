@@ -33,13 +33,27 @@ const (
 
 const certRenewBefore = 60 * 24 * time.Hour
 
-// requireAppliance stops unless the container is an appliance on this node.
+// requireAppliance stops unless the container is an appliance on this node. Without --ctid the
+// cluster's one appliance is the container, and its ID is set.
 func (r *Runner) requireAppliance(ctx context.Context) error {
 	id := r.S.Cfg.CTID
+	found := r.S.Node.ApplianceContainers(ctx)
 	if id == "" {
-		return userErr("--upgrade and --certificate need --ctid", "")
+		switch len(found) {
+		case 0:
+			return userErr("this cluster has no Kubehenge appliance", "Run install.sh without --upgrade or --certificate to install one")
+		case 1:
+			id = found[0].ID
+			r.S.Cfg.CTID = id
+		default:
+			list := make([]string, len(found))
+			for i, a := range found {
+				list[i] = a.ID + " on " + a.Node
+			}
+			return userErr("this cluster has several Kubehenge appliances: "+strings.Join(list, ", "), "Name one with --ctid")
+		}
 	}
-	for _, a := range r.S.Node.ApplianceContainers(ctx) {
+	for _, a := range found {
 		if a.ID == id {
 			if a.Node != r.S.Node.Hostname {
 				return userErr(fmt.Sprintf("container %s runs on node %s", id, a.Node), "Run this there")
@@ -614,8 +628,8 @@ func (r *Runner) upgradeCertificate(ctx context.Context, out io.Writer) error {
 
 func (r *Runner) renewCertificate(ctx context.Context, current *x509.Certificate, out io.Writer) error {
 	if !r.madeHere(current) {
-		r.sayf(out, "kubehenge: the appliance's own certificate is valid until %s. Install a new one with: sh install.sh --certificate --ctid %s --cert <file> --key <file>",
-			current.NotAfter.UTC().Format(time.RFC1123), r.S.Cfg.CTID)
+		r.sayf(out, "kubehenge: the appliance's own certificate is valid until %s. Install a new one with: sh install.sh --certificate --cert <file> --key <file>",
+			current.NotAfter.UTC().Format(time.RFC1123))
 		return nil
 	}
 	r.sayf(out, "== renewing the certificate, valid until %s", current.NotAfter.UTC().Format(time.RFC1123))

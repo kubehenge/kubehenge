@@ -179,8 +179,8 @@ To check the script itself before running it, see [Verifying a release](releasin
 | `--dry-run` | off | Prints what would be installed and changes nothing. |
 | `--keep-failed` | off | Keeps a failed install's container for inspection. |
 | `--pve-entry` or `--no-pve-entry` | asked | Whether to add the Proxmox VE interface entry to this node ([below](#the-proxmox-ve-interface-entry)). Run without a terminal, it leaves the entry out. |
-| `--upgrade --ctid <id>` | | Upgrades an installed appliance instead ([upgrading.md](upgrading.md#from-the-proxmox-ve-shell)). |
-| `--certificate --ctid <id>` | | Replaces the interface's certificate of an installed appliance instead ([details](upgrading.md#the-interfaces-certificate)). |
+| `--upgrade` | | Upgrades the cluster's appliance instead ([upgrading.md](upgrading.md#from-the-proxmox-ve-shell)). Run plain, `install.sh` upgrades an appliance that exists. |
+| `--certificate` | | Replaces the interface's certificate of the cluster's appliance instead ([details](upgrading.md#the-interfaces-certificate)). |
 
 ### What it does
 
@@ -237,7 +237,7 @@ On the node:
 1. Make the node's name resolve to it first. glibc puts IPv6 first even from `/etc/hosts`, so list only the IPv4 address for the name there, or raise IPv4's precedence in `/etc/gai.conf`.
 2. Run `pvecm updatecerts --force`, then `systemctl restart pveproxy`.
 
-A certificate of your own that lists the address works as well (**System**, **Certificates** of the node). Then run `install.sh --upgrade --ctid <id> --proxmox-url https://<address>:8006`.
+A certificate of your own that lists the address works as well (**System**, **Certificates** of the node). Then run `install.sh --upgrade --proxmox-url https://<address>:8006`.
 
 #### The CA
 

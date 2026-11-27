@@ -199,7 +199,9 @@ The task log shows what each Kubehenge account did. In an appliance's management
 | "Proxmox VE's certificate is valid for …, not …" | The URL's name or address is not in the API's certificate. The installer stops before it creates anything. | Give `--proxmox-url` with a name or address the message lists, or [have the certificate list yours](install.md#an-address-the-certificate-lacks). |
 | The API's CA is not trusted | The installer stops before it creates anything. | Give the CA with `--proxmox-ca` ([install.md](install.md#the-ca)). |
 | "this node cannot connect to the Proxmox VE API at …" | The node could not open a connection to port 8006. This is no certificate problem. | Check the node's firewall, and `LISTEN_IP` in `/etc/default/pveproxy`. Or give a URL it reaches with `--proxmox-url`. |
-| "an appliance exists as container … on …" | The cluster has one already. "Container … runs on node …" means the same for `--upgrade` and `--certificate`. | Run `install.sh --upgrade --ctid <id>` on the node it names. |
+| "container … runs on node …" | The cluster's appliance is on another node. | Run the same command on that node. |
+| "this cluster has several Kubehenge appliances" | `--upgrade`, `--certificate` and a plain `install.sh` cannot tell which one you mean. | Name one of those listed with `--ctid`. |
+| "this cluster has no Kubehenge appliance" | `--upgrade` and `--certificate` have nothing to change. | Run `install.sh` without them to install one. |
 | "this node has no quorum" | Proxmox VE refuses container changes without it. | Start the other nodes of the cluster. |
 | "… is no bridge, Open vSwitch bridge or SDN VNet of this node" | The name given is none of those. | Name one of those the message lists with `--bridge`. |
 | "container … got no IPv4 address" | With `--ip dhcp`, no DHCP server on the bridge answered within two minutes. | Check `--vlan` and `--bridge`, or give a static `--ip` with `--gateway`. |
@@ -220,7 +222,7 @@ The task log shows what each Kubehenge account did. In an appliance's management
 | "`<user>` needs `Pool.Audit` on `<pool>`" | Proxmox VE lists a pool's VMs only to a user with `Pool.Audit` on it. Without it a cluster shows no nodes, console links or reboot. `PVEPoolUser` and `PVEAuditor` hold it. A role of your own needs it added. |
 | "Proxmox VE refused: …" | Proxmox VE answered. The reason after the colon is its own, such as "VM is locked (backup)" or "cluster not ready - no quorum?". Fix that first. |
 | "Proxmox VE did not answer" | No connection, a timeout or a certificate error. Check that the appliance reaches the Proxmox VE API on port 8006 and trusts its certificate ([install.md](install.md#the-proxmox-ve-api)). |
-| "Proxmox VE's certificate is valid for …, not …" | The API's certificate no longer lists the address the appliance reaches it at, such as after Proxmox VE renewed it. [Have it list the address again](install.md#an-address-the-certificate-lacks), or move the appliance to one it lists with `install.sh --upgrade --ctid <id> --proxmox-url <URL>`. |
+| "Proxmox VE's certificate is valid for …, not …" | The API's certificate no longer lists the address the appliance reaches it at, such as after Proxmox VE renewed it. [Have it list the address again](install.md#an-address-the-certificate-lacks), or move the appliance to one it lists with `install.sh --upgrade --proxmox-url <URL>`. |
 | "The user name and realm together are at most 64 characters" | Proxmox VE takes no longer sign-in name, `user@realm` counted whole. |
 | "Sign-in failed" with a right password | Proxmox VE gives one answer to a wrong password, an unknown or disabled user, and a realm that requires a second factor the user lacks. Ask an administrator to set up the factor. |
 | "Wrong code, a locked factor or a cluster without quorum" | Eight wrong TOTP codes lock TOTP until a recovery key is used. Proxmox VE says nothing of it. Sign in with a recovery key. Without one, an administrator resets the user's factors. A cluster without quorum refuses every code, a right one too, because Proxmox VE records each use in its cluster files. Sign in on a node's console until quorum returns. |
@@ -1185,7 +1187,7 @@ After a restore of the management cluster, and then daily, the controller compar
 
 The appliance, the management cluster and every cluster check the Proxmox VE API's certificate against the CA chosen when the appliance was installed ([install.md](install.md#the-proxmox-ve-api)). A new certificate from the same CA, such as one Proxmox VE renewed, needs nothing. One from another CA, such as your organisation's replacing Proxmox VE's own, fails those checks. Sign-in fails. The appliance's log (`journalctl -u kubehenge`) and the clusters' cloud controller managers report a certificate error.
 
-- Give the appliance the new CA with `install.sh --upgrade --ctid <ctid> --proxmox-ca <file>` ([upgrading.md](upgrading.md#from-the-proxmox-ve-shell)). It stops, changing nothing, unless the API's certificate is one that CA signed for the URL the appliance uses.
+- Give the appliance the new CA with `install.sh --upgrade --proxmox-ca <file>` ([upgrading.md](upgrading.md#from-the-proxmox-ve-shell)). It stops, changing nothing, unless the API's certificate is one that CA signed for the URL the appliance uses.
 - Then apply the management cluster again, so that it and the clusters check against the new CA too.
 - The new certificate has to be valid for the same name or address the appliance reaches the API at.
 
@@ -1195,7 +1197,7 @@ The appliance, the management cluster and every cluster check the Proxmox VE API
 - The interface's certificate and its sign-in redirects name the address (or `--name`) it was given. After a DHCP change, give it back that address or make a certificate for the new one ([upgrading.md](upgrading.md#the-interfaces-certificate)).
 - **"The appliance stopped during the upgrade"** means a reboot or a migration cut the upgrade off. The old release is back.
   - Ask for the upgrade again, or run `install.sh --upgrade` again.
-- **The browser says the certificate expired.** Renew it with `install.sh --certificate --ctid <ctid>` ([upgrading.md](upgrading.md#the-interfaces-certificate)). The interface warns administrators 30 days ahead.
+- **The browser says the certificate expired.** Renew it with `install.sh --certificate` ([upgrading.md](upgrading.md#the-interfaces-certificate)). The interface warns administrators 30 days ahead.
 - The interface keeps working while the management cluster is unwell. Pages that need it say the management cluster did not answer.
   - Use **Repair access**, or apply the management cluster again from the Administration page.
 

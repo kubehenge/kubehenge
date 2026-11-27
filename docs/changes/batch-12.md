@@ -6,6 +6,7 @@
 - A kubelet serving certificate request left pending for an address that is not its Machine's gets a `ServingCertificatePending` Warning event naming the node and address.
 - A cluster held before its VMs are created says why: the controller's error or what its add-ons wait for.
 - A refresh of the interface shows the fleet as the tab last read it, greyed until read again, and no cluster as healthy before its health is read.
+- `install.sh --upgrade` and `--certificate` find the cluster's appliance without `--ctid`. A plain `install.sh` upgrades the appliance on this node.
 
 ### Fixed
 

@@ -759,7 +759,7 @@ func (r *Runner) stepAddress(ctx context.Context) error {
 		}
 	}
 	if c.IP6 != "" && r.address6 == "" {
-		r.warnings = append(r.warnings, "container "+c.CTID+" has no IPv6 address, so its certificate names IPv4 only. Fix IPv6, then run: sh install.sh --certificate --ctid "+c.CTID)
+		r.warnings = append(r.warnings, "container "+c.CTID+" has no IPv6 address, so its certificate names IPv4 only. Fix IPv6, then run: sh install.sh --certificate")
 	}
 	shown := r.address
 	if shown == "" {

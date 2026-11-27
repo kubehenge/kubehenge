@@ -359,8 +359,6 @@ interface WayProps {
   locked: boolean;
   /** run makes the change and returns what went wrong with it, if anything. */
   run: (call: () => Promise<Replaced>) => Promise<unknown>;
-  /** The appliance's container ID, for a command run on the Proxmox VE node. */
-  ctid: number | undefined;
   /** The saved ACME setting, if any. */
   acme: ACMEView | undefined;
   /** Where the certificate served came from. */
@@ -375,8 +373,8 @@ interface WayProps {
  * OnNode gives the command that signs a new certificate with the Proxmox VE cluster's CA, whose key
  * never leaves the node.
  */
-function OnNode({ way: { ctid } }: { way: WayProps }): JSX.Element {
-  const command = `sh install.sh --certificate --ctid ${ctid ?? "<container ID>"}`;
+function OnNode(): JSX.Element {
+  const command = "sh install.sh --certificate";
   return (
     <>
       <p>
@@ -602,7 +600,7 @@ const ways: { id: WayId; label: string; body: (p: WayProps) => JSX.Element }[] =
       <Acme view={p.acme} name={p.name} waiting={p.waiting} running={p.running} locked={p.locked} run={p.run} />
     ),
   },
-  { id: "cluster-ca", label: "Proxmox VE CA", body: (p) => <OnNode way={p} /> },
+  { id: "cluster-ca", label: "Proxmox VE CA", body: () => <OnNode /> },
   {
     id: "appliance-ca",
     label: "Appliance CA",
@@ -663,13 +661,7 @@ const ways: { id: WayId; label: string; body: (p: WayProps) => JSX.Element }[] =
  * one the installer made. onChanged lets the rest of the interface drop its warning about the
  * certificate it replaced.
  */
-export function InterfaceCertificate({
-  onChanged,
-  ctid,
-}: {
-  onChanged?: () => void;
-  ctid?: number | undefined;
-}): JSX.Element {
+export function InterfaceCertificate({ onChanged }: { onChanged?: () => void }): JSX.Element {
   const read = usePoll(api.interfaceCertificate, pollIdle);
   const { data, error, put } = read;
   const [chosenWay, setChosenWay] = useState<WayId>();
@@ -744,7 +736,6 @@ export function InterfaceCertificate({
           running: running === current.id,
           locked,
           run: runFor(current.id),
-          ctid,
           acme: data.acme,
           source: data.source,
           hasCA: data.applianceCA !== undefined,

@@ -53,14 +53,14 @@ The interface writes a request that `kubehenge-update`, a service running as roo
 
 ### From the Proxmox VE shell
 
-`install.sh` upgrades an installed appliance too. In the shell of the node the appliance runs on, as root:
+`install.sh` upgrades an installed appliance too, and finds it in the cluster. In the shell of the node the appliance runs on, as root:
 
 ```sh
-curl -fsSLO https://github.com/kubehenge/kubehenge/releases/latest/download/install.sh && sh install.sh --upgrade --ctid <ctid>
+curl -fsSLO https://github.com/kubehenge/kubehenge/releases/latest/download/install.sh && sh install.sh --upgrade
 ```
 
 - It checks every download against the checksums it carries, as when installing ([install.md](install.md#downloads-and-checksums)). `--release <file> --sha256 <hex>` installs a local archive instead.
-- It refuses a container that is not Kubehenge's appliance (tagged `kubehenge`) and a release older than the installed one. The same release may be installed again.
+- With several appliances in the cluster, name one with `--ctid <id>`. It refuses a container that is not Kubehenge's appliance (tagged `kubehenge`) and a release older than the installed one. The same release may be installed again.
 - It keeps the appliance's state, settings and certificate. It also keeps a newer OpenTofu that the appliance's own upgrades brought.
 - It stops, changing nothing, while the management cluster is applied or removed, a VM template is built, or the appliance is upgraded.
 - Like the updater, it keeps the installed release aside until the new one serves. Otherwise it rolls back and says `release … did not start: …. Rolled back to …`.
@@ -367,7 +367,7 @@ The management VMs start first after a node boots. They carry `startup: order=1,
 The interface warns administrators 30 days before its certificate runs out. Renew it in the node's shell with the installer of the appliance's release or a newer one:
 
 ```sh
-sh install.sh --certificate --ctid 105
+sh install.sh --certificate
 ```
 
 The same command makes a new certificate after the appliance's address changed. `--name kubehenge.example.org` gives the appliance a DNS name. `--cert <files>` installs a certificate of your own, as the installer's own question does.

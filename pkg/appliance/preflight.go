@@ -167,7 +167,7 @@ func (s *Settings) checkAPIFamily(inv *Inventory, f *Findings) {
 	if slices.Contains(s.Families(), family) {
 		return
 	}
-	f.Errors = append(f.Errors, fmt.Sprintf("The management cluster's nodes have no %s address, so they cannot reach the Proxmox VE API at %s. Give them %s addresses, or move the appliance to an %s address or name of the API that its certificate lists: sh install.sh --upgrade --ctid <id> --proxmox-url <URL>.", family, ip.Unmap(), family, other))
+	f.Errors = append(f.Errors, fmt.Sprintf("The management cluster's nodes have no %s address, so they cannot reach the Proxmox VE API at %s. Give them %s addresses, or move the appliance to an %s address or name of the API that its certificate lists: sh install.sh --upgrade --proxmox-url <URL>.", family, ip.Unmap(), family, other))
 }
 
 // checkAPIReach checks that the datacenter firewall, once on, still lets the appliance and the

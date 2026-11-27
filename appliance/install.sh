@@ -163,10 +163,10 @@ Install:
 
 Upgrade:
       --no-trusted-proxy   with --upgrade, remove the list of trusted proxies
-      --upgrade            upgrade the appliance in container --ctid
+      --upgrade            upgrade the appliance
 
 Certificate:
-      --certificate   replace the certificate of the appliance in container --ctid
+      --certificate   replace the certificate of the appliance
       --no-name       with --certificate, drop the name the certificate was given
 
   -h, --help   list these options

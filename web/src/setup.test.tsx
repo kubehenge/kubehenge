@@ -1645,7 +1645,7 @@ describe("setup", () => {
     certificateIn(10);
     const { unmount } = render(<App />);
     await expect(screen.findByText(/certificate expires on/u)).resolves.toBeInTheDocument();
-    expect(screen.getByText("sh install.sh --certificate --ctid 105")).toBeInTheDocument();
+    expect(screen.getByText("sh install.sh --certificate")).toBeInTheDocument();
     unmount();
 
     certificateIn(300);
@@ -1670,7 +1670,7 @@ describe("setup", () => {
     });
     render(<App />);
     const alert = await screen.findByText(/Appliance address moved from 192\.0\.2\.40 to 192\.0\.2\.41\./u);
-    expect(within(alert).getByText("sh install.sh --certificate --ctid 105")).toBeInTheDocument();
+    expect(within(alert).getByText("sh install.sh --certificate")).toBeInTheDocument();
   });
 
   it("warns administrators that the appliance's disk fills up", async () => {
@@ -1727,7 +1727,7 @@ describe("setup", () => {
     await expect(screen.findByRole("heading", { name: "Proxmox VE API" })).resolves.toBeInTheDocument();
     expect(window.location.pathname).toBe("/administration/appliance");
     expect(screen.getByText("Certificate check").nextElementSibling).toHaveTextContent("Off");
-    expect(screen.getByText("sh install.sh --upgrade --ctid 105 --proxmox-ca <file>")).toBeInTheDocument();
+    expect(screen.getByText("sh install.sh --upgrade --proxmox-ca <file>")).toBeInTheDocument();
     unmount();
 
     routes["GET /api/setup"] = { body: { appliance: true, ready: true, allowed: true } };

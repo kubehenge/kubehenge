@@ -21,9 +21,7 @@ export function AppliancePage({ status, running }: { status: SetupStatus; runnin
           </dl>
           <p>To switch it on, run this on the Proxmox VE node, then apply the management cluster again.</p>
           <p>
-            <code>
-              sh install.sh --upgrade --ctid {status.applianceVMID ?? "<appliance ID>"} --proxmox-ca &lt;file&gt;
-            </code>
+            <code>sh install.sh --upgrade --proxmox-ca &lt;file&gt;</code>
           </p>
         </section>
       )}
