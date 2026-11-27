@@ -5,6 +5,7 @@
 
 ### Fixed
 
+- A kubeadm cluster with registry mirrors comes up on a node OS with containerd 1.x. Its node templates need a rebuild.
 - Persistent volumes work on shared storage such as LVM on iSCSI. A Pending add-on claim shows under `AddonsWaiting` as `<add-on> has no volume: <reason>`.
 - Kubehenge installs its own cert-manager only once a full read of the cluster finds none, and never takes over one installed by hand under the release name `cert-manager`.
 - A cluster being deleted while it sets `useExisting` finishes deleting.

@@ -18,11 +18,14 @@ mkdir -p /etc/containerd
 # containerd 2's transfer service never cancels a pull that stalls before its first byte, so every
 # image behind it waits. Its local pull path cancels one after image_pull_progress_timeout and the
 # kubelet retries. A containerd without the key (1.x) pulls locally already, and the sed leaves it.
+# containerd 1.x reads a registry mirror's hosts.toml only where config_path names its folder.
 containerd config default |
     sed -e 's/SystemdCgroup = false/SystemdCgroup = true/' -e 's/enable_selinux = false/enable_selinux = true/' \
-        -e 's/use_local_image_pull = false/use_local_image_pull = true/' > /etc/containerd/config.toml
+        -e 's/use_local_image_pull = false/use_local_image_pull = true/' \
+        -e 's#config_path = ""#config_path = "/etc/containerd/certs.d"#' > /etc/containerd/config.toml
 grep -q 'SystemdCgroup = true' /etc/containerd/config.toml
 grep -q 'enable_selinux = true' /etc/containerd/config.toml
+grep -q 'certs.d' /etc/containerd/config.toml
 printf 'runtime-endpoint: unix:///run/containerd/containerd.sock\nimage-endpoint: unix:///run/containerd/containerd.sock\n' \
     > /etc/crictl.yaml
 install -D -m 0755 "${files}/node/images.sh" /usr/libexec/kubehenge/images
