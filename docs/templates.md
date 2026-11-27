@@ -115,6 +115,8 @@ A Talos template is baked by the same kind of VM. It runs Sidero's pinned imager
 
 That VM reaches the package repositories by DHCP on `--bridge`. It can use a static address instead, given with `--build-address`, `--build-gateway` and `--build-dns`. For a Talos template it also reaches `ghcr.io` and `pkg-containers.githubusercontent.com`, where `ghcr.io` redirects its downloads.
 
+Behind a proxy or TLS inspection, set `HTTPS_PROXY` and `NO_PROXY`, and point `KUBEHENGE_PROXY_CA_FILE` at a PEM file with the root CA you give the appliance. The command adds the copy of the root that Go-based tools such as podman need, as the appliance does.
+
 Its cloud-init data comes on an ISO uploaded to `--iso-storage` (the node's first ISO storage by default) and removed afterwards.
 
 ### Reuse and failures

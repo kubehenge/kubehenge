@@ -20,6 +20,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/kubehenge/kubehenge/pkg/appliance"
 	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
 	"github.com/kubehenge/kubehenge/pkg/templates"
@@ -75,6 +76,24 @@ func trustingTransport(caBundle string) (http.RoundTripper, error) {
 	}
 	t.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}
 	return t, nil
+}
+
+// trustSite gives the build what the appliance's builds trust for the same authorities: those in
+// CAFileEnv with the renamed copies of their roots that Go needs behind TLS inspection, found as the
+// appliance finds them. chains reads the hosts' chains, through the environment's proxy when nil.
+func trustSite(ctx context.Context, b *templates.Builder, chains appliance.SiteChains) error {
+	if b.Proxy == nil || b.Proxy.CABundle == "" {
+		return nil
+	}
+	trust, err := appliance.TrustFor(ctx, b.Proxy.CABundle, chains)
+	if err == nil {
+		b.Proxy.CABundle = trust
+		b.Sources.HTTP.Transport, err = trustingTransport(trust)
+	}
+	if err != nil {
+		return fmt.Errorf("the certificate authorities in %s: %w", templates.CAFileEnv, err)
+	}
+	return nil
 }
 
 // poolFlag is the pool a template command works in. Clusters clone only from the templates in their
@@ -437,6 +456,9 @@ func (b *builderFlags) connect(cmd *cobra.Command, conn *pve.Config) (*templates
 		return nil, err
 	}
 	b.builder.Client, b.builder.Sources, b.builder.Proxy = c.Client, c.Sources, c.Proxy
+	if err = trustSite(cmd.Context(), &b.builder, nil); err != nil {
+		return nil, err
+	}
 	// Progress is best effort. A closed stderr must not fail the build.
 	b.builder.Log = func(format string, a ...any) { _, _ = fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", a...) }
 	nodes := splitNodes(b.builder.Node)

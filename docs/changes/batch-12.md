@@ -13,6 +13,7 @@
 
 - A cluster that sets no proxy sends its nodes through the management side's proxy, as it does its add-ons, and they trust that proxy's CA. It comes up where only the proxy leads out.
 - `kubehenge template create` builds through the proxy its environment names, and trusts the authorities in `KUBEHENGE_PROXY_CA_FILE` when it fetches repository keys.
+- `kubehenge template create` behind TLS inspection works with the same root CA the appliance takes, as podman now gets the root's renamed copy too.
 - A kubeadm template of a Kubernetes release whose images lack Kubernetes' signature is refused before its build, in the interface, the CLI and the refresh, naming the nearest signed release.
 - capmox gives `cloud-init status` 10 seconds to exit, not 2, so a machine on a busy host no longer stays at `WaitingForCloudInit`.
 - `ControlPlaneRollStalled` times a roll from its start on every distribution, so a successor the health check keeps replacing counts.

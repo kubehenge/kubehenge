@@ -169,6 +169,30 @@ func (a *Appliance) ResolveSite(ctx context.Context, s *Settings) ([]string, err
 	return unchecked, nil
 }
 
+// TrustFor is what a template build outside the appliance trusts for the authorities ca, derived as
+// a save derives the Site CA's bundle: ca with the renamed copies of its roots that the chains of the
+// Site CA's hosts need, read through the environment's proxy unless chains reads them. ca alone where
+// they need none or no host answered. A chain Go would refuse even so fails with SiteChainError.
+func TrustFor(ctx context.Context, ca string, chains SiteChains) (string, error) {
+	s := &Settings{SiteCA: ca}
+	auth, err := newSiteAuthority(siteCALabel, ca, "", &s.SiteBundle)
+	if err != nil {
+		return "", err
+	}
+	a := &Appliance{SiteChains: chains}
+	if chains == nil {
+		a.SiteChains = a.DialChain
+	}
+	answered, _ := a.readChains(ctx, s)
+	if err = judgeChains([]*siteAuthority{auth}, a.publicRoots(), answered, time.Now()); err != nil {
+		return "", err
+	}
+	if derived := auth.derived(); derived != "" {
+		return derived, nil
+	}
+	return ca, nil
+}
+
 func clearBundles(s *Settings) {
 	s.SiteBundle = ""
 	if s.Proxy != nil {
