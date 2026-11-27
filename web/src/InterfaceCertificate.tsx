@@ -22,6 +22,7 @@ import {
   pollIdle,
   saveFile,
   usePoll,
+  ReadError,
 } from "./ui";
 
 // The server's limits of an upload.
@@ -669,7 +670,8 @@ export function InterfaceCertificate({
   onChanged?: () => void;
   ctid?: number | undefined;
 }): JSX.Element {
-  const { data, error, put } = usePoll(api.interfaceCertificate, pollIdle);
+  const read = usePoll(api.interfaceCertificate, pollIdle);
+  const { data, error, put } = read;
   const [chosenWay, setChosenWay] = useState<WayId>();
   const [running, setRunning] = useState<WayId | "address">();
   const [leftOut, setLeftOut] = useState<string[]>([]);
@@ -679,7 +681,8 @@ export function InterfaceCertificate({
     return (
       <div className="box">
         <h3>Interface certificate</h3>
-        {filled(error) ? <ErrorBox message={error} /> : <Skeleton rows={4} />}
+        <ReadError read={read} />
+        {!filled(error) && <Skeleton rows={4} />}
       </div>
     );
   }
@@ -721,7 +724,7 @@ export function InterfaceCertificate({
           }
         />
         {leftOut.length > 0 && <p className="muted">Left out: {leftOut.join(", ")}</p>}
-        <ErrorBox message={error} />
+        <ReadError read={read} />
       </div>
       {data.applianceCA !== undefined && <OwnCA ca={data.applianceCA} />}
       <div className="box fields">

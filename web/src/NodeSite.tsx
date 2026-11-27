@@ -1,10 +1,9 @@
-import { useEffect, useState, type JSX } from "react";
+import { useState, type JSX } from "react";
 
-import { api } from "./api";
 import { list } from "./network";
 import { certificateBundleProblem, sentence } from "./pem";
 import type { Cluster } from "./types";
-import { Dialog, ErrorBox, Field, stageLabel, useChange } from "./ui";
+import { Dialog, ErrorBox, Field, stageLabel, useChange, useClasses } from "./ui";
 import { record, records, text, texts } from "./values";
 
 /** One registry mirror as the interface edits it: where the nodes pull a registry's images from. */
@@ -287,25 +286,8 @@ export const releaseMirrorFound = (p: ReleaseMirrorProblems): boolean =>
 
 /** useReleaseMirrorDefault is the management cluster's release mirror the class's nodes take by default. */
 export function useReleaseMirrorDefault(className: string): string | undefined {
-  const [fallback, setFallback] = useState<string>();
-  useEffect(() => {
-    let current = true;
-    async function load(): Promise<void> {
-      try {
-        const classes = await api.classes();
-        if (current) {
-          setFallback(classes.find((x) => x.name === className)?.releaseMirror ?? "");
-        }
-      } catch {
-        // Without the classes the default is not named. The cluster keeps its setting.
-      }
-    }
-    void load();
-    return () => {
-      current = false;
-    };
-  }, [className]);
-  return fallback;
+  const { data } = useClasses();
+  return data === undefined ? undefined : (data.find((x) => x.name === className)?.releaseMirror ?? "");
 }
 
 /** ReleaseMirrorFields edit the mirror a cluster's nodes download their release from. */

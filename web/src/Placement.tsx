@@ -2,7 +2,19 @@ import { useEffect, useId, useState, type JSX } from "react";
 
 import { api } from "./api";
 import type { Cluster, ClusterClass, HARule, HARules, PveNode, Storage } from "./types";
-import { Detail, Dialog, ErrorBox, Field, Info, Status, errorMessage, filled, stageLabel, useChange } from "./ui";
+import {
+  Detail,
+  Dialog,
+  ErrorBox,
+  Field,
+  Info,
+  Status,
+  errorMessage,
+  filled,
+  stageLabel,
+  useChange,
+  useClasses,
+} from "./ui";
 import { flag, record, texts } from "./values";
 
 /** Where a cluster's VMs may run: any node, the nodes of an HA rule, or nodes chosen one by one. */
@@ -380,21 +392,9 @@ export const managementEndpointAnnotation = "kubehenge.dev/management-endpoint";
 
 /** useAutoscalerInCluster reads whether an existing cluster's autoscaler may run on its own control planes. */
 export function useAutoscalerInCluster(c: Cluster): boolean {
-  const [offered, setOffered] = useState(false);
-  const className = c.class;
-  useEffect(() => {
-    async function load(): Promise<void> {
-      try {
-        const classes = await api.classes();
-        setOffered(classes.find((x) => x.name === className)?.annotations?.[managementEndpointAnnotation] === "true");
-      } catch {
-        // Without the classes the option is not shown. The cluster keeps its setting.
-        setOffered(false);
-      }
-    }
-    void load();
-  }, [className]);
-  return offered;
+  // Without the classes the option is not shown, the page shows that read's error, and the cluster keeps its setting.
+  const { data } = useClasses();
+  return data?.find((x) => x.name === c.class)?.annotations?.[managementEndpointAnnotation] === "true";
 }
 
 /** haGroupsOn reads whether the cluster's nodes are labelled with their Proxmox VE HA groups. */
@@ -428,19 +428,6 @@ export function HAGroupsField({
 
 /** useHAGroupsOffered reads whether an existing cluster may have the HA rule labels. */
 export function useHAGroupsOffered(c: Cluster): boolean {
-  const [offered, setOffered] = useState(false);
-  const className = c.class;
-  useEffect(() => {
-    async function load(): Promise<void> {
-      try {
-        const classes = await api.classes();
-        setOffered(offersHAGroups(classes.find((x) => x.name === className)));
-      } catch {
-        // Without the classes the option is not shown. The cluster keeps its setting.
-        setOffered(false);
-      }
-    }
-    void load();
-  }, [className]);
-  return offered;
+  // Without the classes the option is not shown, the page shows that read's error, and the cluster keeps its setting.
+  return offersHAGroups(useClasses().data?.find((x) => x.name === c.class));
 }

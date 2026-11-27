@@ -4,7 +4,7 @@ import { adminPath, adminViews, type AdminView } from "./admin-views";
 import { clusterPath, views, type View } from "./cluster-paths";
 import { ClusterList } from "./ClusterList";
 import { Link, match } from "./router";
-import { Skeleton } from "./ui";
+import { ReadError, Skeleton } from "./ui";
 
 // Pages only some people open, now and then, load when first opened: whoever only looks at clusters
 // never fetches them.
@@ -33,7 +33,7 @@ const CreateCluster = lazy(async () => {
 });
 
 export type Route =
-  | { page: "loading" | "setup" | "forbidden" | "create" | "list" | "none" }
+  | { page: "loading" | "setup" | "forbidden" | "unread" | "create" | "list" | "none" }
   | { page: "administration"; view: AdminView }
   | { page: "cluster"; namespace: string; name: string; view: View }
   | { page: "run"; id: string };
@@ -45,8 +45,8 @@ export interface At {
   key: string;
 }
 
-/** routeAt is the page at a path, with its title. */
-export function routeAt(path: string, needsSetup: boolean | undefined, canManage: boolean): At {
+/** routeAt is the page at a path, with its title. canManage is undefined while it is not known. */
+export function routeAt(path: string, needsSetup: boolean | undefined, canManage: boolean | undefined): At {
   if (needsSetup === undefined) {
     return { route: { page: "loading" }, title: "Kubehenge", key: path };
   }
@@ -55,8 +55,12 @@ export function routeAt(path: string, needsSetup: boolean | undefined, canManage
   }
   const admin = adminViews.find((v) => adminPath(v.path) === path);
   if (admin !== undefined) {
+    let route: Route = canManage === true ? { page: "administration", view: admin.path } : { page: "forbidden" };
+    if (canManage === undefined) {
+      route = { page: "unread" };
+    }
     return {
-      route: canManage ? { page: "administration", view: admin.path } : { page: "forbidden" },
+      route,
       title: admin.path === "" ? "Administration" : `Administration: ${admin.label}`,
       key: "/administration",
     };
@@ -94,6 +98,7 @@ export function RoutePage({
   namespaces,
   headlamp,
   onSetupChanged,
+  setupRead,
 }: {
   route: Route;
   canCreate: boolean | undefined;
@@ -102,6 +107,8 @@ export function RoutePage({
   namespaces: string[];
   headlamp: number | undefined;
   onSetupChanged: () => void;
+  /** The read of the setup status, which tells whether this user administers the appliance. */
+  setupRead: { error: string | undefined; next: () => number; reload: () => Promise<void> };
 }): JSX.Element {
   useEffect(() => {
     void loadClusterDetail();
@@ -115,6 +122,17 @@ export function RoutePage({
     }
     case "administration": {
       return <Administration view={route.view} onSetupChanged={onSetupChanged} />;
+    }
+    case "unread": {
+      return (
+        <section className="panel">
+          <div className="toolbar">
+            <h2>Administration</h2>
+          </div>
+          <ReadError read={setupRead} />
+          {setupRead.error === undefined && <Skeleton rows={6} />}
+        </section>
+      );
     }
     case "forbidden": {
       return <NoPage title="Administrators only">Needs the Administrator role on / in Proxmox VE.</NoPage>;

@@ -2,7 +2,7 @@ import { useEffect, useState, type JSX, type KeyboardEvent, type ReactNode } fro
 
 import { api } from "./api";
 import type { ClusterRef, StoredCredential } from "./types";
-import { ErrorBox, Field, Skeleton, errorMessage, filled } from "./ui";
+import { ErrorBox, Field, ReadError, Skeleton, errorMessage, filled, pollIdle, usePoll } from "./ui";
 
 /** One value a credential holds. */
 export interface CredentialKey {
@@ -55,7 +55,8 @@ export function CredentialField({
 }): JSX.Element {
   const namespace = cluster?.namespace;
   const name = cluster?.name;
-  const [stored, setStored] = useState<StoredCredential>();
+  const read = usePoll(async () => api.storedCredential(purpose, refOf(namespace, name)), pollIdle);
+  const { data: stored, error: readError, put } = read;
   // The values being typed. None while the field only shows what is stored.
   const [values, setValues] = useState<Record<string, string>>();
   const [confirming, setConfirming] = useState(false);
@@ -63,26 +64,12 @@ export function CredentialField({
   const [error, setError] = useState<string>();
 
   useEffect(() => {
-    let current = true;
-    async function load(): Promise<void> {
-      try {
-        const c = await api.storedCredential(purpose, refOf(namespace, name));
-        if (current) {
-          setStored(c);
-          onRead?.(true);
-        }
-      } catch (err) {
-        if (current) {
-          setError(errorMessage(err));
-          onRead?.(false);
-        }
-      }
+    if (readError !== undefined) {
+      onRead?.(false);
+    } else if (stored !== undefined) {
+      onRead?.(true);
     }
-    void load();
-    return () => {
-      current = false;
-    };
-  }, [purpose, namespace, name, onRead]);
+  }, [stored, readError, onRead]);
 
   const complete = values !== undefined && keys.every((k) => k.optional === true || filled(values[k.key]));
 
@@ -90,7 +77,8 @@ export function CredentialField({
     setBusy(true);
     setError(undefined);
     try {
-      setStored(await step());
+      const now = await step();
+      put(() => now);
       // What was typed does not linger in the page once the server has it.
       setValues(undefined);
       setConfirming(false);
@@ -127,7 +115,7 @@ export function CredentialField({
     <fieldset className="group">
       <legend>{label}</legend>
       {hint !== undefined && <p className="hint">{hint}</p>}
-      {stored === undefined && !filled(error) && <Skeleton rows={1} />}
+      {stored === undefined && !filled(readError) && <Skeleton rows={1} />}
       {stored !== undefined && <p className="muted">{setText(stored)}</p>}
       {stored?.set === true && status}
       {values !== undefined && (
@@ -188,6 +176,7 @@ export function CredentialField({
           </button>
         </div>
       )}
+      <ReadError read={read} />
       <ErrorBox message={error} />
     </fieldset>
   );

@@ -163,11 +163,12 @@ function BackupLog({ run }: { run: RunInfo }): JSX.Element | null {
 function VeleroLogBox({ run, namespace, cluster }: { run: RunInfo; namespace: string; cluster: string }): JSX.Element {
   const name = run.id.split("/").at(-1) ?? "";
   const read = run.kind === "restore" ? api.restoreLog : api.backupLog;
-  const { data: log, error } = usePoll(async () => read(namespace, cluster, name), pollIdle);
+  const logRead = usePoll(async () => read(namespace, cluster, name), pollIdle);
+  const { data: log, error } = logRead;
   return (
     <section className="box run-log">
       <h3>Log</h3>
-      <ErrorBox message={error} />
+      <ReadError read={logRead} />
       {log === undefined && error === undefined && <Skeleton rows={6} />}
       {log !== undefined && (
         <pre className="log" aria-label="Log">

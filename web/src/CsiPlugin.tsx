@@ -3,7 +3,7 @@ import { useEffect, useId, useState, type JSX } from "react";
 import { api } from "./api";
 import { csiOffer, snapshotsOffer, type CSIOffer, type SnapshotsOffer } from "./create-form";
 import type { Cluster } from "./types";
-import { Info } from "./ui";
+import { Info, useClasses } from "./ui";
 import { flag, record, text } from "./values";
 
 /** csiOn reads whether the cluster runs the plugin's newest release. */
@@ -135,25 +135,13 @@ export function SnapshotsField({
 
 /** useSnapshotsOffer reads whether an existing cluster may take volume snapshots, and what stands in the way. */
 export function useSnapshotsOffer(c: Cluster): SnapshotsOffer {
-  const [offer, setOffer] = useState<SnapshotsOffer>({ offered: false, problem: undefined });
-  const storage = text(c.variables["storage"]);
-  const className = c.class;
-  useEffect(() => {
-    async function load(): Promise<void> {
-      try {
-        const classes = await api.classes();
-        setOffer(
-          snapshotsOffer(
-            classes.find((x) => x.name === className),
-            storage,
-          ),
-        );
-      } catch {
-        // Without the classes the option is not shown. The cluster keeps its setting.
-        setOffer({ offered: false, problem: undefined });
-      }
-    }
-    void load();
-  }, [className, storage]);
-  return offer;
+  // Without the classes the option is not shown, the page shows that read's error, and the cluster keeps its setting.
+  const { data } = useClasses();
+  if (data === undefined) {
+    return { offered: false, problem: undefined };
+  }
+  return snapshotsOffer(
+    data.find((x) => x.name === c.class),
+    text(c.variables["storage"]),
+  );
 }

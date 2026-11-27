@@ -2881,6 +2881,7 @@ fieldset.choices legend {
 }
 
 .dialog-body .read-error-retry,
+.rail-note .read-error-retry,
 .wizard .read-error-retry,
 .box .read-error-retry {
   margin-inline: 0;

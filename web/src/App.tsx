@@ -8,7 +8,7 @@ import { RoutePage, routeAt } from "./Pages";
 import { Link, usePath } from "./router";
 import { SignIn } from "./SignIn";
 import type { Session, SetupStatus } from "./types";
-import { ErrorBoundary, Skeleton } from "./ui";
+import { ErrorBoundary, Skeleton, errorMessage } from "./ui";
 
 const mibPerGiB = 1024;
 
@@ -17,6 +17,9 @@ const setupRetry = 5000;
 
 // Answers from this status on are the server's own failures, which pass.
 const firstServerError = 500;
+
+// What shows while the setup status is not read: the clusters, without the administrators' pages.
+const unreadSetup: SetupStatus = { appliance: false, ready: true, allowed: false };
 
 export function App(): JSX.Element {
   // undefined while the session is being looked up, null when signed out.
@@ -93,6 +96,9 @@ function Shell({
 }): JSX.Element {
   const path = usePath();
   const [setup, setSetup] = useState<SetupStatus>();
+  const [setupError, setSetupError] = useState<string>();
+  // When the setup status is read again after it failed.
+  const setupNext = useRef(0);
   const [certificate, setCertificate] = useState<Expiry>();
   const [credentials, setCredentials] = useState<Expiry>();
   const [upgradedTo, setUpgradedTo] = useState<string>();
@@ -115,8 +121,11 @@ function Shell({
       }
       // The clusters show meanwhile, and the administrators' link and warnings come back once it
       // answers.
-      setSetup((was) => was ?? { appliance: false, ready: true, allowed: false });
+      setSetup((was) => was ?? unreadSetup);
+      setSetupError(errorMessage(err));
+      setupNext.current = Date.now();
       if (!(err instanceof ApiError) || err.status === 0 || err.status >= firstServerError) {
+        setupNext.current += setupRetry;
         retry.current = window.setTimeout(() => {
           void load();
         }, setupRetry);
@@ -125,6 +134,7 @@ function Shell({
     }
     if (read === reading.current) {
       setSetup(s);
+      setSetupError(undefined);
       setCertificate(certificateWarning(s.certificateExpires));
       setCredentials(certificateWarning(s.credentialsExpire));
     }
@@ -157,7 +167,10 @@ function Shell({
     }
   };
 
-  const { route, title, key: pageKey } = routeAt(path, needsSetup, canManage);
+  // Whether this user administers the appliance is not known until the setup status is read.
+  const unread = setup === unreadSetup;
+  const setupRead = { error: unread ? setupError : undefined, next: () => setupNext.current, reload: loadSetup };
+  const { route, title, key: pageKey } = routeAt(path, needsSetup, unread ? undefined : canManage);
 
   useEffect(() => {
     document.title = title === "Kubehenge" ? title : `${title} · Kubehenge`;
@@ -199,6 +212,7 @@ function Shell({
             namespaces={namespaces}
             headlamp={headlamp}
             onSetupChanged={reloadSetup}
+            setupRead={setupRead}
           />
         </Suspense>
       </ErrorBoundary>

@@ -15,6 +15,7 @@ import {
   timeZones,
   usePoll,
   Skeleton,
+  ReadError,
 } from "./ui";
 import { oneOf } from "./values";
 
@@ -40,9 +41,10 @@ export function ApplianceUpgrades(): JSX.Element {
   // The release asked for, until the updater reports on it.
   const [asked, setAsked] = useState<string>();
   // An upgrade under way is followed closely.
-  const { data, error, reload } = usePoll(api.upgrades, (d) =>
+  const read = usePoll(api.upgrades, (d) =>
     d?.status?.state === "updating" || (asked !== undefined && d?.version !== asked) ? pollRunning : pollReleases,
   );
+  const { data, error, reload } = read;
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const [saved, setSaved] = useState(false);
@@ -52,7 +54,8 @@ export function ApplianceUpgrades(): JSX.Element {
     return (
       <div className="box">
         <h3>Kubehenge</h3>
-        {filled(error) ? <ErrorBox message={error} /> : <Skeleton rows={2} />}
+        <ReadError read={read} />
+        {!filled(error) && <Skeleton rows={2} />}
       </div>
     );
   }

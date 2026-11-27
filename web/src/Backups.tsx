@@ -31,6 +31,8 @@ import {
   stageLabel,
   useChange,
   usePoll,
+  useClasses,
+  type Poll,
   Skeleton,
 } from "./ui";
 import { oneOf, quantity, record, records, text, texts } from "./values";
@@ -149,21 +151,17 @@ export function targetText(t: OfferedTarget): string {
   return `bucket ${t.bucket} at ${URL.canParse(t.endpoint) ? new URL(t.endpoint).host : t.endpoint}`;
 }
 
-/** useClassTargets reads the targets an existing cluster's class offers. Undefined until known. */
-export function useClassTargets(className: string): OfferedTarget[] | undefined {
-  const [targets, setTargets] = useState<OfferedTarget[]>();
-  useEffect(() => {
-    async function load(): Promise<void> {
-      try {
-        const classes = await api.classes();
-        setTargets(classTargets(classes.find((c) => c.name === className)));
-      } catch {
-        setTargets([]);
-      }
-    }
-    void load();
-  }, [className]);
-  return targets;
+/**
+ * useClassTargets reads the targets an existing cluster's class offers, undefined until known, with
+ * the read of the classes for its error.
+ */
+export function useClassTargets(className: string): {
+  targets: OfferedTarget[] | undefined;
+  read: Poll<ClusterClass[]>;
+} {
+  const read = useClasses();
+  const targets = read.data === undefined ? undefined : classTargets(read.data.find((c) => c.name === className));
+  return { targets, read };
 }
 
 const weekdayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -588,7 +586,7 @@ function BackupsForm({
   onClose: () => void;
 }): JSX.Element {
   const current = backupsOf(c.variables["backups"]);
-  const offered = useClassTargets(c.class);
+  const { targets: offered, read: classesRead } = useClassTargets(c.class);
   const targets = offered ?? [];
   const [enabled, setEnabled] = useState(current.enabled);
   const [typed, setTyped] = useState<BackupFields>(() => backupFieldsOf(current, zone.start, zone.inEffect));
@@ -660,6 +658,7 @@ function BackupsForm({
         />
       )}
       {current.enabled && !enabled && <p className="warning">Removes Velero. Backups stay in the target.</p>}
+      <ReadError read={classesRead} />
       <ErrorBox message={error} />
     </Dialog>
   );
@@ -751,7 +750,9 @@ export function BackupsView({
     );
   }
 
-  const { noBackUp, noRestore, noDelete } = refusals(v, poolName(c.pool));
+  const refused = refusals(v, poolName(c.pool));
+  const { noRestore, noDelete } = refused;
+  const noBackUp = error === undefined ? refused.noBackUp : "Backups not read.";
   const backUp = async (): Promise<void> => {
     setBusy(true);
     setActionError(undefined);
@@ -780,7 +781,7 @@ export function BackupsView({
         <div className="actions">
           <button
             type="button"
-            disabled={busy || !v.canBackUp || !v.reachable}
+            disabled={busy || !v.canBackUp || !v.reachable || error !== undefined}
             title={noBackUp}
             onClick={() => {
               void backUp();
@@ -905,7 +906,7 @@ function BackupsSummary({
       <dd>{backupsText(settings)}</dd>
       <dt>Target status</dt>
       <dd>
-        {v.reachable ? (
+        {v.reachable && !unread ? (
           <Status state={v.location === "Available" ? "ok" : "error"} text={location} />
         ) : (
           <Status state="idle" text="Unknown" />

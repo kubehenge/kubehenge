@@ -5,7 +5,7 @@ import { clusterPath, type View } from "./cluster-paths";
 import { useClusterChanges } from "./live";
 import { Link } from "./router";
 import type { Cluster, FleetHealth, Replicas, RunInfo } from "./types";
-import { Status, distributionName, filled, pollIdle, settled, usePoll } from "./ui";
+import { ReadError, Skeleton, Status, distributionName, filled, pollIdle, settled, usePoll } from "./ui";
 
 // How often the fleet is read again while any cluster is changing.
 const pollChanging = 10_000;
@@ -406,10 +406,6 @@ export function ClusterStatus({
   return <Status state={s.state} text={s.verdict} />;
 }
 
-/** healthUnread is whether the fleet's health read failed with nothing read before it. */
-export const healthUnread = (fleet: Fleet): boolean =>
-  fleet.health === undefined && fleet.healthRead.error !== undefined;
-
 /** groupLabel names a group: the unknown one says Loading while the health is still being read. */
 export const groupLabel = (g: { group: Group; label: string }, failed: boolean): string =>
   g.group === "unknown" && !failed ? "Loading" : g.label;
@@ -436,7 +432,7 @@ const unread = (failed: boolean): Standing => ({
 function standingIn(c: Cluster, health: Map<string, FleetHealth> | undefined, failed: boolean): Standing {
   const found = health?.get(fleetKey(c));
   const s = standing(c, found);
-  return found === undefined && s.group === "healthy" ? unread(health === undefined && failed) : s;
+  return found === undefined && s.group === "healthy" ? unread(failed) : s;
 }
 
 /** ranked is the fleet in the rail's order: by group, the worst first within it, then by name. */
@@ -457,6 +453,27 @@ export function ranked(
     );
 }
 
+// RailRead is the rail's loading look while the clusters are read, and the error of a read that failed.
+function RailRead({ fleet, listed }: { fleet: Fleet; listed: boolean }): JSX.Element | null {
+  if (!listed) {
+    return fleet.error === undefined ? (
+      <Skeleton rows={4} />
+    ) : (
+      <div className="rail-note">
+        <ReadError read={fleet} />
+      </div>
+    );
+  }
+  if (fleet.healthRead.error === undefined) {
+    return null;
+  }
+  return (
+    <div className="rail-note">
+      <ReadError read={fleet.healthRead} />
+    </div>
+  );
+}
+
 /** FleetRail lists every cluster by where it stands, each with why, beside every page. */
 export function FleetRail({
   current,
@@ -474,7 +491,7 @@ export function FleetRail({
       : ranked(fleet.clusters, fleet.health, fleet.healthRead.error !== undefined);
   // The last list read stays shown, greyed, once it or its health may no longer hold.
   const stale = (fleet?.stale === true || fleet?.healthRead.stale === true) && list !== undefined;
-  const failed = fleet !== null && healthUnread(fleet);
+  const failed = fleet?.healthRead.error !== undefined;
   return (
     <nav className={stale ? "rail rail-stale" : "rail"} aria-label="Fleet">
       <div className="rail-head">
@@ -490,11 +507,7 @@ export function FleetRail({
           +
         </button>
       </div>
-      {fleet?.error !== undefined && list === undefined && (
-        <p className="rail-note hint-warning" title={fleet.error}>
-          Not read
-        </p>
-      )}
+      {fleet !== null && <RailRead fleet={fleet} listed={list !== undefined} />}
       {stale && (
         <p className="rail-note hint-warning" title={fleet.error ?? fleet.healthRead.error}>
           Stale

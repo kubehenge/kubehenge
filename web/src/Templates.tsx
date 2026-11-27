@@ -33,6 +33,7 @@ import {
   sole,
   usePoll,
   weekdayName,
+  ReadError,
 } from "./ui";
 import { oneOf } from "./values";
 
@@ -50,9 +51,10 @@ export function Templates(): JSX.Element {
 }
 
 function TemplatesBox(): JSX.Element {
-  const { data, error, reload } = usePoll(api.templates, (d) =>
+  const read = usePoll(api.templates, (d) =>
     d?.job?.state === "running" || refreshBusy(d?.refresh) ? pollRunning : pollIdle,
   );
+  const { data, reload } = read;
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<VMTemplate>();
   const job = data?.job;
@@ -61,7 +63,7 @@ function TemplatesBox(): JSX.Element {
   return (
     <div className="box">
       <h3>VM templates</h3>
-      <ErrorBox message={error} />
+      <ReadError read={read} />
       {data?.down?.map((d) => (
         <p className="warning" key={d.vmid}>
           Template {d.name ?? `VM ${d.vmid}`} is on node {d.node}, which is down.

@@ -158,6 +158,54 @@ const states: State[] = [
     fail: ["/api/credentials/notify"],
     ready: "Targets not read.",
   },
+  {
+    file: "backups-velero-stale.png",
+    path: "/clusters/clusters/web/backups",
+    fail: ["/api/clusters/clusters/web/backups"],
+    failLater: true,
+    before: "Reachable",
+    ready: "Backups not read.",
+  },
+  {
+    file: "machines-cluster-failed.png",
+    path: "/clusters/clusters/web/machines",
+    fail: ["/api/clusters/clusters/web"],
+    ready: "Try now",
+  },
+  {
+    file: "options-classes-failed.png",
+    path: "/clusters/clusters/web/options",
+    fail: ["/api/classes"],
+    ready: "Try now",
+  },
+  { file: "admin-setup-failed.png", path: "/administration", fail: ["/api/setup"], ready: "Try now" },
+  { file: "rail-health-failed.png", path: "/clusters/clusters/web", fail: ["/api/fleet/health"], ready: "Try now" },
+  { file: "admin-activity-failed.png", path: "/administration/activity", fail: ["/api/activity"], ready: "Try now" },
+  {
+    file: "cluster-activity-failed.png",
+    path: "/clusters/clusters/web/activity",
+    fail: ["/api/clusters/clusters/web/activity"],
+    ready: "Try now",
+  },
+  {
+    file: "admin-appliance-failed.png",
+    path: "/administration/appliance",
+    fail: ["/api/appliance/upgrades"],
+    ready: "Try now",
+  },
+  { file: "admin-templates-failed.png", path: "/administration/templates", fail: ["/api/templates"], ready: "Try now" },
+  {
+    file: "admin-release-pins-failed.png",
+    path: "/administration/templates",
+    fail: ["/api/release-pins"],
+    ready: "Try now",
+  },
+  {
+    file: "admin-certificate-failed.png",
+    path: "/administration/certificates",
+    fail: ["/api/appliance/certificate"],
+    ready: "Try now",
+  },
 ];
 
 const [binary, outArg, mode] = process.argv.slice(2);
@@ -181,6 +229,8 @@ try {
       "--disable-skia-runtime-opts",
       "--force-color-profile=srgb",
       "--disable-lcd-text",
+      // No view plays sound on the machine that takes the shots.
+      "--mute-audio",
     ],
   });
   const context = await browser.newContext({

@@ -6,11 +6,13 @@ import {
   ErrorBox,
   Field,
   Info,
+  ReadError,
   type SiteZone,
   browserZone,
   stageLabel,
   timeZones,
   useChange,
+  useClasses,
   useSiteZone,
   weekdays,
 } from "./ui";
@@ -204,6 +206,7 @@ function UpgradesForm({
   zone: SiteZone;
   onClose: () => void;
 }): JSX.Element {
+  const classesRead = useClasses();
   const initial = fieldsOf(upgradePolicy(c.variables["upgrades"]), zone.start, zone.inEffect);
   const talos = c.distribution === "talos";
   const [mode, setMode] = useState<UpgradeMode>(initial.mode);
@@ -296,6 +299,7 @@ function UpgradesForm({
           </Field>
         </>
       )}
+      <ReadError read={classesRead} />
       <ErrorBox message={error} />
     </Dialog>
   );

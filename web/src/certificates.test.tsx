@@ -236,6 +236,8 @@ const wizard = (store: Route): ReturnType<typeof fakeServer> => {
   return fakeServer({
     "GET /api/session": () => ({ body: { user: "alice@pve", csrf: "c1", canCreate: true, canTrust: true } }),
     "GET /api/runs": () => ({ body: [] }),
+    "GET /api/clusters": () => ({ body: [] }),
+    "GET /api/fleet/health": () => ({ body: [] }),
     "GET /api/classes": () => ({ body: [rke2] }),
     "GET /api/proxmox/storages": () => ({
       body: [

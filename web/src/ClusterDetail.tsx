@@ -298,16 +298,12 @@ export function ClusterDetail({
   headlamp?: number | undefined;
 }): JSX.Element {
   const { listed, relist } = useListed(namespace, name);
-  const {
-    data: c,
-    error,
-    errorStatus,
-    reload,
-  } = usePoll(
+  const read = usePoll(
     () => api.cluster(namespace, name),
     (shown) => (shown && settled(shown) ? pollIdle : pollChanging),
     { cache: clusterCache, key: `${namespace}/${name}`, seed: listed },
   );
+  const { data: c, error, errorStatus, reload } = read;
   useClusterChanges(() => {
     void reload();
   });
@@ -348,7 +344,7 @@ export function ClusterDetail({
   if (!c) {
     return (
       <section className="panel">
-        <ErrorBox message={error} />
+        <ReadError read={read} />
         {!filled(error) && <Skeleton rows={6} />}
       </section>
     );
@@ -430,7 +426,7 @@ export function ClusterDetail({
         {pageNote(c) !== undefined && <p className="muted page-note">{pageNote(c)}</p>}
         <HeldUp cluster={c} />
         <AddonConflict cluster={c} />
-        <ErrorBox message={error} />
+        <ReadError read={read} />
         <ErrorBox message={downloadError} />
         <Deleting
           cluster={c}
@@ -484,6 +480,7 @@ export function ClusterDetail({
                   cluster={c}
                   can={can}
                   why={why}
+                  failed={error !== undefined}
                   onChanged={() => {
                     void reload();
                   }}
@@ -655,7 +652,9 @@ function OptionsView({
   can: boolean;
   onEdit: (a: Action) => void;
 }): JSX.Element {
-  const offered = (useClassTargets(c.class) ?? []).length > 0;
+  // Rows stay listed while the class's targets are not known, so a failed read hides none.
+  const { targets, read: classesRead } = useClassTargets(c.class);
+  const offered = targets === undefined || targets.length > 0;
   const staged = useStaging()?.staged?.plan.cluster;
   const more = (shown: Cluster): OptionRow<"backups" | "etcdSnapshots" | "autoscaler">[] => [
     ...backupsRows(shown, offered),
@@ -668,7 +667,12 @@ function OptionsView({
       name: "the autoscaler",
     },
   ];
-  return <Options cluster={c} staged={staged} can={can} onEdit={onEdit} more={more} />;
+  return (
+    <>
+      <ReadError read={classesRead} />
+      <Options cluster={c} staged={staged} can={can} onEdit={onEdit} more={more} />
+    </>
+  );
 }
 
 function Summary({

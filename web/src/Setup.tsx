@@ -75,6 +75,7 @@ import {
   weekdayName,
   weekdays,
   Skeleton,
+  ReadError,
 } from "./ui";
 import { vmIDRangeOf, vmIDRangeProblem, vmIDRangeVariable } from "./VmidRange";
 
@@ -1258,7 +1259,8 @@ const running = (s: SetupStatus): s is SetupStatus & { job: Job } =>
 // Setup is the appliance's first run: it creates the management cluster with the signed-in
 // administrator's Proxmox VE session.
 export function Setup({ onReady }: { onReady?: () => void }): JSX.Element {
-  const { data: status, error, reload } = usePoll(api.setupStatus, (s) => (s && running(s) ? pollRunning : pollIdle));
+  const read = usePoll(api.setupStatus, (s) => (s && running(s) ? pollRunning : pollIdle));
+  const { data: status, error, reload } = read;
   const ready = status?.ready;
   useEffect(() => {
     if (ready === true) {
@@ -1267,7 +1269,12 @@ export function Setup({ onReady }: { onReady?: () => void }): JSX.Element {
   }, [ready, onReady]);
 
   if (!status) {
-    return <section className="panel">{filled(error) ? <ErrorBox message={error} /> : <Skeleton rows={6} />}</section>;
+    return (
+      <section className="panel">
+        <ReadError read={read} />
+        {!filled(error) && <Skeleton rows={6} />}
+      </section>
+    );
   }
   if (!status.allowed) {
     return (

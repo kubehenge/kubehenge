@@ -9,7 +9,6 @@ import {
   groupLabel,
   groups,
   healthReadAt,
-  healthUnread,
   ranked,
   useFleet,
   type Group,
@@ -19,7 +18,7 @@ import { FleetBackupWarning } from "./ManagementRecovery";
 import { score } from "./Palette";
 import { Link, navigate } from "./router";
 import type { Cluster, FleetHealth } from "./types";
-import { ErrorBox, ReadError, RetryIn, Skeleton, Status, age, distributionName, filled, unknownCount } from "./ui";
+import { ReadError, Skeleton, Status, age, distributionName, filled, unknownCount } from "./ui";
 
 // The privilege creating a cluster needs, as Proxmox VE names it.
 const createNeeds = "Creating clusters needs VM.Allocate on the workload pool.";
@@ -65,28 +64,20 @@ function FleetList({ canCreate, canManage }: { canCreate: boolean | undefined; c
         {fleet !== null && (
           <ReadError read={fleet.healthRead} readAt={fleet.healthRead.stale ? healthReadAt(fleet.health) : undefined} />
         )}
-        <Clusters clusters={shown} found={fleet?.health} failed={fleet !== null && healthUnread(fleet)} />
+        <Clusters clusters={shown} found={fleet?.health} failed={fleet?.healthRead.error !== undefined} />
       </>
     );
-  // Without the clusters, the list says when it reads them again, and administrators get the
-  // management cluster's page, which works without them.
-  const unread = (f: NonNullable<typeof fleet>): JSX.Element => (
-    <div className="pad unread">
-      <RetryIn
-        next={f.next}
-        onRetry={() => {
-          void f.reload();
-        }}
-      />
-      {canManage && <Link to={adminPath("")}>Management cluster</Link>}
-    </div>
-  );
+  // Without the clusters, administrators get the management cluster's page, which works without them.
   const body = (): JSX.Element | null => {
     if (clusters !== undefined) {
       return listed(clusters);
     }
-    if (error !== undefined && fleet !== null) {
-      return unread(fleet);
+    if (error !== undefined) {
+      return canManage ? (
+        <div className="pad unread">
+          <Link to={adminPath("")}>Management cluster</Link>
+        </div>
+      ) : null;
     }
     return <Skeleton rows={6} />;
   };
@@ -112,7 +103,7 @@ function FleetList({ canCreate, canManage }: { canCreate: boolean | undefined; c
           {createNeeds}
         </p>
       )}
-      <ErrorBox message={error} />
+      {fleet !== null && <ReadError read={fleet} />}
       {body()}
     </section>
   );
@@ -240,7 +231,7 @@ function Clusters({
               <button key={g.group} type="button" aria-pressed={show === g.group} onClick={() => setShow(g.group)}>
                 {groupLabel(g, failed)}{" "}
                 <span className="count">
-                  {failed && (g.group === "needs" || g.group === "healthy")
+                  {found === undefined && (g.group === "needs" || g.group === "healthy")
                     ? unknownCount
                     : (rows.counts.get(g.group) ?? 0)}
                 </span>

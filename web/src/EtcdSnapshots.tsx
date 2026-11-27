@@ -282,7 +282,7 @@ function EtcdSnapshotsForm({
   onClose: () => void;
 }): JSX.Element {
   const current = etcdSnapshotsOf(c.variables["etcdSnapshots"]);
-  const offered = useClassTargets(c.class);
+  const { targets: offered, read: classesRead } = useClassTargets(c.class);
   const targets = offered ?? [];
   const [enabled, setEnabled] = useState(current.enabled);
   const [typed, setTyped] = useState<EtcdSnapshotFields>(() => etcdFieldsOf(current, zone.start, zone.inEffect));
@@ -345,6 +345,7 @@ function EtcdSnapshotsForm({
       {current.enabled && !enabled && (
         <p className="warning">Stops snapshots. Existing ones stay and can be restored.</p>
       )}
+      <ReadError read={classesRead} />
       <ErrorBox message={error} />
     </Dialog>
   );

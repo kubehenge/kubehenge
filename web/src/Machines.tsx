@@ -95,11 +95,14 @@ export function Machines({
   cluster: c,
   can,
   why,
+  failed = false,
   onChanged,
 }: {
   cluster: Cluster;
   can: boolean;
   why: string | undefined;
+  /** The cluster's own read failed, so machines it has not listed are not known. */
+  failed?: boolean;
   onChanged: () => void;
 }): JSX.Element {
   const nodes = useProxmoxNodes();
@@ -112,6 +115,7 @@ export function Machines({
   const nodeOf = new Map((health.data?.nodes.items ?? []).map((n) => [n.machine ?? n.name, n]));
   const offline = offlineOf(nodes);
   const machines = c.machines ?? [];
+  const unlisted = failed ? "Unknown" : <Skeleton />;
   const autoscaled = new Set(c.workerPools.filter((p) => p.autoscaling !== undefined).map((p) => p.name));
   const crowded = crowding(machines);
   const talos = c.distribution === "talos";
@@ -159,7 +163,7 @@ export function Machines({
           {machines.length === 0 && (
             <tr>
               <td colSpan={columns.length + 1} className="muted">
-                {c.machines === undefined ? <Skeleton /> : "No machines yet"}
+                {c.machines === undefined ? unlisted : "No machines yet"}
               </td>
             </tr>
           )}

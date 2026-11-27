@@ -2,7 +2,7 @@ import { useRef, useState, type JSX } from "react";
 
 import { api } from "./api";
 import type { BootLog, ClusterRef, Machine } from "./types";
-import { Dialog, ErrorBox, errorMessage, filled, pollIdle, pollRunning, usePoll } from "./ui";
+import { Dialog, ErrorBox, errorMessage, filled, pollIdle, pollRunning, usePoll, ReadError } from "./ui";
 
 /**
  * BootLogDialog has the controller read a machine's boot log, through its VM's guest agent or its
@@ -20,7 +20,7 @@ export function BootLogDialog({
   // Opening the dialog asks for a fresh read. The polls after it wait for the controller's answer.
   const asking = useRef(true);
   const [askError, setAskError] = useState<string>();
-  const { data, error, reload } = usePoll(
+  const read = usePoll(
     (): Promise<BootLog> => {
       if (asking.current) {
         asking.current = false;
@@ -30,6 +30,7 @@ export function BootLogDialog({
     },
     (shown) => (shown?.asked === false ? pollIdle : pollRunning),
   );
+  const { data, reload } = read;
   const readAgain = async (): Promise<void> => {
     setAskError(undefined);
     try {
@@ -61,7 +62,7 @@ export function BootLogDialog({
         </>
       }
     >
-      <ErrorBox message={error} />
+      <ReadError read={read} />
       <ErrorBox message={askError} />
       {data?.asked === true && <p className="muted">Reading…</p>}
       {log !== undefined && <p className="muted">Read {new Date(log.read).toLocaleString()}</p>}

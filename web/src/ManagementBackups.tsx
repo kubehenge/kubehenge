@@ -270,7 +270,8 @@ function Summary({
 }
 
 function Snapshots({ running }: { running: boolean }): JSX.Element {
-  const { data: v, error } = usePoll(api.managementSnapshots, pollIdle);
+  const read = usePoll(api.managementSnapshots, pollIdle);
+  const { data: v, error } = read;
   const [restoring, setRestoring] = useState<EtcdSnapshot>();
   const [recreating, setRecreating] = useState<EtcdSnapshot>();
   const list = v?.snapshots ?? [];
@@ -282,7 +283,8 @@ function Snapshots({ running }: { running: boolean }): JSX.Element {
   return (
     <div className="box scroll">
       <h3>Snapshots in the target</h3>
-      <ErrorBox message={error ?? v?.error} />
+      <ReadError read={read} />
+      <ErrorBox message={v?.error} />
       <table className="grid stack">
         <thead>
           <tr>

@@ -18,7 +18,7 @@ import {
 import { ApiError, api, referenceMark } from "./api";
 import { keepCache } from "./poll-cache";
 import { useStaging } from "./staging-context";
-import type { ChangeRequest, Cluster } from "./types";
+import type { ChangeRequest, Cluster, ClusterClass } from "./types";
 
 // minPassphrase is the fewest characters the appliance takes for the state passphrase.
 export const minPassphrase = 16;
@@ -175,6 +175,13 @@ export interface Kept<T> {
 
 /** pollCache is a cache of one kind of answer, for usePoll's kept. */
 export const pollCache = <T,>(): Map<string, T> => keepCache(new Map<string, T>());
+
+const classesCache = pollCache<ClusterClass[]>();
+
+/** useClasses reads the clusters' classes, one answer for every view that needs them. */
+export function useClasses(): Poll<ClusterClass[]> {
+  return usePoll(api.classes, pollIdle, { cache: classesCache, key: "" });
+}
 
 export function usePoll<T>(
   load: () => Promise<T>,
@@ -626,26 +633,13 @@ export interface SiteZone {
  * answered, so that a form never starts in a zone it has to leave.
  */
 export function useSiteZone(): SiteZone | undefined {
-  const [zone, setZone] = useState<SiteZone>();
-  useEffect(() => {
-    let current = true;
-    async function load(): Promise<void> {
-      let zoneRead = "";
-      try {
-        zoneRead = siteZoneOf(await api.classes());
-      } catch {
-        // The browser's zone serves where the classes cannot be read.
-      }
-      if (current) {
-        setZone({ start: zoneRead || browserZone(), inEffect: zoneRead || "UTC" });
-      }
-    }
-    void load();
-    return () => {
-      current = false;
-    };
-  }, []);
-  return zone;
+  const { data, error } = useClasses();
+  if (data === undefined && error === undefined) {
+    return undefined;
+  }
+  // The browser's zone serves where the classes cannot be read, and the forms show that read's error.
+  const zoneRead = data === undefined ? "" : siteZoneOf(data);
+  return { start: zoneRead || browserZone(), inEffect: zoneRead || "UTC" };
 }
 
 /** timeZones lists the IANA time zones, with UTC and the current one, which the browser may not list. */

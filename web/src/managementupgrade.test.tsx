@@ -38,6 +38,8 @@ const administrationPage = (setup: unknown): Record<string, Route> => ({
   },
   "GET /api/templates": { body: { templates: [] } },
   "GET /api/runs": { body: [] },
+  "GET /api/clusters": { body: [] },
+  "GET /api/fleet/health": { body: [] },
 });
 
 describe("the management cluster behind the appliance", () => {
