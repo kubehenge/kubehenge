@@ -1100,9 +1100,9 @@ func anchorCopy(p *x509.Certificate, name []byte, chain, anchors []*x509.Certifi
 	anchor, err := reissued(p, func(fields []asn1.RawValue, subject int) error {
 		fields[subject-2], fields[subject] = asn1.RawValue{FullBytes: name}, asn1.RawValue{FullBytes: name}
 		if notAfter.Before(p.NotAfter) {
-			validity, err := endingAt(fields[subject-1], notAfter)
-			if err != nil {
-				return err
+			validity, clampErr := endingAt(fields[subject-1], notAfter)
+			if clampErr != nil {
+				return clampErr
 			}
 			fields[subject-1] = validity
 		}
