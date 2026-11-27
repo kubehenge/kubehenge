@@ -192,13 +192,13 @@ func TestSpecSecretsRecordsTheLabelledSecretsOfEachCluster(t *testing.T) {
 		t.Fatalf("recorded %q, %v", names, err)
 	}
 	// A label taken off goes from the record, and a cluster with none keeps an empty one.
-	if err := kube.Delete(t.Context(), labelled("web-a", "web")); err != nil {
+	if err = kube.Delete(t.Context(), labelled("web-a", "web")); err != nil {
 		t.Fatal(err)
 	}
-	if err := kube.Delete(t.Context(), labelled("web-b", "web")); err != nil {
+	if err = kube.Delete(t.Context(), labelled("web-b", "web")); err != nil {
 		t.Fatal(err)
 	}
-	if err := record.RunOnce(t.Context()); err != nil {
+	if err = record.RunOnce(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if names, err = SpecSecretNames(t.Context(), kube, c); err != nil || len(names) != 0 {
