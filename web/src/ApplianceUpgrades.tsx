@@ -26,6 +26,9 @@ const pollReleases = 60_000;
 
 const hoursPerDay = 24;
 
+// Kubehenge outside the appliance answers not found, for good: nothing there upgrades it.
+const httpNotFound = 404;
+
 // series names the releases a policy follows from an installed version: 0.1.x, or 0.x.
 function series(version: string, policy: "patch" | "minor"): string {
   const [major, minor] = version.replace(/^v/u, "").split(".");
@@ -54,7 +57,7 @@ export function ApplianceUpgrades(): JSX.Element {
     return (
       <div className="box">
         <h3>Kubehenge</h3>
-        <ReadError read={read} />
+        {read.errorStatus === httpNotFound ? <ErrorBox message={error} /> : <ReadError read={read} />}
         {!filled(error) && <Skeleton rows={2} />}
       </div>
     );

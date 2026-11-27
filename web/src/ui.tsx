@@ -555,7 +555,8 @@ export function ReadError({
   read,
   readAt,
 }: {
-  read: { error: string | undefined; next: () => number; reload: () => Promise<void> };
+  /** next is when a poll reads again by itself. A read made once has none, so only Try now is offered. */
+  read: { error: string | undefined; next?: () => number; reload: () => Promise<void> };
   readAt?: string | undefined;
 }): JSX.Element | null {
   if (read.error === undefined) {
@@ -570,14 +571,117 @@ export function ReadError({
             Stale, read at {new Date(readAt).toLocaleTimeString()}
           </span>
         )}
-        <RetryIn
-          next={read.next}
-          onRetry={() => {
-            void read.reload();
-          }}
-        />
+        {read.next === undefined ? (
+          <button
+            type="button"
+            onClick={() => {
+              void read.reload();
+            }}
+          >
+            Try now
+          </button>
+        ) : (
+          <RetryIn
+            next={read.next}
+            onRetry={() => {
+              void read.reload();
+            }}
+          />
+        )}
       </div>
     </div>
+  );
+}
+
+/** Once is a read made once, and again on request, for what a form needs one answer of rather than a poll. */
+export interface Once<T> {
+  data: T | undefined;
+  error: string | undefined;
+  reload: () => Promise<void>;
+}
+
+/**
+ * useOnce reads once, and again when reload is called. An answer to an earlier ask is dropped, so a
+ * slow one cannot replace a later one.
+ */
+export function useOnce<T>(load: () => Promise<T>): Once<T> {
+  const [data, setData] = useState<T>();
+  const [error, setError] = useState<string>();
+  const loadRef = useRef(load);
+  useLayoutEffect(() => {
+    loadRef.current = load;
+  });
+  const asked = useRef(0);
+  const reload = useCallback(async () => {
+    const n = ++asked.current;
+    try {
+      const d = await loadRef.current();
+      if (n === asked.current) {
+        setData(d);
+        setError(undefined);
+      }
+    } catch (err) {
+      if (n === asked.current) {
+        setError(errorMessage(err));
+      }
+    }
+  }, []);
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+  return { data, error, reload };
+}
+
+/**
+ * ReadDialog is a dialog whose form is made from what a read answered. Until it answers, the
+ * dialog shows the read's loading look, or its error with a retry, and offers no save, so that no
+ * form starts from a value it had to guess.
+ */
+export function ReadDialog<T>({
+  title,
+  read,
+  onClose,
+  children,
+}: {
+  title: string;
+  read: Pick<Poll<T>, "data" | "error" | "reload"> & { next?: () => number };
+  onClose: () => void;
+  children: (data: T) => JSX.Element;
+}): JSX.Element {
+  if (read.data !== undefined) {
+    return children(read.data);
+  }
+  return (
+    <Dialog
+      title={title}
+      onClose={onClose}
+      actions={
+        <button type="button" onClick={onClose}>
+          Cancel
+        </button>
+      }
+    >
+      {read.error === undefined ? <Skeleton rows={3} /> : <ReadError read={read} />}
+    </Dialog>
+  );
+}
+
+/**
+ * ReadSection is a part of a page made from what a read answered: the read's loading look until it
+ * answers, its error with a retry when it fails, and what it shows once it has.
+ */
+export function ReadSection<T>({
+  read,
+  children,
+}: {
+  read: Pick<Poll<T>, "data" | "error" | "reload" | "next">;
+  children: (data: T) => ReactNode;
+}): JSX.Element {
+  return (
+    <>
+      <ReadError read={read} />
+      {read.data === undefined ? read.error === undefined && <Skeleton rows={4} /> : children(read.data)}
+    </>
   );
 }
 
@@ -628,18 +732,10 @@ export interface SiteZone {
   inEffect: string;
 }
 
-/**
- * useSiteZone reads the site time zone from the server. It is undefined until the server has
- * answered, so that a form never starts in a zone it has to leave.
- */
-export function useSiteZone(): SiteZone | undefined {
-  const { data, error } = useClasses();
-  if (data === undefined && error === undefined) {
-    return undefined;
-  }
-  // The browser's zone serves where the classes cannot be read, and the forms show that read's error.
-  const zoneRead = data === undefined ? "" : siteZoneOf(data);
-  return { start: zoneRead || browserZone(), inEffect: zoneRead || "UTC" };
+/** siteZone is the site time zone the classes carry, for schedules. */
+export function siteZone(classes: ClusterClass[]): SiteZone {
+  const zone = siteZoneOf(classes);
+  return { start: zone || browserZone(), inEffect: zone || "UTC" };
 }
 
 /** timeZones lists the IANA time zones, with UTC and the current one, which the browser may not list. */

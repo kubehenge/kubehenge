@@ -18,7 +18,8 @@ import {
   age,
   browserZone,
   type SiteZone,
-  useSiteZone,
+  siteZone,
+  ReadDialog,
   errorMessage,
   filled,
   pollCache,
@@ -571,23 +572,37 @@ export function backupsRows(c: Cluster, offered: boolean): OptionRow<"backups">[
 }
 
 /** BackupsDialog switches a cluster's backups on or off and changes how they run. */
-export function BackupsDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element | null {
-  const zone = useSiteZone();
-  return zone === undefined ? null : <BackupsForm cluster={c} zone={zone} onClose={onClose} />;
+export function BackupsDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+  const read = useClasses();
+  return (
+    <ReadDialog title="Edit backups" read={read} onClose={onClose}>
+      {(classes) => (
+        <BackupsForm
+          cluster={c}
+          zone={siteZone(classes)}
+          targets={classTargets(classes.find((x) => x.name === c.class))}
+          classesRead={read}
+          onClose={onClose}
+        />
+      )}
+    </ReadDialog>
+  );
 }
 
 function BackupsForm({
   cluster: c,
   zone,
+  targets,
+  classesRead,
   onClose,
 }: {
   cluster: Cluster;
   zone: SiteZone;
+  targets: OfferedTarget[];
+  classesRead: Poll<ClusterClass[]>;
   onClose: () => void;
 }): JSX.Element {
   const current = backupsOf(c.variables["backups"]);
-  const { targets: offered, read: classesRead } = useClassTargets(c.class);
-  const targets = offered ?? [];
   const [enabled, setEnabled] = useState(current.enabled);
   const [typed, setTyped] = useState<BackupFields>(() => backupFieldsOf(current, zone.start, zone.inEffect));
   const { busy, error, send } = useChange(c, onClose);
@@ -604,7 +619,7 @@ function BackupsForm({
     ? backupsVariable(backupFieldsOf(current), current.existingSecret)
     : current;
   const changed = JSON.stringify(next) !== JSON.stringify(before);
-  const none = offered !== undefined && targets.length === 0 && !current.enabled;
+  const none = targets.length === 0 && !current.enabled;
   return (
     <Dialog
       title="Edit backups"
@@ -701,6 +716,9 @@ function readersOf(c: Cluster, clusters: Cluster[] | null | undefined): string[]
     .toSorted();
 }
 
+// unreadBackups is why nothing is done with the backups while their read fails.
+const unreadBackups = "Backups not read.";
+
 /** BackupsView lists a cluster's backups and restores, and starts either. */
 export function BackupsView({
   cluster: c,
@@ -752,7 +770,7 @@ export function BackupsView({
 
   const refused = refusals(v, poolName(c.pool));
   const { noRestore, noDelete } = refused;
-  const noBackUp = error === undefined ? refused.noBackUp : "Backups not read.";
+  const noBackUp = error === undefined ? refused.noBackUp : unreadBackups;
   const backUp = async (): Promise<void> => {
     setBusy(true);
     setActionError(undefined);
@@ -809,6 +827,7 @@ export function BackupsView({
         backups={own}
         noRestore={noRestore}
         noDelete={noDelete}
+        unread={error !== undefined}
         onRestore={setRestoring}
         onDelete={setDeleting}
       />
@@ -819,6 +838,7 @@ export function BackupsView({
           view={v}
           backups={v.backups.filter((b) => b.from === s.cluster)}
           noRestore={noRestore}
+          unread={error !== undefined}
           onRestore={setRestoring}
         />
       ))}
@@ -953,6 +973,7 @@ function BackupsTable({
   backups,
   noRestore,
   noDelete,
+  unread,
   onRestore,
   onDelete,
 }: {
@@ -961,10 +982,15 @@ function BackupsTable({
   backups: BackupRun[];
   noRestore: string | undefined;
   noDelete?: string | undefined;
+  /** The list's last read failed, so what it shows may be gone: none of it is restored or deleted. */
+  unread: boolean;
   onRestore: (backup: BackupRun) => void;
   /** Unset for another cluster's backups, which are deleted where they are made. */
   onDelete?: (backup: BackupRun) => void;
 }): JSX.Element {
+  // why says why a backup's button is off: the list unread, the cluster's refusal, or the backup unfinished.
+  const why = (refusal: string | undefined, done: boolean): string | undefined =>
+    unread ? unreadBackups : (refusal ?? (done ? undefined : "Backup not finished"));
   return (
     <div className="box scroll">
       <h3>{title}</h3>
@@ -1021,8 +1047,8 @@ function BackupsTable({
                 <td className="row-action">
                   <button
                     type="button"
-                    disabled={!v.canRestore || !restorable(b) || b.deleting === true}
-                    title={noRestore ?? (restorable(b) ? undefined : "Backup not finished")}
+                    disabled={unread || !v.canRestore || !restorable(b) || b.deleting === true}
+                    title={why(noRestore, restorable(b))}
                     aria-label={`Restore ${b.name}`}
                     onClick={() => onRestore(b)}
                   >
@@ -1034,8 +1060,10 @@ function BackupsTable({
                       <button
                         type="button"
                         className="danger"
-                        disabled={!mayDelete}
-                        title={noDelete ?? (deletable(b) ? undefined : "Backup not finished")}
+                        disabled={unread || !mayDelete}
+                        title={
+                          unread ? unreadBackups : (noDelete ?? (deletable(b) ? undefined : "Backup not finished"))
+                        }
                         aria-label={`Delete ${b.name}`}
                         onClick={() => onDelete(b)}
                       >

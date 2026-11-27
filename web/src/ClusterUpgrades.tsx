@@ -1,6 +1,6 @@
 import { useState, type JSX } from "react";
 
-import type { Cluster } from "./types";
+import type { Cluster, ClusterClass } from "./types";
 import {
   Dialog,
   ErrorBox,
@@ -13,8 +13,10 @@ import {
   timeZones,
   useChange,
   useClasses,
-  useSiteZone,
+  ReadDialog,
+  siteZone,
   weekdays,
+  type Poll,
 } from "./ui";
 import { oneOf, quantities, quantity, record, text, texts } from "./values";
 
@@ -104,6 +106,10 @@ export function ModeSelect({
   );
 }
 
+/** inZone is a policy whose window names the zone it runs in: its own, else zone, the site's. */
+export const inZone = (p: UpgradePolicy, zone: string | undefined): UpgradePolicy =>
+  zone === undefined ? p : { ...p, window: { ...p.window, timeZone: p.window?.timeZone ?? zone } };
+
 // describe says in words when a policy upgrades a cluster, and moves its nodes to new template
 // builds, or Talos patch releases, when nodeImages says the cluster's nodes may be.
 export function describe(p: UpgradePolicy, nodeImages = false, distribution = ""): string {
@@ -192,21 +198,26 @@ function policyOf(f: PolicyFields): UpgradePolicy {
   return { mode: f.mode, ...off, window };
 }
 
-export function UpgradesDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element | null {
-  const zone = useSiteZone();
-  return zone === undefined ? null : <UpgradesForm cluster={c} zone={zone} onClose={onClose} />;
+export function UpgradesDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+  const read = useClasses();
+  return (
+    <ReadDialog title="Edit automatic upgrades" read={read} onClose={onClose}>
+      {(classes) => <UpgradesForm cluster={c} zone={siteZone(classes)} classesRead={read} onClose={onClose} />}
+    </ReadDialog>
+  );
 }
 
 function UpgradesForm({
   cluster: c,
   zone,
+  classesRead,
   onClose,
 }: {
   cluster: Cluster;
   zone: SiteZone;
+  classesRead: Poll<ClusterClass[]>;
   onClose: () => void;
 }): JSX.Element {
-  const classesRead = useClasses();
   const initial = fieldsOf(upgradePolicy(c.variables["upgrades"]), zone.start, zone.inEffect);
   const talos = c.distribution === "talos";
   const [mode, setMode] = useState<UpgradeMode>(initial.mode);

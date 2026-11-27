@@ -28,6 +28,7 @@ import {
   Dialog,
   ErrorBox,
   ReadError,
+  ReadSection,
   Said,
   Status,
   Field,
@@ -668,10 +669,9 @@ function OptionsView({
     },
   ];
   return (
-    <>
-      <ReadError read={classesRead} />
-      <Options cluster={c} staged={staged} can={can} onEdit={onEdit} more={more} />
-    </>
+    <ReadSection read={classesRead}>
+      {() => <Options cluster={c} staged={staged} can={can} onEdit={onEdit} more={more} />}
+    </ReadSection>
   );
 }
 

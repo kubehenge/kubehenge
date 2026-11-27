@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type JSX } from "react";
+import { useId, useState, type JSX } from "react";
 
 import { api, etcdSnapshotURL } from "./api";
 import {
@@ -9,7 +9,7 @@ import {
   scheduleText,
   targetProblem,
   TargetScheduleFields,
-  useClassTargets,
+  classTargets,
   volumeName,
   volumeTarget,
   type OfferedTarget,
@@ -17,7 +17,14 @@ import {
 import type { OptionRow } from "./ClusterOptions";
 import { CredentialField } from "./CredentialField";
 import { RemovedSnapshots } from "./RemovedSnapshots";
-import type { Cluster, ClusterEtcdSnapshots, EtcdRestorePlan, EtcdRestoreStatus, EtcdSnapshot } from "./types";
+import type {
+  Cluster,
+  ClusterClass,
+  ClusterEtcdSnapshots,
+  EtcdRestorePlan,
+  EtcdRestoreStatus,
+  EtcdSnapshot,
+} from "./types";
 import {
   Detail,
   Dialog,
@@ -29,7 +36,11 @@ import {
   age,
   browserZone,
   type SiteZone,
-  useSiteZone,
+  siteZone,
+  ReadDialog,
+  useClasses,
+  useOnce,
+  type Poll,
   bytes,
   distributionName,
   errorMessage,
@@ -261,29 +272,37 @@ export function EtcdSnapshotFieldset({
 }
 
 /** EtcdSnapshotsDialog switches a cluster's etcd snapshots on or off and changes how they run. */
-export function EtcdSnapshotsDialog({
-  cluster: c,
-  onClose,
-}: {
-  cluster: Cluster;
-  onClose: () => void;
-}): JSX.Element | null {
-  const zone = useSiteZone();
-  return zone === undefined ? null : <EtcdSnapshotsForm cluster={c} zone={zone} onClose={onClose} />;
+export function EtcdSnapshotsDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+  const read = useClasses();
+  return (
+    <ReadDialog title="Edit etcd snapshots" read={read} onClose={onClose}>
+      {(classes) => (
+        <EtcdSnapshotsForm
+          cluster={c}
+          zone={siteZone(classes)}
+          targets={classTargets(classes.find((x) => x.name === c.class))}
+          classesRead={read}
+          onClose={onClose}
+        />
+      )}
+    </ReadDialog>
+  );
 }
 
 function EtcdSnapshotsForm({
   cluster: c,
   zone,
+  targets,
+  classesRead,
   onClose,
 }: {
   cluster: Cluster;
   zone: SiteZone;
+  targets: OfferedTarget[];
+  classesRead: Poll<ClusterClass[]>;
   onClose: () => void;
 }): JSX.Element {
   const current = etcdSnapshotsOf(c.variables["etcdSnapshots"]);
-  const { targets: offered, read: classesRead } = useClassTargets(c.class);
-  const targets = offered ?? [];
   const [enabled, setEnabled] = useState(current.enabled);
   const [typed, setTyped] = useState<EtcdSnapshotFields>(() => etcdFieldsOf(current, zone.start, zone.inEffect));
   const { busy, error, send } = useChange(c, onClose);
@@ -762,18 +781,8 @@ export function EtcdRestoreDialog({
 // RestoreSteps lists the commands that restore the cluster by hand, for a management cluster whose
 // controller does not reach the VMs' guest agent.
 function RestoreSteps({ cluster: c, snapshot }: { cluster: Cluster; snapshot: EtcdSnapshot }): JSX.Element {
-  const [plan, setPlan] = useState<EtcdRestorePlan>();
-  const [error, setError] = useState<string>();
-  useEffect(() => {
-    async function load(): Promise<void> {
-      try {
-        setPlan(await api.etcdRestorePlan(c.namespace, c.name, snapshot.name));
-      } catch (err) {
-        setError(errorMessage(err));
-      }
-    }
-    void load();
-  }, [c.namespace, c.name, snapshot.name]);
+  const read = useOnce(async (): Promise<EtcdRestorePlan> => api.etcdRestorePlan(c.namespace, c.name, snapshot.name));
+  const { data: plan, error } = read;
   return (
     <div className="restore-steps">
       <p>
@@ -789,7 +798,7 @@ function RestoreSteps({ cluster: c, snapshot }: { cluster: Cluster; snapshot: Et
           like an admin kubeconfig.
         </span>
       </p>
-      <ErrorBox message={error} />
+      <ReadError read={read} />
       {plan === undefined && !filled(error) && <Skeleton rows={2} />}
       {plan !== undefined && <PlanSteps plan={plan} />}
     </div>

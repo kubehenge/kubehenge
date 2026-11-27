@@ -428,11 +428,12 @@ const unread = (failed: boolean): Standing => ({
   verdict: failed ? "Unknown" : "Loading…",
 });
 
-// standingIn is standing in the fleet, where a missing health read leaves a well cluster unknown.
+// standingIn is standing in the fleet, where a missing health read leaves a well cluster unknown. A
+// cluster that a health answer left out is not being read: it stays unknown until one names it.
 function standingIn(c: Cluster, health: Map<string, FleetHealth> | undefined, failed: boolean): Standing {
   const found = health?.get(fleetKey(c));
   const s = standing(c, found);
-  return found === undefined && s.group === "healthy" ? unread(failed) : s;
+  return found === undefined && s.group === "healthy" ? unread(failed || health !== undefined) : s;
 }
 
 /** ranked is the fleet in the rail's order: by group, the worst first within it, then by name. */
@@ -517,7 +518,7 @@ export function FleetRail({
       {list !== undefined &&
         groups.map((g) => {
           const { group } = g;
-          const label = groupLabel(g, failed);
+          const label = groupLabel(g, failed || fleet?.health !== undefined);
           const members = list.filter((m) => m.standing.group === group);
           if (members.length === 0) {
             return null;

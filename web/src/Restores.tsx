@@ -19,7 +19,19 @@ import {
 import { clusterPath } from "./cluster-paths";
 import { Link } from "./router";
 import type { BackupRun, Cluster, ClusterBackups, RestoreMessages, RestoreResults, RestoreRun } from "./types";
-import { Dialog, ErrorBox, Field, Status, errorMessage, filled, Said, saveFile, sentence } from "./ui";
+import {
+  Dialog,
+  ErrorBox,
+  Field,
+  ReadError,
+  Status,
+  errorMessage,
+  filled,
+  Said,
+  saveFile,
+  sentence,
+  useOnce,
+} from "./ui";
 
 /** SpecExport downloads a cluster's spec, which is also kept in the management backups' target. */
 export function SpecExport({ cluster: c }: { cluster: Cluster }): JSX.Element {
@@ -209,27 +221,8 @@ export function ResultsDialog({
   restore: RestoreRun;
   onClose: () => void;
 }): JSX.Element {
-  const [results, setResults] = useState<RestoreResults>();
-  const [error, setError] = useState<string>();
-  useEffect(() => {
-    let current = true;
-    async function load(): Promise<void> {
-      try {
-        const read = await api.restoreResults(c.namespace, c.name, restore.name);
-        if (current) {
-          setResults(read);
-        }
-      } catch (err) {
-        if (current) {
-          setError(errorMessage(err));
-        }
-      }
-    }
-    void load();
-    return () => {
-      current = false;
-    };
-  }, [c.namespace, c.name, restore.name]);
+  const read = useOnce(async (): Promise<RestoreResults> => api.restoreResults(c.namespace, c.name, restore.name));
+  const { data: results, error } = read;
   return (
     <Dialog
       title={`Results of ${restore.name}`}
@@ -248,7 +241,7 @@ export function ResultsDialog({
           <MessagesTable title="Warnings" messages={results.warnings} />
         </>
       )}
-      <ErrorBox message={error} />
+      <ReadError read={read} />
     </Dialog>
   );
 }

@@ -68,13 +68,14 @@ describe("what a page shows of a failed or pending read, once more", () => {
     expect(screen.queryByText("Reachable")).not.toBeInTheDocument();
   });
 
-  it("calls a cluster unknown that the last health answer left out, once reading it again fails", async () => {
+  it("calls a cluster unknown that the last health answer left out, and once reading it again fails", async () => {
     window.history.replaceState(null, "", "/");
     const routes: Record<string, Route> = { ...signedIn, "GET /api/fleet/health": { body: [] } };
     fakeServer(routes);
     render(<App />);
     const main = within(await screen.findByRole("main"));
-    await main.findByRole("row", { name: /^web.*Loading/u });
+    await expect(main.findByRole("row", { name: /^web.*Unknown/u })).resolves.toBeInTheDocument();
+    expect(main.queryByText("Loading…")).not.toBeInTheDocument();
     routes["GET /api/fleet/health"] = unreadable;
     await readAgain();
     await expect(main.findByRole("row", { name: /^web.*Unknown/u })).resolves.toBeInTheDocument();
@@ -114,13 +115,14 @@ describe("what a page shows of a failed or pending read, once more", () => {
     await expect(main.findByRole("cell", { name: "Unknown" })).resolves.toBeInTheDocument();
   });
 
-  it("shows a failed read of the classes, and keeps the options it would have offered", async () => {
+  it("shows a failed read of the classes in place of the options, with a retry", async () => {
     window.history.replaceState(null, "", "/clusters/default/web/options");
     fakeServer({ ...signedIn, "GET /api/classes": unreadable });
     render(<App />);
     const main = within(await screen.findByRole("main"));
-    await expect(main.findByRole("row", { name: /^Backups/u })).resolves.toBeInTheDocument();
     await expect(tryNow(main)).resolves.toBeInTheDocument();
+    expect(main.queryByRole("row", { name: /^Release mirror/u })).not.toBeInTheDocument();
+    expect(main.queryByRole("row", { name: /^Backups/u })).not.toBeInTheDocument();
   });
 
   it("shows a failed setup read on Administration with a retry, never as no right to it", async () => {

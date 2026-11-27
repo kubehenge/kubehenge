@@ -8,12 +8,13 @@ import {
   ErrorBox,
   Field,
   Info,
+  ReadError,
   Status,
-  errorMessage,
   filled,
   stageLabel,
   useChange,
   useClasses,
+  useOnce,
 } from "./ui";
 import { flag, record, texts } from "./values";
 
@@ -60,6 +61,8 @@ export function placeProblem(p: Place): string | undefined {
 export interface HARulesRead {
   haRules: HARules | undefined;
   haRulesError: string | undefined;
+  /** Reads the rules again, after a failure. */
+  reload?: () => Promise<void>;
 }
 
 /**
@@ -67,19 +70,8 @@ export interface HARulesRead {
  * on nodes chosen, so a failure shows only where the rules would be offered.
  */
 export function useHARules(): HARulesRead {
-  const [haRules, setHARules] = useState<HARules>();
-  const [haRulesError, setHARulesError] = useState<string>();
-  useEffect(() => {
-    async function load(): Promise<void> {
-      try {
-        setHARules(await api.haRules());
-      } catch (err) {
-        setHARulesError(errorMessage(err));
-      }
-    }
-    void load();
-  }, []);
-  return { haRules, haRulesError };
+  const { data, error, reload } = useOnce(api.haRules);
+  return { haRules: data, haRulesError: error, reload };
 }
 
 // ruleLabel names a rule with what it keeps the cluster to.
@@ -87,12 +79,22 @@ const ruleLabel = (r: HARule): string =>
   `${r.rule}${filled(r.comment) ? ` (${r.comment})` : ""}: ${r.allowed.join(", ")}${r.strict === true ? ", strict" : ""}`;
 
 // rulesHint says why no HA rule can be chosen. A read failure's message sits behind Detail.
-function rulesHint({ haRules, haRulesError }: HARulesRead): JSX.Element | undefined {
+function rulesHint({ haRules, haRulesError, reload }: HARulesRead): JSX.Element | undefined {
   if (filled(haRulesError)) {
     return (
       <>
         Couldn&apos;t read the HA rules
         <Detail>{haRulesError}</Detail>
+        {reload !== undefined && (
+          <button
+            type="button"
+            onClick={() => {
+              void reload();
+            }}
+          >
+            Try now
+          </button>
+        )}
       </>
     );
   }
@@ -106,6 +108,9 @@ function rulesHint({ haRules, haRulesError }: HARulesRead): JSX.Element | undefi
 }
 
 const noNodes: string[] = [];
+
+// While the nodes are not read, only the cluster's own are offered.
+const noPveNodes: PveNode[] = [];
 
 /** nodeNote says after a node's name why it cannot take VMs: down, or a member whose forwarded calls fail. */
 export const nodeNote = (n: PveNode): string => {
@@ -326,20 +331,10 @@ export function PlacementDialog({ cluster: c, onClose }: { cluster: Cluster; onC
   const kept = texts(c.variables["allowedNodes"]);
   const initial = placeOf(kept);
   const [value, setValue] = useState(initial);
-  const [nodes, setNodes] = useState<PveNode[]>([]);
-  const [nodesError, setNodesError] = useState<string>();
+  const nodesRead = useOnce(api.nodes);
+  const nodes = nodesRead.data ?? noPveNodes;
   const rules = useHARules();
   const { busy, error, send } = useChange(c, onClose);
-  useEffect(() => {
-    async function load(): Promise<void> {
-      try {
-        setNodes(await api.nodes());
-      } catch (err) {
-        setNodesError(errorMessage(err));
-      }
-    }
-    void load();
-  }, []);
   const problem = placeProblem(value);
   const next = allowedNodes(value) ?? null;
   const changed = JSON.stringify(next) !== JSON.stringify(allowedNodes(initial) ?? null);
@@ -371,7 +366,8 @@ export function PlacementDialog({ cluster: c, onClose }: { cluster: Cluster; onC
         rules={rules}
         framed={false}
       />
-      <ErrorBox message={nodesError ?? error} />
+      <ReadError read={nodesRead} />
+      <ErrorBox message={error} />
     </Dialog>
   );
 }

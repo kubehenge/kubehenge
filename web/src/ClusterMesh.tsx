@@ -1,8 +1,8 @@
-import { Fragment, useEffect, useState, type JSX } from "react";
+import { Fragment, useState, type JSX } from "react";
 
 import { api } from "./api";
 import type { Cluster, MeshPeer } from "./types";
-import { Detail, Dialog, ErrorBox, Info, Skeleton, errorMessage, filled, stageLabel, useChange } from "./ui";
+import { Detail, Dialog, ErrorBox, Info, ReadError, Skeleton, filled, stageLabel, useChange, useOnce } from "./ui";
 import { flag, record, text, texts } from "./values";
 
 /** A cluster's clusterMesh variable. */
@@ -58,18 +58,8 @@ export function MeshPeersField({
   standing?: MeshPeer[] | undefined;
   onChange: (peers: string[]) => void;
 }): JSX.Element {
-  const [clusters, setClusters] = useState<Cluster[]>();
-  const [error, setError] = useState<string>();
-  useEffect(() => {
-    async function load(): Promise<void> {
-      try {
-        setClusters(await api.clusters());
-      } catch (err) {
-        setError(errorMessage(err));
-      }
-    }
-    void load();
-  }, []);
+  const read = useOnce(api.clusters);
+  const { data: clusters, error } = read;
   const others = (clusters ?? []).filter((c) => c.namespace === namespace && c.name !== self && runsCilium(c));
   const names = [...new Set([...others.map((c) => c.name), ...value])].toSorted();
   return (
@@ -96,7 +86,7 @@ export function MeshPeersField({
           </Fragment>
         );
       })}
-      <ErrorBox message={error} />
+      <ReadError read={read} />
     </fieldset>
   );
 }

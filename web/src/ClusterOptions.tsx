@@ -4,7 +4,7 @@ import { AlertingFields, alertingOf, alertingText, alertingVariable, type Alerti
 import { api } from "./api";
 import { CertificatesDialog, certificatesOf, certificatesText } from "./Certificates";
 import { ClusterMeshDialog, meshText, runsCilium } from "./ClusterMesh";
-import { UpgradesDialog, describe, refreshesNodes, upgradePolicy } from "./ClusterUpgrades";
+import { UpgradesDialog, describe, inZone, refreshesNodes, upgradePolicy } from "./ClusterUpgrades";
 import { CredentialField } from "./CredentialField";
 import { csiOn, csiWith, snapshotsOn, useCSIOffer, useSnapshotsOffer } from "./CsiPlugin";
 import { EgressDialog, egressOf, egressText } from "./EgressProxy";
@@ -68,7 +68,9 @@ import {
   snapshotsText,
   stageLabel,
   useChange,
-  Skeleton,
+  ReadDialog,
+  siteZone,
+  useClasses,
 } from "./ui";
 import { flag, record, text, texts } from "./values";
 import { VMIDRangeDialog, vmIDRangeOf, vmIDRangeText, vmIDVariable } from "./VmidRange";
@@ -225,6 +227,8 @@ export interface Offered {
   snapshotsProblem?: string | undefined;
   /** The management cluster's release mirror, empty for GitHub, undefined while unknown. */
   releaseMirror?: string | undefined;
+  /** The zone an upgrade window naming none runs in, UTC while unknown. */
+  zone?: string | undefined;
 }
 
 /** everything offers every setting, for a list that has to show whatever a change sets. */
@@ -240,7 +244,9 @@ export function useOffered(c: Cluster): Offered {
   const snapshots = useSnapshotsOffer(c);
   const haGroups = useHAGroupsOffered(c);
   const releaseMirror = useReleaseMirrorDefault(c.class);
+  const classes = useClasses().data;
   return {
+    zone: classes === undefined ? undefined : siteZone(classes).inEffect,
     ha,
     csi: csi.offered,
     snapshots: snapshots.offered,
@@ -493,7 +499,7 @@ export function optionRows<A extends string = never>(
     },
     {
       label: "Automatic upgrades",
-      value: describe(upgrades, refreshesNodes(upgrades), c.distribution),
+      value: describe(inZone(upgrades, offered.zone), refreshesNodes(upgrades), c.distribution),
       group: "Maintenance",
       action: "upgrades",
       name: "automatic upgrades",
@@ -702,31 +708,29 @@ function nodeOSNote(o: NodeOSChoice, oses: NodeOSChoice[], c: Cluster): string |
 }
 
 function NodeOSDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
+  const read = useClasses();
+  return (
+    <ReadDialog title="Edit node OS" read={read} onClose={onClose}>
+      {(classes) => (
+        <NodeOSForm cluster={c} oses={classes.find((x) => x.name === c.class)?.nodeOSes ?? []} onClose={onClose} />
+      )}
+    </ReadDialog>
+  );
+}
+
+function NodeOSForm({
+  cluster: c,
+  oses,
+  onClose,
+}: {
+  cluster: Cluster;
+  oses: NodeOSChoice[];
+  onClose: () => void;
+}): JSX.Element {
   const running = c.nodeOS === undefined ? "" : nodeOSKey(c.nodeOS);
-  const [oses, setOses] = useState<NodeOSChoice[]>();
-  const [loadError, setLoadError] = useState<string>();
   const [chosen, setChosen] = useState(running);
   const { busy, error, send } = useChange(c, onClose);
   const group = useId();
-  useEffect(() => {
-    let current = true;
-    async function load(): Promise<void> {
-      try {
-        const classes = await api.classes();
-        if (current) {
-          setOses(classes.find((x) => x.name === c.class)?.nodeOSes ?? []);
-        }
-      } catch (err) {
-        if (current) {
-          setLoadError(errorMessage(err));
-        }
-      }
-    }
-    void load();
-    return () => {
-      current = false;
-    };
-  }, [c.class]);
   const os = findNodeOS(oses, chosen);
   return (
     <Dialog
@@ -753,38 +757,34 @@ function NodeOSDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () =
       }
     >
       <p className="muted">Replaces every node, one at a time.</p>
-      {oses === undefined && !filled(loadError) && <Skeleton rows={2} />}
-      <ErrorBox message={loadError} />
-      {oses !== undefined && (
-        <div role="radiogroup" aria-label="Node OS">
-          {oses.map((o, i) => {
-            const key = nodeOSKey(o);
-            const note = key === running ? undefined : nodeOSNote(o, oses, c);
-            const noteId = `${group}-${i}`;
-            return (
-              <Fragment key={key}>
-                <label className="check">
-                  <input
-                    type="radio"
-                    name={group}
-                    checked={chosen === key}
-                    disabled={key !== running && !movable(o, c)}
-                    aria-describedby={note === undefined ? undefined : noteId}
-                    onChange={() => setChosen(key)}
-                  />{" "}
-                  {o.title}
-                  {key === running && " (running)"}
-                </label>
-                {note !== undefined && (
-                  <p className="hint" id={noteId}>
-                    {note}
-                  </p>
-                )}
-              </Fragment>
-            );
-          })}
-        </div>
-      )}
+      <div role="radiogroup" aria-label="Node OS">
+        {oses.map((o, i) => {
+          const key = nodeOSKey(o);
+          const note = key === running ? undefined : nodeOSNote(o, oses, c);
+          const noteId = `${group}-${i}`;
+          return (
+            <Fragment key={key}>
+              <label className="check">
+                <input
+                  type="radio"
+                  name={group}
+                  checked={chosen === key}
+                  disabled={key !== running && !movable(o, c)}
+                  aria-describedby={note === undefined ? undefined : noteId}
+                  onChange={() => setChosen(key)}
+                />{" "}
+                {o.title}
+                {key === running && " (running)"}
+              </label>
+              {note !== undefined && (
+                <p className="hint" id={noteId}>
+                  {note}
+                </p>
+              )}
+            </Fragment>
+          );
+        })}
+      </div>
       <ErrorBox message={error} />
     </Dialog>
   );

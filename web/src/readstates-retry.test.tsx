@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { ApplianceActivity, ClusterActivity } from "./Activity";
@@ -53,5 +53,20 @@ describe("a retry under every failed read", () => {
     fakeServer({ "GET /api/setup": unreadable });
     render(<Setup />);
     await expect(tryNow()).resolves.toBeInTheDocument();
+  });
+
+  it("says why no template is built while the templates are not read", async () => {
+    fakeServer({ "GET /api/templates": unreadable, "GET /api/release-pins": held().route });
+    render(<Templates />);
+    await expect(screen.findByText("Templates not read.")).resolves.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Build template" })).toBeDisabled();
+  });
+
+  it("offers no retry of the appliance upgrades where Kubehenge runs outside the appliance", async () => {
+    fakeServer({ "GET /api/appliance/upgrades": { status: 404, body: { error: "upgrades need the appliance" } } });
+    render(<ApplianceUpgrades />);
+    const box = within(await screen.findByRole("alert"));
+    expect(box.getByText(/need the appliance/u)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Try now" })).not.toBeInTheDocument();
   });
 });

@@ -39,6 +39,9 @@ import { oneOf } from "./values";
 
 const kubernetesVersion = /^v1\.\d+\.\d+$/u;
 
+// unreadTemplates is why no template is built while the list of them is not read.
+const unreadTemplates = "Templates not read.";
+
 // Templates lists the VM templates clusters are cloned from and builds them with the signed-in
 // administrator's Proxmox VE session.
 export function Templates(): JSX.Element {
@@ -130,10 +133,17 @@ function TemplatesBox(): JSX.Element {
       )}
       {job && <BuildJob job={job} />}
       <div className="actions">
-        <button type="button" className="primary" disabled={!data || building} onClick={() => setCreating(true)}>
+        <button
+          type="button"
+          className="primary"
+          disabled={!data || building}
+          title={!data && filled(read.error) ? unreadTemplates : undefined}
+          onClick={() => setCreating(true)}
+        >
           Build template
         </button>
       </div>
+      {!data && filled(read.error) && <p className="muted">{unreadTemplates}</p>}
       {data && (
         <AutomaticBuilds
           refresh={data.refresh}

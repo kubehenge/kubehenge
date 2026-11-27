@@ -229,7 +229,7 @@ function Clusters({
             .filter((g) => g.group !== "unknown" || (rows.counts.get(g.group) ?? 0) > 0)
             .map((g) => (
               <button key={g.group} type="button" aria-pressed={show === g.group} onClick={() => setShow(g.group)}>
-                {groupLabel(g, failed)}{" "}
+                {groupLabel(g, failed || found !== undefined)}{" "}
                 <span className="count">
                   {found === undefined && (g.group === "needs" || g.group === "healthy")
                     ? unknownCount

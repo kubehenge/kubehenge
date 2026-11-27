@@ -29,10 +29,8 @@ const refOf = (namespace?: string, name?: string): ClusterRef | undefined =>
   namespace === undefined || name === undefined ? undefined : { namespace, name };
 
 /**
- * CredentialField stores, replaces or removes one credential: a cluster's, or with no cluster, the
- * one for every cluster. What is typed goes to the server and never comes back. The field shows
- * only whether one is set, when and by whom, and offers changes only to those who may make them.
- * It is no form of its own, so it sits in a dialog's form without submitting it.
+ * CredentialField is the field of one credential. A field whose purpose or cluster changes, as an
+ * output's does while its name is typed, is another credential's, so it reads that one at once.
  */
 export function CredentialField({
   label,
@@ -42,7 +40,22 @@ export function CredentialField({
   hint,
   status,
   onRead,
-}: {
+}: CredentialFieldProps): JSX.Element {
+  return (
+    <StoredCredentialField
+      key={`${purpose}/${cluster?.namespace ?? ""}/${cluster?.name ?? ""}`}
+      label={label}
+      purpose={purpose}
+      cluster={cluster}
+      keys={keys}
+      hint={hint}
+      status={status}
+      onRead={onRead}
+    />
+  );
+}
+
+interface CredentialFieldProps {
   label: string;
   purpose: string;
   cluster?: ClusterRef | undefined;
@@ -52,7 +65,23 @@ export function CredentialField({
   status?: ReactNode;
   /** Told whether the stored credential was read, for actions that need it. */
   onRead?: ((read: boolean) => void) | undefined;
-}): JSX.Element {
+}
+
+/**
+ * StoredCredentialField stores, replaces or removes one credential: a cluster's, or with no cluster, the
+ * one for every cluster. What is typed goes to the server and never comes back. The field shows
+ * only whether one is set, when and by whom, and offers changes only to those who may make them.
+ * It is no form of its own, so it sits in a dialog's form without submitting it.
+ */
+function StoredCredentialField({
+  label,
+  purpose,
+  cluster,
+  keys,
+  hint,
+  status,
+  onRead,
+}: CredentialFieldProps): JSX.Element {
   const namespace = cluster?.namespace;
   const name = cluster?.name;
   const read = usePoll(async () => api.storedCredential(purpose, refOf(namespace, name)), pollIdle);
