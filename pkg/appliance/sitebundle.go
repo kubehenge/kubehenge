@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -46,7 +47,7 @@ const siteCheckTimeout = 2 * siteDialTimeout
 
 // noteSite tells the job's log which faults of the hosts' chains the run goes on past with the
 // certificates of the last run, and which hosts did not answer.
-func noteSite(j *Job, unchecked []string, kept SiteChainError) {
+func noteSite(j *Job, s *Settings, unchecked []string, kept SiteChainError) {
 	if len(kept.Lines) > 0 {
 		j.Add("Kept the certificates of the last run, since the nodes would refuse these chains:")
 		for _, fault := range kept.Lines {
@@ -54,7 +55,11 @@ func noteSite(j *Job, unchecked []string, kept SiteChainError) {
 		}
 	}
 	if len(unchecked) > 0 {
-		j.Add("The Site CA was not checked against " + strings.Join(unchecked, ", ") + ". They did not answer.")
+		checked := "The Site CA"
+		if s.SiteCA == "" {
+			checked = "The proxy certificate"
+		}
+		j.Add(checked + " was not checked against " + strings.Join(unchecked, ", ") + ". They did not answer.")
 	}
 }
 
@@ -150,23 +155,59 @@ func (a *Appliance) ResolveSite(ctx context.Context, s *Settings) ([]string, err
 	if len(authorities) == 0 || a.SiteChains == nil {
 		return nil, nil
 	}
-	// An https proxy is verified with the copies the last run found, as the downloads verify it.
-	for _, auth := range authorities {
-		*auth.bundle = auth.derived()
-	}
-	answered, unchecked := a.readChains(ctx, s)
 	now := time.Now()
 	if a.Now != nil {
 		now = a.Now()
 	}
-	if err := judgeChains(authorities, a.publicRoots(), answered, now); err != nil {
-		clearBundles(s)
-		return unchecked, err
+	public := a.publicRoots()
+	// An https proxy is verified with the copies the last run found, as the downloads verify it, and
+	// with those its own chain needs, which a first save has no other source for. A fault in the
+	// proxy's chain leaves the hosts unread, as before.
+	if chain := proxyChain(ctx, s.Proxy); len(chain) > 0 {
+		_ = judgeChains(authorities, public, []hostChain{{chain: chain}}, now)
 	}
 	for _, auth := range authorities {
 		*auth.bundle = auth.derived()
 	}
-	return unchecked, nil
+	answered, unchecked := a.readChains(ctx, s)
+	err = judgeChains(authorities, public, answered, now)
+	// A faulty chain keeps the copies the others need, for a run that goes on past the fault.
+	for _, auth := range authorities {
+		*auth.bundle = auth.derived()
+	}
+	return unchecked, err
+}
+
+// proxyChain is the chain an https proxy presents, read with a handshake alone, so that no request
+// and no credentials reach it. Nil without an https proxy, or where it does not answer.
+func proxyChain(ctx context.Context, p *Proxy) []*x509.Certificate {
+	if !p.Enabled() {
+		return nil
+	}
+	u, err := url.Parse(p.URL)
+	if err != nil || u.Scheme != schemeHTTPS {
+		return nil
+	}
+	address := u.Host
+	if u.Port() == "" {
+		address = net.JoinHostPort(u.Hostname(), "443")
+	}
+	dial, cancel := context.WithTimeout(ctx, siteDialTimeout)
+	defer cancel()
+	dialer := tls.Dialer{Config: &tls.Config{
+		MinVersion: tls.VersionTLS12, ServerName: u.Hostname(),
+		InsecureSkipVerify: true, //nolint:gosec // only the presented chain is read, and judgeChains judges it
+	}}
+	conn, err := dialer.DialContext(dial, "tcp", address)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = conn.Close() }()
+	tlsConn, ok := conn.(*tls.Conn)
+	if !ok {
+		return nil
+	}
+	return tlsConn.ConnectionState().PeerCertificates
 }
 
 // TrustFor is what a template build outside the appliance trusts for the authorities ca, derived as
@@ -201,19 +242,15 @@ func clearBundles(s *Settings) {
 }
 
 // resolveSiteKeeping is ResolveSite for a run that leaves the Site CA and the proxy's CA as they
-// were saved. A chain the nodes would refuse keeps the bundles of the last run and comes back in
-// kept, since the nodes go on as they are and the fault should not block other settings. A first or
-// changed authority still fails.
+// were saved. A chain the nodes would refuse keeps the copies of the last run, with those the other
+// chains need, and comes back in kept, since the nodes go on as they are and the fault should not
+// block other settings. A first or changed authority still fails.
 func (a *Appliance) resolveSiteKeeping(ctx context.Context, s *Settings) ([]string, SiteChainError, error) {
 	unchecked, err := a.ResolveSite(ctx, s)
 	faults, ok := errors.AsType[SiteChainError](err)
 	saved := a.SavedSettings()
 	if !ok || saved == nil || saved.SiteCA != s.SiteCA || proxyCAOf(saved) != proxyCAOf(s) {
 		return unchecked, SiteChainError{}, err
-	}
-	s.SiteBundle = saved.SiteBundle
-	if s.Proxy != nil && saved.Proxy != nil {
-		s.Proxy.Bundle = saved.Proxy.Bundle
 	}
 	return unchecked, faults, nil
 }
@@ -331,8 +368,10 @@ func newSiteAuthority(label, pasted, kept string, bundle *string) (*siteAuthorit
 	auth := &siteAuthority{label: label, pasted: pasted, roots: roots, bundle: bundle}
 	held, _ := parseCertificates(kept)
 	for _, c := range held {
-		// Only a renamed root carries a pasted root's key.
-		if !slices.ContainsFunc(roots, c.Equal) && slices.ContainsFunc(roots, sameKey(c)) {
+		// A copy is a renamed root, with a pasted root's key, or an anchored intermediate, which
+		// names itself as its issuer.
+		anchored := c.IsCA && bytes.Equal(c.RawIssuer, c.RawSubject) && len(c.AuthorityKeyId) == 0
+		if !slices.ContainsFunc(roots, c.Equal) && (slices.ContainsFunc(roots, sameKey(c)) || anchored) {
 			auth.add(c)
 		}
 	}
@@ -494,7 +533,7 @@ func judgeChains(authorities []*siteAuthority, public *x509.CertPool, chains []h
 	}
 	out := SiteChainError{Lines: make([]string, 0, len(faults))}
 	for _, key := range faults {
-		out.Lines = append(out.Lines, key.label+" "+strings.Join(hosts[key], ", ")+": "+key.fault)
+		out.Lines = append(out.Lines, key.label+" "+strings.Join(hosts[key], ", ")+". "+key.fault)
 	}
 	out.Roots = missingRoots(roots)
 	return out
@@ -549,7 +588,7 @@ func publicRefusal(chain []*x509.Certificate, public *x509.CertPool, now time.Ti
 			return refusal{text: fault}
 		}
 	}
-	return refusal{text: fmt.Sprintf("the nodes refuse %q. Check the chain on the device.", subjectOf(chain[0]))}
+	return refusal{text: fmt.Sprintf("The nodes refuse %q. Check the chain on the device.", subjectOf(chain[0]))}
 }
 
 // authorityOf is the authority a refused chain is about: the one whose root a certificate of the
@@ -617,16 +656,24 @@ func judgeChain(authorities []*siteAuthority, chain []*x509.Certificate, now tim
 		return refusal{}
 	}
 	found := renamedRoots(authorities, chain)
+	for _, f := range found {
+		anchors = append(anchors, f.cert)
+	}
 	if len(found) > 0 {
-		for _, f := range found {
-			anchors = append(anchors, f.cert)
-		}
-		if err = verifyChain(chain, poolOf(anchors), now); err == nil {
-			for _, f := range found {
-				f.auth.add(f.cert)
+		err = verifyChain(chain, poolOf(anchors), now)
+	}
+	if err != nil {
+		if anchored := anchoredIntermediate(chain, anchors, now); anchored != nil {
+			if err = verifyChain(chain, poolOf(append(slices.Clone(anchors), anchored)), now); err == nil {
+				found = append(found, renamedRoot{auth: authorityOf(authorities, chain), cert: anchored})
 			}
-			return refusal{}
 		}
+	}
+	if err == nil {
+		for _, f := range found {
+			f.auth.add(f.cert)
+		}
+		return refusal{}
 	}
 	return chainFault(chain, anchors, authorityOf(authorities, chain), err, now)
 }
@@ -710,7 +757,7 @@ func chainFault(chain, anchors []*x509.Certificate, auth *siteAuthority, verifyE
 			return refusal{text: fault}
 		}
 	}
-	return refusal{text: fmt.Sprintf("the nodes refuse %q. Check the chain on the device.", subjectOf(chain[0]))}
+	return refusal{text: fmt.Sprintf("The nodes refuse %q. Check the chain on the device.", subjectOf(chain[0]))}
 }
 
 // verifyFault names a refusal of Go's verifier that following the chain by names does not find,
@@ -831,23 +878,24 @@ func subjectOf(c *x509.Certificate) string { return nameText(c.Subject.String(),
 
 func issuerOf(c *x509.Certificate) string { return nameText(c.Issuer.String(), c.RawIssuer) }
 
-// nameText is a distinguished name for a person to read: Go's text of it, else the values as
-// canonicalName decodes them, since Go leaves out values in UniversalString.
+// nameText is a distinguished name for a person to read, its values as canonicalName decodes them,
+// since Go leaves out values in UniversalString and prints VisibleString as raw bytes. Go's text
+// where the name does not parse.
 func nameText(goText string, raw []byte) string {
-	if goText != "" {
-		return goText
-	}
 	rdns, ok := nameAttributes(raw)
 	if !ok {
-		return ""
+		return goText
 	}
 	seq := make(pkix.RDNSequence, 0, len(rdns))
 	for _, rdn := range rdns {
 		set := make(pkix.RelativeDistinguishedNameSET, 0, len(rdn))
 		for _, atv := range rdn {
 			var value any = atv.Value
-			if text, canon, ok := nameString(atv.Value); canon && ok {
+			v := atv.Value
+			if text, canon, ok := nameString(v); canon && ok {
 				value = text
+			} else if v.Class == asn1.ClassUniversal && !v.IsCompound && (v.Tag == tagVisibleString || v.Tag == asn1.TagNumericString) {
+				value = string(v.Bytes)
 			}
 			set = append(set, pkix.AttributeTypeAndValue{Type: atv.Type, Value: value})
 		}
@@ -997,6 +1045,130 @@ func canonicalValue(s string) string {
 // signature. The signature no longer covers the certificate, which Go never checks for a root it is
 // given.
 func withSubject(c *x509.Certificate, name []byte) (*x509.Certificate, error) {
+	return reissued(c, func(fields []asn1.RawValue, subject int) error {
+		fields[subject] = asn1.RawValue{FullBytes: name}
+		return nil
+	})
+}
+
+// anchoredIntermediate is a copy of the presented intermediate that a certificate below it names in
+// other bytes, as RFC 5280 and OpenSSL compare names and Go does not, for the nodes to anchor the
+// chain at, since their verifier sees the presented intermediate under no other name. Nil where
+// there is no such intermediate, it leads to no anchor, or a certificate above it limits what the
+// copy would no longer carry.
+func anchoredIntermediate(chain, anchors []*x509.Certificate, now time.Time) *x509.Certificate {
+	cur, path := chain[0], []*x509.Certificate{chain[0]}
+	for {
+		i := slices.IndexFunc(chain[1:], func(p *x509.Certificate) bool {
+			return !slices.ContainsFunc(path, p.Equal) && canonicalName(p.RawSubject) == canonicalName(cur.RawIssuer) && cur.CheckSignatureFrom(p) == nil
+		})
+		if i < 0 {
+			return nil
+		}
+		parent := chain[1+i]
+		if slices.ContainsFunc(anchors, parent.Equal) || canonicalName(parent.RawIssuer) == canonicalName(parent.RawSubject) {
+			return nil
+		}
+		if !bytes.Equal(cur.RawIssuer, parent.RawSubject) {
+			return anchorCopy(parent, cur.RawIssuer, chain, anchors, len(path)-1, now)
+		}
+		cur, path = parent, append(path, parent)
+	}
+}
+
+// anchorCopy is the anchor for the intermediate p under the name its child gives it, with below
+// intermediates between the leaf and p. The copy names itself as its issuer and has no authority
+// key ID, so that OpenSSL, on the nodes that use it, takes it as a root as Go does. It expires with
+// the first certificate above p. Nil where p leads to no anchor, or a certificate above it
+// constrains names or allows fewer intermediates than the whole chain holds, which the copy would
+// no longer enforce.
+func anchorCopy(p *x509.Certificate, name []byte, chain, anchors []*x509.Certificate, below int, now time.Time) *x509.Certificate {
+	chains, err := p.Verify(x509.VerifyOptions{Roots: poolOf(anchors), Intermediates: poolOf(chain[1:]), CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}})
+	if err != nil {
+		return nil
+	}
+	notAfter := p.NotAfter
+	for i, c := range chains[0][1:] {
+		limited := c.MaxPathLen > 0 || (c.MaxPathLen == 0 && c.MaxPathLenZero)
+		if constrainsNames(c) || (limited && below+1+i > c.MaxPathLen) {
+			return nil
+		}
+		if c.NotAfter.Before(notAfter) {
+			notAfter = c.NotAfter
+		}
+	}
+	anchor, err := reissued(p, func(fields []asn1.RawValue, subject int) error {
+		fields[subject-2], fields[subject] = asn1.RawValue{FullBytes: name}, asn1.RawValue{FullBytes: name}
+		if notAfter.Before(p.NotAfter) {
+			var validity struct{ NotBefore, NotAfter asn1.RawValue }
+			if _, err := asn1.Unmarshal(fields[subject-1].FullBytes, &validity); err != nil {
+				return err //nolint:wrapcheck // reissued names the fault
+			}
+			end, err := asn1.Marshal(notAfter.UTC())
+			if err != nil {
+				return err //nolint:wrapcheck // reissued names the fault
+			}
+			der, err := derSequence(slices.Concat(validity.NotBefore.FullBytes, end))
+			if err != nil {
+				return err
+			}
+			fields[subject-1] = asn1.RawValue{FullBytes: der}
+		}
+		return withoutAuthorityKeyID(fields)
+	})
+	if err != nil {
+		return nil
+	}
+	return anchor
+}
+
+func constrainsNames(c *x509.Certificate) bool {
+	return len(c.PermittedDNSDomains)+len(c.ExcludedDNSDomains)+len(c.PermittedIPRanges)+len(c.ExcludedIPRanges)+
+		len(c.PermittedEmailAddresses)+len(c.ExcludedEmailAddresses)+len(c.PermittedURIDomains)+len(c.ExcludedURIDomains) > 0
+}
+
+var oidAuthorityKeyID = asn1.ObjectIdentifier{2, 5, 29, 35}
+
+// withoutAuthorityKeyID drops the authority key ID from the extensions among a certificate's fields.
+func withoutAuthorityKeyID(fields []asn1.RawValue) error {
+	for i, f := range fields {
+		if f.Class != asn1.ClassContextSpecific || f.Tag != 3 {
+			continue
+		}
+		var extensions []asn1.RawValue
+		if _, err := asn1.Unmarshal(f.Bytes, &extensions); err != nil {
+			return err //nolint:wrapcheck // reissued names the fault
+		}
+		var kept []byte
+		for _, e := range extensions {
+			var ext pkix.Extension
+			if _, err := asn1.Unmarshal(e.FullBytes, &ext); err != nil {
+				return err //nolint:wrapcheck // reissued names the fault
+			}
+			if !ext.Id.Equal(oidAuthorityKeyID) {
+				kept = append(kept, e.FullBytes...)
+			}
+		}
+		body, err := derSequence(kept)
+		if err != nil {
+			return err
+		}
+		wrapped, err := asn1.Marshal(asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 3, IsCompound: true, Bytes: body})
+		if err != nil {
+			return err //nolint:wrapcheck // reissued names the fault
+		}
+		fields[i] = asn1.RawValue{FullBytes: wrapped}
+	}
+	return nil
+}
+
+func derSequence(body []byte) ([]byte, error) {
+	return asn1.Marshal(asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagSequence, IsCompound: true, Bytes: body}) //nolint:wrapcheck // reissued names the fault
+}
+
+// reissued is a copy of c whose fields change changes, given the index of the subject, with the
+// same signature, which no longer covers the certificate.
+func reissued(c *x509.Certificate, change func(fields []asn1.RawValue, subject int) error) (*x509.Certificate, error) {
 	var outer struct{ TBS, Algorithm, Signature asn1.RawValue }
 	if rest, err := asn1.Unmarshal(c.Raw, &outer); err != nil || len(rest) > 0 {
 		return nil, errors.New("holds a certificate that does not parse")
@@ -1016,25 +1188,18 @@ func withSubject(c *x509.Certificate, name []byte) (*x509.Certificate, error) {
 	if len(fields) > 0 && fields[0].Class == asn1.ClassContextSpecific && fields[0].Tag == 0 {
 		subject = 5
 	}
-	if len(fields) <= subject || !bytes.Equal(fields[subject].FullBytes, c.RawSubject) {
+	if len(fields) <= subject || !bytes.Equal(fields[subject].FullBytes, c.RawSubject) || change(fields, subject) != nil {
 		return nil, errors.New("holds a certificate whose name cannot be copied under another encoding")
 	}
 	var tbs []byte
-	for i, f := range fields {
-		if i == subject {
-			tbs = append(tbs, name...)
-			continue
-		}
+	for _, f := range fields {
 		tbs = append(tbs, f.FullBytes...)
 	}
-	sequence := func(body []byte) ([]byte, error) {
-		return asn1.Marshal(asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagSequence, IsCompound: true, Bytes: body})
-	}
-	tbsDER, err := sequence(tbs)
+	tbsDER, err := derSequence(tbs)
 	if err != nil {
 		return nil, errors.New("holds a certificate whose name cannot be copied under another encoding")
 	}
-	der, err := sequence(slices.Concat(tbsDER, outer.Algorithm.FullBytes, outer.Signature.FullBytes))
+	der, err := derSequence(slices.Concat(tbsDER, outer.Algorithm.FullBytes, outer.Signature.FullBytes))
 	if err != nil {
 		return nil, errors.New("holds a certificate whose name cannot be copied under another encoding")
 	}

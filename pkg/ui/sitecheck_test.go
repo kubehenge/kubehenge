@@ -141,7 +141,7 @@ func TestSetupCheckNamesTheFaultsOfTheSiteCAChainAsTheSaveDoes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = `Site CA: factory.talos.dev, ghcr.io, registry.k8s.io, tuf-repo-cdn.sigstore.dev: Add "CN=Inspect Intermediate" to the Site CA.`
+	const want = `Site CA: factory.talos.dev, ghcr.io, registry.k8s.io, tuf-repo-cdn.sigstore.dev. Add "CN=Inspect Intermediate" to the Site CA.`
 	check, err := json.Marshal(map[string]any{"settings": settings["settings"]})
 	if err != nil {
 		t.Fatal(err)
@@ -245,7 +245,7 @@ func TestSetupCheckWarnsOfAChainFaultWhileTheSiteCAIsTheSaved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = `Site CA: factory.talos.dev, ghcr.io, registry.k8s.io, tuf-repo-cdn.sigstore.dev: Add "CN=Inspect Intermediate" to the Site CA.`
+	const want = `Site CA: factory.talos.dev, ghcr.io, registry.k8s.io, tuf-repo-cdn.sigstore.dev. Add "CN=Inspect Intermediate" to the Site CA.`
 	f := checkSettings(t, b, string(check))
 	if slices.Contains(f.Errors, want) || !slices.Contains(f.Warnings, want) {
 		t.Errorf("the live check gave errors %q and warnings %q, want the warning %q", f.Errors, f.Warnings, want)

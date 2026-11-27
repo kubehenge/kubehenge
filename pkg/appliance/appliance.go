@@ -186,7 +186,7 @@ func (a *Appliance) Apply(settings *Settings, passphrase string, ticket *pve.Tic
 		return err
 	}
 	return a.start(ticket, "apply", func(ctx context.Context, j *Job) error {
-		noteSite(j, unchecked, kept)
+		noteSite(j, &s, unchecked, kept)
 		kubeconfig, err := a.run(ctx, j, &s, passphrase, ticket)
 		if err != nil {
 			return err

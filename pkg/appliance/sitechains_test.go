@@ -278,7 +278,7 @@ func TestSiteBundleNamesAnIntermediateTheHostDoesNotPresent(t *testing.T) {
 	t.Parallel()
 	c := newInspected(t)
 	_, err := bundleFor(c.root, c.leaf)
-	if err == nil || err.Error() != `Site CA: host.example: Add "CN=Inspect Intermediate" to the Site CA.` {
+	if err == nil || err.Error() != `Site CA: host.example. Add "CN=Inspect Intermediate" to the Site CA.` {
 		t.Errorf("a chain missing its intermediate: %v", err)
 	}
 }
@@ -450,7 +450,7 @@ func TestSiteBundleRefusesWhatTheRenamedRootsLimitsRefuse(t *testing.T) {
 // faultWords counts the words of a fault line as web/WRITING.md counts them: the label is two words
 // and the hosts one value.
 func faultWords(line string) int {
-	_, text, _ := strings.Cut(strings.TrimPrefix(line, siteCALabel+" "), ": ")
+	_, text, _ := strings.Cut(strings.TrimPrefix(line, siteCALabel+" "), ". ")
 	return 3 + len(strings.Fields(text))
 }
 
@@ -495,7 +495,7 @@ func TestSiteBundleNamesTheCertificateThatBreaksTheChain(t *testing.T) {
 		"an intermediate without certificate signing": {[]*testAuthority{underNoSigning, noSigning}, `"CN=Inspect NoSign" may not sign certificates. Reissue it with the certificate signing key usage.`},
 		"a root that was not pasted":                  {[]*testAuthority{other}, "Chain ends at \"CN=Other Root\" (SHA-256 " + Fingerprint(other.cert) + "). Add that root to the Site CA."},
 	} {
-		if _, err := bundleFor(root, tc.chain...); err == nil || err.Error() != "Site CA: host.example: "+tc.want {
+		if _, err := bundleFor(root, tc.chain...); err == nil || err.Error() != "Site CA: host.example. "+tc.want {
 			t.Errorf("%s: %v, want %q", name, err, tc.want)
 		}
 	}
@@ -515,8 +515,8 @@ func TestSiteChainErrorGroupTheHostsAndStayShort(t *testing.T) {
 	s := &Settings{SiteCA: c.root.pem() + weakRoot.pem()}
 	_, err := a.ResolveSite(t.Context(), s)
 	want := []string{
-		`Site CA: factory.talos.dev, ghcr.io: Add "CN=Inspect Intermediate" to the Site CA.`,
-		`Site CA: tuf-repo-cdn.sigstore.dev: "CN=Inspect Weak" is signed with ECDSA-SHA1. Nodes refuse that. Reissue it with SHA-256.`,
+		`Site CA: factory.talos.dev, ghcr.io. Add "CN=Inspect Intermediate" to the Site CA.`,
+		`Site CA: tuf-repo-cdn.sigstore.dev. "CN=Inspect Weak" is signed with ECDSA-SHA1. Nodes refuse that. Reissue it with SHA-256.`,
 	}
 	faults, ok := errors.AsType[SiteChainError](err)
 	if !ok || !slices.Equal(faults.Lines, want) {
@@ -911,7 +911,7 @@ func TestAnUnattendedRunKeepsTheLastBundleThroughAChainFault(t *testing.T) {
 	}
 
 	a.SiteChains = fakeChains(map[string][]*x509.Certificate{"ghcr.io": certs(c.leaf)})
-	const fault = `Site CA: ghcr.io: Add "CN=Inspect Intermediate" to the Site CA.`
+	const fault = `Site CA: ghcr.io. Add "CN=Inspect Intermediate" to the Site CA.`
 	if err := a.KeepUnattended(Unattended{Passphrase: "correct horse battery staple", Token: upgraderAPI}); err != nil {
 		t.Fatal(err)
 	}
@@ -935,7 +935,7 @@ func TestSiteBundleRefusesALeafForClientsOnly(t *testing.T) {
 	t.Parallel()
 	c := newInspected(t)
 	leaf := c.intermediate.issue(t, issuance{cn: "host.example", leaf: true, clientOnly: true})
-	const want = `Site CA: host.example: "CN=host.example" is not for servers. Reissue it for server authentication.`
+	const want = `Site CA: host.example. "CN=host.example" is not for servers. Reissue it for server authentication.`
 	if _, err := bundleFor(c.root, leaf, c.intermediate); err == nil || err.Error() != want {
 		t.Errorf("a leaf for clients only gave %v, want %q", err, want)
 	}
@@ -954,7 +954,7 @@ func TestAProxyCAFaultNamesTheProxyCertificate(t *testing.T) {
 		a := &Appliance{sitePublic: x509.NewCertPool(), SiteChains: fakeChains(map[string][]*x509.Certificate{"ghcr.io": chain})}
 		s := &Settings{SiteCA: newTestRoot(t, "Site Root").pem(), Proxy: &Proxy{URL: "http://proxy.example:3128", CABundle: c.root.pem()}}
 		_, err := a.ResolveSite(t.Context(), s)
-		if err == nil || !strings.HasPrefix(err.Error(), "Proxy certificate: ghcr.io: ") {
+		if err == nil || !strings.HasPrefix(err.Error(), "Proxy certificate: ghcr.io. ") {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
@@ -973,7 +973,7 @@ func TestSiteBundleNamesARootTheDeviceMadeAgain(t *testing.T) {
 		"without the new root": {[]*testAuthority{c.leaf, c.intermediate}, `"CN=Inspect Intermediate" is signed by a new "CN=Inspect Root". Paste the new root.`},
 		"with the new root":    {[]*testAuthority{c.leaf, c.intermediate, c.root}, "Chain ends at \"CN=Inspect Root\" (SHA-256 " + Fingerprint(c.root.cert) + "). Add that root to the Site CA."},
 	} {
-		if _, err := bundleFor(pasted, tc.chain...); err == nil || err.Error() != "Site CA: host.example: "+tc.want {
+		if _, err := bundleFor(pasted, tc.chain...); err == nil || err.Error() != "Site CA: host.example. "+tc.want {
 			t.Errorf("%s: %v, want %q", name, err, tc.want)
 		}
 	}
@@ -1070,7 +1070,7 @@ func TestSiteFaultNamesAnIssuerInUniversalString(t *testing.T) {
 	root := newTestRoot(t, "Inspect Root")
 	intermediate := root.issue(t, issuance{cn: "Inspect Intermediate", tag: tagUniversalString})
 	leaf := intermediate.issue(t, issuance{cn: "host.example", leaf: true})
-	const want = `Site CA: host.example: Add "CN=Inspect Intermediate" to the Site CA.`
+	const want = `Site CA: host.example. Add "CN=Inspect Intermediate" to the Site CA.`
 	if _, err := bundleFor(root, leaf); err == nil || err.Error() != want {
 		t.Errorf("got %v, want %q", err, want)
 	}
@@ -1107,7 +1107,7 @@ func TestASaveThatKeepsTheSiteCAGoesOnPastAChainFault(t *testing.T) {
 	a.SiteChains = fakeChains(map[string][]*x509.Certificate{"ghcr.io": good, "registry.k8s.io": certs(old.issue(t, issuance{cn: "host.example", leaf: true}), old)})
 	again := settings("pve1")
 	again.SiteCA, again.TimeZone = c.root.pem(), "Europe/Zurich"
-	fault := `Site CA: registry.k8s.io: "CN=Inspect Old" expired on ` + old.cert.NotAfter.UTC().Format(time.DateOnly) + ". Renew it on the device."
+	fault := `Site CA: registry.k8s.io. "CN=Inspect Old" expired on ` + old.cert.NotAfter.UTC().Format(time.DateOnly) + ". Renew it on the device."
 	if got := a.CheckSite(t.Context(), again); len(got.Errors) != 0 || !slices.Equal(got.Warnings, []string{fault}) {
 		t.Errorf("the live check gave errors %q and warnings %q, want the warning %q", got.Errors, got.Warnings, fault)
 	}
@@ -1129,7 +1129,7 @@ func TestASaveThatChangesTheSiteCARefusesAChainFault(t *testing.T) {
 	a, ready := newAppliance(t)
 	a.sitePublic = x509.NewCertPool()
 	missing := fakeChains(map[string][]*x509.Certificate{"ghcr.io": certs(c.leaf)})
-	const fault = `Site CA: ghcr.io: Add "CN=Inspect Intermediate" to the Site CA.`
+	const fault = `Site CA: ghcr.io. Add "CN=Inspect Intermediate" to the Site CA.`
 	a.SiteChains = missing
 	first := settings("pve1")
 	first.SiteCA = c.root.pem()
@@ -1191,7 +1191,7 @@ func TestSiteCheckReadsThroughAnHTTPSProxyThatNeedsTheKeptCopy(t *testing.T) {
 
 // presentedRootFault is the line a chain that ends at a root the Site CA lacks gets.
 func presentedRootFault(hosts string, root *testAuthority) string {
-	return "Site CA: " + hosts + ": Chain ends at \"CN=" + root.cn + "\" (SHA-256 " + Fingerprint(root.cert) + "). Add that root to the Site CA."
+	return "Site CA: " + hosts + ". Chain ends at \"CN=" + root.cn + "\" (SHA-256 " + Fingerprint(root.cert) + "). Add that root to the Site CA."
 }
 
 // TestSiteCheckNamesThePresentedRootTheSiteCALacksAndPassesOnceItIsAdded judges a chain that ends at
@@ -1257,7 +1257,7 @@ func TestSiteCheckOffersNoRootTheHostDidNotPresent(t *testing.T) {
 	c := newInspected(t)
 	a := &Appliance{SiteChains: fakeChains(map[string][]*x509.Certificate{"ghcr.io": certs(c.leaf, c.intermediate)})}
 	got := a.CheckSite(t.Context(), &Settings{SiteCA: newTestRoot(t, "Internal-R2").pem()})
-	if want := []string{`Site CA: ghcr.io: Add "CN=Inspect Root" to the Site CA.`}; !slices.Equal(got.Errors, want) || len(got.MissingRoots) != 0 {
+	if want := []string{`Site CA: ghcr.io. Add "CN=Inspect Root" to the Site CA.`}; !slices.Equal(got.Errors, want) || len(got.MissingRoots) != 0 {
 		t.Errorf("got %+v, want errors %q and no roots", got, want)
 	}
 }
@@ -1297,7 +1297,7 @@ func TestAChainSignedByARootOnlyTheContainerTrustsIsAFault(t *testing.T) {
 		}
 		a := &Appliance{SiteChains: fakeChains(map[string][]*x509.Certificate{"ghcr.io": chain})}
 		got := a.CheckSite(t.Context(), &Settings{SiteCA: readTestFile(t, filepath.Join(dir, "site.pem"))})
-		want := "Site CA: ghcr.io: Chain ends at \"CN=Internal-R1\" (SHA-256 " + Fingerprint(chain[len(chain)-1]) + "). Add that root to the Site CA."
+		want := "Site CA: ghcr.io. Chain ends at \"CN=Internal-R1\" (SHA-256 " + Fingerprint(chain[len(chain)-1]) + "). Add that root to the Site CA."
 		if !slices.Equal(got.Errors, []string{want}) {
 			t.Fatalf("errors %q, want %q", got.Errors, want)
 		}
@@ -1349,7 +1349,7 @@ func TestSiteCheckTellsAMissingIntermediateFromAMissingRoot(t *testing.T) {
 	} {
 		a := &Appliance{sitePublic: x509.NewCertPool(), SiteChains: fakeChains(map[string][]*x509.Certificate{"ghcr.io": tc.chain})}
 		got := a.CheckSite(t.Context(), &Settings{SiteCA: tc.siteCA})
-		if want := []string{"Site CA: ghcr.io: " + tc.want}; !slices.Equal(got.Errors, want) || len(got.MissingRoots) != 0 {
+		if want := []string{"Site CA: ghcr.io. " + tc.want}; !slices.Equal(got.Errors, want) || len(got.MissingRoots) != 0 {
 			t.Errorf("%s: %+v, want %q", name, got, want)
 		}
 	}
@@ -1364,7 +1364,7 @@ func TestAProxyChainEndingAtARootItsCALacksNamesTheProxyField(t *testing.T) {
 	leaf := stray.issue(t, issuance{cn: "host.example", leaf: true})
 	a := &Appliance{sitePublic: x509.NewCertPool(), SiteChains: fakeChains(map[string][]*x509.Certificate{"ghcr.io": certs(leaf, stray)})}
 	got := a.CheckSite(t.Context(), &Settings{Proxy: &Proxy{URL: "http://proxy.example:3128", CABundle: c.root.pem()}})
-	want := "Proxy certificate: ghcr.io: Chain ends at \"CN=Stray Root\" (SHA-256 " + Fingerprint(stray.cert) + "). Add that root to the proxy's CA."
+	want := "Proxy certificate: ghcr.io. Chain ends at \"CN=Stray Root\" (SHA-256 " + Fingerprint(stray.cert) + "). Add that root to the proxy's CA."
 	if !slices.Equal(got.Errors, []string{want}) || len(got.MissingRoots) != 0 {
 		t.Errorf("got %+v, want the error %q and no roots", got, want)
 	}

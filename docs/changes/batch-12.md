@@ -17,6 +17,10 @@
 - A kubeadm template of a Kubernetes release whose images lack Kubernetes' signature is refused before its build, in the interface, the CLI and the refresh, naming the nearest signed release.
 - capmox gives `cloud-init status` 10 seconds to exit, not 2, so a machine on a busy host no longer stays at `WaitingForCloudInit`.
 - `ControlPlaneRollStalled` times a roll from its start on every distribution, so a successor the health check keeps replacing counts.
+- Behind TLS inspection, a host certificate that names its intermediate in other bytes than the intermediate's own name is accepted, as curl accepts it.
+- A save that keeps the Site CA while one host's chain is faulty still gives the nodes the root copies the other hosts need.
+- A first save behind an https proxy whose certificate names the Site CA's root in other bytes reads the hosts through that proxy.
+- Site CA faults show a name in VisibleString as text and end the host list with a full stop. The run log names the proxy certificate where no Site CA is set.
 
 ### Internal
 
