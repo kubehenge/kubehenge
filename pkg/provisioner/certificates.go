@@ -484,7 +484,8 @@ type certificateInputs struct {
 }
 
 // certificateInputs reads them. It reports false when the issuer is to be left out until the binding
-// key is stored, since an ACME server that requires the binding refuses an account made without it.
+// key is stored, since an ACME server that requires the binding refuses an account made without it,
+// or until the DNS provider's credential is, which a DNS-01 issuer cannot answer a challenge without.
 func (r *Reconciler) certificateInputs(ctx context.Context, cluster *clusterv1.Cluster, c *Certificates) (certificateInputs, bool, error) {
 	var in certificateInputs
 	var err error
@@ -493,17 +494,49 @@ func (r *Reconciler) certificateInputs(ctx context.Context, cluster *clusterv1.C
 			return in, false, err
 		}
 	}
+	var stored bool
 	if c.copiesDNS01Credential() {
-		if in.credential, _, err = r.dns01Credential(ctx, cluster, c); err != nil {
+		if in.credential, stored, err = r.dns01Credential(ctx, cluster, c); err != nil || !stored {
 			return in, false, err
 		}
 	}
 	if !c.bindsAccount() {
 		return in, true, nil
 	}
-	var stored bool
 	in.binding, stored, err = r.eabCredential(ctx, cluster)
 	return in, stored && err == nil, err
+}
+
+// certificateWaits are the waiting lines of the credentials the certificates add-on lacks, each
+// naming the Secret to store: the DNS provider's, without which the DNS-01 issuer is not applied,
+// and the ACME account's binding key, without which no issuer is.
+func (r *Reconciler) certificateWaits(ctx context.Context, cluster *clusterv1.Cluster, c *Certificates) ([]addonWait, error) {
+	var waits []addonWait
+	missing := func(what, name string) {
+		waits = append(waits, addonWait{
+			addon: certificatesVariable, reason: AddonsWaitingCredentialMissing,
+			line: fmt.Sprintf("%s waits for %s in Secret %s/%s", certificatesVariable, what, cluster.Namespace, name),
+		})
+	}
+	if c.copiesDNS01Credential() {
+		_, stored, err := r.dns01Credential(ctx, cluster, c)
+		if err != nil {
+			return nil, err
+		}
+		if !stored {
+			missing("the DNS-01 credential", dns01CredentialName(cluster, c))
+		}
+	}
+	if c.bindsAccount() {
+		_, stored, err := r.eabCredential(ctx, cluster)
+		if err != nil {
+			return nil, err
+		}
+		if !stored {
+			missing("the ACME external account binding key", CredentialName(cluster.Name, eabPurpose))
+		}
+	}
+	return waits, nil
 }
 
 // applyIssued applies the add-on's objects. When the issuer is another than before, every
@@ -686,34 +719,21 @@ func newIngressCA(cluster, domain string, now time.Time) ([]byte, []byte, error)
 // dns01Credential reads the DNS provider's credential the cluster takes: the one stored for every
 // cluster when it shares that, else its own, and whether anyone has stored it.
 func (r *Reconciler) dns01Credential(ctx context.Context, cluster *clusterv1.Cluster, c *Certificates) (map[string][]byte, bool, error) {
-	name := CredentialName(cluster.Name, dns01Purpose)
+	return r.storedCredential(ctx, cluster, dns01CredentialName(cluster, c), dns01Purpose, dns01TokenKey)
+}
+
+// dns01CredentialName is the Secret of the DNS provider's credential the cluster takes.
+func dns01CredentialName(cluster *clusterv1.Cluster, c *Certificates) string {
 	if c.SharesDNS01Credential() {
-		name = CredentialName("", dns01Purpose)
+		return CredentialName("", dns01Purpose)
 	}
-	credential, stored, err := r.storedCredential(ctx, cluster, name, dns01Purpose, dns01TokenKey)
-	if err == nil && !stored {
-		ctrl.LoggerFrom(ctx).Info("no DNS-01 credential stored, so no certificate can be issued", "credential", name)
-		if r.Events != nil {
-			r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, "NoDNS01Credential", "IssueCertificates",
-				"no DNS-01 credential is stored for the cluster (%s): store one, or name an existing Secret", name)
-		}
-	}
-	return credential, stored, err
+	return CredentialName(cluster.Name, dns01Purpose)
 }
 
 // eabCredential reads the HMAC key of the cluster's ACME external account binding, and whether
 // anyone has stored it.
 func (r *Reconciler) eabCredential(ctx context.Context, cluster *clusterv1.Cluster) (map[string][]byte, bool, error) {
-	name := CredentialName(cluster.Name, eabPurpose)
-	credential, stored, err := r.storedCredential(ctx, cluster, name, eabPurpose, eabKey)
-	if err == nil && !stored {
-		ctrl.LoggerFrom(ctx).Info("no external account binding key stored, so the ACME issuer is left out", "credential", name)
-		if r.Events != nil {
-			r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, "NoACMEEABCredential", "IssueCertificates",
-				"no external account binding key is stored for the cluster (%s): store the key your ACME server gave you", name)
-		}
-	}
-	return credential, stored, err
+	return r.storedCredential(ctx, cluster, CredentialName(cluster.Name, eabPurpose), eabPurpose, eabKey)
 }
 
 // storedCredential reads the user credential name, of purpose, with its key set, and whether it

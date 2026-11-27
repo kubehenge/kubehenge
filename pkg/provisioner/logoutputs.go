@@ -240,18 +240,22 @@ func needsCredentials(outputs []LogOutput) []LogOutput {
 }
 
 // logOutputSecretData is the Secret that holds the outputs' credentials in the workload cluster.
-// The message names an output whose stored credential lacks what its auth needs.
+// The message is the waiting line of an output whose credential is not stored, or lacks what its
+// auth needs.
 func logOutputSecretData(outputs []LogOutput, stored map[string]map[string][]byte) (map[string][]byte, string) {
 	data := map[string][]byte{}
 	for _, o := range needsCredentials(outputs) {
-		values := stored[o.Name]
+		values, has := stored[o.Name]
+		if !has {
+			return nil, fmt.Sprintf("log output %s waits for its stored credential %s", o.Name, o.CredentialPurpose())
+		}
 		keys := []string{tokenKey}
 		if o.auth() == logAuthBasic {
 			keys = []string{usernameKey, passwordKey}
 		}
 		for _, k := range keys {
 			if len(values[k]) == 0 {
-				return nil, fmt.Sprintf("log output %s has no %s in its stored credential %s", o.Name, k, o.CredentialPurpose())
+				return nil, fmt.Sprintf("log output %s waits for %s in its stored credential %s", o.Name, k, o.CredentialPurpose())
 			}
 			data[o.Name+"."+k] = values[k]
 		}
@@ -418,35 +422,32 @@ func outputVolume(outputs []LogOutput) ([]any, []any) {
 }
 
 // logOutputsWait puts the outputs' stored credentials into the namespaces of the cluster's Alloys
-// before the Alloy chart, which mounts them as an optional Secret. It reports whether the chart has
-// to wait for the cluster's API. A missing credential holds nothing back: Alloy runs, and the
-// output reports the unreadable file.
+// before the Alloy chart, which mounts them as an optional Secret. It says what the chart waits for,
+// the cluster's API, and the waiting line of a missing credential. That holds nothing back: Alloy
+// runs and keeps its logs in the cluster, and the output reports the unreadable file.
 //
 // The Cluster's annotation holds what was last written (the credentials' resource versions and the
 // collector), so the workload cluster is reached only when that changes, and when the last output
 // with a credential goes the Secret is taken out of both namespaces once.
-func (r *Reconciler) logOutputsWait(ctx context.Context, cluster *clusterv1.Cluster, logs Logs) (bool, error) {
+func (r *Reconciler) logOutputsWait(ctx context.Context, cluster *clusterv1.Cluster, logs Logs) (string, string, error) {
 	stored, versions, err := r.logOutputCredentials(ctx, cluster, logs.Outputs)
 	if err != nil {
-		return false, err
+		return "", "", err
 	}
 	data, missing := logOutputSecretData(logs.Outputs, stored)
 	if missing != "" {
-		if r.Events != nil {
-			r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, "LogOutputCredentialMissing", "ShipLogs", "%s", missing)
-		}
-		return false, nil
+		return "", missing, nil
 	}
 	want := ""
 	if len(data) > 0 {
 		want = logs.collector() + ";" + strings.Join(versions, ";")
 	}
 	if cluster.Annotations[logOutputsAnnotation] == want {
-		return false, nil
+		return "", "", nil
 	}
 	workload, found, err := r.Remotes.get(ctx, cluster)
 	if err != nil || !found {
-		return true, err
+		return clusterAPIWait, "", err
 	}
 	for _, namespace := range []string{logsNamespace, logsNodeNamespace} {
 		if len(data) > 0 && (namespace == logsNamespace || logs.collector() == collectorNode) {
@@ -456,10 +457,10 @@ func (r *Reconciler) logOutputsWait(ctx context.Context, cluster *clusterv1.Clus
 		}
 		if err != nil {
 			r.Remotes.forget(cluster)
-			return false, err
+			return "", "", err
 		}
 	}
-	return false, r.markLogOutputs(ctx, cluster, want)
+	return "", "", r.markLogOutputs(ctx, cluster, want)
 }
 
 // logOutputCredentials reads the stored credentials of the outputs that need one, with the

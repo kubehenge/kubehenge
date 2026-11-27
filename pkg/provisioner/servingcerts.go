@@ -8,10 +8,13 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+	"sync"
 
 	certificatesv1 "k8s.io/api/certificates/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -30,6 +33,13 @@ type ServingCertApprover struct {
 	ClassNamespace string
 	// Remotes reaches the workload clusters.
 	Remotes *Remotes
+	// Events records on the Cluster a request left pending for an address that is not its node's.
+	Events events.EventRecorder
+
+	mu sync.Mutex
+	// held is, by cluster, the requests left pending that an event was recorded for, so that each
+	// is said once.
+	held map[types.NamespacedName][]types.UID
 }
 
 // SetupWithManager registers the approver for Clusters.
@@ -71,20 +81,56 @@ func (a *ServingCertApprover) Reconcile(ctx context.Context, req ctrl.Request) (
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("listing the cluster's machines: %w", err)
 	}
-	if err := approveServing(ctx, workload.client, machines.Items); err != nil {
+	held, err := approveServing(ctx, workload.client, machines.Items)
+	if err != nil {
 		a.Remotes.forget(cluster)
 		return ctrl.Result{}, err
 	}
+	a.warnHeld(cluster, held)
 	return ctrl.Result{RequeueAfter: waitInterval}, nil
 }
 
+// servingHold is a kubelet serving certificate request left pending for a name or address that is
+// not its node's.
+type servingHold struct {
+	uid       types.UID
+	node, why string
+}
+
+// warnHeld records a Warning event on the cluster for each request in held not said before. Only
+// the requests still pending are remembered.
+func (a *ServingCertApprover) warnHeld(cluster *clusterv1.Cluster, held []servingHold) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	key := client.ObjectKeyFromObject(cluster)
+	said := a.held[key]
+	uids := make([]types.UID, 0, len(held))
+	for _, h := range held {
+		uids = append(uids, h.uid)
+		if a.Events != nil && !slices.Contains(said, h.uid) {
+			a.Events.Eventf(cluster, nil, corev1.EventTypeWarning, "ServingCertificatePending", "ApproveServingCertificate",
+				"node %s: serving certificate pending, %s", h.node, h.why)
+		}
+	}
+	if a.held == nil {
+		a.held = map[types.NamespacedName][]types.UID{}
+	}
+	if len(uids) == 0 {
+		delete(a.held, key)
+		return
+	}
+	a.held[key] = uids
+}
+
 // approveServing approves every pending kubelet serving certificate that names only its node and
-// the node's Machine's addresses. One that names more stays pending, for an administrator to see.
-func approveServing(ctx context.Context, workload client.Client, machines []clusterv1.Machine) error {
+// the node's Machine's addresses. One that names more stays pending, for an administrator to see,
+// and is returned.
+func approveServing(ctx context.Context, workload client.Client, machines []clusterv1.Machine) ([]servingHold, error) {
 	csrs := &certificatesv1.CertificateSigningRequestList{}
 	if err := workload.List(ctx, csrs); err != nil {
-		return fmt.Errorf("listing certificate signing requests: %w", err)
+		return nil, fmt.Errorf("listing certificate signing requests: %w", err)
 	}
+	var held []servingHold
 	for i := range csrs.Items {
 		csr := &csrs.Items[i]
 		if csr.Spec.SignerName != certificatesv1.KubeletServingSignerName || len(csr.Status.Conditions) > 0 {
@@ -92,6 +138,10 @@ func approveServing(ctx context.Context, workload client.Client, machines []clus
 		}
 		if why := servingRefusal(csr, machines); why != "" {
 			ctrl.LoggerFrom(ctx).Info("not approving a kubelet's serving certificate", "request", csr.Name, "user", csr.Spec.Username, "reason", why)
+			// A request a kubelet made for itself is held for what it names.
+			if node, _, other := servingRequestOf(csr); other == "" {
+				held = append(held, servingHold{uid: csr.UID, node: node, why: why})
+			}
 			continue
 		}
 		csr.Status.Conditions = append(csr.Status.Conditions, certificatesv1.CertificateSigningRequestCondition{
@@ -101,10 +151,10 @@ func approveServing(ctx context.Context, workload client.Client, machines []clus
 			Message: "names only the node and its Machine's addresses",
 		})
 		if err := workload.SubResource("approval").Update(ctx, csr); err != nil {
-			return fmt.Errorf("approving %s: %w", csr.Name, err)
+			return nil, fmt.Errorf("approving %s: %w", csr.Name, err)
 		}
 	}
-	return nil
+	return held, nil
 }
 
 // servingUsages are those a kubelet asks for, of which server authentication must be one.

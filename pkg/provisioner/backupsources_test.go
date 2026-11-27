@@ -215,7 +215,7 @@ func TestBackupsWaitPutsAndTakesTheSourcesKeys(t *testing.T) {
 	b, _, _ := optionalVariable[Backups](c, backupsVariable)
 	key := []byte(strings.Repeat("s", sseCKeyBytes))
 	wait, err := r.backupsWait(context.Background(), c, &b, []backupSource{{name: "shop", sseC: key}})
-	if err != nil || wait {
+	if err != nil || wait != "" {
 		t.Fatalf("waits %v: %v", wait, err)
 	}
 	ctx := context.Background()

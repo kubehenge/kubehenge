@@ -16,6 +16,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
@@ -86,6 +87,16 @@ var (
 const shellImageEnv = "CATTLE_SHELL_IMAGE"
 
 const (
+	// RancherRegisteredCondition on a Cluster that registers with a Rancher says whether it is
+	// registered, and else what registration waits for or what failed.
+	RancherRegisteredCondition = "RancherRegistered"
+	// RancherRegisteredReason is its reason once Rancher has the cluster ready.
+	RancherRegisteredReason = "Registered"
+	// RancherWaitingReason is its reason while registration waits, its message saying what for.
+	RancherWaitingReason = "Waiting"
+	// RancherFailedReason is its reason when registration failed, its message giving the error.
+	RancherFailedReason = "Failed"
+
 	// rancherWorkspace is where Rancher keeps the clusters it manages through Fleet.
 	rancherWorkspace = "fleet-default"
 	// rancherClusterAnnotation names the Kubehenge cluster a Rancher cluster object stands for.
@@ -183,7 +194,9 @@ var availabilityChanged = predicate.Funcs{
 	},
 }
 
-// Reconcile implements reconcile.Reconciler.
+// Reconcile implements reconcile.Reconciler. Each look sets the cluster's
+// RancherRegisteredCondition while it is to register with a Rancher: what registration waits for or
+// what failed, or that it is registered.
 func (r *Registrar) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	cluster := &clusterv1.Cluster{}
 	if err := r.Client.Get(ctx, req.NamespacedName, cluster); err != nil {
@@ -195,32 +208,19 @@ func (r *Registrar) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resul
 	if !Owns(cluster, r.ClassNamespace) || !cluster.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, nil
 	}
-	v, err := rancherOf(cluster)
-	if err != nil {
-		return ctrl.Result{}, err
+	res, reg, err := r.reconcileCluster(ctx, cluster)
+	var cond *metav1.Condition
+	switch {
+	case !reg.registers:
+	case err != nil:
+		cond = &metav1.Condition{Status: metav1.ConditionFalse, Reason: RancherFailedReason, Message: "registering with Rancher: " + err.Error()}
+	case reg.wait != "":
+		cond = &metav1.Condition{Status: metav1.ConditionFalse, Reason: RancherWaitingReason, Message: reg.wait}
+	default:
+		cond = &metav1.Condition{Status: metav1.ConditionTrue, Reason: RancherRegisteredReason, Message: "registered with Rancher"}
 	}
-	if v.Install {
-		// Rancher manages its own cluster as "local".
-		return ctrl.Result{}, nil
-	}
-	// With no Rancher yet, or before this cluster is available, there is nothing to do until one
-	// of them changes, which the watches report. Nothing new registers with a Rancher being deleted.
-	found, err := r.findRancher(ctx)
-	if err != nil || found == nil || !found.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, err
-	}
-	rs, reached, err := r.connect(ctx, found)
-	if err != nil || !reached {
-		return ctrl.Result{}, err
-	}
-	if !v.registers() {
-		return r.optOut(ctx, rs, cluster)
-	}
-	if !meta.IsStatusConditionTrue(cluster.Status.Conditions, clusterv1.AvailableCondition) {
-		return ctrl.Result{}, nil
-	}
-	res, err := r.register(ctx, rs, cluster)
-	return res, r.failed(rs, err)
+	_, markErr := keepCondition(ctx, r.Client, nil, cluster, RancherRegisteredCondition, cond)
+	return res, errors.Join(err, markErr)
 }
 
 // BeforeDelete removes a cluster from Rancher before its VMs go, while Rancher can still clean up
@@ -256,6 +256,46 @@ func (r *Registrar) BeforeDelete(ctx context.Context, cluster *clusterv1.Cluster
 		return rs.deregisterAll(ctx)
 	}
 	return rs.deregister(ctx, cluster)
+}
+
+// registration is whether a cluster is to register with Rancher, and what its registration waits
+// for, if anything.
+type registration struct {
+	registers bool
+	wait      string
+}
+
+// reconcileCluster registers the cluster with Rancher, or removes it from Rancher where it opted
+// out. It says whether the cluster is to register at all, and what registration waits for.
+func (r *Registrar) reconcileCluster(ctx context.Context, cluster *clusterv1.Cluster) (ctrl.Result, registration, error) {
+	v, err := rancherOf(cluster)
+	if err != nil {
+		return ctrl.Result{}, registration{}, err
+	}
+	if v.Install {
+		// Rancher manages its own cluster as "local".
+		return ctrl.Result{}, registration{}, nil
+	}
+	// With no Rancher yet, or before this cluster is available, there is nothing to do until one
+	// of them changes, which the watches report. Nothing new registers with a Rancher being deleted.
+	found, err := r.findRancher(ctx)
+	if err != nil || found == nil || !found.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, registration{}, err
+	}
+	rs, reached, err := r.connect(ctx, found)
+	switch {
+	case err != nil:
+		return ctrl.Result{}, registration{registers: v.registers()}, err
+	case !reached:
+		return ctrl.Result{}, registration{registers: v.registers(), wait: fmt.Sprintf("waits for Rancher's cluster %s/%s to be available", found.Namespace, found.Name)}, nil
+	case !v.registers():
+		res, optOutErr := r.optOut(ctx, rs, cluster)
+		return res, registration{}, optOutErr
+	case !meta.IsStatusConditionTrue(cluster.Status.Conditions, clusterv1.AvailableCondition):
+		return ctrl.Result{}, registration{registers: true, wait: "waits for the cluster to be available"}, nil
+	}
+	res, wait, err := r.register(ctx, rs, cluster)
+	return res, registration{registers: true, wait: wait}, r.failed(rs, err)
 }
 
 // othersOfRancher asks for every other owned cluster when the one changing installs Rancher.
@@ -323,8 +363,8 @@ func (r *Registrar) failed(rs *rancherSide, err error) error {
 }
 
 // register makes the cluster's object in Rancher, then installs into the cluster the agent Rancher
-// makes for it.
-func (r *Registrar) register(ctx context.Context, rs *rancherSide, cluster *clusterv1.Cluster) (ctrl.Result, error) {
+// makes for it. It says what registration waits for, or "" once Rancher has the cluster ready.
+func (r *Registrar) register(ctx context.Context, rs *rancherSide, cluster *clusterv1.Cluster) (ctrl.Result, string, error) {
 	log := ctrl.LoggerFrom(ctx).WithValues("rancher", client.ObjectKeyFromObject(rs.cluster))
 	ctx = ctrl.LoggerInto(ctx, log)
 	rc := &unstructured.Unstructured{}
@@ -334,51 +374,55 @@ func (r *Registrar) register(ctx context.Context, rs *rancherSide, cluster *clus
 	switch {
 	case meta.IsNoMatchError(err):
 		log.Info("waiting for Rancher to serve its API")
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		return ctrl.Result{RequeueAfter: time.Minute}, "waits for Rancher to serve its API", nil
 	case apierrors.IsNotFound(err):
-		return rs.create(ctx, key, cluster)
+		res, createErr := rs.create(ctx, key, cluster)
+		return res, rancherAgentWait, createErr
 	case err != nil:
-		return ctrl.Result{}, fmt.Errorf("reading cluster %s in Rancher: %w", key, err)
+		return ctrl.Result{}, "", fmt.Errorf("reading cluster %s in Rancher: %w", key, err)
 	}
 	if owner := rc.GetAnnotations()[rancherClusterAnnotation]; owner != cluster.Namespace+"/"+cluster.Name {
-		return ctrl.Result{}, fmt.Errorf("cluster %s in Rancher stands for %q, not this cluster", key, owner)
+		return ctrl.Result{}, "", fmt.Errorf("cluster %s in Rancher stands for %q, not this cluster", key, owner)
 	}
 	changed, err := rs.withShellImage(ctx, rc)
 	if err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, "", err
 	}
 	if changed {
 		if err := rs.client.Update(ctx, rc); err != nil {
-			return ctrl.Result{}, fmt.Errorf("giving cluster %s in Rancher the shell image: %w", key, err)
+			return ctrl.Result{}, "", fmt.Errorf("giving cluster %s in Rancher the shell image: %w", key, err)
 		}
 		log.Info("gave Rancher's agent the shell image Rancher runs")
-		return ctrl.Result{RequeueAfter: registerPoll}, nil
+		return ctrl.Result{RequeueAfter: registerPoll}, "waits for Rancher to take the agent's shell image", nil
 	}
 	if ready, _, _ := unstructured.NestedBool(rc.Object, "status", "ready"); ready {
-		return ctrl.Result{RequeueAfter: resync}, nil
+		return ctrl.Result{RequeueAfter: resync}, "", nil
 	}
 	return r.installAgent(ctx, rs, cluster, rc)
 }
 
+// rancherAgentWait is what registration waits for while Rancher makes the cluster's agent.
+const rancherAgentWait = "waits for Rancher to make the cluster's agent"
+
 // installAgent installs Rancher's agent into the cluster once Rancher has made it.
-func (r *Registrar) installAgent(ctx context.Context, rs *rancherSide, cluster *clusterv1.Cluster, rc *unstructured.Unstructured) (ctrl.Result, error) {
+func (r *Registrar) installAgent(ctx context.Context, rs *rancherSide, cluster *clusterv1.Cluster, rc *unstructured.Unstructured) (ctrl.Result, string, error) {
 	internal, _, _ := unstructured.NestedString(rc.Object, "status", "clusterName")
 	if internal == "" {
-		return ctrl.Result{RequeueAfter: registerPoll}, nil
+		return ctrl.Result{RequeueAfter: registerPoll}, rancherAgentWait, nil
 	}
 	manifest, err := rs.agentManifest(ctx, internal)
 	if err != nil || manifest == nil {
-		return ctrl.Result{RequeueAfter: waitInterval}, err
+		return ctrl.Result{RequeueAfter: waitInterval}, "waits for Rancher's agent manifest, which needs its server-url setting", err
 	}
 	config, found, err := remoteConfig(ctx, r.Client, client.ObjectKeyFromObject(cluster))
 	if err != nil || !found {
-		return ctrl.Result{RequeueAfter: waitInterval}, err
+		return ctrl.Result{RequeueAfter: waitInterval}, "waits for the cluster's kubeconfig", err
 	}
 	if err := applyManifest(ctx, config, manifest); err != nil {
-		return ctrl.Result{}, fmt.Errorf("installing Rancher's agent: %w", err)
+		return ctrl.Result{}, "", fmt.Errorf("installing Rancher's agent: %w", err)
 	}
 	ctrl.LoggerFrom(ctx).Info("installed Rancher's agent", "name", rc.GetName())
-	return ctrl.Result{RequeueAfter: agentStart}, nil
+	return ctrl.Result{RequeueAfter: agentStart}, "waits for Rancher's agent to connect", nil
 }
 
 // rancherSide is the cluster Rancher runs in, as the registrar reaches it.

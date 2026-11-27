@@ -21,7 +21,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/tools/events"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -622,10 +621,8 @@ func TestCertificatesCopyTheBindingKeyAndLeaveTheIssuerOutWithoutIt(t *testing.T
 		ACME: ACME{ExternalAccountBinding: ExternalAccountBinding{KeyID: "kid-1"}},
 	}
 
-	// Without the credential the issuer is not made, and the cluster hears why.
+	// Without the credential the issuer is not made, and the cluster's waiting line names the Secret.
 	r, _ := newReconciler(t, &fakeCloud{}, c)
-	recorder := events.NewFakeRecorder(10)
-	r.Events = recorder
 	workload := newCertWorkload(t)
 	workload.installed = true
 	r.Remotes = &Remotes{byCluster: map[string]remote{remoteKey(c): {client: workload, until: time.Now().Add(time.Hour)}}}
@@ -635,13 +632,10 @@ func TestCertificatesCopyTheBindingKeyAndLeaveTheIssuerOutWithoutIt(t *testing.T
 	if len(workload.applied) != 0 {
 		t.Errorf("objects applied without the binding key: %v", workload.applied)
 	}
-	select {
-	case e := <-recorder.Events:
-		if !strings.Contains(e, "NoACMEEABCredential") {
-			t.Errorf("event %q", e)
-		}
-	default:
-		t.Error("the missing binding key is not reported")
+	waits, err := r.certificateWaits(ctx, c, &certs)
+	if want := "certificates waits for the ACME external account binding key in Secret team-a/web.acme-eab"; err != nil || len(waits) != 1 ||
+		waits[0].line != want || waits[0].reason != AddonsWaitingCredentialMissing {
+		t.Errorf("waits %+v, %v", waits, err)
 	}
 
 	// A credential of the wrong purpose is no credential.
@@ -649,14 +643,14 @@ func TestCertificatesCopyTheBindingKeyAndLeaveTheIssuerOutWithoutIt(t *testing.T
 	wrong.Labels[CredentialLabel] = dns01Purpose
 	r, _ = newReconciler(t, &fakeCloud{}, c, wrong)
 	r.Remotes = &Remotes{byCluster: map[string]remote{remoteKey(c): {client: workload, until: time.Now().Add(time.Hour)}}}
-	if _, err := r.reconcileCertificates(ctx, c, &certs); err != nil || workload.has("ClusterIssuer//"+ingressIssuer) {
+	if _, err = r.reconcileCertificates(ctx, c, &certs); err != nil || workload.has("ClusterIssuer//"+ingressIssuer) {
 		t.Errorf("a credential of another purpose: %v, %v", workload.applied, err)
 	}
 
 	// With it, the key is copied and the issuer points at the copy, never at the value.
 	r, _ = newReconciler(t, &fakeCloud{}, c, stored)
 	r.Remotes = &Remotes{byCluster: map[string]remote{remoteKey(c): {client: workload, until: time.Now().Add(time.Hour)}}}
-	if _, err := r.reconcileCertificates(ctx, c, &certs); err != nil {
+	if _, err = r.reconcileCertificates(ctx, c, &certs); err != nil {
 		t.Fatal(err)
 	}
 	secret := workload.applied["Secret/cert-manager/"+eabSecret]

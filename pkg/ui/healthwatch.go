@@ -64,18 +64,22 @@ func watchAttention(c *clusterv1.Cluster, a *attention) {
 }
 
 // addonWaitAttention adds the add-ons the controller holds back: those another install of their
-// software blocks, and those that wait for cert-manager or for a volume.
+// software blocks, and those that wait, with every line of what they wait for.
 func addonWaitAttention(c *clusterv1.Cluster, a *attention) {
 	if cond := trueCondition(c, provisioner.AddonConflictCondition); cond != nil {
 		a.add(severityWarning, sectionAddons, "Add-on conflict", cond.Message, cond.LastTransitionTime.Time)
 	}
 	if cond := trueCondition(c, provisioner.AddonsWaitingCondition); cond != nil {
-		severity, what := severityProgress, "Add-ons wait for cert-manager"
+		severity, what := severityProgress, "Add-ons wait"
 		switch cond.Reason {
+		case provisioner.AddonsWaitingForCertManager:
+			what = "Add-ons wait for cert-manager"
 		case provisioner.AddonsWaitingGatewayAPIMissing:
-			severity = severityWarning
+			severity, what = severityWarning, "Add-ons wait for cert-manager"
 		case provisioner.AddonsWaitingVolumeMissing:
 			severity, what = severityWarning, "Add-ons wait for a volume"
+		case provisioner.AddonsWaitingCredentialMissing:
+			severity, what = severityWarning, "Add-ons wait for a credential"
 		}
 		a.add(severity, sectionAddons, what, cond.Message, cond.LastTransitionTime.Time)
 	}

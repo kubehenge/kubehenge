@@ -146,6 +146,7 @@ func TestApproveServing(t *testing.T) {
 	foreign := servingRequest(t, "foreign", "web-control-plane-abc", func(r *x509.CertificateRequest, _ *certificatesv1.CertificateSigningRequestSpec) {
 		r.IPAddresses = []net.IP{net.ParseIP("192.0.2.1")}
 	})
+	foreign.UID = "foreign-uid"
 	kubeletClient := servingRequest(t, "client", "web-control-plane-abc", func(_ *x509.CertificateRequest, s *certificatesv1.CertificateSigningRequestSpec) {
 		s.SignerName = certificatesv1.KubeAPIServerClientKubeletSignerName
 	})
@@ -156,8 +157,12 @@ func TestApproveServing(t *testing.T) {
 		WithStatusSubresource(&certificatesv1.CertificateSigningRequest{}).
 		Build()
 
-	if err := approveServing(context.Background(), workload, servingMachines()); err != nil {
+	held, err := approveServing(context.Background(), workload, servingMachines())
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(held) != 1 || held[0].uid != foreign.UID || held[0].node != "web-control-plane-abc" || held[0].why != "address 192.0.2.1 is not the Machine's" {
+		t.Errorf("held %+v", held)
 	}
 	for name, approved := range map[string]bool{"own": true, "foreign": false, "client": false, "denied": false} {
 		got := &certificatesv1.CertificateSigningRequest{}

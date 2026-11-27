@@ -6,11 +6,11 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
@@ -24,8 +24,19 @@ const (
 	// gatewayAPIOverdue after the control plane is initialised: the distribution's chart has not
 	// deployed, or has and the controller did not record it.
 	AddonsWaitingGatewayAPIMissing = "GatewayAPIMissing"
-	// AddonsWaitingVolumeMissing is its reason while only add-ons whose volume cannot be made wait.
+	// AddonsWaitingVolumeMissing is its reason while the first line is of an add-on whose volume
+	// cannot be made.
 	AddonsWaitingVolumeMissing = "VolumeMissing"
+	// AddonsWaitingReason is its reason while the first line is of an add-on that waits for what its
+	// chart needs first: another add-on's release, the cluster's API or a definition.
+	AddonsWaitingReason = "Waiting"
+	// AddonsWaitingCredentialMissing is its reason while the first line names a credential to store.
+	AddonsWaitingCredentialMissing = "CredentialMissing" //nolint:gosec // a condition's reason, not a credential
+
+	// clusterAPIWait and gatewayAPIWait are what an add-on waits for while the cluster does not
+	// answer, and while it has no Gateway API.
+	clusterAPIWait = "the cluster's API"
+	gatewayAPIWait = "the cluster's Gateway API definitions"
 
 	// gatewayAPIOverdue is how long after the control plane is initialised the Gateway API may go
 	// unrecorded before the wait says so.
@@ -63,44 +74,76 @@ func (r *Reconciler) certManagerWaits(ctx context.Context, cluster *clusterv1.Cl
 	return true, nil
 }
 
-// recordAddonsWaiting sets the cluster's AddonsWaiting condition to the add-ons that wait for
-// cert-manager and why, then the volume lines, or takes it off. It returns the add-on conflicts to
-// record, cert-manager's with the add-ons it holds back, so that a conflict is said once.
+// addonWait is a line of AddonsWaitingCondition, "<add-on> waits for <what>", with the add-on and
+// the condition's reason while it is the first line.
+type addonWait struct {
+	addon, reason, line string
+}
+
+// chartWait is the line of an add-on whose chart waits for what.
+func chartWait(addon, what string) addonWait {
+	return addonWait{addon: addon, reason: AddonsWaitingReason, line: addon + " waits for " + what}
+}
+
+// releaseWait is what a chart waits for while the release of the cluster's proxy named is not
+// deployed for its current spec, or "".
+func (r *Reconciler) releaseWait(ctx context.Context, cluster *clusterv1.Cluster, proxy string) (string, error) {
+	ready, err := r.proxyReady(ctx, cluster, proxy)
+	if err != nil || ready {
+		return "", err
+	}
+	return addonOf(cluster, proxy) + " to be deployed", nil
+}
+
+// addonOf is the add-on a proxy of the cluster is: its name without the cluster's.
+func addonOf(cluster *clusterv1.Cluster, proxy string) string {
+	return strings.TrimPrefix(proxy, cluster.Name+"-")
+}
+
+// recordAddonsWaiting sets the cluster's AddonsWaiting condition to what holds its add-ons, read
+// afresh in this reconcile: the add-ons that wait for cert-manager and why, the other waits found,
+// then the volume lines. It takes the condition off when nothing waits, and records a Warning event
+// when the lines change. It returns the add-on conflicts to record, cert-manager's with the add-ons
+// it holds back, so that a conflict is said once.
 func (r *Reconciler) recordAddonsWaiting(ctx context.Context, cluster *clusterv1.Cluster, addons *Addons, volumes []string) ([]addonConflict, error) {
-	conflicts, waiting := addons.conflicts, andJoined(addons.certManagerWaiting)
-	var cond *metav1.Condition
+	conflicts, users := addons.conflicts, andJoined(addons.certManagerWaiting)
+	var waits []addonWait
 	switch held := addons.certManagerConflict; {
-	case held.message != "" && waiting != "":
-		held.message += ". Until then " + waiting + " wait"
+	case held.message != "" && users != "":
+		held.message += ". Until then " + users + " wait"
 		conflicts = append(conflicts, held)
 	case held.message != "":
 		conflicts = append(conflicts, held)
-	case waiting != "":
+	case users != "":
 		reason, why, err := r.certManagerHeldBy(ctx, cluster, addons)
 		if err != nil {
 			return nil, err
 		}
-		cond = &metav1.Condition{Type: AddonsWaitingCondition, Status: metav1.ConditionTrue, Reason: reason, Message: waiting + " wait for cert-manager" + why}
+		waits = append(waits, addonWait{addon: certManagerAddon, reason: reason, line: users + " wait for cert-manager" + why})
 	case addons.certManagerUnread:
-		cond = &metav1.Condition{Type: AddonsWaitingCondition, Status: metav1.ConditionTrue, Reason: AddonsWaitingForCertManager, Message: "cert-manager " + certManagerUnreadWait}
+		waits = append(waits, addonWait{addon: certManagerAddon, reason: AddonsWaitingForCertManager, line: "cert-manager " + certManagerUnreadWait})
 	}
-	if len(volumes) > 0 {
-		if cond == nil {
-			cond = &metav1.Condition{Type: AddonsWaitingCondition, Status: metav1.ConditionTrue, Reason: AddonsWaitingVolumeMissing}
+	for _, w := range addons.waits {
+		// The line of cert-manager's users says what cert-manager waits for.
+		if w.addon != certManagerAddon || users == "" {
+			waits = append(waits, w)
 		}
-		if cond.Message != "" {
-			volumes = append([]string{cond.Message}, volumes...)
+	}
+	for _, v := range volumes {
+		waits = append(waits, addonWait{reason: AddonsWaitingVolumeMissing, line: v})
+	}
+	var cond *metav1.Condition
+	if len(waits) > 0 {
+		lines := make([]string, len(waits))
+		for i, w := range waits {
+			lines[i] = w.line
 		}
-		cond.Message = strings.Join(volumes, ". ")
+		cond = &metav1.Condition{Type: AddonsWaitingCondition, Status: metav1.ConditionTrue, Reason: waits[0].reason, Message: strings.Join(lines, ". ")}
 	}
-	found := meta.FindStatusCondition(cluster.Status.Conditions, AddonsWaitingCondition)
-	switch {
-	case cond == nil && found == nil:
-		return conflicts, nil
-	case cond != nil && found != nil && found.Reason == cond.Reason && found.Message == shorten(cond.Message, watchMessageMax):
-		return conflicts, nil
+	wrote, err := keepCondition(ctx, r.Client, r.Reader, cluster, AddonsWaitingCondition, cond)
+	if err == nil && wrote && cond != nil && r.Events != nil {
+		r.Events.Eventf(cluster, nil, corev1.EventTypeWarning, AddonsWaitingCondition, "InstallAddon", "%s", clip(cond.Message, eventNoteMax))
 	}
-	_, err := markCluster(ctx, r.Client, r.Reader, client.ObjectKeyFromObject(cluster), AddonsWaitingCondition, cond)
 	return conflicts, err
 }
 
@@ -123,7 +166,7 @@ func (r *Reconciler) certManagerHeldBy(ctx context.Context, cluster *clusterv1.C
 		}
 		return AddonsWaitingForCertManager, " to be deployed", nil
 	}
-	const gatewayWait = ", which waits for the cluster's Gateway API definitions"
+	const gatewayWait = ", which waits for " + gatewayAPIWait
 	charts, has := chartsOf(distributionOf(cluster))
 	initialised := meta.FindStatusCondition(cluster.Status.Conditions, clusterv1.ClusterControlPlaneInitializedCondition)
 	if !has || initialised == nil || initialised.Status != metav1.ConditionTrue || r.now().Sub(initialised.LastTransitionTime.Time) < gatewayAPIOverdue {

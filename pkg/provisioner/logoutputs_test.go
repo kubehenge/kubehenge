@@ -289,8 +289,8 @@ func TestLogOutputsSecretFollowsTheCredentials(t *testing.T) {
 		if err := kube.Get(ctx, client.ObjectKeyFromObject(c), c); err != nil {
 			t.Fatal(err)
 		}
-		if waits, err := r.logOutputsWait(ctx, c, logs); err != nil || waits {
-			t.Fatalf("waits %v: %v", waits, err)
+		if waits, missing, err := r.logOutputsWait(ctx, c, logs); err != nil || waits != "" || missing != "" {
+			t.Fatalf("waits %q, %q: %v", waits, missing, err)
 		}
 	}
 
@@ -339,14 +339,18 @@ func TestLogOutputsSecretFollowsTheCredentials(t *testing.T) {
 	wait(Logs{})
 }
 
+// A missing credential holds Alloy back from nothing, and is said as a waiting line.
 func TestLogOutputsMissingCredentialWritesNothing(t *testing.T) {
 	t.Parallel()
 	c := cluster()
 	r, _ := newReconciler(t, &fakeCloud{}, c)
 	r.Remotes = &Remotes{}
-	waits, err := r.logOutputsWait(context.Background(), c, Logs{Outputs: allOutputs[:1]})
-	if err != nil || waits {
-		t.Fatalf("waits %v: %v", waits, err)
+	waits, missing, err := r.logOutputsWait(context.Background(), c, Logs{Outputs: allOutputs[:1]})
+	if err != nil || waits != "" {
+		t.Fatalf("waits %q: %v", waits, err)
+	}
+	if want := "log output " + allOutputs[0].Name + " waits for its stored credential " + allOutputs[0].CredentialPurpose(); missing != want {
+		t.Errorf("missing %q, want %q", missing, want)
 	}
 	if c.Annotations[logOutputsAnnotation] != "" {
 		t.Error("the Cluster records a Secret that was never written")
@@ -364,7 +368,7 @@ func TestLogOutputSecretHoldsWhatTheAuthNeeds(t *testing.T) {
 		t.Errorf("data %v, missing %q", data, missing)
 	}
 	delete(stored["cloud"], "password")
-	if _, missing = logOutputSecretData(allOutputs, stored); !strings.Contains(missing, "cloud has no password") {
+	if _, missing = logOutputSecretData(allOutputs, stored); !strings.Contains(missing, "cloud waits for password") {
 		t.Errorf("missing %q", missing)
 	}
 	if _, missing = logOutputSecretData(allOutputs, nil); !strings.Contains(missing, "splunk") {

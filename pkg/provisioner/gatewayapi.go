@@ -46,6 +46,16 @@ import (
 var gatewayAPIFiles embed.FS
 
 const (
+	// GatewayAPIReadyCondition on a Cluster says whether its Gateway API is recorded, and else what
+	// the Gateway API reconciler waits for or what failed.
+	GatewayAPIReadyCondition = "GatewayAPIReady"
+	// GatewayAPIRecordedReason is its reason once the release is recorded, which its message names.
+	GatewayAPIRecordedReason = "Recorded"
+	// GatewayAPIWaitingReason is its reason while the reconciler waits, its message saying what for.
+	GatewayAPIWaitingReason = "Waiting"
+	// GatewayAPIFailedReason is its reason when a step failed, its message giving the error.
+	GatewayAPIFailedReason = "Failed"
+
 	// bundleVersionAnnotation names the Gateway API release each of its objects comes from.
 	bundleVersionAnnotation = "gateway.networking.k8s.io/bundle-version"
 	// gatewayAPIAnnotation records on a Cluster the oldest Gateway API release among the CRDs its
@@ -252,7 +262,9 @@ func (r *GatewayAPIReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // Reconcile implements reconcile.Reconciler. A workload cluster is reached once its control plane
-// is initialised, so that a cluster still being built returns no errors.
+// is initialised, so that a cluster still being built returns no errors. Each look sets the
+// cluster's GatewayAPIReadyCondition to what it found: what it waits for, what failed, or the
+// release recorded.
 func (r *GatewayAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	cluster := &clusterv1.Cluster{}
 	if err := r.Client.Get(ctx, req.NamespacedName, cluster); err != nil {
@@ -266,48 +278,70 @@ func (r *GatewayAPIReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		r.forgetCluster(req.NamespacedName)
 		return ctrl.Result{}, nil
 	}
+	result, waits, err := r.reconcileCluster(ctx, cluster)
+	cond := &metav1.Condition{Status: metav1.ConditionTrue, Reason: GatewayAPIRecordedReason, Message: "release " + cluster.Annotations[gatewayAPIAnnotation]}
+	switch _, recorded := cluster.Annotations[gatewayAPIAnnotation]; {
+	case err != nil:
+		cond = &metav1.Condition{Status: metav1.ConditionFalse, Reason: GatewayAPIFailedReason, Message: err.Error()}
+	case waits != "":
+		cond = &metav1.Condition{Status: metav1.ConditionFalse, Reason: GatewayAPIWaitingReason, Message: waits}
+	case !recorded:
+		cond = &metav1.Condition{Status: metav1.ConditionFalse, Reason: GatewayAPIWaitingReason, Message: "finds no release of the Gateway API's CRDs to record"}
+	}
+	_, markErr := keepCondition(ctx, r.Client, nil, cluster, GatewayAPIReadyCondition, cond)
+	return result, errors.Join(err, markErr)
+}
+
+// reconcileCluster keeps the cluster's Gateway API and records its release, or says what it waits
+// for. Its errors say what was being done.
+func (r *GatewayAPIReconciler) reconcileCluster(ctx context.Context, cluster *clusterv1.Cluster) (ctrl.Result, string, error) {
 	if initialised := cluster.Status.Initialization.ControlPlaneInitialized; initialised == nil || !*initialised {
-		return ctrl.Result{RequeueAfter: waitInterval}, nil
+		return ctrl.Result{RequeueAfter: waitInterval}, "waits for the control plane to be initialised", nil
 	}
 	workload, found, err := r.Remotes.get(ctx, cluster)
 	if err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, "", fmt.Errorf("reaching the cluster: %w", err)
 	}
 	if !found {
-		return ctrl.Result{RequeueAfter: waitInterval}, nil
+		return ctrl.Result{RequeueAfter: waitInterval}, "waits for the cluster's kubeconfig", nil
 	}
+	key := client.ObjectKeyFromObject(cluster)
 	distribution := distributionOf(cluster)
 	// RKE2's and k3s's charts hold the CRDs, or will once a later release brings a Gateway API chart,
 	// often of an older release than Kubehenge's. A policy of Kubehenge's would refuse them, so it is
 	// withdrawn first, also while those charts install.
-	_, charts := chartsOf(distribution)
+	names, charts := chartsOf(distribution)
 	if charts {
-		if err = r.withdrawPolicy(ctx, req.NamespacedName, workload.client, "the distribution's charts hold the CRDs"); err != nil {
+		if err = r.withdrawPolicy(ctx, key, workload.client, "the distribution's charts hold the CRDs"); err != nil {
 			r.Remotes.forget(cluster)
-			return ctrl.Result{}, err
+			return ctrl.Result{}, "", fmt.Errorf("withdrawing Kubehenge's Gateway API admission policy: %w", err)
 		}
 	}
 	ready, owner, err := distributionGatewayAPI(ctx, workload.client, distribution)
 	if err != nil {
 		r.Remotes.forget(cluster)
-		return ctrl.Result{}, err
+		return ctrl.Result{}, "", fmt.Errorf("reading the distribution's Gateway API charts: %w", err)
 	}
 	if !ready {
-		return ctrl.Result{RequeueAfter: waitInterval}, nil
+		chart := names.traefikCRD
+		if owner != "" {
+			chart = names.gatewayAPI
+		}
+		return ctrl.Result{RequeueAfter: waitInterval}, fmt.Sprintf("waits for %s's %s chart, which has not deployed", distribution.Title(), chart), nil
 	}
-	installed, applied, err := r.ensure(ctx, req.NamespacedName, workload.client, owner, !charts)
+	installed, applied, err := r.ensure(ctx, key, workload.client, owner, !charts)
 	if err != nil {
 		r.Remotes.forget(cluster)
-		return ctrl.Result{}, err
+		return ctrl.Result{}, "", fmt.Errorf("applying the Gateway API: %w", err)
 	}
 	// What was applied is recorded once it is seen in the cluster.
 	if applied {
-		return ctrl.Result{RequeueAfter: waitInterval}, nil
+		return ctrl.Result{RequeueAfter: waitInterval}, "waits to see the CRDs it applied", nil
 	}
 	if err := r.record(ctx, cluster, installed); err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, "", err
 	}
-	return ctrl.Result{RequeueAfter: gatewayAPIInterval}, nil
+	return ctrl.Result{RequeueAfter: gatewayAPIInterval}, "", nil
 }
 
 // ensure applies each CRD of the bundle the workload cluster lacks, or has in an older release that
@@ -798,7 +832,9 @@ func (r *GatewayAPIReconciler) record(ctx context.Context, cluster *clusterv1.Cl
 // gatewayAPIWaits holds back what needs the Gateway API in the workload cluster until the cluster
 // has it: Traefik's chart creates a Gateway, which an API server without the CRDs refuses, and the
 // Add-on Provider for Helm puts each install after a failed one further off.
-func gatewayAPIWaits(_ context.Context, cluster *clusterv1.Cluster) (bool, error) {
-	_, has := cluster.Annotations[gatewayAPIAnnotation]
-	return !has, nil
+func gatewayAPIWaits(_ context.Context, cluster *clusterv1.Cluster) (string, error) {
+	if _, has := cluster.Annotations[gatewayAPIAnnotation]; has {
+		return "", nil
+	}
+	return gatewayAPIWait, nil
 }

@@ -37,25 +37,24 @@ func turtlesValues(turtles, clusterAPI Image) (string, error) {
 }
 
 // rancherConfigWaits gives Rancher the values it installs Turtles with before Rancher's chart
-// installs, and reports whether Rancher's chart has to wait, as it does while the cluster cannot
-// be reached. Rancher reads them only from its rancher-config ConfigMap, which its chart makes
+// installs, and says what Rancher's chart waits for: the cluster's API while it cannot be reached. Rancher reads them only from its rancher-config ConfigMap, which its chart makes
 // without them. Installed first, it would pull Turtles by tag. The ConfigMap carries the marks
 // of Rancher's release, so Helm takes it over as it installs, and keeps the key it does not
 // manage there.
-func (r *Reconciler) rancherConfigWaits(ctx context.Context, cluster *clusterv1.Cluster) (bool, error) {
+func (r *Reconciler) rancherConfigWaits(ctx context.Context, cluster *clusterv1.Cluster) (string, error) {
 	workload, found, err := r.Remotes.get(ctx, cluster)
 	if err != nil || !found {
-		return true, err
+		return clusterAPIWait, err
 	}
 	values, err := turtlesValues(r.Charts.Turtles, r.Charts.TurtlesClusterAPI)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	if err := writeRancherConfig(ctx, workload.client, values); err != nil {
 		r.Remotes.forget(cluster)
-		return false, err
+		return "", err
 	}
-	return false, nil
+	return "", nil
 }
 
 func writeRancherConfig(ctx context.Context, workload client.Client, values string) error {

@@ -1362,7 +1362,7 @@ Some ACME servers accept only accounts tied to one their operator made: a step-c
 - **The HMAC key** is the cluster's own credential, typed in when creating the cluster or under **Options**. The interface keeps it in the Secret `<cluster>.acme-eab` beside the Cluster and never shows it again.
 - Kubehenge's controller copies it into the `cert-manager` namespace of the workload cluster (`kubehenge-acme-eab`), and the ClusterIssuer's `externalAccountBinding.keySecretRef` points there.
 - Cert-manager signs with HS256, the only algorithm ACME defines for it, so there is nothing to set.
-- A cluster without the key gets a `NoACMEEABCredential` event and no issuer, since a registration without it would fail.
+- A cluster without the key gets no issuer, since a registration without it would fail. Its condition `AddonsWaiting` names the Secret to create.
 
 ### An issuer you run
 
@@ -1399,7 +1399,7 @@ The credential comes from one of three places, the first that applies:
 3. **The cluster's own**, typed in when creating the cluster or under **Options**.
    - The interface keeps it in the Secret `<cluster>.dns01` beside the Cluster and never shows it again.
 
-Kubehenge's controller copies the stored credential into the `cert-manager` namespace of the workload cluster (`kubehenge-dns01`). The copy follows any change of the stored credential. A cluster without a credential gets a `NoDNS01Credential` event. Its certificates wait.
+Kubehenge's controller copies the stored credential into the `cert-manager` namespace of the workload cluster (`kubehenge-dns01`). The copy follows any change of the stored credential. A cluster without a credential gets no DNS-01 issuer, and its condition `AddonsWaiting` names the Secret to create. Its certificates wait.
 
 With split-horizon DNS, the domain answers differently inside the network than outside. `dns01.nameservers` then names the servers (host:port) cert-manager checks the challenge's record with, such as the domain's authoritative servers. Only Kubehenge's own cert-manager gets them.
 

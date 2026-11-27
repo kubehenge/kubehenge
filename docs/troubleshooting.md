@@ -404,6 +404,8 @@ Nodes keep the taint `node.cloudprovider.kubernetes.io/uninitialized`. Pods stay
 
 Persistent volumes that stay pending point the same way. The CSI plugin's controller uses the same address and token.
 
+A Warning event `ServingCertificatePending` on the Cluster names a node whose kubelet asked for a serving certificate with an address or name that is not its Machine's. Kubehenge leaves that request pending, so `kubectl logs` and metrics from that node fail. Find where the extra address comes from on the node, then delete the request (`kubectl get csr` in the cluster).
+
 #### HA group errors in the cloud controller manager's log
 
 The cloud controller manager logs `failed to get HA group for the node` with `403 Permission check failed (/, Sys.Audit)` for every node now and then. It means only that the nodes go without the HA rule labels. Reading Proxmox VE's HA groups needs `Sys.Audit` on `/`. A cluster's token holds it only with **Add HA rule labels** on (the `ccm` variable's `haGroups`, on by default, [clusters.md](clusters.md#machines)).
@@ -608,6 +610,7 @@ Give the workers more cores (`workerMachine`, or a worker pool's override), add 
   - That needs the cluster reachable and istio-cni running on the pod's node.
   - A pod whose node is gone keeps the annotation. Delete the pod.
 - **Waypoints are not created.** They need the Gateway API's CRDs, which every cluster has once the annotation `kubehenge.dev/gateway-api` is on its Cluster ([clusters.md](clusters.md#routes-through-the-gateway-api)).
+  - The condition `GatewayAPIReady` says what they wait for. `Waiting` names it, `Failed` gives the error, and `True` names the release recorded.
 
 ### Cluster Mesh
 
@@ -631,6 +634,7 @@ Give the workers more cores (`workerMachine`, or a worker pool's override), add 
 
 #### Registering and leaving
 
+- **`RancherRegistered` is `False`.** Its message says what registration waits for, such as Rancher's API or its agent connecting. The reason `Failed` gives the error. It turns `True` once Rancher has the cluster ready.
 - **Clusters do not register.** Rancher's host name must resolve, for people and every registered cluster, to the Rancher cluster's ingress controller. That answers on the cluster's API address and on every node.
 - **Removing Rancher takes long.** It waits until Rancher has let go of every registered cluster, which needs each of them reachable. Meanwhile the Rancher cluster shows `RemovingRancher` events and applies its other changes.
 - **Rancher's agent stays after a cluster leaves Rancher.** Rancher removes it with a `cattle-cleanup-…` job in the `default` namespace, whose pod does not meet `restricted` ([rancher/rancher#58081](https://github.com/rancher/rancher/issues/58081)).
@@ -700,7 +704,7 @@ kubectl -n logging-node logs ds/alloy-node | grep out_<name>
 
 Component names are `out_<name>`, with hyphens as underscores. Alloy drops what an endpoint keeps refusing. Loki still has those logs.
 
-- **A `LogOutputCredentialMissing` event on the Cluster** means the stored credential `<cluster>.log-<name>` lacks `username` and `password`, or `token`. Store it again under **Options**.
+- **`AddonsWaiting` with the reason `CredentialMissing`**, "log output <name> waits for …", means the stored credential `<cluster>.log-<name>` is missing or lacks `username` and `password`, or `token`. Store it again under **Options**.
   - Alloy runs meanwhile, and the output reports an unreadable file.
 - **`401` or `403` in Alloy's log** means the endpoint refused the credential. Store a new one.
 - **`x509: certificate signed by unknown authority`.** Paste the endpoint's CA into **CA certificate**.
@@ -848,6 +852,9 @@ Rancher, monitoring and the logs add-on install only once Kubehenge's cert-manag
 | `WaitingForCertManager` | cert-manager is installing, waits for the cluster's Gateway API definitions, or waits until the cluster can be read for a cert-manager of its own. On RKE2 and k3s the Gateway API definitions come from the chart `rke2-traefik-crd` or `traefik-crd`. A wait for the read clears once the cluster's API answers. The add-ons follow once cert-manager is deployed. If cert-manager's install fails, `kubectl -n <namespace> get helmreleaseproxies` in the management cluster gives Helm's error. |
 | `GatewayAPIMissing` | No Gateway API definitions are recorded 10 minutes after the control plane came up. If the message says the chart has not deployed, read its install in the cluster: `kubectl -n kube-system logs job/helm-install-rke2-traefik-crd`, or `helm-install-traefik-crd` on k3s. If the chart is deployed, check that `kubectl get crd gateways.gateway.networking.k8s.io` answers in the cluster, and read the controller's log. |
 
+| `Waiting` | Each line says what an add-on waits for: another add-on to be deployed, the cluster's API, the Gateway API definitions, or a credential for the backup target. Each clears on its own once that is there. A Warning event `AddonsWaiting` repeats the lines when they change. |
+| `CredentialMissing` | A credential the add-on needs is not stored. The line names the Secret to create, or the log output whose credential is missing. Store it under the cluster's **Options**. |
+
 A Helm error "no matches for kind … cert-manager.io" in an add-on's message means the cluster lacks cert-manager's definitions. The add-on installs once they exist.
 
 ### Add-ons wait for a volume
@@ -922,8 +929,8 @@ The condition's reason says where renewal stands:
 
 | Problem | Cause and fix |
 | --- | --- |
-| `NoDNS01Credential`, "no DNS-01 credential is stored for the cluster (…): store one, or name an existing Secret" | The `acme-dns01` issuer has no credential for the DNS provider, and the cluster's certificates wait. Type it in under the cluster's **Options**, take the one an administrator stored for every cluster (`dns01.sharedCredential`), or name a Secret of your own in `dns01.existingSecret` ([clusters.md](clusters.md#dns-providers)). |
-| `NoACMEEABCredential`, "no external account binding key is stored for the cluster (…)" | The variable names a key ID but the HMAC key is missing. No issuer is made. Type it in under the cluster's **Options**, **Certificates** ([clusters.md](clusters.md#external-account-binding)). |
+| `AddonsWaiting`, "certificates waits for the DNS-01 credential in Secret …" | The `acme-dns01` issuer has no credential for the DNS provider. It is not applied, and the cluster's certificates wait. Type it in under the cluster's **Options**, take the one an administrator stored for every cluster (`dns01.sharedCredential`), or name a Secret of your own in `dns01.existingSecret` ([clusters.md](clusters.md#dns-providers)). |
+| `AddonsWaiting`, "certificates waits for the ACME external account binding key in Secret …" | The variable names a key ID but the HMAC key is missing. No issuer is made. Type it in under the cluster's **Options**, **Certificates** ([clusters.md](clusters.md#external-account-binding)). |
 | `externalAccountRequired` in the ClusterIssuer's `Ready` message (`kubectl describe clusterissuer kubehenge-ingress` in the cluster) | The ACME server accepts only accounts tied to one its operator made. Set `acme.externalAccountBinding.keyID` and store the HMAC key it gave you. |
 | An issuer of your own (`issuer: external`) is not `Ready` | Kubehenge only points its certificates at it. Read its `Ready` condition with `kubectl get clusterissuer <issuerName> -o yaml` in the cluster. Create it with the name, kind and group the variable gives ([clusters.md](clusters.md#an-issuer-you-run)). |
 

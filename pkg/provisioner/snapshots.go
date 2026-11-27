@@ -319,12 +319,11 @@ func snapshotClassProxy(cluster *clusterv1.Cluster) string {
 // snapshotClassWaits holds the VolumeSnapshotClass back until the snapshot controller's release,
 // with the CRDs, is deployed: Helm cannot install a release of kinds the API server does not serve
 // yet. RKE2's are there from the start.
-func (r *Reconciler) snapshotClassWaits(ctx context.Context, cluster *clusterv1.Cluster) (bool, error) {
+func (r *Reconciler) snapshotClassWaits(ctx context.Context, cluster *clusterv1.Cluster) (string, error) {
 	if distributionOf(cluster) == templates.RKE2 {
-		return false, nil
+		return "", nil
 	}
-	ready, err := r.proxyReady(ctx, cluster, snapshotControllerProxy(cluster))
-	return !ready, err
+	return r.releaseWait(ctx, cluster, snapshotControllerProxy(cluster))
 }
 
 // removeVolumeSnapshots takes volume snapshots out of a cluster that switched them off: the

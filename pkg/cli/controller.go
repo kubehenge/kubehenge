@@ -799,7 +799,9 @@ func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *pro
 	if err := tainter.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the control-plane taints: %w", err)
 	}
-	approver := &provisioner.ServingCertApprover{Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Remotes: registrar.Remotes}
+	approver := &provisioner.ServingCertApprover{
+		Client: mgr.GetClient(), ClassNamespace: o.r.ClassNamespace, Remotes: registrar.Remotes, Events: mgr.GetEventRecorder("kubehenge"),
+	}
 	if err := approver.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("the kubelet serving certificates: %w", err)
 	}

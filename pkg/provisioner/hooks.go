@@ -9,6 +9,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -261,10 +262,7 @@ func (h *Hooks) BeforeClusterCreate(ctx context.Context, req *runtimehooksv1.Bef
 	switch {
 	case apierrors.IsNotFound(err) || err == nil && !isReady(s):
 		resp.RetryAfterSeconds = 5
-		resp.Message = "waiting for the cluster's Proxmox VE pool, user and token"
-		if failed := cloudFailure(cluster); failed != "" {
-			resp.Message = "Proxmox VE objects: " + failed
-		}
+		resp.Message = heldBecause(cluster)
 	case err != nil:
 		ctrl.LoggerFrom(ctx).Error(err, "reading the cluster's Proxmox VE credentials", "cluster", client.ObjectKeyFromObject(cluster))
 		resp.Status = runtimehooksv1.ResponseStatusFailure
@@ -281,6 +279,21 @@ func (h *Hooks) storedCluster(ctx context.Context, sent *clusterv1.Cluster) (*cl
 		return nil, fmt.Errorf("reading cluster %s/%s: %w", sent.Namespace, sent.Name, err)
 	}
 	return c, nil
+}
+
+// heldBecause says why BeforeClusterCreate holds the cluster: what the controller last said of it,
+// a failure of its Proxmox VE objects first, or else that they are being made.
+func heldBecause(c *clusterv1.Cluster) string {
+	if failed := cloudFailure(c); failed != "" {
+		return "Proxmox VE objects: " + failed
+	}
+	if cond := meta.FindStatusCondition(c.Status.Conditions, KubehengeReadyCondition); cond != nil && cond.Status == metav1.ConditionFalse && cond.Message != "" {
+		return cond.Message
+	}
+	if cond := meta.FindStatusCondition(c.Status.Conditions, AddonsWaitingCondition); cond != nil && cond.Status == metav1.ConditionTrue && cond.Message != "" {
+		return cond.Message
+	}
+	return "waiting for the cluster's Proxmox VE pool, user and token"
 }
 
 // refusal is the first reason BeforeClusterCreate refuses the cluster for, or nil.

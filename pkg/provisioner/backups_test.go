@@ -339,7 +339,7 @@ func TestBackupsWaitWithTheOwnersSecret(t *testing.T) {
 	r.Remotes = &Remotes{byCluster: map[string]remote{remoteKey(c): {client: workload, until: time.Now().Add(time.Hour)}}}
 	b, _, _ := optionalVariable[Backups](c, backupsVariable)
 	wait, err := r.backupsWait(context.Background(), c, &b, nil)
-	if err != nil || wait {
+	if err != nil || wait != "" {
 		t.Fatalf("waits %v: %v", wait, err)
 	}
 	ctx := context.Background()

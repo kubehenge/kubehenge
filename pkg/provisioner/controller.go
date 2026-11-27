@@ -226,6 +226,11 @@ func (r *Reconciler) reconcileAddons(ctx context.Context, cluster *clusterv1.Clu
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	certificateWaits, err := r.certificateWaits(ctx, cluster, &addons.Certificates)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	addons.waits = append(addons.waits, certificateWaits...)
 	volumeWaits := r.addonVolumeWaits(ctx, cluster, &addons)
 	conflicts, err := r.recordAddonsWaiting(ctx, cluster, &addons, volumeWaits)
 	if err != nil {
@@ -591,7 +596,7 @@ func (r *Reconciler) removeSwitchedOff(ctx context.Context, cluster *clusterv1.C
 	if !addons.logsOn() {
 		// The Secret of the outputs' credentials goes with the Alloys it was for. A cluster that
 		// cannot be reached yet keeps its annotation, so this runs again.
-		if _, err := r.logOutputsWait(ctx, cluster, Logs{}); err != nil {
+		if _, _, err := r.logOutputsWait(ctx, cluster, Logs{}); err != nil {
 			return false, err
 		}
 	}
@@ -708,13 +713,16 @@ func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluste
 	}
 	addons.rollout, addons.pending, addons.conflicts = gate, nil, nil
 	addons.certManagerConflict, addons.certManagerWaiting = addonConflict{}, nil
-	addons.clusterCertManager, addons.certManagerUnread = false, false
+	addons.clusterCertManager, addons.certManagerUnread, addons.waits = false, false, nil
 	labels := proxyNamespaces(proxies)
 	labelsWait, err := r.applyNamespaceLabels(ctx, cluster, labels, addons.NamespaceLabels)
 	if err != nil {
 		return false, err
 	}
 	waiting := labelsWait
+	if labelsWait {
+		addons.waits = namespaceLabelWaits(labels)
+	}
 	for _, p := range proxies {
 		if labelsWait && slices.Contains(labels, specText(p.Object["spec"], "namespace")) {
 			continue
@@ -741,6 +749,14 @@ func (r *Reconciler) applyProxies(ctx context.Context, cluster *clusterv1.Cluste
 		}
 	}
 	return waiting, nil
+}
+
+// namespaceLabelWaits is the waiting line of the add-ons whose namespaces wait to be labelled.
+func namespaceLabelWaits(labels []string) []addonWait {
+	if len(labels) == 0 {
+		return nil
+	}
+	return []addonWait{{reason: AddonsWaitingReason, line: "the add-ons in " + andJoined(labels) + " wait for " + clusterAPIWait + " to label their namespaces"}}
 }
 
 // proxyStates are what a proxy does in a reconcile: it is applied, it waits for what its chart needs
@@ -776,21 +792,32 @@ func (r *Reconciler) proxyState(ctx context.Context, cluster *clusterv1.Cluster,
 		addons.conflicts = append(addons.conflicts, conflict)
 		return proxyConflicts, nil
 	}
-	waits, err := r.chartWaits(ctx, cluster, p.GetName(), addons)
-	if waits {
-		return proxyWaits, err
+	what, err := r.chartWaits(ctx, cluster, p.GetName(), addons)
+	switch {
+	case err != nil:
+		return proxyReady, err
+	case what == "":
+		return proxyReady, nil
+	case what != certManagerAddon:
+		// The add-ons that wait for cert-manager are said in one line of their own.
+		addons.waits = append(addons.waits, chartWait(addonOf(cluster, p.GetName()), what))
 	}
-	return proxyReady, err
+	return proxyWaits, nil
 }
 
-// chartWaits reports whether the proxy named waits for what its chart needs first.
-func (r *Reconciler) chartWaits(ctx context.Context, cluster *clusterv1.Cluster, name string, addons *Addons) (bool, error) {
+// chartWaits says what the proxy named waits for before its chart is applied, or "" where it waits
+// for nothing.
+func (r *Reconciler) chartWaits(ctx context.Context, cluster *clusterv1.Cluster, name string, addons *Addons) (string, error) {
 	if slices.Contains(certManagerUsers(cluster), name) {
-		if waits, err := r.certManagerWaits(ctx, cluster, name, addons); waits || err != nil {
-			return waits, err
+		waits, err := r.certManagerWaits(ctx, cluster, name, addons)
+		if waits {
+			return certManagerAddon, err
+		}
+		if err != nil {
+			return "", err
 		}
 	}
-	var wait func(context.Context, *clusterv1.Cluster) (bool, error)
+	var wait func(context.Context, *clusterv1.Cluster) (string, error)
 	switch name {
 	case kyvernoPoliciesProxy(cluster):
 		wait = r.policiesWait
@@ -799,17 +826,21 @@ func (r *Reconciler) chartWaits(ctx context.Context, cluster *clusterv1.Cluster,
 	case traefikProxy(cluster), certManagerProxy(cluster):
 		wait = gatewayAPIWaits
 	case veleroProxy(cluster):
-		wait = func(ctx context.Context, c *clusterv1.Cluster) (bool, error) {
+		wait = func(ctx context.Context, c *clusterv1.Cluster) (string, error) {
 			return r.backupsWait(ctx, c, &addons.Backups, addons.backupSources)
 		}
 	case alloyProxy(cluster):
-		wait = func(ctx context.Context, c *clusterv1.Cluster) (bool, error) {
-			return r.logOutputsWait(ctx, c, addons.Logs)
+		wait = func(ctx context.Context, c *clusterv1.Cluster) (string, error) {
+			what, missing, err := r.logOutputsWait(ctx, c, addons.Logs)
+			if missing != "" {
+				addons.waits = append(addons.waits, addonWait{addon: logsAddon, reason: AddonsWaitingCredentialMissing, line: missing})
+			}
+			return what, err
 		}
 	case snapshotClassProxy(cluster):
 		wait = r.snapshotClassWaits
 	default:
-		return false, nil
+		return "", nil
 	}
 	return wait(ctx, cluster)
 }

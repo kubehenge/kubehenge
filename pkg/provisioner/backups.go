@@ -570,30 +570,33 @@ const (
 // backupsWait puts what Velero needs into the workload cluster before its chart: the namespace, the
 // repository password, the SSE-C key and, unless the cluster's owner keeps them in a Secret of
 // their own there, the store's keys. Velero would make a repository password of its own, the same
-// for every installation, were it to start without one. It reports whether the chart has to wait,
-// for the cluster's API or for a credential. The SSE-C keys of the clusters it reads the backups of
+// for every installation, were it to start without one. It says what the chart waits for: the
+// cluster's API or a credential. The SSE-C keys of the clusters it reads the backups of
 // go beside its own, and what is left of those it no longer reads is taken away.
-func (r *Reconciler) backupsWait(ctx context.Context, cluster *clusterv1.Cluster, b *Backups, sources []backupSource) (bool, error) {
+func (r *Reconciler) backupsWait(ctx context.Context, cluster *clusterv1.Cluster, b *Backups, sources []backupSource) (string, error) {
 	keys, err := r.backupKeys(ctx, cluster, true)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	creds, held, err := r.veleroCredential(ctx, cluster, b)
-	if err != nil || held {
-		return held, err
+	switch {
+	case err != nil:
+		return "", err
+	case held:
+		return "a credential for the backup target", nil
 	}
 	workload, found, err := r.Remotes.get(ctx, cluster)
 	if err != nil || !found {
-		return true, err
+		return clusterAPIWait, err
 	}
 	if err = r.markBackupsInstalled(ctx, keys); err != nil {
-		return false, err
+		return "", err
 	}
 	if err = fillVeleroNamespace(ctx, workload.client, veleroSecrets(keys, creds, sources), sources); err != nil {
 		r.Remotes.forget(cluster)
-		return false, err
+		return "", err
 	}
-	return false, nil
+	return "", nil
 }
 
 // veleroCredential finds the store's keys Kubehenge puts into the cluster for Velero, or none when

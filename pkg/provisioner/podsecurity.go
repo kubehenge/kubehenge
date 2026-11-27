@@ -172,23 +172,22 @@ func kyvernoPolicyValues(level string, exempt []string) map[string]any {
 	}
 }
 
-// policiesWait reports whether Kyverno's policies wait for Kyverno, as they do until Kyverno's
+// policiesWait says what Kyverno's policies wait for, as they wait for Kyverno until Kyverno's
 // release is deployed for its current spec: before, their kinds are unknown to the cluster, and the
 // Add-on Provider for Helm puts each install after a failed one further off, past what a cluster
 // whose API server is slow to take Kyverno's custom resource definitions waits. Policies already
 // installed stay.
-func (r *Reconciler) policiesWait(ctx context.Context, cluster *clusterv1.Cluster) (bool, error) {
+func (r *Reconciler) policiesWait(ctx context.Context, cluster *clusterv1.Cluster) (string, error) {
 	p := &unstructured.Unstructured{}
 	p.SetGroupVersionKind(helmChartProxyGVK)
 	err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: kyvernoPoliciesProxy(cluster)}, p)
 	switch {
 	case err == nil:
-		return false, nil
+		return "", nil
 	case !apierrors.IsNotFound(err):
-		return false, fmt.Errorf("reading add-on %s: %w", kyvernoPoliciesProxy(cluster), err)
+		return "", fmt.Errorf("reading add-on %s: %w", kyvernoPoliciesProxy(cluster), err)
 	}
-	ready, err := r.proxyReady(ctx, cluster, kyvernoProxy(cluster))
-	return !ready, err
+	return r.releaseWait(ctx, cluster, kyvernoProxy(cluster))
 }
 
 // removeKyverno uninstalls Kyverno's policies, and Kyverno once they are gone: their release

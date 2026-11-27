@@ -235,6 +235,8 @@ type Addons struct {
 	certManagerWaiting  []string
 	clusterCertManager  bool
 	certManagerUnread   bool
+	// waits are the lines of AddonsWaitingCondition beside cert-manager's and the volumes'.
+	waits []addonWait
 	// talosServing is set when every controller manager and scheduler of a Talos cluster serves a
 	// certificate of the cluster CA (talosServesControlPlaneMetrics), so that their metrics are
 	// scraped as on the other distributions.

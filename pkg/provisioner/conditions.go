@@ -91,6 +91,21 @@ func setClusterCondition(ctx context.Context, c client.Client, live client.Reade
 	return before, nil
 }
 
+// keepCondition sets the cluster's condition of condType to cond, or takes it off where cond is
+// nil, and writes only when that changes what the cluster in hand carries, so that a condition set
+// on every reconcile costs no write while it holds. It reports whether it wrote.
+func keepCondition(ctx context.Context, c client.Client, live client.Reader, cluster *clusterv1.Cluster, condType string, cond *metav1.Condition) (bool, error) {
+	found := meta.FindStatusCondition(cluster.Status.Conditions, condType)
+	switch {
+	case cond == nil && found == nil:
+		return false, nil
+	case cond != nil && found != nil && found.Status == cond.Status && found.Reason == cond.Reason && found.Message == shorten(cond.Message, watchMessageMax):
+		return false, nil
+	}
+	_, err := markCluster(ctx, c, live, client.ObjectKeyFromObject(cluster), condType, cond)
+	return true, err
+}
+
 // liveOr is live, or c where no live reader is set.
 func liveOr(live client.Reader, c client.Client) client.Reader { //nolint:ireturn // either reader serves
 	if live == nil {

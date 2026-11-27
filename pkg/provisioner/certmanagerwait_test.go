@@ -158,12 +158,12 @@ func TestEachCertManagerUserWaits(t *testing.T) {
 	r, _ := newReconciler(t, &fakeCloud{}, c)
 	for _, name := range []string{rancherProxy(c), monitoringProxy(c), lokiProxy(c), alloyProxy(c), alloyNodeProxy(c)} {
 		addons := &Addons{}
-		waits, err := r.chartWaits(context.Background(), c, name, addons)
+		what, err := r.chartWaits(context.Background(), c, name, addons)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := strings.TrimPrefix(name, c.Name+"-"); !waits || !slices.Equal(addons.certManagerWaiting, []string{want}) {
-			t.Errorf("%s: waits %v, waiting for cert-manager %v", name, waits, addons.certManagerWaiting)
+		if want := strings.TrimPrefix(name, c.Name+"-"); what != certManagerAddon || !slices.Equal(addons.certManagerWaiting, []string{want}) || len(addons.waits) != 0 {
+			t.Errorf("%s: waits for %q, waiting for cert-manager %v, lines %v", name, what, addons.certManagerWaiting, addons.waits)
 		}
 	}
 }
