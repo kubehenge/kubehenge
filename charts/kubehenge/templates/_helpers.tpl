@@ -2124,7 +2124,7 @@ write. 8 GiB is the most etcd's documentation suggests.
           minimum: 2
           maximum: 8
           default: 8
-          description: The most one member's database may reach, in GiB. Lowering it needs every database well under the new limit.
+          description: The most one member's database may reach, in GiB. Lowering it needs every database under 60% of the new limit.
 {{- end -}}
 
 {{/*

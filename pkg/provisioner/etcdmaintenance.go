@@ -168,14 +168,14 @@ func validateEtcdQuota(old, c *clusterv1.Cluster, at time.Time) field.ErrorList 
 	path := field.NewPath("spec", "topology", "variables").Key(etcdVariable)
 	status, ok := LastEtcdStatus(old)
 	if reason := etcdSizesUntrusted(old, &status, ok, at); reason != "" {
-		return field.ErrorList{field.Forbidden(path, "the etcd limit cannot be lowered until the controller has read every member's database size again, since a database above it stops accepting writes: "+reason)}
+		return field.ErrorList{field.Forbidden(path, "the etcd limit cannot be lowered without a recent read of every member's database size: "+reason)}
 	}
 	var errs field.ErrorList
 	for i := range status.Members {
 		m := &status.Members[i]
 		if m.DBSize*percentOf > now.QuotaBytes()*EtcdWarnPercent {
-			errs = append(errs, field.Forbidden(path, fmt.Sprintf("etcd member %s's database is %.1f GiB, too large for a limit of %d GiB: a database above the limit stops accepting writes and needs %d%% of room",
-				m.Name, float64(m.DBSize)/float64(bytesPerGiB), now.QuotaGiB, percentOf-EtcdWarnPercent)))
+			errs = append(errs, field.Forbidden(path, fmt.Sprintf("etcd member %s's database is %.1f GiB, too large for a limit of %d GiB: it must stay under %d%% of the limit",
+				m.Name, float64(m.DBSize)/float64(bytesPerGiB), now.QuotaGiB, EtcdWarnPercent)))
 		}
 	}
 	return errs

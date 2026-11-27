@@ -174,7 +174,7 @@ A node that never joins its cluster says why in its boot log ([troubleshooting.m
 
 - **What it grants:** the controller's token holds `VM.GuestAgent.FileRead` and `VM.GuestAgent.Audit` on the workload pool, propagated.
   - With them, the token may read files in every cluster VM through the guest agent, and the network addresses the agent reports. It runs no commands and writes nothing.
-  - The addresses tell a machine whose node never joined that another host holds the address it was given.
+  - The addresses show which machines' VMs lack the address they were given, as when another host holds it.
 - **What it reaches:** only the files the node's guest agent may open.
   - Kubehenge's node templates allow the agent to read cloud-init's output and the node's copy of its journals (`/var/log/kubehenge`, root's alone).
   - Their SELinux policy keeps it from the rest of `/var/log` and from the node's keys and kubeconfigs.

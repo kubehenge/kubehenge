@@ -317,7 +317,11 @@ func certificatesSettings(addons *Addons) string {
 	if addons.viaProxy.on() {
 		settings = append(settings, "the egress proxy")
 	}
-	return "certificates uses the cluster's own cert-manager, so " + andJoined(settings) + " are not applied. Set them on that cert-manager"
+	them := "them"
+	if len(settings) == 1 {
+		them = "it"
+	}
+	return "certificates uses the cluster's own cert-manager, which Kubehenge does not give " + andJoined(settings) + ". Set " + them + " on that cert-manager"
 }
 
 // addonIngress is the TLS and the annotations of an add-on's Ingress for hostname. A certificate

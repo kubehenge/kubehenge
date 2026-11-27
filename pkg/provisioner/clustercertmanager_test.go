@@ -379,7 +379,7 @@ func TestCertificatesSettingsBesideTheClustersCertManager(t *testing.T) {
 	w.addons.viaProxy = egressEnv{url: "http://proxy.example.org:3128"}
 	w.inside(newClusterOwnCertManager(nil).objects()...)
 	w.apply()
-	want := "certificates uses the cluster's own cert-manager, so the default issuer for tls-acme Ingresses, dns01.nameservers and the egress proxy are not applied. Set them on that cert-manager"
+	want := "certificates uses the cluster's own cert-manager, which Kubehenge does not give the default issuer for tls-acme Ingresses, dns01.nameservers and the egress proxy. Set them on that cert-manager"
 	if len(w.addons.conflicts) != 1 || w.addons.conflicts[0].reason != AddonConflictSettingsReason || w.addons.conflicts[0].message != want {
 		t.Errorf("conflicts %+v", w.addons.conflicts)
 	}

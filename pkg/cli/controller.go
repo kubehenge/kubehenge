@@ -246,7 +246,7 @@ chart's PodTemplate, the only pod that mounts that token.`,
 	f.StringVar(&o.healthAddr, "health-address", ":8081", "address of the liveness and readiness probes")
 	f.StringVar(&o.metricsAddr, "metrics-address", ":8443", "address of the Prometheus metrics, served over HTTPS to callers the API server authorises for /metrics, or 0 for none")
 	o.logs.addFlags(f, "log in development mode, with stack traces from warnings up and a panic on what should never happen. Lines stay in JSON")
-	f.BoolVar(&o.bootLogs, "boot-logs", true, "read the boot logs of kubeadm, RKE2 and k3s nodes through their guest agents with this controller's token, which then needs VM.GuestAgent.FileRead and VM.GuestAgent.Audit on the workload pool. The second has it say which machines' VMs have no address")
+	f.BoolVar(&o.bootLogs, "boot-logs", true, "read the boot logs of kubeadm, RKE2 and k3s nodes through their guest agents with this controller's token, which then needs VM.GuestAgent.FileRead and VM.GuestAgent.Audit on the workload pool. The second lets it name the machines whose VMs lack their address")
 	f.BoolVar(&o.leaderElect, "leader-elect", true, "elect one active controller among replicas")
 	return cmd
 }

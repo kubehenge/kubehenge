@@ -185,7 +185,7 @@ request the controller defragments large, fragmented members inside the cluster'
 			return o.change(cmd.Context(), cmd.OutOrStdout(), args[0], map[string]any{variablesKey: map[string]any{"etcd": map[string]any{"quotaGiB": quota}}})
 		},
 	}
-	set.Flags().IntVar(&quota, "quota-gib", 0, "the most one member's database may reach, in GiB: 2 to 8, lowered only while every database stays well under it")
+	set.Flags().IntVar(&quota, "quota-gib", 0, "the most one member's database may reach, in GiB: 2 to 8, lowered only while every member's database stays under 60% of it")
 	_ = set.MarkFlagRequired("quota-gib")
 	cmd.AddCommand(defrag, set)
 	return cmd

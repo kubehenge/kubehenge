@@ -59,7 +59,11 @@ export function EtcdDialog({ cluster: c, onClose }: { cluster: Cluster; onClose:
         </>
       }
     >
-      <Field label="Database limit (GiB)" hint="Lowering needs every database well under the new limit." error={shown}>
+      <Field
+        label="Database limit (GiB)"
+        hint="Lowering needs every database under 60% of the new limit."
+        error={shown}
+      >
         {(id) => (
           <input
             id={id}

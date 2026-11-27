@@ -106,7 +106,7 @@ Where a node reports the bridge's network, the wizard fills in the API address a
 - the gateway, the node and every other cluster's addresses on the bridge
 - any address where a host answers the management cluster's ping, or its connection on port 22, 80, 443, 6443, 8006 or 50000
 
-Addresses you type are probed the same way and marked **In use** where a host answers. A host that answers no probe looks free, so the probe is only advice. The controller refuses addresses another cluster holds and, the management cluster's nodes' and API's on its bridge and VLAN, and the appliance's on the bridge and VLAN of each of its network cards.
+Addresses you type are probed the same way and marked **In use** where a host answers. A host that answers no probe looks free, so the probe is only advice. The controller refuses addresses another cluster holds, the management cluster's node and API addresses on its bridge and VLAN, and the appliance's addresses on the bridge and VLAN of each of its network cards.
 
 The interface's pod pings without privileges through the `net.ipv4.ping_group_range` sysctl. Without it, only the connections are tried.
 
@@ -1147,7 +1147,7 @@ The sections below cover the add-ons and sign-in.
 ### Monitoring settings
 
 - **Monitoring:** switch it on or off, set or clear Grafana's host name, and choose where alerts and samples go ([Monitoring alerts and remote write](#monitoring-alerts-and-remote-write)). The credentials are stored in the dialog at once, the rest with **Save**.
-  - Switching it off uninstalls it with its metrics proxies and certificates. It also uninstalls cert-manager, unless Rancher or the certificates add-on runs in the cluster. Switching logs off alone leaves it.
+  - Switching it off uninstalls it with its metrics proxies and certificates. It also uninstalls cert-manager, unless Rancher or the certificates add-on runs in the cluster. Switching off logs alone leaves cert-manager in place.
   - The volumes and CRDs stay, as the dialog notes ([What stays](#what-stays-after-an-add-on-is-switched-off)). With logs on, the dialog switches them off too.
 
 ### Backup settings
@@ -1960,7 +1960,7 @@ Kubehenge installs cert-manager for the certificates add-on, monitoring, logs an
 
 Kubehenge installs its own only once the cluster has answered in full that it runs none. While the cluster cannot be read, `AddonsWaiting` says cert-manager waits until it can, and the next look reads it again.
 
-It works when it serves `cert-manager.io/v1` and its controller and webhook Deployments run in the `cert-manager` namespace and are Available. Its version must read from its `app.kubernetes.io/version` label or its image's tag as v1.15.0 or newer, Rancher's minimum. It must keep cluster issuers' Secrets in `cert-manager`.
+It works when it serves `cert-manager.io/v1` and its controller and webhook Deployments run in the `cert-manager` namespace and are Available. Its version, read from its `app.kubernetes.io/version` label or its image's tag, must be v1.15.0 or newer, Rancher's minimum. It must keep cluster issuers' Secrets in `cert-manager`.
 
 The certificates add-on sets these only on Kubehenge's own cert-manager. Set them on yours yourself:
 
@@ -1969,7 +1969,7 @@ The certificates add-on sets these only on Kubehenge's own cert-manager. Set the
 - the add-ons' proxy
 - the Gateway API, which `acme-http01` needs
 
-While certificates is on, `AddonConflict` with the reason `SettingsNotApplied` names the first three, those it would set.
+While certificates is on, `AddonConflict` with the reason `SettingsNotApplied` names those of the first three that the cluster's settings call for.
 
 A cert-manager that does not work holds its users back. `AddonConflict` names what is wrong and the add-ons that wait, such as definitions left without a controller after an uninstall, a webhook that is not Available, a version too old or one that cannot be read. Make it work, or remove it and Kubehenge installs its own. Either takes effect on the next look, within ten minutes. When the cert-manager in use changes, Rancher, monitoring and logs are applied again, so their certificates and issuers come back.
 
@@ -2173,7 +2173,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
   - 1, 3, 5 or 7 control-plane nodes, and 0 to 100 workers in each pool.
   - Enough node addresses for every machine at once plus one for a rollout.
   - Node addresses and a control-plane endpoint on the gateway's network, with the endpoint outside the node addresses.
-  - None of another cluster's, the management cluster's or the appliance's addresses on the bridge and VLAN that cluster or the appliance is on.
+  - None of the addresses of another cluster, the management cluster or the appliance on the same bridge and VLAN.
 
 ### Namespaces and ranges
 
