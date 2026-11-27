@@ -531,6 +531,13 @@ if [ "${distribution}" = talos ]; then
     talos_from=${KUBEHENGE_E2E_TALOS_VERSION:?the Talos release the cluster starts on}
     talos_to=${KUBEHENGE_E2E_TALOS_UPGRADE:?the Talos release its nodes are upgraded to}
     talos_variable=$(printf '      - name: talosVersion\n        value: %s\n' "${talos_from}")
+    # Talos's nodes start with no image of Kubehenge's, and every cluster's CSI plugin runs the proxy
+    # from that image, which ghcr.io holds only once released. The cluster's own registryMirrors,
+    # as a user sets them, send ghcr.io's pulls to the registry this build was pushed to first.
+    if [ -n "${KUBEHENGE_E2E_REGISTRY:-}" ]; then
+        talos_variable=$(printf '%s\n      - name: registryMirrors\n        value: [{registry: ghcr.io, endpoints: ["http://%s"]}]\n' \
+            "${talos_variable}" "${KUBEHENGE_E2E_REGISTRY}")
+    fi
     echo "nodes on Talos ${talos_from}"
 else
     node_os=$(kubectl -n kubehenge-system get clusterclass "${class}" -o json |
