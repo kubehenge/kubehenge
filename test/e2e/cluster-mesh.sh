@@ -85,6 +85,7 @@ spec:
           name: md-0
           replicas: 0
     variables:
+${own_registry}
       - name: controlPlaneEndpoint
         value: $3
       - name: network

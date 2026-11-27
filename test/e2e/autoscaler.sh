@@ -130,6 +130,7 @@ spec:
               ${min_size}: "0"
               ${max_size}: "2"
     variables:
+${own_registry}
       - name: controlPlaneEndpoint
         value: ${KUBEHENGE_E2E_ENDPOINT}
       - name: network

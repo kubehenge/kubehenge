@@ -499,13 +499,6 @@ if [ -n "${KUBEHENGE_E2E_CNI:-}" ]; then
     cni_variable=$(printf '      - name: cni\n        value: %s\n' "${KUBEHENGE_E2E_CNI}")
 fi
 talos_variable=
-# Every cluster's CSI plugin runs Kubehenge's proxy from Kubehenge's own image, which ghcr.io holds
-# only once released. The cluster's registryMirrors, as a user sets them, send ghcr.io's pulls to the
-# registry this build was pushed to first, and ghcr.io serves the rest.
-own_registry=
-if [ -n "${KUBEHENGE_E2E_REGISTRY:-}" ]; then
-    own_registry=$(printf '      - name: registryMirrors\n        value: [{registry: ghcr.io, endpoints: ["http://%s"]}]\n' "${KUBEHENGE_E2E_REGISTRY}")
-fi
 node_os=
 # node_release is the node OS word without its family, and without -fips.
 node_release=
