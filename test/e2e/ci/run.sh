@@ -114,9 +114,11 @@ if [ -n "${egress}" ]; then
     # shellcheck source=/dev/null
     . "${work}/egress/env"
     # The management cluster's module takes the authority and the proxy, with its credentials in the
-    # address, as variables. Neither is on a command line.
+    # address, as variables. Neither is on a command line. The module trusts its site_ca as given, so
+    # it gets what the appliance hands it for the root alone: the root and its copy under the name the
+    # intermediate gives it, without which the nodes' Go verifier finds no parent for the intermediate.
     if [ -n "${KUBEHENGE_E2E_SITE_CA:-}" ]; then
-        TF_VAR_site_ca=$(cat "${KUBEHENGE_E2E_SITE_CA}")
+        TF_VAR_site_ca=$(cat "${KUBEHENGE_E2E_SITE_CA}" "${KUBEHENGE_E2E_STORE_CA:?egress.sh exports it with the Site CA}")
         export TF_VAR_site_ca
     fi
     if [ -n "${KUBEHENGE_E2E_PROXY_URL:-}" ]; then
