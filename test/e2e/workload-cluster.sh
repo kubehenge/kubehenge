@@ -90,8 +90,8 @@
 # refuse a copy of a volume that is not the cluster's, checks that a deleted snapshot's copy goes
 # from its holder VM, and switches them off again, on a KUBEHENGE_E2E_STORAGE local to each node.
 # KUBEHENGE_E2E_REGISTRY, when set, is the plain-HTTP registry the controller's image under test was
-# pushed to by its ghcr.io path; the control-plane nodes pull ghcr.io's images from it first while
-# volume snapshots are on, for the copy proxy that runs from that image.
+# pushed to by its ghcr.io path. Every cluster's nodes pull ghcr.io's images from it first, through
+# the cluster's registryMirrors, for the CSI proxy that runs from that image.
 # KUBEHENGE_E2E_TALOS_VERSION and KUBEHENGE_E2E_TALOS_UPGRADE are, for kubehenge-talos, the Talos
 # release the cluster starts on and a newer one its nodes are upgraded to in place, both with a
 # template in the template pool. Talos has no SSH, no systemd and no guest agent that runs commands:
@@ -332,28 +332,6 @@ on_machines() {
         guest "${pm_node}" "${pm_vmid}" "$2"
     done
 }
-# own_image_registry "<Machine names>" [off]: the clusters pull Kubehenge's own image from ghcr.io,
-# where a build under test is not. With KUBEHENGE_E2E_REGISTRY set, containerd on those Machines
-# asks the registry the build was pushed to first and ghcr.io for anything it has not; off takes
-# that away again.
-own_image_registry() {
-    [ -n "${KUBEHENGE_E2E_REGISTRY:-}" ] || return 0
-    case ${distribution} in
-        k3s | rke2) certs=/var/lib/rancher/${distribution}/agent/etc/containerd/certs.d ;;
-        kubeadm) certs=/etc/containerd/certs.d ;;
-        *) fail "the ${distribution} nodes take no registry from the guest agent for Kubehenge's image" ;;
-    esac
-    if [ "${2:-}" = off ]; then
-        # shellcheck disable=SC2310 # a node that does not take it off fails the test with the reason.
-        on_machines "$1" "rm -f ${certs}/ghcr.io/hosts.toml" > /dev/null ||
-            fail "the registry of Kubehenge's image was not taken off the nodes"
-        return 0
-    fi
-    hosts=$(printf 'server = "https://ghcr.io"\n\n[host."http://%s"]\n  capabilities = ["pull", "resolve"]\n' "${KUBEHENGE_E2E_REGISTRY}")
-    # shellcheck disable=SC2310 # a node that does not take it fails the test with the reason.
-    on_machines "$1" "mkdir -p ${certs}/ghcr.io && printf '%s\n' '${hosts}' > ${certs}/ghcr.io/hosts.toml" > /dev/null ||
-        fail "the nodes did not take the registry of Kubehenge's image"
-}
 b64url() { base64 -w0 | tr '+/' '-_' | tr -d '='; }
 
 step "an OpenID issuer for the cluster to trust"
@@ -521,6 +499,13 @@ if [ -n "${KUBEHENGE_E2E_CNI:-}" ]; then
     cni_variable=$(printf '      - name: cni\n        value: %s\n' "${KUBEHENGE_E2E_CNI}")
 fi
 talos_variable=
+# Every cluster's CSI plugin runs Kubehenge's proxy from Kubehenge's own image, which ghcr.io holds
+# only once released. The cluster's registryMirrors, as a user sets them, send ghcr.io's pulls to the
+# registry this build was pushed to first, and ghcr.io serves the rest.
+own_registry=
+if [ -n "${KUBEHENGE_E2E_REGISTRY:-}" ]; then
+    own_registry=$(printf '      - name: registryMirrors\n        value: [{registry: ghcr.io, endpoints: ["http://%s"]}]\n' "${KUBEHENGE_E2E_REGISTRY}")
+fi
 node_os=
 # node_release is the node OS word without its family, and without -fips.
 node_release=
@@ -531,13 +516,6 @@ if [ "${distribution}" = talos ]; then
     talos_from=${KUBEHENGE_E2E_TALOS_VERSION:?the Talos release the cluster starts on}
     talos_to=${KUBEHENGE_E2E_TALOS_UPGRADE:?the Talos release its nodes are upgraded to}
     talos_variable=$(printf '      - name: talosVersion\n        value: %s\n' "${talos_from}")
-    # Talos's nodes start with no image of Kubehenge's, and every cluster's CSI plugin runs the proxy
-    # from that image, which ghcr.io holds only once released. The cluster's own registryMirrors,
-    # as a user sets them, send ghcr.io's pulls to the registry this build was pushed to first.
-    if [ -n "${KUBEHENGE_E2E_REGISTRY:-}" ]; then
-        talos_variable=$(printf '%s\n      - name: registryMirrors\n        value: [{registry: ghcr.io, endpoints: ["http://%s"]}]\n' \
-            "${talos_variable}" "${KUBEHENGE_E2E_REGISTRY}")
-    fi
     echo "nodes on Talos ${talos_from}"
 else
     node_os=$(kubectl -n kubehenge-system get clusterclass "${class}" -o json |
@@ -650,6 +628,7 @@ ${network_families}
         value: {memoryMiB: ${worker_memory}, cores: ${worker_cores}}
 ${cni_variable}
 ${talos_variable}
+${own_registry}
 ${release_mirror}
       - name: oidc
         value: ${oidc}
@@ -1752,9 +1731,6 @@ if [ "${KUBEHENGE_E2E_VOLUME_SNAPSHOTS:-}" = 1 ]; then
         volumes=$(held) || return 1
         ! printf '%s\n' "${volumes}" | grep -qxF "$1"
     }
-    # The copy proxy runs beside the CSI plugin's controller on the control-plane nodes.
-    snapshot_servers=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
-    own_image_registry "${snapshot_servers}"
     # not_found <kubectl get arguments>: the object is not found, rather than out of reach for a
     # moment.
     not_found() {
@@ -1949,7 +1925,6 @@ EOF
     until_true 600 "the VolumeSnapshotClass removed" not_found volumesnapshotclass proxmox
     until_true 600 "the snapshot controller removed" none_of -n kube-system deployments -l app.kubernetes.io/name=snapshot-controller
     persistent_volume
-    own_image_registry "${snapshot_servers}" off
 fi
 
 if [ "${KUBEHENGE_E2E_HA_GROUPS:-}" = 1 ]; then
@@ -2194,8 +2169,6 @@ if [ "${restores_etcd}" = true ]; then
     wl -n default create configmap e2e-after-volume-snapshot --from-literal=marker="${lost_marker}"
     control_planes=$(kubectl -n "${ns}" get machines -l cluster.x-k8s.io/control-plane -o jsonpath='{.items[*].metadata.name}')
     control_plane_count=$(printf '%s' "${control_planes}" | wc -w)
-    # A kubeadm, RKE2 or k3s control plane receives the snapshot in a pod of Kubehenge's own image.
-    [ "${distribution}" = talos ] || own_image_registry "${control_planes}"
     if [ "${distribution}" != talos ] && [ "${control_plane_count}" -ge 3 ]; then
         step "etcd's quorum lost on purpose, then restored from the backup volume"
         # Every member but the first drops etcd's peer traffic, so no member has a majority and the
