@@ -225,9 +225,10 @@ rules:
     resources: [secrets]
     verbs: [get, create, update, delete]
   # A cluster's spec, as the interface stores it with the management backups and hands it out, holds
-  # the ConfigMaps and Secrets labelled for the cluster, which RBAC cannot find without listing.
+  # the ConfigMaps labelled for the cluster. Its labelled Secrets it gets by the names the controller
+  # records in <cluster>-spec-secrets, since it may never list Secrets.
   - apiGroups: [""]
-    resources: [configmaps, secrets]
+    resources: [configmaps]
     verbs: [list]
   # What a cluster's support bundle holds: every object of Cluster API and its providers here,
   # never a Secret, and the boot logs the controller reads into <cluster>-boot-logs.

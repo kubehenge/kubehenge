@@ -78,6 +78,9 @@ const (
 	// cluster seconds after the credential.
 	credentialOrphansInterval = time.Minute
 	credentialOrphansGrace    = 10 * time.Minute
+	// specSecretsInterval is how often the Secrets labelled for a cluster are recorded for the
+	// interface, which cannot list them.
+	specSecretsInterval = 30 * time.Second
 	// certificateWatchInterval is how often the clusters' certificates are looked at, a few reads
 	// each: they are renewed weeks before they run out, and RKE2 and k3s report theirs every half hour.
 	certificateWatchInterval = 5 * time.Minute
@@ -825,6 +828,9 @@ func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *pro
 	}
 	if err = mgr.Add(&provisioner.CredentialOrphans{Client: mgr.GetClient(), Interval: credentialOrphansInterval, Grace: credentialOrphansGrace}); err != nil {
 		return fmt.Errorf("the credentials stored ahead of their clusters: %w", err)
+	}
+	if err = mgr.Add(&provisioner.SpecSecrets{Client: mgr.GetClient(), Interval: specSecretsInterval}); err != nil {
+		return fmt.Errorf("the record of the Secrets labelled for clusters: %w", err)
 	}
 	if err = o.addAutoscalers(mgr, registrar.Remotes); err != nil {
 		return err

@@ -1606,7 +1606,7 @@ The spec collects these by name, whatever labels they carry:
 
 The providers use a Secret that exists when the control plane is created. `create --from` restores these before the Cluster.
 
-Anything labelled `kubehenge.dev/cluster-name: <name>`, ConfigMaps included, is kept too.
+Anything labelled `kubehenge.dev/cluster-name: <name>`, ConfigMaps included, is kept too. A Secret is picked up within half a minute of its label.
 
 The controller makes the rest again. These are left out:
 

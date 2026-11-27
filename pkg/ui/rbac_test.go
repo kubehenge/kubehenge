@@ -246,7 +246,8 @@ func TestInterfaceRequestsAreAllowedByTheChartsRBAC(t *testing.T) {
 		{"get", "", "configmaps", "kubehenge-system", provisioner.EtcdHealthName},
 		{"get", "", "configmaps", "kubehenge-system", provisioner.UnownedVMsName},
 		{"list", "", "pods", "kube-system", ""},
-		{"list", "", "secrets", "clusters", ""},
+		{"list", "", "configmaps", "clusters", ""},
+		{"get", "", "configmaps", "clusters", provisioner.SpecSecretsConfigMap("one")},
 	} {
 		if !log.seen[want] {
 			t.Errorf("no request made: %s", want)
