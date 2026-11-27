@@ -200,6 +200,8 @@ locals {
     go         = "go1.26.10"
     base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
     image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:d1277f222ceed6a2fafca6b341a7c290a0ad0215676e3d8c9610b8a377480605"
+    # The patched package's tests, which the build runs first.
+    tests = "./pkg/proxmox/goproxmox/"
   }
 
   # The Add-on Provider for Helm creates a cluster's HelmReleaseProxy under a generated name and

@@ -1,0 +1,48 @@
+diff --git a/pkg/proxmox/goproxmox/api_client.go b/pkg/proxmox/goproxmox/api_client.go
+index 1391747..7701ad3 100644
+--- a/pkg/proxmox/goproxmox/api_client.go
++++ b/pkg/proxmox/goproxmox/api_client.go
+@@ -516,6 +516,11 @@ func (c *APIClient) CloudInitStatus(ctx context.Context, vm *proxmox.VirtualMach
+ 	}
+ 
+ 	status, err := vm.WaitForAgentExecExit(ctx, pid, 2)
++	// A busy guest can take longer than the wait. Its status is then unknown, not failed, so the
++	// caller asks again later.
++	if errors.Is(err, proxmox.ErrTimeout) {
++		return true, nil
++	}
+ 	if err != nil {
+ 		return false, errors.Wrap(err, "unable to wait for agent exec")
+ 	}
+diff --git a/pkg/proxmox/goproxmox/api_client_test.go b/pkg/proxmox/goproxmox/api_client_test.go
+index 4fe52fd..84247cc 100644
+--- a/pkg/proxmox/goproxmox/api_client_test.go
++++ b/pkg/proxmox/goproxmox/api_client_test.go
+@@ -1059,3 +1059,27 @@ func TestProxmoxAPIClient_CloudInitStatus(t *testing.T) {
+ 		})
+ 	}
+ }
++
++// A busy guest's cloud-init status may not exit within the wait, which is no failure.
++func TestProxmoxAPIClient_CloudInitStatusSlowGuest(t *testing.T) {
++	client := newTestClient(t)
++	httpmock.RegisterResponder(http.MethodGet, `=~/nodes/pve/status`,
++		newJSONResponder(200, proxmox.Node{Name: "pve"}))
++	httpmock.RegisterResponder(http.MethodGet, `=~/nodes/pve/qemu/1111/status/current`,
++		newJSONResponder(200, proxmox.VirtualMachine{VMID: 1111, Node: "pve"}))
++	httpmock.RegisterResponder(http.MethodGet, `=~/nodes/pve/qemu/1111/config`,
++		newJSONResponder(200, proxmox.VirtualMachineConfig{}))
++	vm, err := client.GetVM(context.Background(), "pve", 1111)
++	require.NoError(t, err)
++
++	httpmock.RegisterResponder(http.MethodGet, `=~/nodes/pve/qemu/1111/agent/get-osinfo`,
++		newJSONResponder(200, map[string]*proxmox.AgentOsInfo{"result": {ID: "ubuntu"}}))
++	httpmock.RegisterResponder(http.MethodPost, `=~/nodes/pve/qemu/1111/agent/exec\z`,
++		newJSONResponder(200, map[string]any{"pid": 12234}))
++	httpmock.RegisterResponder(http.MethodGet, `=~/nodes/pve/qemu/1111/agent/exec-status\?pid=12234`,
++		httpmock.NewJsonResponderOrPanic(200, map[string]any{"data": proxmox.AgentExecStatus{Exited: 0}}))
++
++	running, err := client.CloudInitStatus(context.Background(), vm)
++	require.NoError(t, err)
++	require.True(t, running)
++}
