@@ -649,6 +649,39 @@ func TestEtcdRestorerThatCannotPauseReplacesNothing(t *testing.T) {
 	}
 }
 
+// A pause or an unpause that the API server answers with a webhook's timeout is made again, so the
+// restore succeeds and the cluster is not left paused.
+func TestEtcdRestorerPatchesAgainPastASlowWebhook(t *testing.T) {
+	t.Parallel()
+	f := newRestoreFixture(t, nil)
+	kube, ok := f.kube.(client.WithWatch)
+	if !ok {
+		t.Fatal("the fixture's client does not watch")
+	}
+	slow := apierrors.NewInternalError(errors.New(`failed calling webhook "clusters.kubehenge.dev": context deadline exceeded`))
+	var mu sync.Mutex
+	failed := map[string]bool{}
+	f.r.Client = interceptor.NewClient(kube, interceptor.Funcs{
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			data, err := patch.Data(obj)
+			for _, part := range []string{`"paused":true`, `"paused":null`} {
+				mu.Lock()
+				first := err == nil && strings.Contains(string(data), part) && !failed[part]
+				failed[part] = failed[part] || first
+				mu.Unlock()
+				if first {
+					return slow
+				}
+			}
+			return c.Patch(ctx, obj, patch, opts...)
+		},
+	})
+	f.reconcile()
+	if st := f.status(); st.Phase != RestoreSucceeded || len(failed) != 2 {
+		t.Errorf("failed %v, status %+v", failed, st)
+	}
+}
+
 // A restore that succeeds after one left etcd on the first node alone takes that condition away.
 func TestEtcdRestorerClearsEtcdOnOneNode(t *testing.T) {
 	t.Parallel()

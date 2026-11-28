@@ -18,6 +18,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -1074,14 +1075,44 @@ var (
 	restoreStatusPath  = "/metadata/annotations/" + strings.ReplaceAll(EtcdRestoreStatusAnnotation, "/", "~1")
 )
 
-// mergePatch merges patch into the cluster.
+// restoreBackoff bounds how long a merge patch is tried again when the API server is briefly slow:
+// about 45 seconds of waiting in all, inside the restore's own context.
+const (
+	restoreBackoffFactor = 2
+	restoreBackoffSteps  = 7
+	restoreBackoffCap    = 15 * time.Second
+)
+
+var restoreBackoff = wait.Backoff{Duration: time.Second, Factor: restoreBackoffFactor, Steps: restoreBackoffSteps, Cap: restoreBackoffCap}
+
+// transientAPIError is a refusal that a later try may not meet: a webhook that missed its timeout
+// comes back as an internal error.
+func transientAPIError(err error) bool {
+	return apierrors.IsInternalError(err) || apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err) ||
+		apierrors.IsTooManyRequests(err) || apierrors.IsConflict(err)
+}
+
+// mergePatch merges patch into the cluster, trying again while the API server is briefly slow. A
+// restore that ends on one such answer would otherwise leave the cluster paused.
 func (run *restoreRun) mergePatch(ctx context.Context, patch any, doing string) error {
 	raw, err := json.Marshal(patch)
 	if err != nil {
 		return fmt.Errorf("%s: %w", doing, err)
 	}
-	if err = run.r.Client.Patch(ctx, &clusterv1.Cluster{Namespace: run.key.Namespace, Name: run.key.Name}, client.RawPatch(types.MergePatchType, raw)); err != nil {
-		return fmt.Errorf("%s: %w", doing, err)
+	var last error
+	werr := wait.ExponentialBackoffWithContext(ctx, restoreBackoff, func(ctx context.Context) (bool, error) {
+		last = run.r.Client.Patch(ctx, &clusterv1.Cluster{Namespace: run.key.Namespace, Name: run.key.Name}, client.RawPatch(types.MergePatchType, raw))
+		if last != nil && transientAPIError(last) {
+			ctrl.LoggerFrom(ctx).Info("the API server refused a patch of the cluster, trying again", "doing", doing, "error", last.Error())
+			return false, nil
+		}
+		return true, nil
+	})
+	if last != nil {
+		return fmt.Errorf("%s: %w", doing, last)
+	}
+	if werr != nil {
+		return fmt.Errorf("%s: %w", doing, werr)
 	}
 	return nil
 }

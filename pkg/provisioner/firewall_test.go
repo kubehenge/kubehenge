@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -92,6 +93,36 @@ func TestValidatorHoldsARunningClusterToItsSecurityGroupsOnlyWhenTheyChange(t *t
 	addVariable(ported, FirewallVariable, `{"enabled": true, "ports": [{"protocol": "tcp", "port": 8443}]}`)
 	if _, err := v.ValidateUpdate(context.Background(), running, ported); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "no security group gone") {
 		t.Errorf("a firewall change with a missing group: %v", err)
+	}
+}
+
+// Pausing or unpausing a cluster never reads the class or Proxmox VE, but a pause together with any
+// other change is checked as ever.
+func TestValidatorSkipsTheCheckForAChangeOfPausedAlone(t *testing.T) {
+	t.Parallel()
+	hooks, _ := hooksFor(t)
+	v := &ClusterValidator{Hooks: hooks}
+	reads := 0
+	classOf := func(context.Context) (*clusterv1.ClusterClass, error) {
+		reads++
+		return nil, errors.New("no class")
+	}
+	running := networkCluster("192.168.1.1", 24)
+	paused := running.DeepCopy()
+	paused.Spec.Paused = new(true)
+	for name, pair := range map[string][2]*clusterv1.Cluster{"pausing": {running, paused}, "unpausing": {paused, running}} {
+		if _, err := v.validateOf(context.Background(), pair[0], pair[1], classOf); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if reads != 0 {
+		t.Errorf("read the class %d times for a change of paused alone", reads)
+	}
+	both := paused.DeepCopy()
+	both.Spec.Topology.Version = "v1.99.0"
+	_, _ = v.validateOf(context.Background(), running, both, classOf)
+	if reads == 0 {
+		t.Error("a pause with another change skipped the check")
 	}
 }
 

@@ -69,8 +69,9 @@ func (v *ClusterValidator) validateOf(ctx context.Context, old, c *clusterv1.Clu
 	}
 	// The spec checks read the clock, Proxmox VE and the class, so a cluster can fall short of them
 	// without a change. Annotations, labels and finalizers must still go through: deleting a cluster
-	// starts with an annotation.
-	if old != nil && equality.Semantic.DeepEqual(old.Spec, c.Spec) {
+	// starts with an annotation. Pausing or unpausing is no change to check either, and it must work
+	// when Proxmox VE does not answer: the rest of the spec is compared with paused set equal.
+	if old != nil && equality.Semantic.DeepEqual(specWithPaused(&old.Spec, c.Spec.Paused), c.Spec) {
 		return nil, invalid(c, validateCiliumClusterID(old, c))
 	}
 	r, err := rancherOf(c)
@@ -87,6 +88,13 @@ func (v *ClusterValidator) validateOf(ctx context.Context, old, c *clusterv1.Clu
 	}
 	warnings = append(warnings, upgradeWarnings(old, c)...)
 	return warnings, v.check(ctx, old, c, class, r)
+}
+
+// specWithPaused is spec with its paused field set to paused.
+func specWithPaused(spec *clusterv1.ClusterSpec, paused *bool) clusterv1.ClusterSpec {
+	out := *spec.DeepCopy()
+	out.Paused = paused
+	return out
 }
 
 // check holds a cluster to every rule it can be checked against at admission.
