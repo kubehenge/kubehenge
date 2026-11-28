@@ -25,9 +25,9 @@ func withTemplates(t *testing.T, h *harness) {
 	t.Helper()
 	h.server.Appliance = &appliance.Appliance{Dir: t.TempDir(), Log: slog.New(slog.DiscardHandler)}
 	h.accounts.members = []pve.Member{
-		{VMID: 9001, Node: "pve1", Type: "qemu", Name: "kubehenge-rke2-almalinux-10-build-202610010000", Template: 1, Tags: "build-202610010000;kubehenge;os-almalinux-10;rke2"},
-		{VMID: 9004, Node: "pve1", Type: "qemu", Name: "kubehenge-rke2-almalinux-10-build-202610150000", Template: 1, Tags: "build-202610150000;kubehenge;os-almalinux-10;rke2"},
-		{VMID: 9002, Node: "pve1", Type: "qemu", Name: "kubehenge-kubeadm-v1.36.5-almalinux-10-build-202610010000", Template: 1, Tags: "build-202610010000;kubeadm;kubehenge;kubernetes-v1.36.5;os-almalinux-10"},
+		{VMID: 9001, Node: "pve1", Type: "qemu", Name: "kubehenge-rke2-almalinux-10-build-202610010000", Template: 1, Tags: "build-202610010000;kubehenge;rke2-almalinux-10"},
+		{VMID: 9004, Node: "pve1", Type: "qemu", Name: "kubehenge-rke2-almalinux-10-build-202610150000", Template: 1, Tags: "build-202610150000;kubehenge;rke2-almalinux-10", Notes: templates.Notes("Kubehenge template", templates.Hardware{CPUType: "host", SSD: true}, nil)},
+		{VMID: 9002, Node: "pve1", Type: "qemu", Name: "kubehenge-kubeadm-v1.36.5-almalinux-10-build-202610010000", Template: 1, Tags: "build-202610010000;kubeadm-v1.36.5-almalinux-10;kubehenge"},
 		{VMID: 9003, Node: "pve1", Type: "qemu", Name: "being-built", Template: 0},
 	}
 }
@@ -67,6 +67,7 @@ func TestTemplatesListedWithTheClustersThatNeedThem(t *testing.T) {
 	if !slices.Equal(ids, []int{9002, 9004, 9001}) || got.Templates[0].InUse != "" || got.Templates[0].Line != "kubehenge-kubeadm-v1.36.5-almalinux-10" ||
 		got.Templates[0].NodeOS != "AlmaLinux 10" || len(got.NodeOSes) != len(templates.NodeOSes()) ||
 		got.Templates[1].InUse != "" || !got.Templates[1].Newest || got.Templates[1].Build != "build-202610150000" ||
+		got.Templates[1].Hardware == nil || *got.Templates[1].Hardware != (hardwareView{CPUType: "host", SSD: true}) || got.Templates[2].Hardware != nil ||
 		got.Templates[2].InUse != "default/one" || got.Templates[2].Newest || got.Refresh != nil {
 		t.Fatalf("templates = %s", rec.Body)
 	}
@@ -82,7 +83,7 @@ func TestTemplatesOnADownNodeAreReportedAndFailNothing(t *testing.T) {
 	h := newHarness(t, cluster("default", "one"))
 	withTemplates(t, h)
 	h.accounts.members = append(h.accounts.members,
-		pve.Member{VMID: 9010, Node: "pve2", Type: "qemu", Name: "kubehenge-talos-v1.14.4", Tags: "kubehenge;talos;talos-v1.14.4", Down: true},
+		pve.Member{VMID: 9010, Node: "pve2", Type: "qemu", Name: "kubehenge-talos-v1.14.4", Tags: "kubehenge;talos-v1.14.4", Down: true},
 		pve.Member{VMID: 9009, Node: "pve3", Type: "qemu", Tags: "kubehenge", Down: true})
 	h.server.MakeTemplate = func(context.Context, *pve.Ticket, templates.Builder, *templates.Template) (int, error) { return 0, nil }
 	a := h.browser()
@@ -114,7 +115,7 @@ func TestTemplateWithAnOlderKernelIsMarkedOlder(t *testing.T) {
 	if err := h.kube.Get(context.Background(), client.ObjectKey{Namespace: "kubehenge-system", Name: "kubehenge-rke2"}, class); err != nil {
 		t.Fatal(err)
 	}
-	class.Annotations["kubehenge.dev/node-image-older"] = `{"` + templates.LineKey([]string{"kubehenge", "os-almalinux-10", "rke2"}) + `":["2026-10-15T00:00:00Z"]}`
+	class.Annotations["kubehenge.dev/node-image-older"] = `{"` + templates.LineKey([]string{"kubehenge", "rke2-almalinux-10"}) + `":["2026-10-15T00:00:00Z"]}`
 	if err := h.kube.Update(context.Background(), class); err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +206,7 @@ func TestFinishedTemplateBuildIsListed(t *testing.T) {
 		defer h.accounts.mu.Unlock()
 		h.accounts.members = append(h.accounts.members, pve.Member{
 			VMID: 9010, Node: "pve1", Type: "qemu", Name: "kubehenge-kubeadm-v1.37.1-almalinux-10",
-			Template: 1, Tags: "kubeadm;kubehenge;kubernetes-v1.37.1;os-almalinux-10",
+			Template: 1, Tags: "kubeadm-v1.37.1-almalinux-10;kubehenge",
 		})
 		return 9010, nil
 	}

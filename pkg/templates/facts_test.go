@@ -29,7 +29,7 @@ func TestCompareKernelsOrdersAsRPMDoes(t *testing.T) {
 func TestBuildFactsRoundTripThroughTheDescription(t *testing.T) {
 	t.Parallel()
 	facts := BuildFacts{Kernel: "6.12.0-124.8.1.el10_1.x86_64", Packages: strings.Repeat("c", 64)}
-	got, ok := ParseBuildFacts(facts.Description(templateDescription))
+	got, ok := ParseBuildFacts(Notes(templateDescription, Hardware{}, &facts))
 	if !ok || got != facts {
 		t.Errorf("read %+v back, %v", got, ok)
 	}

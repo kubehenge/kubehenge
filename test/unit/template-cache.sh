@@ -22,7 +22,7 @@ efidisk0: local:100/base-100-disk-1.raw,efitype=4m,size=528K
 name: kubehenge-k3s-almalinux-10-build-202611071744
 scsi0: local:100/base-100-disk-0.raw,backup=0,discard=on,size=8G,ssd=1
 scsi1: local:100/base-100-disk-2.raw,backup=0
-tags: build-202611071744;k3s;kubehenge;os-almalinux-10
+tags: build-202611071744;k3s-almalinux-10;kubehenge
 template: 1
 
 [pending]

@@ -3,7 +3,6 @@ package templates
 import (
 	"fmt"
 	"regexp"
-	"slices"
 	"strings"
 )
 
@@ -39,79 +38,22 @@ func DefaultHardware(cpuType string) Hardware {
 // spread across nodes.
 const NUMAMinCores = 2
 
-// hardwareTagPrefix starts the tags that record a template's hardware. They describe a template and
-// are no part of its line: Cluster API's Proxmox VE provider selects by the other tags
-// (matchPolicy uniqueSubset, which still refuses two matches), and the line of a template is the same
-// whatever hardware a build was made with.
-const hardwareTagPrefix = "hw-"
-
-// The tags of the options that are on. A CPU type has its own, hardwareTagPrefix + "cpu-" + the type.
+// The words of the options in a template's notes, where its hardware is recorded. It describes a
+// template and is no part of its line, which is the same whatever hardware a build was made with.
 const (
-	hardwareCPUTagPrefix = hardwareTagPrefix + "cpu-"
-	ssdTag               = hardwareTagPrefix + "ssd"
-	discardTag           = hardwareTagPrefix + "discard"
-	ioThreadTag          = hardwareTagPrefix + "iothread"
-	numaTag              = hardwareTagPrefix + "numa"
+	ssdWord      = "ssd"
+	discardWord  = "discard"
+	ioThreadWord = "iothread"
+	numaWord     = "numa"
 )
 
-// Tags are the tags that record the hardware, sorted.
-func (h Hardware) Tags() []string {
-	var tags []string
-	if h.CPUType != "" {
-		tags = append(tags, hardwareCPUTagPrefix+strings.ToLower(h.CPUType))
-	}
-	for _, o := range h.options() {
-		if o.on {
-			tags = append(tags, o.tag)
-		}
-	}
-	return NormaliseTags(tags)
-}
-
 type hardwareOption struct {
-	tag string
-	on  bool
+	word string
+	on   bool
 }
 
-// IsHardwareTag tells whether a tag records hardware rather than naming the template's line.
-func IsHardwareTag(tag string) bool {
-	return strings.HasPrefix(tag, hardwareTagPrefix)
-}
-
-// HardwareOf reads the hardware a template's tags record, and whether they record any.
-func HardwareOf(tags []string) (Hardware, bool) {
-	var h Hardware
-	var found bool
-	for _, tag := range tags {
-		if !IsHardwareTag(tag) {
-			continue
-		}
-		found = true
-		switch tag {
-		case ssdTag:
-			h.SSD = true
-		case discardTag:
-			h.Discard = true
-		case ioThreadTag:
-			h.IOThread = true
-		case numaTag:
-			h.NUMA = true
-		default:
-			if t, ok := strings.CutPrefix(tag, hardwareCPUTagPrefix); ok {
-				h.CPUType = canonicalCPUType(t)
-			}
-		}
-	}
-	return h, found
-}
-
-// IdentityOf is the tags of a template that are not hardware: those a line and a build are named by.
-func IdentityOf(tags []string) []string {
-	return slices.DeleteFunc(slices.Clone(tags), IsHardwareTag)
-}
-
-// String is the hardware as one word for a listing: the CPU type, then the options that are on,
-// separated by commas.
+// String is the hardware as one word for a listing and the notes: the CPU type, then the options
+// that are on, separated by commas.
 func (h Hardware) String() string {
 	parts := []string{}
 	if h.CPUType != "" {
@@ -119,10 +61,31 @@ func (h Hardware) String() string {
 	}
 	for _, o := range h.options() {
 		if o.on {
-			parts = append(parts, strings.TrimPrefix(o.tag, hardwareTagPrefix))
+			parts = append(parts, o.word)
 		}
 	}
 	return strings.Join(parts, ",")
+}
+
+// parseHardware reads the hardware back from String's word. A part that names no option is the
+// CPU type, whose case the notes keep.
+func parseHardware(s string) Hardware {
+	var h Hardware
+	for part := range strings.SplitSeq(s, ",") {
+		switch part {
+		case ssdWord:
+			h.SSD = true
+		case discardWord:
+			h.Discard = true
+		case ioThreadWord:
+			h.IOThread = true
+		case numaWord:
+			h.NUMA = true
+		default:
+			h.CPUType = part
+		}
+	}
+	return h
 }
 
 // Describe lists the hardware as a person reads it: the CPU type, then the options that are on.
@@ -143,7 +106,7 @@ func (h Hardware) Describe() string {
 }
 
 func (h Hardware) options() []hardwareOption {
-	return []hardwareOption{{ssdTag, h.SSD}, {discardTag, h.Discard}, {ioThreadTag, h.IOThread}, {numaTag, h.NUMA}}
+	return []hardwareOption{{ssdWord, h.SSD}, {discardWord, h.Discard}, {ioThreadWord, h.IOThread}, {numaWord, h.NUMA}}
 }
 
 // diskOptions are the options of the template's disks, each led by a comma.
@@ -195,8 +158,8 @@ var cpuModels = map[string]int{
 // cpuModelSuffix is what Proxmox VE appends to a model for a mitigation or a revision.
 var cpuModelSuffix = regexp.MustCompile(`(?i)(-ibrs|-ibpb|-notsx|-v\d+)+$`)
 
-// customCPUType is a CPU model an administrator defined in Proxmox VE. Tags are lower case, so only
-// a lower case name survives a round trip through them.
+// customCPUType is a CPU model an administrator defined in Proxmox VE, which Kubehenge takes in lower
+// case.
 var customCPUType = regexp.MustCompile(`^custom-[a-z0-9][a-z0-9_.-]*$`)
 
 // baseCPUModel is the model of a CPU type without a mitigation or revision suffix, and whether
@@ -216,7 +179,7 @@ func baseCPUModel(cpuType string) (string, bool) {
 	return "", false
 }
 
-// canonicalCPUType is a CPU type as Proxmox VE spells it, from its lower case spelling in a tag.
+// canonicalCPUType is a CPU type as Proxmox VE spells it, from its lower case spelling.
 func canonicalCPUType(lower string) string {
 	for model := range cpuModels {
 		if strings.EqualFold(model, lower) {

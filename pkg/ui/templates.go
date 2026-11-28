@@ -148,7 +148,7 @@ func (s *Server) templates(ctx context.Context, t *pve.Ticket) ([]templateView, 
 		if o, ok := templates.NodeOSOf(v.Tags); ok {
 			v.NodeOS = nodeOSTitle(o)
 		}
-		if hw, ok := templates.HardwareOf(templates.ParseAllTags(m.Tags)); ok {
+		if hw, ok := templates.HardwareOfNotes(m.Notes); ok {
 			v.Hardware = &hardwareView{CPUType: hw.CPUType, SSD: hw.SSD, Discard: hw.Discard, IOThread: hw.IOThread, NUMA: hw.NUMA}
 		}
 		if at, built := templates.BuildOf(v.Tags); built {

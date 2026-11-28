@@ -105,9 +105,9 @@ func TestNewBuildKeepsTheHardwareOfTheNewest(t *testing.T) {
 	day := func(d int) time.Time { return time.Date(2026, 10, d, 0, 0, 0, 0, time.UTC) }
 	yes, no := true, false
 	older, newer := buildVM(t, &line, 101, day(1)), buildVM(t, &line, 102, day(8))
-	newer["tags"] = fmt.Sprint(newer["tags"]) + ";" + strings.Join(Hardware{CPUType: "Haswell", Discard: true, IOThread: true, NUMA: true}.Tags(), ";")
 	configs := configsOf(older, newer)
 	configs[102]["cpu"] = "Haswell"
+	configs[102]["description"] = Notes(templateDescription, Hardware{CPUType: "Haswell", Discard: true, IOThread: true, NUMA: true}, nil)
 	b := &Builder{Client: (&fakeCluster{t: t, views: [][]map[string]any{{older, newer}}, configs: configs}).client(), Pool: testPool}
 	next, err := line.Build(day(15))
 	if err != nil {

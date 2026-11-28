@@ -406,8 +406,6 @@ func (s *ChannelServer) markedRelease(ctx context.Context, base string, minor in
 	return v, true, nil
 }
 
-var kubeadmTemplateVersion = regexp.MustCompile(`^kubernetes-(v1\.\d+\.\d+)$`)
-
 func (s *ChannelServer) templateChannels(ctx context.Context, os templates.NodeOS) (Channels, error) {
 	seen, err := listPoolTemplates(ctx, s.Proxmox)
 	if err != nil {
@@ -463,17 +461,13 @@ func talosVersionOf(tags []string) (string, bool) {
 	return "", false
 }
 
-// kubeadmVersionOf is the Kubernetes version a kubeadm template's tags name.
+// kubeadmVersionOf is the Kubernetes version a kubeadm template's line tag names.
 func kubeadmVersionOf(tags []string) (kubeVersion, bool) {
-	if !slices.Contains(tags, "kubeadm") {
+	req, ok := templates.RequestOf(tags)
+	if !ok || req.Distribution != templates.Kubeadm {
 		return kubeVersion{}, false
 	}
-	for _, tag := range tags {
-		if m := kubeadmTemplateVersion.FindStringSubmatch(tag); m != nil {
-			return parseKubeVersion(m[1])
-		}
-	}
-	return kubeVersion{}, false
+	return parseKubeVersion(req.KubernetesVersion)
 }
 
 // listPoolTemplates reads the templates through the builder, which confirms each from its VM's
@@ -522,10 +516,8 @@ func (p *poolTemplates) add(tags []string, facts *templates.BuildFacts) {
 		}
 		p.facts[line][at.UTC()] = *facts
 	}
-	for _, d := range []templates.Distribution{templates.RKE2, templates.K3s} {
-		if slices.Contains(tags, string(d)) && !slices.Contains(p.nodeOSes[d], os) {
-			p.nodeOSes[d] = append(p.nodeOSes[d], os)
-		}
+	if req, _ := templates.RequestOf(tags); (req.Distribution == templates.RKE2 || req.Distribution == templates.K3s) && !slices.Contains(p.nodeOSes[req.Distribution], os) {
+		p.nodeOSes[req.Distribution] = append(p.nodeOSes[req.Distribution], os)
 	}
 	if v, ok := kubeadmVersionOf(tags); ok && !slices.Contains(p.kubeadm[os], v) {
 		p.kubeadm[os] = append(p.kubeadm[os], v)

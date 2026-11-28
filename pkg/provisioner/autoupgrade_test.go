@@ -225,16 +225,16 @@ func TestUpgrader(t *testing.T) {
 func TestKubeadmTargetsAreTemplatesTheClassSelects(t *testing.T) {
 	t.Parallel()
 	vms := []map[string]any{
-		{"vmid": 9001, "template": 1, "tags": "build-202610010000;kubeadm;kubehenge;kubernetes-v1.36.5;os-almalinux-10"},
+		{"vmid": 9001, "template": 1, "tags": "build-202610010000;kubeadm-v1.36.5-almalinux-10;kubehenge"},
 		// Another node OS's, which clusters on the default do not run.
-		{"vmid": 9002, "template": 1, "tags": "build-202610010000;kubeadm;kubehenge;kubernetes-v1.37.1;os-rocky-10"},
-		{"vmid": 9003, "template": 0, "tags": "build-202610010000;kubeadm;kubehenge;kubernetes-v1.37.2;os-almalinux-10"},
+		{"vmid": 9002, "template": 1, "tags": "build-202610010000;kubeadm-v1.37.1-rocky-10;kubehenge"},
+		{"vmid": 9003, "template": 0, "tags": "build-202610010000;kubeadm-v1.37.2-almalinux-10;kubehenge"},
 		// A VM ID reused a moment ago, which the resource view still shows as the template before.
-		{"vmid": 9004, "template": 1, "tags": "build-202610010000;kubeadm;kubehenge;kubernetes-v1.38.0;os-almalinux-10"},
+		{"vmid": 9004, "template": 1, "tags": "build-202610010000;kubeadm-v1.38.0-almalinux-10;kubehenge"},
 		// A template that is no build, which no machine selects.
-		{"vmid": 9005, "template": 1, "tags": "kubeadm;kubehenge;kubernetes-v1.39.0;os-almalinux-10"},
+		{"vmid": 9005, "template": 1, "tags": "kubeadm-v1.39.0-almalinux-10;kubehenge"},
 		// A node OS Kubehenge does not know.
-		{"vmid": 9006, "template": 1, "tags": "build-202610010000;kubeadm;kubehenge;kubernetes-v1.39.1;os-plan9-4"},
+		{"vmid": 9006, "template": 1, "tags": "build-202610010000;kubeadm-v1.39.1-plan9-4;kubehenge"},
 	}
 	configs := map[string]any{}
 	for _, vm := range vms {
@@ -267,7 +267,7 @@ func TestKubeadmTargetsAreTemplatesTheClassSelects(t *testing.T) {
 
 	// The patch that picks a machine's template and the upgrader name the same node OS.
 	for _, o := range []templates.NodeOS{templates.DefaultNodeOS, rocky} {
-		if line, err := MachineLine("kubeadm", "v1.36.5", o); err != nil || !slices.Contains(line, o.Tags()[0]) {
+		if line, err := MachineLine("kubeadm", "v1.36.5", o); err != nil || !slices.Contains(line, "kubeadm-v1.36.5-"+o.String()) {
 			t.Errorf("kubeadm machines on %s select %v, %v", o, line, err)
 		}
 	}

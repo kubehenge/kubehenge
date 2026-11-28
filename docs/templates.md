@@ -46,7 +46,7 @@ On kubeadm nodes, kube-vip and the control plane's static pods (etcd, API server
 
 ### FIPS mode
 
-An RKE2 cluster's node OS can run in FIPS mode, as `almalinux-10-fips` or `rocky-10-fips`. Its nodes boot with the kernel argument `fips=1`. Every crypto library takes the `FIPS` policy of `update-crypto-policies`. The build fixes both. FIPS mode therefore has template lines of its own, tagged `fips`.
+An RKE2 cluster's node OS can run in FIPS mode, as `almalinux-10-fips` or `rocky-10-fips`. Its nodes boot with the kernel argument `fips=1`. Every crypto library takes the `FIPS` policy of `update-crypto-policies`. The build fixes both. FIPS mode therefore has template lines of its own, such as `rke2-almalinux-10-fips`.
 
 Each build checks in its own boot that `/proc/sys/crypto/fips_enabled` reads 1 and that the policy is `FIPS`.
 
@@ -127,11 +127,13 @@ A failed run removes what it made. `--keep-on-failure` leaves the VM for inspect
 
 ## How clusters find them
 
-Each template carries a unique set of Proxmox VE tags, such as `baked;kubehenge;talos;talos-v1.14.5`, `kubehenge;os-almalinux-10;rke2` or, in FIPS mode, `fips;kubehenge;os-almalinux-10;rke2`. Cluster API's Proxmox VE provider selects it by that exact set. The template has no network card, one core and 512 MiB. Each clone gets the network, size and disk its machine asks for.
+Each template carries at most three Proxmox VE tags: `kubehenge`, its line and, for a node OS template, its build. A line names the distribution and node OS, such as `rke2-almalinux-10`, `rke2-almalinux-10-fips` in FIPS mode, `kubeadm-v1.36.5-rocky-10` or `talos-v1.14.5`. Cluster API's Proxmox VE provider selects the one template that carries all of a machine's tags. A tag you add to a template changes nothing, as long as no second template carries the same Kubehenge tags.
+
+The template has no network card, one core and 512 MiB. Each clone gets the network, size and disk its machine asks for. A clone keeps its template's tags. Its notes name its cluster, its role and its pool.
 
 ### Builds
 
-A node OS template is a line of builds. Each build is a template of its own, named after the time it was made, such as `kubehenge-rke2-almalinux-10-build-202610180100`. It is tagged with that time (`build-202610180100`) beside the line's tags.
+A node OS template is a line of builds. Each build is a template of its own, named after the time it was made, such as `kubehenge-rke2-almalinux-10-build-202610180100`. It is tagged with that time (`build-202610180100`) beside the line's tag.
 
 A cluster's machines clone the newest build of their line made by the cluster's node image time. That time moves only when the nodes are refreshed ([clusters.md](clusters.md#node-image-refresh)). Scaling up or replacing a failed node therefore clones the build the other nodes run.
 
@@ -139,7 +141,7 @@ Talos templates have no builds. Talos nodes take their updates by upgrading Talo
 
 ### Kernel check
 
-A build records its kernel and a hash of its packages in the template's description when it ends. The refresh compares each build with the previous one of its line. An older kernel means the mirror was one sync behind ([where packages come from](#where-packages-come-from)).
+A build records its kernel and a hash of its packages in the template's notes when it ends. The refresh compares each build with the previous one of its line. An older kernel means the mirror was one sync behind ([where packages come from](#where-packages-come-from)).
 
 Such a build is kept out of the builds clusters move to. The Administration page marks it "Older than the previous build". The controller asks for another build an hour later, up to 3 times. After the third, the build stays out until a newer one arrives. A build from before this check is never older.
 
@@ -170,9 +172,9 @@ The default CPU type lets a VM migrate between nodes of different CPUs. It hides
 
 #### Where it is recorded
 
-Each template records its hardware in tags that start with `hw-`, such as `hw-cpu-x86-64-v2-aes` and `hw-ssd`. They are no part of its line. A cluster selects its template by the other tags. The hardware never changes which one it gets.
+Each template records its hardware in its notes, on a line such as `kubehenge-hardware: x86-64-v2-AES,ssd,discard`. The hardware never changes which template a cluster gets.
 
-The Templates view and `kubehenge template list` show the hardware. A template without these tags was made before Kubehenge recorded it.
+The Templates view and `kubehenge template list` show the hardware. A template without that line was made before Kubehenge recorded it.
 
 A cluster is placed only on the Proxmox VE nodes whose CPU reaches the level of its templates' CPU type. It is refused when no allowed node does. A model such as `Haswell` counts as the level its CPU needs. `host` and custom models count as none.
 
@@ -220,9 +222,6 @@ The refresh also makes the missing Talos template of each release a Talos cluste
 - the run was asked to make it.
 
 A cluster creator's request names a Talos template as `talos-v1.14.5`.
-
-A Talos template an earlier Kubehenge made from the Image Factory has no `baked` tag. It is no release's template any more, and the refresh deletes it once no machine waits on it.
-
 ## Requirements
 
 ### Storage and nodes

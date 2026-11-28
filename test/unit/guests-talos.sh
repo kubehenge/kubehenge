@@ -111,7 +111,7 @@ case $1 in
     config)
         case $2 in
             100) echo 'tags: kubehenge;management' ;;
-            101 | 103 | 104) echo 'tags: kubehenge;talos;v1.11' ;;
+            101 | 103 | 104) echo 'tags: kubehenge;talos-v1.11.6' ;;
             *) echo 'tags: kubehenge' ;;
         esac
         ;;

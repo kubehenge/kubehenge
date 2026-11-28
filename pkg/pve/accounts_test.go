@@ -63,16 +63,16 @@ func fakeTicketAPI(t *testing.T) *Accounts {
 			{"vmid": 152, "node": "one"},
 			{"vmid": 153, "node": "one"},
 			{"vmid": 154, "node": "two"},
-			{"vmid": 160, "node": "one", "type": "qemu", "name": "kubehenge-rke2-almalinux-10", "template": 1, "tags": "kubehenge;os-almalinux-10;rke2", "pool": "kubehenge-templates"},
-			{"vmid": 161, "node": "one", "type": "qemu", "name": "kubehenge-rke2-almalinux-10", "template": 1, "tags": "kubehenge;os-almalinux-10;rke2", "pool": "elsewhere"},
+			{"vmid": 160, "node": "one", "type": "qemu", "name": "kubehenge-rke2-almalinux-10", "template": 1, "tags": "kubehenge;rke2-almalinux-10", "pool": "kubehenge-templates"},
+			{"vmid": 161, "node": "one", "type": "qemu", "name": "kubehenge-rke2-almalinux-10", "template": 1, "tags": "kubehenge;rke2-almalinux-10", "pool": "elsewhere"},
 			{"vmid": 162, "node": "one", "type": "qemu", "name": "being-built", "template": 0, "pool": "kubehenge-templates"},
 			{"vmid": 163, "node": "one", "type": "lxc", "name": "a-container-template", "template": 1, "pool": "kubehenge-templates"},
 			// Behind the configurations: 164's VM ID was reused by a VM being built, 165 was removed.
-			{"vmid": 164, "node": "one", "type": "qemu", "name": "kubehenge-old", "template": 1, "tags": "kubehenge;os-rocky-10;rke2", "pool": "kubehenge-templates"},
-			{"vmid": 165, "node": "one", "type": "qemu", "name": "kubehenge-gone", "template": 1, "tags": "k3s;kubehenge;os-rocky-10", "pool": "kubehenge-templates"},
+			{"vmid": 164, "node": "one", "type": "qemu", "name": "kubehenge-old", "template": 1, "tags": "kubehenge;rke2-rocky-10", "pool": "kubehenge-templates"},
+			{"vmid": 165, "node": "one", "type": "qemu", "name": "kubehenge-gone", "template": 1, "tags": "k3s-rocky-10;kubehenge", "pool": "kubehenge-templates"},
 			// 166's node is down and the view says so. 167's node went down after the view was made,
 			// which only a 595 on its configuration shows. 168 is none of Kubehenge's.
-			{"vmid": 166, "node": "two", "type": "qemu", "status": "unknown", "tags": "kubehenge;talos;talos-v1.14.4", "pool": "kubehenge-templates"},
+			{"vmid": 166, "node": "two", "type": "qemu", "status": "unknown", "tags": "kubehenge;talos-v1.14.4", "pool": "kubehenge-templates"},
 			{"vmid": 167, "node": "one", "type": "qemu", "name": "kubehenge-k3s", "template": 1, "tags": "k3s;kubehenge", "pool": "kubehenge-templates"},
 			{"vmid": 168, "node": "two", "type": "qemu", "status": "unknown", "tags": "web", "pool": "kubehenge-templates"},
 			// The appliance restored to 180, a clone of it at 181, and an untagged copy at 182.
@@ -92,7 +92,7 @@ func fakeTicketAPI(t *testing.T) *Accounts {
 	})
 	mux.HandleFunc("GET /api2/json/nodes/one/qemu/{vmid}/config", func(w http.ResponseWriter, r *http.Request) {
 		configs := map[string]map[string]any{
-			"160": {"name": "kubehenge-rke2-almalinux-10", "template": 1},
+			"160": {"name": "kubehenge-rke2-almalinux-10", "template": 1, "description": "Kubehenge template\nkubehenge-hardware: host"},
 			"162": {"name": "being-built"},
 			"164": {"name": "being-built-too"},
 		}
@@ -316,13 +316,14 @@ func TestApplianceIDByItsMAC(t *testing.T) {
 	}
 }
 
+// A template's notes come with it, for the hardware its build recorded there.
 func TestTemplatesOfAPoolWithTheirTags(t *testing.T) {
 	t.Parallel()
 	a := fakeTicketAPI(t)
 	got, err := a.Templates(context.Background(), &Ticket{Username: "alice@pve", Ticket: "PVE:alice@pve:1"}, "kubehenge-templates")
 	want := []Member{
-		{VMID: 160, Node: "one", Type: "qemu", Name: "kubehenge-rke2-almalinux-10", Template: 1, Tags: "kubehenge;os-almalinux-10;rke2"},
-		{VMID: 166, Node: "two", Type: "qemu", Status: StatusUnknown, Tags: "kubehenge;talos;talos-v1.14.4", Down: true},
+		{VMID: 160, Node: "one", Type: "qemu", Name: "kubehenge-rke2-almalinux-10", Template: 1, Tags: "kubehenge;rke2-almalinux-10", Notes: "Kubehenge template\nkubehenge-hardware: host"},
+		{VMID: 166, Node: "two", Type: "qemu", Status: StatusUnknown, Tags: "kubehenge;talos-v1.14.4", Down: true},
 		{VMID: 167, Node: "one", Type: "qemu", Name: "kubehenge-k3s", Template: 1, Tags: "k3s;kubehenge", Down: true},
 	}
 	if err != nil || !reflect.DeepEqual(got, want) {

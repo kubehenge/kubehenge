@@ -12,7 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const olderLine = "kubehenge;os-almalinux-10;rke2"
+const olderLine = "kubehenge;rke2-almalinux-10"
 
 func TestOlderLinesDueFollowTheHourAndTheThreeTries(t *testing.T) {
 	t.Parallel()

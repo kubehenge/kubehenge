@@ -114,13 +114,13 @@ func newTemplateListCommand(conn *pve.Config) *cobra.Command {
 				return err
 			}
 			b.Pool = pool
-			list, err := b.List(cmd.Context())
+			inv, err := b.Inventory(cmd.Context())
 			if err != nil {
 				return fmt.Errorf("listing the templates: %w", err)
 			}
-			for _, r := range list {
+			for _, r := range inv.Templates {
 				line := fmt.Sprintf("%d %s %s %s", r.VMID, r.Node, r.Name, strings.Join(templates.ParseTags(r.Tags), ";"))
-				if hw, recorded := templates.HardwareOf(templates.ParseAllTags(r.Tags)); recorded {
+				if hw, recorded := inv.Hardware[r.VMID]; recorded {
 					line += " " + hw.String()
 				}
 				if _, err = fmt.Fprintln(cmd.OutOrStdout(), line); err != nil {

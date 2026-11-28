@@ -39,10 +39,10 @@ func TestNodeOSRegistry(t *testing.T) {
 	}
 	for _, o := range NodeOSes() {
 		back, err := ParseNodeOS(o.String())
-		if err != nil || back != o.NodeOS || !strings.HasPrefix(o.Tags()[0], "os-") {
+		if err != nil || back != o.NodeOS {
 			t.Errorf("%s reads back as %+v, %v", o, back, err)
 		}
-		if tagged, ok := NodeOSOf(append([]string{"kubehenge"}, o.Tags()...)); !ok || tagged != o.NodeOS {
+		if tagged, ok := NodeOSOf([]string{"kubehenge", lineTag(RKE2, "", o.NodeOS)}); !ok || tagged != o.NodeOS {
 			t.Errorf("%s from its tags: %+v", o, tagged)
 		}
 		if o.FIPS != strings.HasSuffix(o.Title, " FIPS") || (o.FIPS && o.Default) {
@@ -57,14 +57,14 @@ func TestFIPSNodeOS(t *testing.T) {
 	if err != nil || o != (NodeOS{Family: rockyName, Release: "10", FIPS: true}) {
 		t.Fatalf("ParseNodeOS = %+v, %v", o, err)
 	}
-	if o.String() != "rocky-10-fips" || !slices.Equal(o.Tags(), []string{"os-rocky-10", FIPSTag}) || o.Base().FIPS {
-		t.Errorf("%s tagged %v, base %+v", o, o.Tags(), o.Base())
+	if o.String() != "rocky-10-fips" || lineTag(RKE2, "", o) != "rke2-rocky-10-fips" || o.Base().FIPS {
+		t.Errorf("%s tagged %s, base %+v", o, lineTag(RKE2, "", o), o.Base())
 	}
-	if got, ok := NodeOSOf([]string{"kubehenge", "os-rocky-10", "rke2"}); !ok || got.FIPS {
-		t.Errorf("a line without the fips tag reads as %+v", got)
+	if got, ok := NodeOSOf([]string{"kubehenge", "rke2-rocky-10"}); !ok || got.FIPS {
+		t.Errorf("a line without FIPS mode reads as %+v", got)
 	}
-	if _, ok := NodeOSOf([]string{"kubehenge", "os-rocky-10-fips"}); ok {
-		t.Error("FIPS mode is a tag of its own, never part of the node OS's")
+	if got, ok := NodeOSOf([]string{"kubehenge", "rke2-rocky-10-fips"}); !ok || !got.FIPS {
+		t.Errorf("a FIPS line reads as %+v", got)
 	}
 	if _, r, err := Available(o); err != nil || !r.FIPS {
 		t.Errorf("Available = %+v, %v", r, err)

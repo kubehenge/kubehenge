@@ -200,6 +200,8 @@ type Member struct {
 	// Down is set by Templates on a member whose node is not online. Its configuration cannot be
 	// read then, so its name and whether it is a template may be missing.
 	Down bool `json:"-"`
+	// Notes is a template's description, which Templates reads from its configuration.
+	Notes string `json:"-"`
 }
 
 // StatusUnknown is the status the cluster's resource view gives a VM whose node is not online.
@@ -904,8 +906,9 @@ func (a *Accounts) templateMember(ctx context.Context, t *Ticket, g *Member) (Me
 		return down()
 	}
 	var config struct {
-		Name     string `json:"name"`
-		Template int    `json:"template"`
+		Name        string `json:"name"`
+		Template    int    `json:"template"`
+		Description string `json:"description"`
 	}
 	err := a.get(ctx, t, fmt.Sprintf("/nodes/%s/qemu/%d/config", url.PathEscape(g.Node), g.VMID), &config)
 	switch {
@@ -916,7 +919,7 @@ func (a *Accounts) templateMember(ctx context.Context, t *Ticket, g *Member) (Me
 	case err != nil:
 		return Member{}, false, err
 	}
-	g.Name, g.Template = config.Name, config.Template
+	g.Name, g.Template, g.Notes = config.Name, config.Template, config.Description
 	return *g, true, nil
 }
 

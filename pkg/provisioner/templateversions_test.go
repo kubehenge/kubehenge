@@ -22,18 +22,18 @@ func TestKubeadmTemplateVersionsRecordedOnTheClass(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex
 	tags := []string{
-		"build-202610010000;kubeadm;kubehenge;kubernetes-v1.36.5;os-almalinux-10",
-		"build-202610080000;kubeadm;kubehenge;kubernetes-v1.36.5;os-almalinux-10",
-		"build-202610010000;kubeadm;kubehenge;kubernetes-v1.37.1;os-almalinux-10",
-		"build-202610010000;kubeadm;kubehenge;kubernetes-v1.36.4;os-almalinux-10",
+		"build-202610010000;kubeadm-v1.36.5-almalinux-10;kubehenge",
+		"build-202610080000;kubeadm-v1.36.5-almalinux-10;kubehenge",
+		"build-202610010000;kubeadm-v1.37.1-almalinux-10;kubehenge",
+		"build-202610010000;kubeadm-v1.36.4-almalinux-10;kubehenge",
 		// Not a build, which no class selects.
-		"kubeadm;kubehenge;kubernetes-v1.38.1;os-almalinux-10",
-		"build-202610010000;kubeadm;kubehenge;kubernetes-v1.38.0;os-rocky-10",
+		"kubeadm-v1.38.1-almalinux-10;kubehenge",
+		"build-202610010000;kubeadm-v1.38.0-rocky-10;kubehenge",
 		// A node OS Kubehenge does not know.
-		"build-202610010000;kubeadm;kubehenge;kubernetes-v1.38.0;os-plan9-4",
-		"build-202610010000;kubehenge;os-almalinux-10;rke2",
-		"build-202610010000;kubehenge;os-rocky-10;rke2",
-		"build-202610010000;k3s;kubehenge;os-rocky-10",
+		"build-202610010000;kubeadm-v1.38.0-plan9-4;kubehenge",
+		"build-202610010000;kubehenge;rke2-almalinux-10",
+		"build-202610010000;kubehenge;rke2-rocky-10",
+		"build-202610010000;k3s-rocky-10;kubehenge",
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var data any = []any{}
@@ -95,7 +95,7 @@ func TestKubeadmTemplateVersionsRecordedOnTheClass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	line := "kubeadm;kubehenge;kubernetes-v1.36.5;" + templates.DefaultNodeOS.Tags()[0]
+	line := "kubeadm-v1.36.5-" + templates.DefaultNodeOS.String() + ";kubehenge"
 	if got := builds[line]; len(got) != 2 || !got[0].Before(got[1]) || len(builds) != 7 {
 		t.Errorf("builds recorded %s", raw)
 	}
@@ -109,7 +109,7 @@ func TestKubeadmTemplateVersionsRecordedOnTheClass(t *testing.T) {
 	// The last template deleted: none, which is not the same as not looked at yet. A template of a
 	// node OS Kubehenge does not know is no source for the classes.
 	mu.Lock()
-	tags = []string{"build-202610010000;kubehenge;os-plan9-4;rke2"}
+	tags = []string{"build-202610010000;kubehenge;rke2-plan9-4"}
 	mu.Unlock()
 	if err := p.publish(ctx); err != nil {
 		t.Fatal(err)

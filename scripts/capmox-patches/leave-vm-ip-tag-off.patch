@@ -1,0 +1,95 @@
+diff --git a/internal/service/vmservice/ip.go b/internal/service/vmservice/ip.go
+index 3bf6bf7..d4f1bfd 100644
+--- a/internal/service/vmservice/ip.go
++++ b/internal/service/vmservice/ip.go
+@@ -58,16 +58,8 @@ func reconcileIPAddresses(ctx context.Context, machineScope *scope.MachineScope)
+ 		}
+ 	}
+ 
+-	// TODO: move to own state machine stage. Doesn't belong here, really
+-	defaultDevicePools := netPoolAddresses["default"]
+-	for _, ipAddresses := range defaultDevicePools {
+-		// Todo: This is not necessarily the default IP.
+-		_, err := setVMIPAddressTag(ctx, machineScope, ipAddresses[0])
+-		if err != nil {
+-			return false, err
+-		}
+-	}
+-
++	// No ip_net0_<address> tag: the ProxmoxMachine's status holds the addresses, and a VM keeps
++	// only the tags of its template.
+ 	machineScope.Logger.V(4).Info("updating the ProxmoxMachine's IP addresses.")
+ 	writeIPAddressStatus(pm, netPoolAddresses)
+ 
+@@ -173,28 +165,6 @@ func resolveExistingIPAddress(ctx context.Context, machineScope *scope.MachineSc
+ 	return []ipamv1.IPAddress{}, nil
+ }
+ 
+-// Todo: add tagging to its own stage.
+-func setVMIPAddressTag(ctx context.Context, machineScope *scope.MachineScope, ipAddress ipamv1.IPAddress) (bool, error) {
+-	// format ipTag as `ip_net0_<ipv4/6-address>`
+-	// to add it to the VM.
+-	ipTag := fmt.Sprintf("ip_%s_%s", infrav1.DefaultNetworkDevice, ipAddress.Spec.Address)
+-
+-	requeue := false
+-	// TODO: IPv6 tag?
+-	// Add ipv4 tag if the Virtual Machine doesn't have it.
+-	if vm := machineScope.VirtualMachine; !vm.HasTag(ipTag) && isIPv4(ipAddress.Spec.Address) {
+-		machineScope.Logger.V(4).Info("adding virtual machine ip tag.", "ip", ipAddress.Spec.Address)
+-		t, err := machineScope.InfraCluster.ProxmoxClient.TagVM(ctx, vm, ipTag)
+-		if err != nil {
+-			return false, errors.Wrapf(err, "unable to add IP tag to VirtualMachine %s", machineScope.Name())
+-		}
+-		machineScope.ProxmoxMachine.Status.TaskRef = new(string(t.UPID))
+-		requeue = true
+-	}
+-
+-	return requeue, nil
+-}
+-
+ func findIPAddressGatewayMetric(ctx context.Context, machineScope *scope.MachineScope, ipAddress *ipamv1.IPAddress) (*int32, error) {
+ 	annotations, err := machineScope.IPAMHelper.GetIPPoolAnnotations(ctx, ipAddress)
+ 	if err != nil {
+diff --git a/internal/service/vmservice/ip_test.go b/internal/service/vmservice/ip_test.go
+index 168db2d..9e07dc3 100644
+--- a/internal/service/vmservice/ip_test.go
++++ b/internal/service/vmservice/ip_test.go
+@@ -207,9 +207,9 @@ func TestReconcileIPAddresses_ClaimConflictSetsWaitingConditionAndDoesNotCreateC
+ 	require.Contains(t, message, string(ipam.ConflictOwnerMismatch))
+ }
+ 
+-// TestReconcileIPAddresses_AddIPTag tests if a machine with all resources created will add a task to add tags to proxmox VMs.
+-func TestReconcileIPAddresses_AddIPTag(t *testing.T) {
+-	machineScope, proxmoxClient, kubeClient := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForStaticIPAllocationReason)
++// TestReconcileIPAddresses_AddsNoIPTag tests that a machine's VM gets no ip_net0_<address> tag.
++func TestReconcileIPAddresses_AddsNoIPTag(t *testing.T) {
++	machineScope, _, kubeClient := setupReconcilerTestWithCondition(t, infrav1.ProxmoxMachineVirtualMachineProvisionedWaitingForStaticIPAllocationReason)
+ 
+ 	defaultPool := corev1.TypedLocalObjectReference{
+ 		APIGroup: new(ipamicv1.GroupVersion.String()),
+@@ -226,23 +226,16 @@ func TestReconcileIPAddresses_AddIPTag(t *testing.T) {
+ 	}
+ 
+ 	vm := newStoppedVM()
+-	task := newTask()
+ 	machineScope.SetVirtualMachine(vm)
+ 
+ 	createIPPools(t, kubeClient, machineScope)
+ 	createIPAddress(t, kubeClient, machineScope, infrav1.DefaultNetworkDevice, "10.10.10.10", 0, &defaultPool)
+ 
+-	proxmoxClient.EXPECT().TagVM(context.Background(), vm, ipTag).Return(task, nil).Once()
+-
++	// The mock client fails the test on a TagVM call it does not expect.
+ 	requeue, err := reconcileIPAddresses(context.Background(), machineScope)
+ 	require.NoError(t, err)
+ 	require.True(t, requeue)
+-
+-	// Machine should have one Task Pending
+-	require.NotNil(t, machineScope.ProxmoxMachine.Status.TaskRef)
+-
+-	// Task should be equal to fake result from TagVM
+-	require.Equal(t, "result", *machineScope.ProxmoxMachine.Status.TaskRef)
++	require.Nil(t, machineScope.ProxmoxMachine.Status.TaskRef)
+ 
+ 	requireConditionIsFalse(t, machineScope.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition)
+ }

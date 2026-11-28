@@ -57,10 +57,10 @@ func TestClusterNeedsFollowTheTemplatesHardware(t *testing.T) {
 		{"a model's level", web, new(hardwareSite(t, web, templates.Hardware{CPUType: "Haswell-noTSX"})), templateNeeds{Level: 3, CPUType: "Haswell-noTSX"}},
 		{
 			"a template of another node OS is no concern", web,
-			new(hardwareSite(t, web, templates.Hardware{CPUType: "x86-64-v4", NUMA: true}, "os-almalinux-10", "os-rocky-10")),
+			new(hardwareSite(t, web, templates.Hardware{CPUType: "x86-64-v4", NUMA: true}, "rke2-almalinux-10", "rke2-rocky-10")),
 			templateNeeds{Level: 2},
 		},
-		{"a template of another distribution is no concern", web, new(hardwareSite(t, web, v4, "rke2", "k3s")), templateNeeds{Level: 2}},
+		{"a template of another distribution is no concern", web, new(hardwareSite(t, web, v4, "rke2-almalinux-10", "k3s-almalinux-10")), templateNeeds{Level: 2}},
 		{
 			"NUMA", web,
 			new(hardwareSite(t, web, templates.Hardware{CPUType: templates.DefaultCPUType, NUMA: true})),
@@ -143,7 +143,7 @@ func TestCheckNodeOSRefusesATemplateCPUTypeNoNodeRuns(t *testing.T) {
 	}{
 		{"a node reaches it", web, hardwareSite(t, web, hw), map[string]int{"pve1": 4}, ""},
 		{"no node does", web, hardwareSite(t, web, hw), map[string]int{"pve1": 3}, "use CPU type x86-64-v4, which no allowed node (pve1) offers"},
-		{"other templates are no concern", web, hardwareSite(t, web, hw, "rke2", "k3s"), map[string]int{"pve1": 3}, ""},
+		{"other templates are no concern", web, hardwareSite(t, web, hw, "rke2-almalinux-10", "k3s-almalinux-10"), map[string]int{"pve1": 3}, ""},
 		{"Talos too", talos, hardwareSite(t, talos, hw), map[string]int{"pve1": 3}, "use CPU type x86-64-v4"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -13,8 +13,10 @@ type SiteCache struct {
 type cachedSite struct {
 	name string
 	site Site
-	// facts is nil for a template whose build recorded none.
-	facts *BuildFacts
+	// facts is nil for a template whose build recorded none, and hardware for one whose notes
+	// record none.
+	facts    *BuildFacts
+	hardware *Hardware
 }
 
 // Len is the number of templates held.

@@ -34,7 +34,7 @@ func TestInventoryReportsATemplateOnADownNodeAndListsTheOthers(t *testing.T) {
 	t.Parallel()
 	tmpl, tags := rke2(t)
 	up := template(101, tmpl.Name, tags, testPool)
-	down := onNode(template(102, "kubehenge-talos", "kubehenge;talos;talos-v1.14.4", testPool), "pve2", "unknown")
+	down := onNode(template(102, "kubehenge-talos", "kubehenge;talos-v1.14.4", testPool), "pve2", "unknown")
 	f := &fakeCluster{t: t, views: [][]map[string]any{{up, down}}, configs: configsOf(up)}
 	f.configs[101]["scsi0"] = "ceph:base-101-disk-0,size=30G"
 
@@ -56,7 +56,7 @@ func TestInventoryOfOnlyDownNodes(t *testing.T) {
 	t.Parallel()
 	tmpl, tags := rke2(t)
 	first := onNode(template(101, tmpl.Name, tags, testPool), "pve1", "unknown")
-	second := onNode(template(102, "kubehenge-talos", "kubehenge;talos;talos-v1.14.4", testPool), "pve2", "unknown")
+	second := onNode(template(102, "kubehenge-talos", "kubehenge;talos-v1.14.4", testPool), "pve2", "unknown")
 	inv := inventoryOf(t, &fakeCluster{t: t, views: [][]map[string]any{{first, second}}, configs: map[int]map[string]any{}})
 	if len(inv.Templates) != 0 || len(inv.Storages) != 0 || len(inv.Down) != 2 {
 		t.Errorf("Inventory = %+v; want two VMs down and nothing listed", inv)
@@ -90,7 +90,7 @@ func TestInventoryNoticesACachedTemplatesNodeTheViewStillShowsOnline(t *testing.
 	t.Parallel()
 	tmpl, tags := rke2(t)
 	first := onNode(template(101, tmpl.Name, tags, testPool), "pve2", "")
-	second := onNode(template(102, "kubehenge-talos", "kubehenge;talos;talos-v1.14.4", testPool), "pve2", "")
+	second := onNode(template(102, "kubehenge-talos", "kubehenge;talos-v1.14.4", testPool), "pve2", "")
 	other := onNode(template(103, "kubehenge-k3s", "k3s;kubehenge", testPool), "pve1", "")
 	f := &fakeCluster{t: t, views: [][]map[string]any{{first, second, other}}, configs: configsOf(first, second, other)}
 	b := &Builder{Client: f.client(), Pool: testPool, SiteCache: &SiteCache{}}
@@ -117,22 +117,25 @@ func TestInventoryNoticesACachedTemplatesNodeTheViewStillShowsOnline(t *testing.
 	}
 }
 
-// A template served from the site cache keeps the facts its build recorded in its description,
-// which only the first listing reads.
+// A template served from the site cache keeps the facts and the hardware its build recorded in its
+// description, which only the first listing reads.
 func TestInventoryKeepsTheBuildFactsOfACachedTemplate(t *testing.T) {
 	t.Parallel()
 	tmpl, tags := rke2(t)
 	built := template(101, tmpl.Name, tags, testPool)
-	old := template(102, "kubehenge-talos", "kubehenge;talos;talos-v1.14.4", testPool)
+	old := template(102, "kubehenge-talos", "kubehenge;talos-v1.14.4", testPool)
 	configs := configsOf(built, old)
 	facts := BuildFacts{Kernel: "6.12.0-124.8.1.el10_1.x86_64", Packages: strings.Repeat("c", 64)}
-	configs[101]["description"] = facts.Description(templateDescription)
+	configs[101]["description"] = Notes(templateDescription, DefaultHardware(DefaultCPUType), &facts)
 	f := &fakeCluster{t: t, views: [][]map[string]any{{built, old}}, configs: configs}
 	b := &Builder{Client: f.client(), Pool: testPool, SiteCache: &SiteCache{}}
 	for round := range 2 {
 		inv, err := b.Inventory(t.Context())
 		if err != nil || len(inv.Facts) != 1 || inv.Facts[101] != facts {
 			t.Errorf("listing %d: facts %+v, %v; want 101's alone", round+1, inv.Facts, err)
+		}
+		if len(inv.Hardware) != 1 || inv.Hardware[101] != DefaultHardware(DefaultCPUType) {
+			t.Errorf("listing %d: hardware %+v; want 101's alone", round+1, inv.Hardware)
 		}
 	}
 	if f.configReads() != 2 {
@@ -146,7 +149,7 @@ func TestInventoryTakesA595OnAConfigurationForADownNode(t *testing.T) {
 	t.Parallel()
 	tmpl, tags := rke2(t)
 	up := template(101, tmpl.Name, tags, testPool)
-	racing := onNode(template(102, "kubehenge-talos", "kubehenge;talos;talos-v1.14.4", testPool), "pve2", "")
+	racing := onNode(template(102, "kubehenge-talos", "kubehenge;talos-v1.14.4", testPool), "pve2", "")
 	f := &fakeCluster{t: t, views: [][]map[string]any{{up, racing}}, configs: configsOf(up, racing), unreachable: map[int]bool{102: true}}
 
 	inv := inventoryOf(t, f)

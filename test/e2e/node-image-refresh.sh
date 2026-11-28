@@ -246,7 +246,7 @@ vars=$(kubectl -n "${ns}" get cluster/node-image -o json |
     jq -c '[.spec.topology.variables[] | select(.name != "nodeOS")] + [{name: "nodeOS", value: {family: "rocky", release: "10"}}]')
 kubectl -n "${ns}" patch cluster/node-image --type=merge -p "{\"spec\":{\"topology\":{\"variables\":${vars}}}}"
 # A change of node OS is no node image refresh: the node moves at once, window closed or not.
-until_true 2400 "the cluster runs a build of k3s on Rocky Linux 10" runs os-rocky-10
+until_true 2400 "the cluster runs a build of k3s on Rocky Linux 10" runs k3s-rocky-10
 now=$(machine_name)
 [ "${now}" != "${machine}" ] || fail 'the node runs Rocky Linux without having been replaced'
 pm=$(kubectl -n "${ns}" get proxmoxmachines -o jsonpath='{.items[0].metadata.name}')

@@ -199,9 +199,9 @@ locals {
     # capmox's own image is built with Go 1.26 on distroless static.
     go         = "go1.26.10"
     base_image = "gcr.io/distroless/static:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3"
-    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:47d0bb036f360a212c874d8a40c5ca2b4929a0cc20ad9302f9b6f75eef022015"
+    image      = "ghcr.io/kubehenge/cluster-api-provider-proxmox@sha256:e7335e4e90626af259a2c5441330d0a857a90aa3409445b32bc4786591abc55e"
     # The patched package's tests, which the build runs first.
-    tests = "./pkg/proxmox/goproxmox/"
+    tests = "./pkg/proxmox/goproxmox/ ./internal/service/vmservice/"
   }
 
   # The Add-on Provider for Helm creates a cluster's HelmReleaseProxy under a generated name and

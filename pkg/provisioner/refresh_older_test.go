@@ -155,9 +155,9 @@ func TestBuildUsersNeverNameAnOlderBuild(t *testing.T) {
 func TestOlderBuildStaysOnlyWhileItIsTheNewest(t *testing.T) {
 	t.Parallel()
 	res := func(id uint64, at time.Time) templates.Built {
-		return templates.Built{Resource: &proxmox.ClusterResource{VMID: id, Tags: "kubehenge;rke2;almalinux-10;" + templates.BuildTag(at)}, At: at}
+		return templates.Built{Resource: &proxmox.ClusterResource{VMID: id, Tags: "kubehenge;rke2-almalinux-10;" + templates.BuildTag(at)}, At: at}
 	}
-	key := "almalinux-10;kubehenge;rke2"
+	key := "kubehenge;rke2-almalinux-10"
 	builds := map[string][]templates.Built{key: {res(4, day(22)), res(3, day(15)), res(2, day(8)), res(1, day(1))}}
 	// Build 4 has an older kernel than 3: it stays as the newest, and 3 and 2 fill the two places.
 	got := unneededBuilds(builds, map[uint64]bool{4: true}, nil, nil, 2, DefaultNodeImageSoak)

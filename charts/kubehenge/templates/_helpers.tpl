@@ -2602,6 +2602,20 @@ Call with the root context.
           valueFrom:
             template: |
               {{- .Files.Get "files/proxmox-network.tpl" | nindent 14 }}
+    # A clone's notes are its own, not its template's: capmox writes them as it clones. One line, as
+    # Cluster API reads the rendered value as YAML.
+    {{- range $role, $match := dict "control-plane" (dict "controlPlane" true) "worker" (dict "machineDeploymentClass" (dict "names" (list "worker"))) }}
+    - selector:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
+        kind: ProxmoxMachineTemplate
+        matchResources:
+          {{- toYaml $match | nindent 10 }}
+      jsonPatches:
+        - op: add
+          path: /spec/template/spec/description
+          valueFrom:
+            template: {{ printf "Kubehenge cluster {{ .builtin.cluster.namespace }}/{{ .builtin.cluster.name }}, %s node, pool %s/{{ .builtin.cluster.namespace }}.{{ .builtin.cluster.name }}" $role $.Values.workloadPool | quote }}
+    {{- end }}
 # Cluster API copies the machine template's annotations onto each ProxmoxMachine, where Kubehenge's
 # capmox build reads them (scripts/capmox-patches): capmox has no firewall field, and a field of its
 # own would be pruned by the CRDs of capmox's release. The groups and the ports the firewall serves

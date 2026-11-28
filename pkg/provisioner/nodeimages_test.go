@@ -412,7 +412,7 @@ func TestGeneratePatchesSelectTheBuildOfTheNodeImageTime(t *testing.T) {
 		t.Errorf("Talos machines: %+v", resp.Items)
 	}
 	// The request carries none of the cluster's own variables. Its node OS is the Cluster's.
-	if resp := request("rocky"); len(resp.Items) != 1 || !strings.Contains(string(resp.Items[0].Patch), `"os-rocky-10"`) ||
+	if resp := request("rocky"); len(resp.Items) != 1 || !strings.Contains(string(resp.Items[0].Patch), `"rke2-rocky-10"`) ||
 		!strings.Contains(string(resp.Items[0].Patch), `"build-202610020000"`) {
 		t.Errorf("a cluster on Rocky Linux: %+v", resp.Items)
 	}

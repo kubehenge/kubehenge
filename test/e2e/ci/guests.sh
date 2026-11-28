@@ -44,7 +44,7 @@
 # test/e2e/common.sh). A workload cluster's comes from its <cluster>-talosconfig Secret, read with
 # the management cluster's kubeconfig from the same places. They stay in a private
 # directory that collect removes when it ends, never in what it writes. A VM runs Talos when it is
-# tagged management (the management cluster's nodes) or talos, or when its cluster has a
+# tagged management (the management cluster's nodes) or talos-<release>, or when its cluster has a
 # talosconfig. Each talosctl call is cut off after KUBEHENGE_E2E_TALOSCTL_TIMEOUT seconds (60), and
 # a node whose API does not answer the first is asked nothing more.
 set -eu
@@ -655,7 +655,7 @@ EOF
                 } > "${talos_config}.why"
             fi
             case ";$2;" in
-                *";talos;"*) ;;
+                *";talos-v"*) ;;
                 *) [ -s "${talos_config}" ] || return 1 ;;
             esac
             ;;

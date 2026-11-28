@@ -1,3 +1,7 @@
+### Before you upgrade
+
+- Templates and cluster VMs carry at most three tags, with the hardware in the notes. Delete the node OS templates made before, which clusters no longer select.
+
 ### Changed
 
 - A node's VM, host and Machine share one name, `<cluster>-cp-<random>` or `<cluster>-<pool>-<random>-<random>`. The `nodeNamePrefix` variable, **Name prefix** in the wizard, starts it otherwise.

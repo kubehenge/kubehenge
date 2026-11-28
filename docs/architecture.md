@@ -394,7 +394,7 @@ Each node OS is a family in `pkg/templates`, which holds its image source, signa
 
 #### A cluster's node OS
 
-`GeneratePatches` points each machine template at the cluster's node OS's template line (the tag `os-<family>-<release>`). It has RKE2 and k3s start with SELinux. Clones keep their template's CPU type. Changing the variable rolls the nodes as an upgrade does.
+`GeneratePatches` points each machine template at the cluster's node OS's template line (the tag `<distribution>-<family>-<release>`, such as `rke2-almalinux-10`). It has RKE2 and k3s start with SELinux. Clones keep their template's CPU type. Changing the variable rolls the nodes as an upgrade does.
 
 The controller places a cluster only on the online nodes whose CPU reaches its node OS's level (read from each node's CPU flags). It places a Talos cluster on those that reach `x86-64-v2`, the CPU type of Talos's templates. Its admission webhook refuses a node OS none of the cluster's nodes can run, or one that is not released.
 

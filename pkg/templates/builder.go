@@ -175,6 +175,9 @@ type Inventory struct {
 	// Facts are what the builds recorded of themselves, by VM ID. A template without any, such as
 	// one made before builds recorded them, has no entry.
 	Facts map[uint64]BuildFacts
+	// Hardware is what each template's notes record of its hardware, by VM ID. A template whose
+	// notes record none has no entry.
+	Hardware map[uint64]Hardware
 }
 
 // Site is where one template's disks are.
@@ -224,7 +227,7 @@ func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 		}
 		out := *t.resource
 		out.Name, out.Template = t.name, 1
-		l.found = append(l.found, placedTemplate{&out, t.site, t.facts})
+		l.found = append(l.found, placedTemplate{&out, t.site, t.facts, t.hardware})
 	}
 	return inventoryFrom(l.found, l.down), nil
 }
@@ -232,12 +235,15 @@ func (b *Builder) Inventory(ctx context.Context) (Inventory, error) {
 // inventoryFrom is the inventory of the templates found, sorted by name, and those on down nodes.
 func inventoryFrom(found []placedTemplate, down []*proxmox.ClusterResource) Inventory {
 	slices.SortFunc(found, func(x, y placedTemplate) int { return strings.Compare(x.resource.Name, y.resource.Name) })
-	inv := Inventory{Down: down, Facts: map[uint64]BuildFacts{}}
+	inv := Inventory{Down: down, Facts: map[uint64]BuildFacts{}, Hardware: map[uint64]Hardware{}}
 	for _, p := range found {
 		inv.Templates = append(inv.Templates, p.resource)
 		inv.Sites = append(inv.Sites, p.site)
 		if p.facts != nil {
 			inv.Facts[p.resource.VMID] = *p.facts
+		}
+		if p.hardware != nil {
+			inv.Hardware[p.resource.VMID] = *p.hardware
 		}
 		for _, s := range p.site.Storages {
 			if !slices.Contains(inv.Storages, s) {
@@ -249,11 +255,13 @@ func inventoryFrom(found []placedTemplate, down []*proxmox.ClusterResource) Inve
 	return inv
 }
 
-// placedTemplate is a template of the listing with where its disks are and its build facts.
+// placedTemplate is a template of the listing with where its disks are, its build facts and its
+// hardware.
 type placedTemplate struct {
 	resource *proxmox.ClusterResource
 	site     Site
 	facts    *BuildFacts
+	hardware *Hardware
 }
 
 // cachedTemplate is a template of the listing whose name, site and build facts the SiteCache holds.
@@ -555,8 +563,11 @@ func (b *Builder) readSite(ctx context.Context, id int, r *proxmox.ClusterResour
 	if facts, ok := ParseBuildFacts(c.Description); ok {
 		e.facts = &facts
 	}
+	if hw, ok := HardwareOfNotes(c.Description); ok {
+		e.hardware = &hw
+	}
 	b.SiteCache.put(id, e)
-	return &placedTemplate{confirmed(r, c), e.site, e.facts}, nil
+	return &placedTemplate{confirmed(r, c), e.site, e.facts, e.hardware}, nil
 }
 
 // unreachableNodes are the nodes of the cached templates that pveproxy cannot reach. The resource
@@ -644,17 +655,13 @@ func (b *Builder) config(ctx context.Context, r *proxmox.ClusterResource) (*prox
 }
 
 // finish tags the new VM as a build under way, bakes it if the template asks for it, gives it its
-// final tags (those of its line and its hardware) and size, and turns it into the template.
+// final tags, notes (its hardware and what the bake installed) and size, and turns it into the
+// template.
 func (b *Builder) finish(ctx context.Context, node *proxmox.Node, vm *proxmox.VirtualMachine, vmid int, t *Template, hw Hardware, recipe *Recipe) error {
 	if err := markBuilding(ctx, vm); err != nil {
 		return err
 	}
-	options := []proxmox.VirtualMachineOption{
-		{Name: "tags", Value: strings.Join(NormaliseTags(append(slices.Clone(t.Tags), hw.Tags()...)), ";")},
-		{Name: "cores", Value: templateCores},
-		{Name: "memory", Value: templateMemoryMB},
-		bootFrom(templateDisk),
-	}
+	var recorded *BuildFacts
 	if recipe != nil {
 		facts, err := b.bake(ctx, node, vm, recipe)
 		if err != nil {
@@ -662,10 +669,16 @@ func (b *Builder) finish(ctx context.Context, node *proxmox.Node, vm *proxmox.Vi
 		}
 		if facts != (BuildFacts{}) {
 			b.logf("%s installed kernel %s and packages %s", t.Name, facts.Kernel, facts.Packages)
-			options = append(options, proxmox.VirtualMachineOption{Name: "description", Value: facts.Description(templateDescription)})
+			recorded = &facts
 		}
 	}
-	task, err := vm.Config(ctx, options...)
+	task, err := vm.Config(ctx,
+		proxmox.VirtualMachineOption{Name: "tags", Value: strings.Join(t.Tags, ";")},
+		proxmox.VirtualMachineOption{Name: "cores", Value: templateCores},
+		proxmox.VirtualMachineOption{Name: "memory", Value: templateMemoryMB},
+		bootFrom(templateDisk),
+		proxmox.VirtualMachineOption{Name: "description", Value: Notes(templateDescription, hw, recorded)},
+	)
 	err = waitTask(ctx, task, err, configTimeout)
 	if err != nil {
 		return err
@@ -953,7 +966,7 @@ func (b *Builder) newestHardware(ctx context.Context, t *Template) (*Hardware, e
 	if err != nil {
 		return nil, err
 	}
-	hw, recorded := HardwareOf(ParseAllTags(builds[0].Resource.Tags))
+	hw, recorded := HardwareOfNotes(c.Description)
 	if !recorded {
 		hw = DefaultHardware("")
 	}

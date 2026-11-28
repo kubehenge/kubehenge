@@ -267,7 +267,7 @@ func TestFindLooksOnlyInTheBuildersPool(t *testing.T) {
 	tmpl, tags := rke2(t)
 	elsewhere := template(101, tmpl.Name, tags, "")
 	inPool := template(201, tmpl.Name, tags, testPool)
-	other := template(202, "kubehenge-talos", "kubehenge;talos;talos-v1.14.4", testPool)
+	other := template(202, "kubehenge-talos", "kubehenge;talos-v1.14.4", testPool)
 	ctx := t.Context()
 
 	b := &Builder{Client: clusterVMs(t, elsewhere, other), Pool: testPool}
@@ -297,7 +297,7 @@ func TestInventoryNamesTheStoragesOfThePoolsTemplates(t *testing.T) {
 	t.Parallel()
 	tmpl, tags := rke2(t)
 	first := template(201, tmpl.Name, tags, testPool)
-	second := template(202, "kubehenge-talos", "kubehenge;talos;talos-v1.14.4", testPool)
+	second := template(202, "kubehenge-talos", "kubehenge;talos-v1.14.4", testPool)
 	elsewhere := template(101, tmpl.Name, tags, "")
 	configs := configsOf(first, second, elsewhere)
 	configs[201]["scsi0"] = "ceph:base-201-disk-0,discard=on,size=30G"
@@ -322,7 +322,7 @@ func TestSiteCacheReadsEachTemplateConfigurationOnce(t *testing.T) {
 	t.Parallel()
 	tmpl, tags := rke2(t)
 	first := template(201, tmpl.Name, tags, testPool)
-	second := template(202, "kubehenge-talos", "kubehenge;talos;talos-v1.14.4", testPool)
+	second := template(202, "kubehenge-talos", "kubehenge;talos-v1.14.4", testPool)
 	configs := configsOf(first, second)
 	configs[201]["scsi0"] = "ceph:base-201-disk-0,size=30G"
 	configs[202]["scsi0"] = "nvme:base-202-disk-0,size=10G"
@@ -419,7 +419,7 @@ func TestLookupsSkipAVMRemovedSinceTheListing(t *testing.T) {
 	t.Parallel()
 	tmpl, tags := rke2(t)
 	gone := template(101, tmpl.Name, tags, testPool)
-	other := template(202, "kubehenge-talos", "kubehenge;talos;talos-v1.14.4", testPool)
+	other := template(202, "kubehenge-talos", "kubehenge;talos-v1.14.4", testPool)
 	view := []map[string]any{gone, shownAs(gone, tmpl.Name, 0), other}
 	view[1]["vmid"] = 102
 	b := &Builder{Client: (&fakeCluster{t: t, views: [][]map[string]any{view}, configs: configsOf(other)}).client(), Pool: testPool}

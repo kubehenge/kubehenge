@@ -32,22 +32,8 @@ func (o NodeOS) String() string {
 // Base is the node OS without FIPS mode: the family's release it is built of.
 func (o NodeOS) Base() NodeOS { return NodeOS{Family: o.Family, Release: o.Release} }
 
-// Tags are the template tags of the node OS: its release's, and FIPSTag for FIPS mode.
-func (o NodeOS) Tags() []string {
-	tags := []string{nodeOSTagPrefix + o.Base().String()}
-	if o.FIPS {
-		tags = append(tags, FIPSTag)
-	}
-	return tags
-}
-
-const nodeOSTagPrefix = "os-"
-
-// FIPSTag marks the template lines of a node OS in FIPS mode, and fipsSuffix the node OS's word.
-const (
-	FIPSTag    = "fips"
-	fipsSuffix = "-" + FIPSTag
-)
+// fipsSuffix ends the word of a node OS in FIPS mode.
+const fipsSuffix = "-fips"
 
 // ParseNodeOS reads a node OS written as one word, such as almalinux-10, leap-16.1 or
 // rocky-10-fips. A family's name holds no dash, so the first one ends it, and no release ends in
@@ -62,17 +48,10 @@ func ParseNodeOS(s string) (NodeOS, error) {
 	return NodeOS{Family: family, Release: release, FIPS: fips}, nil
 }
 
-// NodeOSOf is the node OS a template's tags name, if they name one.
+// NodeOSOf is the node OS a template's line tag names, if it names one.
 func NodeOSOf(tags []string) (NodeOS, bool) {
-	for _, tag := range tags {
-		if s, ok := strings.CutPrefix(tag, nodeOSTagPrefix); ok {
-			if o, err := ParseNodeOS(s); err == nil && !o.FIPS {
-				o.FIPS = slices.Contains(tags, FIPSTag)
-				return o, true
-			}
-		}
-	}
-	return NodeOS{}, false
+	req, ok := RequestOf(tags)
+	return req.NodeOS, ok
 }
 
 // MAC is the mandatory access control a family's nodes enforce.

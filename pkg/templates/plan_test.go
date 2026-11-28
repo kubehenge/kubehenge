@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 var (
@@ -23,7 +24,7 @@ func TestPlan(t *testing.T) {
 			req:  Request{Distribution: Talos},
 			want: Template{
 				Name:  "kubehenge-talos-" + DefaultTalosVersion,
-				Tags:  []string{"baked", "kubehenge", "talos", "talos-" + DefaultTalosVersion},
+				Tags:  []string{"kubehenge", "talos-" + DefaultTalosVersion},
 				Image: ImageRef{Kind: NodeOSImage, NodeOS: DefaultNodeOS.Base()},
 				Bake:  &Bake{NodeOS: DefaultNodeOS.Base(), Distribution: Talos, TalosVersion: DefaultTalosVersion},
 			},
@@ -33,7 +34,7 @@ func TestPlan(t *testing.T) {
 			req:  Request{Distribution: RKE2},
 			want: Template{
 				Name:  "kubehenge-rke2-almalinux-10",
-				Tags:  []string{"kubehenge", "os-almalinux-10", "rke2"},
+				Tags:  []string{"kubehenge", "rke2-almalinux-10"},
 				Image: ImageRef{Kind: NodeOSImage, NodeOS: DefaultNodeOS},
 				Bake:  &Bake{NodeOS: DefaultNodeOS, Distribution: RKE2},
 			},
@@ -43,7 +44,7 @@ func TestPlan(t *testing.T) {
 			req:  Request{Distribution: K3s, NodeOS: rocky10},
 			want: Template{
 				Name:  "kubehenge-k3s-rocky-10",
-				Tags:  []string{"k3s", "kubehenge", "os-rocky-10"},
+				Tags:  []string{"k3s-rocky-10", "kubehenge"},
 				Image: ImageRef{Kind: NodeOSImage, NodeOS: rocky10},
 				Bake:  &Bake{NodeOS: rocky10, Distribution: K3s},
 			},
@@ -53,7 +54,7 @@ func TestPlan(t *testing.T) {
 			req:  Request{Distribution: RKE2, NodeOS: rocky10FIPS},
 			want: Template{
 				Name:  "kubehenge-rke2-rocky-10-fips",
-				Tags:  []string{"fips", "kubehenge", "os-rocky-10", "rke2"},
+				Tags:  []string{"kubehenge", "rke2-rocky-10-fips"},
 				Image: ImageRef{Kind: NodeOSImage, NodeOS: rocky10},
 				Bake:  &Bake{NodeOS: rocky10FIPS, Distribution: RKE2},
 			},
@@ -63,7 +64,7 @@ func TestPlan(t *testing.T) {
 			req:  Request{Distribution: RKE2, NodeOS: NodeOS{FIPS: true}},
 			want: Template{
 				Name:  "kubehenge-rke2-almalinux-10-fips",
-				Tags:  []string{"fips", "kubehenge", "os-almalinux-10", "rke2"},
+				Tags:  []string{"kubehenge", "rke2-almalinux-10-fips"},
 				Image: ImageRef{Kind: NodeOSImage, NodeOS: DefaultNodeOS},
 				Bake:  &Bake{NodeOS: NodeOS{Family: almaLinuxName, Release: "10", FIPS: true}, Distribution: RKE2},
 			},
@@ -73,7 +74,7 @@ func TestPlan(t *testing.T) {
 			req:  Request{Distribution: Kubeadm, NodeOS: rocky10, KubernetesVersion: "v1.37.1"},
 			want: Template{
 				Name:  "kubehenge-kubeadm-v1.37.1-rocky-10",
-				Tags:  []string{"kubeadm", "kubehenge", "kubernetes-v1.37.1", "os-rocky-10"},
+				Tags:  []string{"kubeadm-v1.37.1-rocky-10", "kubehenge"},
 				Image: ImageRef{Kind: NodeOSImage, NodeOS: rocky10},
 				Bake:  &Bake{NodeOS: rocky10, Distribution: Kubeadm, KubernetesVersion: "v1.37.1"},
 			},
@@ -92,7 +93,7 @@ func TestPlan(t *testing.T) {
 			if (got.Bake == nil) != (tt.want.Bake == nil) || (got.Bake != nil && *got.Bake != *tt.want.Bake) {
 				t.Errorf("Plan().Bake = %+v, want %+v", got.Bake, tt.want.Bake)
 			}
-			// RequestOf reads the node OS lines a refresh builds again. A Talos template has no os- tag.
+			// RequestOf reads the node OS lines a refresh builds again. A Talos template's line names no node OS.
 			if got.Refreshed() {
 				if back, ok := RequestOf(got.Tags); !ok || back.NodeOS != got.Bake.NodeOS || back.Distribution != tt.req.Distribution ||
 					back.KubernetesVersion != tt.req.KubernetesVersion {
@@ -185,10 +186,11 @@ func TestRequestOfRefusesWhatNoLineIs(t *testing.T) {
 	t.Parallel()
 	for _, tags := range [][]string{
 		{"kubehenge", "rke2"},
-		{"kubehenge", "os-almalinux-10"},
-		{"kubeadm", "kubehenge", "os-almalinux-10"},
-		{"kubehenge", "kubernetes-v1.37.1", "os-almalinux-10", "rke2"},
-		{"kubehenge", "os-almalinux", "rke2"},
+		{"kubehenge", "almalinux-10"},
+		{"kubehenge", "kubeadm-almalinux-10"},
+		{"kubehenge", "rke2-v1.37.1-almalinux-10"},
+		{"kubehenge", "rke2-almalinux"},
+		{"kubehenge", "talos-v1.14.2"},
 	} {
 		if req, ok := RequestOf(tags); ok {
 			t.Errorf("RequestOf(%v) = %+v", tags, req)
@@ -196,11 +198,73 @@ func TestRequestOfRefusesWhatNoLineIs(t *testing.T) {
 	}
 }
 
+// ParseTags keeps the tags Kubehenge names a template by, and leaves out a user's own and those an
+// older Kubehenge wrote.
 func TestParseTags(t *testing.T) {
 	t.Parallel()
-	got := ParseTags("talos;Kubehenge, talos-v1.14.2;;")
-	want := []string{"kubehenge", "talos", "talos-v1.14.2"}
+	got := ParseTags("talos;Kubehenge, talos-v1.14.2;;mine hw-ssd;build-202611261109;rke2-almalinux-10-fips")
+	want := []string{"build-202611261109", "kubehenge", "rke2-almalinux-10-fips", "talos-v1.14.2"}
 	if !slices.Equal(got, want) {
 		t.Errorf("ParseTags() = %v, want %v", got, want)
+	}
+}
+
+// Every template carries at most three tags, and Cluster API's Proxmox VE provider, which picks the
+// one template whose tags hold all of a selector's (uniqueSubset), finds each build in a pool of
+// several lines and builds. A tag a user adds to a template changes neither.
+func TestEachBuildIsTheOneMatchOfItsTags(t *testing.T) {
+	t.Parallel()
+	var pool [][]string
+	for _, req := range []Request{
+		{Distribution: Talos, TalosVersion: "v1.14.2"},
+		{Distribution: Talos, TalosVersion: "v1.14.1"},
+		{Distribution: RKE2},
+		{Distribution: RKE2, NodeOS: NodeOS{FIPS: true}},
+		{Distribution: RKE2, NodeOS: rocky10},
+		{Distribution: RKE2, NodeOS: rocky10FIPS},
+		{Distribution: K3s},
+		{Distribution: K3s, NodeOS: rocky10},
+		{Distribution: Kubeadm, KubernetesVersion: "v1.37.1"},
+		{Distribution: Kubeadm, KubernetesVersion: "v1.36.5"},
+		{Distribution: Kubeadm, NodeOS: rocky10, KubernetesVersion: "v1.37.1"},
+	} {
+		line, err := Plan(&req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !line.Refreshed() {
+			pool = append(pool, line.Tags)
+			continue
+		}
+		for _, at := range []time.Time{time.Date(2026, 11, 19, 11, 9, 0, 0, time.UTC), time.Date(2026, 11, 26, 11, 9, 0, 0, time.UTC)} {
+			build, err := line.Build(at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pool = append(pool, build.Tags)
+		}
+	}
+	// The user's own tag on one build.
+	pool[3] = NormaliseTags(append(slices.Clone(pool[3]), "team-a"))
+	matches := func(selector []string) int {
+		n := 0
+		for _, tags := range pool {
+			if !slices.ContainsFunc(selector, func(s string) bool { return !slices.Contains(tags, s) }) {
+				n++
+			}
+		}
+		return n
+	}
+	for i, tags := range pool {
+		own := ParseTags(strings.Join(tags, ";"))
+		if len(own) > 3 {
+			t.Errorf("%v: more than three tags", own)
+		}
+		if n := matches(own); n != 1 {
+			t.Errorf("%v selects %d templates, want 1", own, n)
+		}
+		if i == 3 && slices.Equal(own, tags) {
+			t.Errorf("the user's tag is part of the template's identity: %v", own)
+		}
 	}
 }

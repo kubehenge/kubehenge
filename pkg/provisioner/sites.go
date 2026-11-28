@@ -94,10 +94,9 @@ func (p *Proxmox) Sites(ctx context.Context) (*Sites, error) {
 	for i, r := range inv.Templates {
 		tags := templates.ParseTags(r.Tags)
 		at, _ := templates.BuildOf(tags)
-		hw, _ := templates.HardwareOf(templates.ParseAllTags(r.Tags))
 		id, _ := templates.VMID(r)
 		s.Templates = append(s.Templates, TemplateSite{
-			Name: r.Name, VMID: id, Node: r.Node, Tags: tags, Storages: inv.Sites[i].Storages, CPU: inv.Sites[i].CPU, Hardware: hw, Built: at,
+			Name: r.Name, VMID: id, Node: r.Node, Tags: tags, Storages: inv.Sites[i].Storages, CPU: inv.Sites[i].CPU, Hardware: inv.Hardware[r.VMID], Built: at,
 		})
 	}
 	p.readNetworks(ctx, s)

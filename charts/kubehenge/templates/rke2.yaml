@@ -1,7 +1,7 @@
 {{- $class := "kubehenge-rke2" }}
 {{- $clusterSpec := include "kubehenge.proxmoxClusterSpec" . }}
 {{- /* Placeholder tags: the controller's patch selects the build of the node OS's template. */}}
-{{- $machineSpec := include "kubehenge.proxmoxMachineSpec" (dict "tags" (list "kubehenge" "os-almalinux-10" "rke2") "serviceJoins" true) }}
+{{- $machineSpec := include "kubehenge.proxmoxMachineSpec" (dict "tags" (list "kubehenge" "rke2-almalinux-10") "serviceJoins" true) }}
 {{- $controlPlaneSpec := include "kubehenge.rke2ControlPlaneSpec" . }}
 {{- $workerSpec := include "kubehenge.rke2WorkerSpec" . }}
 {{- $clusterName := include "kubehenge.hashedName" (dict "name" $class "spec" $clusterSpec) }}

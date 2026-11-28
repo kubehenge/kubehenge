@@ -72,7 +72,7 @@ func (p *templatePool) serve(w http.ResponseWriter, r *http.Request) {
 			p.gone = append(p.gone, vmid)
 			data = fmt.Sprintf("UPID:pve1:00001234:00005678:6700AB12:qmdestroy:%d:root@pam:", vmid)
 		case m[2] == "/config":
-			data = map[string]any{"name": c["name"], "tags": c["tags"], "template": 1}
+			data = map[string]any{"name": c["name"], "tags": c["tags"], "description": c["description"], "template": 1}
 		default:
 			data = map[string]any{"vmid": vmid, "name": c["name"], "status": "stopped", "template": 1}
 		}
@@ -246,7 +246,9 @@ func TestReportDeletedSaysWhenItCannotWrite(t *testing.T) {
 func TestTheTemplateCommandsListAndDeleteInThePool(t *testing.T) {
 	t.Parallel()
 	talos := plan(t, templates.Talos)
-	p := &templatePool{t: t, vms: map[int]map[string]any{301: {"name": talos.Name, "tags": strings.Join(talos.Tags, ";")}}}
+	// The hardware the build recorded in the notes is listed after the tags.
+	notes := templates.Notes("Kubehenge template", templates.Hardware{CPUType: "host", SSD: true}, nil)
+	p := &templatePool{t: t, vms: map[int]map[string]any{301: {"name": talos.Name, "tags": strings.Join(talos.Tags, ";"), "description": notes}}}
 	conn := p.start(t)
 	exec := func(cmd *cobra.Command, args ...string) (string, error) {
 		var out bytes.Buffer
@@ -256,7 +258,7 @@ func TestTheTemplateCommandsListAndDeleteInThePool(t *testing.T) {
 		err := cmd.ExecuteContext(t.Context())
 		return out.String(), err
 	}
-	if out, err := exec(newTemplateListCommand(conn)); err != nil || out != fmt.Sprintf("301 pve1 %s %s\n", talos.Name, strings.Join(talos.Tags, ";")) {
+	if out, err := exec(newTemplateListCommand(conn)); err != nil || out != fmt.Sprintf("301 pve1 %s %s host,ssd\n", talos.Name, strings.Join(talos.Tags, ";")) {
 		t.Errorf("list printed %q, %v", out, err)
 	}
 	if out, err := exec(newTemplateDeleteCommand(conn), "talos"); err != nil || out != "deleted 301 "+talos.Name+"\n" {

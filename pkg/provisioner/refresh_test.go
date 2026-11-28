@@ -270,13 +270,6 @@ func TestTemplateRefreshCollectsTalosTemplatesByMinor(t *testing.T) {
 		line := talos(v)
 		pool.list = append(pool.list, &proxmox.ClusterResource{VMID: uint64(9000 + len(pool.list)), Name: line.Name, Tags: strings.Join(line.Tags, ";")})
 	}
-	// Templates an earlier Kubehenge made from the Image Factory's image, which have no baked tag.
-	factory := func(vmid uint64, v string) []string {
-		tags := []string{"kubehenge", "talos", "talos-" + v}
-		pool.list = append(pool.list, &proxmox.ClusterResource{VMID: vmid, Name: "kubehenge-talos-" + v, Tags: strings.Join(tags, ";")})
-		return tags
-	}
-	factory14, factory13, factoryWaited := factory(9200, "v1.14.4"), factory(9201, "v1.13.12"), factory(9202, "v1.13.7")
 	web := talosCluster("web", "v1.14.2")
 	web.Annotations[TalosImageAnnotation] = "v1.13.10"
 	waiting := func(name string, tags []string) *unstructured.Unstructured {
@@ -290,11 +283,9 @@ func TestTemplateRefreshCollectsTalosTemplatesByMinor(t *testing.T) {
 		}
 		return m
 	}
-	// The second selects the factory-made v1.13.12, whose baked template exists. The third selects
-	// a factory-made template with no baked one, its only match.
 	pending := waiting("api-abc", talos("v1.13.8").Tags)
 	r := &TemplateRefresh{
-		Kube: refreshKube(t, web, pending, waiting("api-def", factory13), waiting("api-ghi", factoryWaited)), Pool: pool, ClassNamespace: "kubehenge-system", Keep: DefaultBuildsKept,
+		Kube: refreshKube(t, web, pending), Pool: pool, ClassNamespace: "kubehenge-system", Keep: DefaultBuildsKept,
 		Soak: DefaultNodeImageSoak, Now: func() time.Time { return day(22) }, MissingOnly: true,
 		Missing: []templates.Request{{Distribution: templates.Talos, TalosVersion: "v1.14.1"}},
 	}
@@ -305,28 +296,8 @@ func TestTemplateRefreshCollectsTalosTemplatesByMinor(t *testing.T) {
 		t.Errorf("built %v", pool.built)
 	}
 	slices.Sort(pool.deleted)
-	// The factory-made v1.13.12 and v1.14.4 go with the baked v1.13.9 and v1.14.0.
-	if want := []string{"kubehenge-talos-v1.13.12", "kubehenge-talos-v1.13.9", "kubehenge-talos-v1.14.0", "kubehenge-talos-v1.14.4"}; !slices.Equal(pool.deleted, want) {
+	if want := []string{"kubehenge-talos-v1.13.9", "kubehenge-talos-v1.14.0"}; !slices.Equal(pool.deleted, want) {
 		t.Errorf("deleted %v, want %v", pool.deleted, want)
-	}
-	left := map[uint64]bool{}
-	for _, res := range pool.list {
-		left[res.VMID] = true
-	}
-	if left[9200] || left[9201] || !left[9202] {
-		t.Errorf("VMs left %v: the factory-made v1.14.4 and v1.13.12 should go and v1.13.7, a waiting machine's only match, stay", left)
-	}
-	// capmox refuses a selector that two templates match.
-	for _, selector := range [][]string{factory13, factory14} {
-		matches := 0
-		for _, res := range pool.list {
-			if tags := templates.ParseTags(res.Tags); !slices.ContainsFunc(selector, func(s string) bool { return !slices.Contains(tags, s) }) {
-				matches++
-			}
-		}
-		if matches != 1 {
-			t.Errorf("the selector %v matches %d templates, want the baked one alone", selector, matches)
-		}
 	}
 }
 
@@ -473,8 +444,8 @@ func TestTemplateRequestsStartOneRunAtATime(t *testing.T) {
 	}
 }
 
-// A machine waiting on an old selector keeps its one match: the baked template of its release,
-// though that release is past keep and no cluster runs it.
+// A machine waiting for its VM keeps its one match: the template of its release, though that
+// release is past keep and no cluster runs it.
 func TestTemplateRefreshKeepsAWaitingMachinesOnlyMatch(t *testing.T) {
 	t.Parallel()
 	pool := &fakePool{}
@@ -485,8 +456,7 @@ func TestTemplateRefreshKeepsAWaitingMachinesOnlyMatch(t *testing.T) {
 		}
 		pool.list = append(pool.list, &proxmox.ClusterResource{VMID: uint64(9000 + len(pool.list)), Name: line.Name, Tags: strings.Join(line.Tags, ";")})
 	}
-	old := []string{"kubehenge", "talos", "talos-v1.13.9"}
-	pool.list = append(pool.list, &proxmox.ClusterResource{VMID: 9201, Name: "kubehenge-talos-v1.13.9", Tags: strings.Join(old, ";")})
+	old := []string{"kubehenge", "talos-v1.13.9"}
 	m := &unstructured.Unstructured{}
 	m.SetAPIVersion("infrastructure.cluster.x-k8s.io/" + proxmoxMachineVersion)
 	m.SetKind("ProxmoxMachine")
@@ -503,7 +473,7 @@ func TestTemplateRefreshKeepsAWaitingMachinesOnlyMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	slices.Sort(pool.deleted)
-	if want := []string{"kubehenge-talos-v1.13.10", "kubehenge-talos-v1.13.8", "kubehenge-talos-v1.13.9"}; !slices.Equal(pool.deleted, want) {
+	if want := []string{"kubehenge-talos-v1.13.10", "kubehenge-talos-v1.13.8"}; !slices.Equal(pool.deleted, want) {
 		t.Errorf("deleted %v, want %v", pool.deleted, want)
 	}
 	var matches []uint64
@@ -513,6 +483,6 @@ func TestTemplateRefreshKeepsAWaitingMachinesOnlyMatch(t *testing.T) {
 		}
 	}
 	if !slices.Equal(matches, []uint64{9001}) {
-		t.Errorf("the waiting machine's selector matches VMs %v, want the baked v1.13.9 (9001) alone", matches)
+		t.Errorf("the waiting machine's selector matches VMs %v, want v1.13.9 (9001) alone", matches)
 	}
 }

@@ -310,7 +310,7 @@ The interface refuses a cluster whose template the controller does not find in t
 
 #### Builds, pool and storage
 
-Cluster API's Proxmox VE provider selects a template by its exact set of tags and needs exactly one match.
+Cluster API's Proxmox VE provider selects the template that carries all of a machine's tags and needs exactly one match.
 
 - A cluster's machines clone the build its node image time picks ([templates.md](templates.md#how-clusters-find-them)).
   - With that build deleted they take the one before it, or the oldest left. With none left of the line, they take none.

@@ -117,3 +117,37 @@ func TestMachineTemplatesFollowTheProviderSchema(t *testing.T) {
 		t.Fatal("the chart renders no ProxmoxMachineTemplate")
 	}
 }
+
+// A clone takes its template's notes unless its machine names its own, and a template's describe
+// the template. Each class gives its control plane and its workers notes naming the cluster, the
+// role and the pool.
+func TestClonesGetNotesOfTheirOwn(t *testing.T) {
+	t.Parallel()
+	variables := map[string]any{"builtin": map[string]any{"cluster": map[string]any{"name": "web", "namespace": "clusters"}}}
+	for _, file := range []string{"rke2.yaml", "k3s.yaml", "kubeadm.yaml", "talos.yaml"} {
+		t.Run(file, func(t *testing.T) {
+			t.Parallel()
+			notes := map[string]string{}
+			for _, p := range renderClass(t, file).patches {
+				for _, d := range p.Definitions {
+					for _, jp := range d.JSONPatches {
+						if d.Selector.Kind != "ProxmoxMachineTemplate" || jp.Path != "/spec/template/spec/description" || jp.ValueFrom == nil {
+							continue
+						}
+						role := "worker"
+						if d.Selector.MatchResources.ControlPlane {
+							role = "control-plane"
+						}
+						notes[role] = capiTemplate(t, jp.ValueFrom.Template, variables)
+					}
+				}
+			}
+			for _, role := range []string{"control-plane", "worker"} {
+				want := "Kubehenge cluster clusters/web, " + role + " node, pool kubehenge/clusters.web"
+				if notes[role] != want {
+					t.Errorf("the %s machines' notes are %q, want %q", role, notes[role], want)
+				}
+			}
+		})
+	}
+}

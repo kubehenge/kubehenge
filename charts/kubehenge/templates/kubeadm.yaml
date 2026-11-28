@@ -1,7 +1,7 @@
 {{- $class := "kubehenge-kubeadm" }}
 {{- $clusterSpec := include "kubehenge.proxmoxClusterSpec" . }}
 {{- /* Placeholder tags: the controller's patch selects the build of each machine's version's template. */}}
-{{- $machineSpec := include "kubehenge.proxmoxMachineSpec" (dict "tags" (list "kubeadm" "kubehenge" "os-almalinux-10")) }}
+{{- $machineSpec := include "kubehenge.proxmoxMachineSpec" (dict "tags" (list "kubehenge")) }}
 {{- $controlPlaneSpec := include "kubehenge.kubeadmControlPlaneSpec" . }}
 {{- $workerSpec := include "kubehenge.kubeadmWorkerSpec" . }}
 {{- $clusterName := include "kubehenge.hashedName" (dict "name" $class "spec" $clusterSpec) }}

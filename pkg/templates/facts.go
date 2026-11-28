@@ -7,8 +7,12 @@ import (
 	"unicode"
 )
 
-// factsMarker starts the line of a template's description that records what its build installed.
-const factsMarker = "kubehenge-build:"
+// factsMarker starts the line of a template's description that records what its build installed, and
+// hardwareMarker the one that records its hardware.
+const (
+	factsMarker    = "kubehenge-build:"
+	hardwareMarker = "kubehenge-hardware:"
+)
 
 // factsCommand prints a finished node's running kernel and, on the next line, a SHA-256 of its
 // installed packages with their versions.
@@ -30,9 +34,26 @@ func parseFactsOutput(out string) (BuildFacts, error) {
 	return BuildFacts{Kernel: lines[0], Packages: lines[1]}, nil
 }
 
-// Description is the text of a template's description that carries the facts, after its fixed text.
-func (f BuildFacts) Description(text string) string {
-	return fmt.Sprintf("%s\n%s kernel=%s packages=%s", text, factsMarker, f.Kernel, f.Packages)
+// Notes is a template's description: the fixed text, a line of its hardware and, if its build
+// recorded them, a line of its facts.
+func Notes(text string, hw Hardware, facts *BuildFacts) string {
+	notes := fmt.Sprintf("%s\n%s %s", text, hardwareMarker, hw)
+	if facts != nil {
+		notes += fmt.Sprintf("\n%s kernel=%s packages=%s", factsMarker, facts.Kernel, facts.Packages)
+	}
+	return notes
+}
+
+// HardwareOfNotes reads the hardware out of a template's description, and whether it records any.
+func HardwareOfNotes(description string) (Hardware, bool) {
+	for line := range strings.Lines(description) {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), hardwareMarker); ok {
+			if rest = strings.TrimSpace(rest); rest != "" {
+				return parseHardware(rest), true
+			}
+		}
+	}
+	return Hardware{}, false
 }
 
 // ParseBuildFacts reads the facts out of a template's description. It is false for a template that

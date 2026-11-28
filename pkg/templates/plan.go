@@ -1,10 +1,12 @@
 // Package templates creates the Proxmox VE VM templates that Kubehenge's clusters are cloned from.
 //
-// A template is identified by its tag set alone: Cluster API's Proxmox VE provider selects templates
-// by tags and needs exactly one match, so each distribution, node OS and version maps to one unique
-// set, its line. The node OS templates are built again to bring in their updates, and each build
-// keeps a tag of its own beside the line's (build-<YYYYMMDDhhmm>, UTC), so that a cluster's machines
-// move to a new build only when the cluster's patch names it.
+// A template is identified by its tags alone: Cluster API's Proxmox VE provider selects templates by
+// tags and needs exactly one match. A template carries kubehenge and one tag naming its line, the
+// distribution and node OS together, such as rke2-almalinux-10, talos-v1.14.6 or
+// kubeadm-v1.37.1-rocky-10-fips. The node OS templates are built again to bring in their updates, and
+// each build adds a tag of its own (build-<YYYYMMDDhhmm>, UTC), so that a cluster's machines move to
+// a new build only when the cluster's patch names it. What only a reader needs, such as the
+// hardware and the kernel, is in the template's notes.
 package templates
 
 import (
@@ -28,14 +30,6 @@ const (
 
 // kubehengeTag is on every template Kubehenge makes, which is how List tells them from others.
 const kubehengeTag = "kubehenge"
-
-// kubernetesTagPrefix and a version tag a kubeadm line.
-const kubernetesTagPrefix = "kubernetes-"
-
-// talosBakedTag marks a Talos template this Kubehenge baked. It does not start with "talos-", which
-// reads as a release, and it keeps an older template made from the Image Factory's image out of
-// every selector, since a machine's template must be the one match of its tags.
-const talosBakedTag = "baked"
 
 // buildingTag marks, beside kubehengeTag, a VM the builder is still making into a template.
 const buildingTag = "kubehenge-building"
@@ -126,7 +120,7 @@ func Plan(req *Request) (Template, error) {
 		if !versionRE.MatchString(v) {
 			return Template{}, fmt.Errorf("the Talos version %q is not of the form v1.2.3", v)
 		}
-		return newTemplate("kubehenge-talos-"+v, []string{talosBakedTag, kubehengeTag, "talos", "talos-" + v},
+		return newTemplate("kubehenge-talos-"+v, []string{kubehengeTag, talosTagPrefix + v},
 			ImageRef{Kind: NodeOSImage, NodeOS: DefaultNodeOS.Base()},
 			&Bake{NodeOS: DefaultNodeOS.Base(), Distribution: Talos, TalosVersion: v})
 
@@ -137,7 +131,7 @@ func Plan(req *Request) (Template, error) {
 		}
 		// RKE2 and k3s install themselves at boot, but each needs its own SELinux policy, so each
 		// has its own template per node OS.
-		return newTemplate(fmt.Sprintf("kubehenge-%s-%s", req.Distribution, os), append([]string{kubehengeTag, string(req.Distribution)}, os.Tags()...),
+		return newTemplate(fmt.Sprintf("kubehenge-%s-%s", req.Distribution, os), []string{kubehengeTag, lineTag(req.Distribution, "", os)},
 			ImageRef{Kind: NodeOSImage, NodeOS: os.Base()}, &Bake{NodeOS: os, Distribution: req.Distribution})
 
 	case Kubeadm:
@@ -149,7 +143,7 @@ func Plan(req *Request) (Template, error) {
 		if !versionRE.MatchString(v) {
 			return Template{}, fmt.Errorf("the Kubernetes version %q is not of the form v1.2.3", v)
 		}
-		return newTemplate(fmt.Sprintf("kubehenge-kubeadm-%s-%s", v, os), append([]string{kubehengeTag, "kubeadm", kubernetesTagPrefix + v}, os.Tags()...),
+		return newTemplate(fmt.Sprintf("kubehenge-kubeadm-%s-%s", v, os), []string{kubehengeTag, lineTag(Kubeadm, v, os)},
 			ImageRef{Kind: NodeOSImage, NodeOS: os.Base()}, &Bake{NodeOS: os, Distribution: Kubeadm, KubernetesVersion: v})
 	}
 	return Template{}, fmt.Errorf("unknown distribution %q: %s", req.Distribution, orList(DistributionNames()))
@@ -281,35 +275,72 @@ func NormaliseTags(tags []string) []string {
 	return slices.Compact(out)
 }
 
-// ParseTags splits a Proxmox VE tag string, which uses ';' (and accepts ',' and spaces) as
-// separators, and leaves out the tags that record hardware, since a template is identified by the
-// others (ParseAllTags keeps them).
-func ParseTags(s string) []string {
-	return IdentityOf(ParseAllTags(s))
+// talosTagPrefix and a release make a Talos line's tag.
+const talosTagPrefix = "talos-"
+
+// lineTag names a node OS line: the distribution, for kubeadm its Kubernetes version, and the node
+// OS, FIPS mode included.
+func lineTag(d Distribution, kubernetesVersion string, os NodeOS) string {
+	if kubernetesVersion != "" {
+		return fmt.Sprintf("%s-%s-%s", d, kubernetesVersion, os)
+	}
+	return fmt.Sprintf("%s-%s", d, os)
 }
 
-// ParseAllTags splits a Proxmox VE tag string as ParseTags does, hardware tags included.
-func ParseAllTags(s string) []string {
-	return NormaliseTags(strings.FieldsFunc(s, func(r rune) bool { return r == ';' || r == ',' || r == ' ' }))
+// ParseTags splits a Proxmox VE tag string, which uses ';' (and accepts ',' and spaces) as
+// separators, and keeps only the tags Kubehenge names a template by: kubehenge, a line's and a
+// build's. A tag a user adds of their own is no part of the template's identity, and Cluster API's
+// Proxmox VE provider matches the selector as a subset, so it changes nothing.
+func ParseTags(s string) []string {
+	tags := NormaliseTags(strings.FieldsFunc(s, func(r rune) bool { return r == ';' || r == ',' || r == ' ' }))
+	return slices.DeleteFunc(tags, func(tag string) bool { return !isIdentityTag(tag) })
+}
+
+// isIdentityTag tells whether a tag is one Kubehenge names a template by.
+func isIdentityTag(tag string) bool {
+	if tag == kubehengeTag {
+		return true
+	}
+	if _, built := BuildOf([]string{tag}); built {
+		return true
+	}
+	if v, ok := strings.CutPrefix(tag, talosTagPrefix); ok && versionRE.MatchString(v) {
+		return true
+	}
+	_, ok := requestOfTag(tag)
+	return ok
 }
 
 // RequestOf is the request a node OS line was planned from, read back from its tags.
 func RequestOf(tags []string) (Request, bool) {
-	o, ok := NodeOSOf(tags)
+	for _, tag := range tags {
+		if req, ok := requestOfTag(tag); ok {
+			return req, true
+		}
+	}
+	return Request{}, false
+}
+
+// requestOfTag reads a node OS line's tag, such as rke2-almalinux-10-fips or kubeadm-v1.37.1-rocky-10.
+func requestOfTag(tag string) (Request, bool) {
+	d, rest, ok := strings.Cut(tag, "-")
 	if !ok {
 		return Request{}, false
 	}
-	req := Request{NodeOS: o}
-	for _, tag := range tags {
-		switch {
-		case tag == string(RKE2) || tag == string(K3s) || tag == string(Kubeadm):
-			req.Distribution = Distribution(tag)
-		case strings.HasPrefix(tag, kubernetesTagPrefix):
-			req.KubernetesVersion = strings.TrimPrefix(tag, kubernetesTagPrefix)
+	req := Request{Distribution: Distribution(d)}
+	if req.Distribution == Kubeadm {
+		v, os, cut := strings.Cut(rest, "-")
+		if !cut || !versionRE.MatchString(v) {
+			return Request{}, false
 		}
-	}
-	if req.Distribution == "" || (req.Distribution == Kubeadm) != (req.KubernetesVersion != "") {
+		req.KubernetesVersion, rest = v, os
+	} else if req.Distribution != RKE2 && req.Distribution != K3s {
 		return Request{}, false
 	}
+	o, err := ParseNodeOS(rest)
+	if _, known := FamilyOf(o.Family); err != nil || !known {
+		return Request{}, false
+	}
+	req.NodeOS = o
 	return req, true
 }

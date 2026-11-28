@@ -99,7 +99,9 @@ function TemplatesBox(): JSX.Element {
                   <td data-label="Hardware">{hardwareText(t.hardware)}</td>
                   <td data-label="Build">
                     {t.built === undefined ? (
-                      <span className="muted">{t.tags.includes("talos") ? "Made once" : "Not rebuilt"}</span>
+                      <span className="muted">
+                        {t.tags.some((tag) => tag.startsWith("talos-")) ? "Made once" : "Not rebuilt"}
+                      </span>
                     ) : (
                       <>
                         {new Date(t.built).toLocaleString()}

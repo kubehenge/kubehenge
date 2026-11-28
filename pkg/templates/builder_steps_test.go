@@ -533,8 +533,8 @@ func TestFinishBakesAnImageModeBuildStepByStep(t *testing.T) {
 		"run cloud-init clean --logs",
 		"shutdown", "config delete=ide2,net0",
 		"remove " + seed,
-		"config boot=order=scsi0 cores=1 description=" + facts.Description(templateDescription) + " memory=512 tags=" +
-			strings.Join(NormaliseTags(append(slices.Clone(k.tmpl.Tags), DefaultHardware(DefaultCPUType).Tags()...)), ";"),
+		"config boot=order=scsi0 cores=1 description=" + Notes(templateDescription, DefaultHardware(DefaultCPUType), &facts) + " memory=512 tags=" +
+			strings.Join(k.tmpl.Tags, ";"),
 		"template",
 	}
 	if got := h.steps(); !slices.Equal(got, want) {
@@ -938,7 +938,7 @@ func TestCreateMakesATemplateAndRemovesItsDownload(t *testing.T) {
 		"run true", "run sh -c " + builtCheck[2],
 		// The image is written and never booted, so there are no facts and no clean-up.
 		"shutdown", "unlink scsi1", "config boot=order=scsi0 delete=ide2,net0", "remove " + seed,
-		"config boot=order=scsi0 cores=1 memory=512 tags=" + strings.Join(NormaliseTags(append(slices.Clone(tmpl.Tags), DefaultHardware(DefaultCPUType).Tags()...)), ";"),
+		"config boot=order=scsi0 cores=1 description=" + Notes(templateDescription, DefaultHardware(DefaultCPUType), nil) + " memory=512 tags=" + strings.Join(tmpl.Tags, ";"),
 		"template",
 		"remove " + volume,
 	}
@@ -954,8 +954,8 @@ func TestCreateMakesATemplateAndRemovesItsDownload(t *testing.T) {
 	if c["scsi1"] != nil || c["ide2"] != nil || c["net0"] != nil {
 		t.Errorf("the template keeps the builder's devices: %v", c)
 	}
-	if c["description"] != templateDescription {
-		t.Errorf("the template's description is %q, not the fixed text", c["description"])
+	if want := Notes(templateDescription, DefaultHardware(DefaultCPUType), nil); c["description"] != want {
+		t.Errorf("the template's description is %q, not %q", c["description"], want)
 	}
 }
 

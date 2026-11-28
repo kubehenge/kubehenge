@@ -1,13 +1,14 @@
 package templates
 
 import (
-	"slices"
+	"fmt"
 	"strings"
 	"testing"
 )
 
-func TestHardwareTagsRoundTrip(t *testing.T) {
+func TestHardwareNotesRoundTrip(t *testing.T) {
 	t.Parallel()
+	facts := BuildFacts{Kernel: "6.12.0-124.8.1.el10_1.x86_64", Packages: strings.Repeat("c", 64)}
 	for _, hw := range []Hardware{
 		DefaultHardware(DefaultCPUType),
 		{CPUType: "host"},
@@ -15,31 +16,19 @@ func TestHardwareTagsRoundTrip(t *testing.T) {
 		{CPUType: "EPYC-Rome-v2", Discard: true, NUMA: true},
 		{CPUType: "custom-gold", SSD: true, Discard: true, IOThread: true, NUMA: true},
 	} {
-		tags := hw.Tags()
-		for _, tag := range tags {
-			if !tagRE.MatchString(tag) {
-				t.Errorf("%+v: %q is no Proxmox VE tag", hw, tag)
+		for _, recorded := range []*BuildFacts{nil, &facts} {
+			notes := Notes(templateDescription, hw, recorded)
+			got, ok := HardwareOfNotes(notes)
+			if !ok || got != hw {
+				t.Errorf("%+v came back as %+v (recorded %v) through %q", hw, got, ok, notes)
+			}
+			if back, ok := ParseBuildFacts(notes); ok != (recorded != nil) || (ok && back != facts) {
+				t.Errorf("facts %+v, %v through %q", back, ok, notes)
 			}
 		}
-		got, recorded := HardwareOf(tags)
-		if !recorded || got != hw {
-			t.Errorf("%+v came back as %+v (recorded %v) through %v", hw, got, recorded, tags)
-		}
 	}
-	if _, recorded := HardwareOf([]string{"kubehenge", "rke2"}); recorded {
-		t.Error("tags without hardware record some")
-	}
-}
-
-func TestHardwareTagsAreNoPartOfTheLine(t *testing.T) {
-	t.Parallel()
-	line, _ := rke2(t)
-	raw := strings.Join(line.Tags, ";") + ";" + strings.Join(DefaultHardware(DefaultCPUType).Tags(), ";")
-	if got := ParseTags(raw); !slices.Equal(got, line.Tags) {
-		t.Errorf("identity %v, want %v", got, line.Tags)
-	}
-	if got := ParseAllTags(raw); len(got) != len(line.Tags)+len(DefaultHardware(DefaultCPUType).Tags()) {
-		t.Errorf("all tags %v", got)
+	if _, recorded := HardwareOfNotes(templateDescription); recorded {
+		t.Error("notes without hardware record some")
 	}
 }
 
@@ -78,10 +67,10 @@ func TestCreateAppliesTheHardware(t *testing.T) {
 		scsihw string
 		numa   bool
 		cpu    string
-		tags   []string
+		notes  string
 	}{
-		{"the defaults", HardwareChoice{}, ",backup=0,discard=on,ssd=1", "virtio-scsi-pci", false, DefaultCPUType, []string{"hw-cpu-x86-64-v2-aes", "hw-discard", "hw-ssd"}},
-		{"every option changed", HardwareChoice{CPUType: "Haswell", SSD: &no, Discard: &no, IOThread: &yes, NUMA: &yes}, ",backup=0,iothread=1", "virtio-scsi-single", true, "Haswell", []string{"hw-cpu-haswell", "hw-iothread", "hw-numa"}},
+		{"the defaults", HardwareChoice{}, ",backup=0,discard=on,ssd=1", "virtio-scsi-pci", false, DefaultCPUType, "kubehenge-hardware: x86-64-v2-AES,ssd,discard"},
+		{"every option changed", HardwareChoice{CPUType: "Haswell", SSD: &no, Discard: &no, IOThread: &yes, NUMA: &yes}, ",backup=0,iothread=1", "virtio-scsi-single", true, "Haswell", "kubehenge-hardware: Haswell,iothread,numa"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -100,14 +89,12 @@ func TestCreateAppliesTheHardware(t *testing.T) {
 			if _, numa := c["numa"]; numa != tc.numa {
 				t.Errorf("numa set: %v, want %v (%v)", numa, tc.numa, c["numa"])
 			}
-			tags, isString := c["tags"].(string)
-			if !isString {
-				t.Fatalf("tags are %T, want a string", c["tags"])
+			// The hardware is in the notes, the tags are the template's alone.
+			if c["tags"] != strings.Join(tmpl.Tags, ";") {
+				t.Errorf("tags %v, want %v", c["tags"], tmpl.Tags)
 			}
-			for _, want := range tc.tags {
-				if !slices.Contains(ParseAllTags(tags), want) {
-					t.Errorf("tags %q lack %s", tags, want)
-				}
+			if notes := fmt.Sprint(c["description"]); !strings.Contains(notes, "\n"+tc.notes) {
+				t.Errorf("notes %q lack %q", notes, tc.notes)
 			}
 		})
 	}
