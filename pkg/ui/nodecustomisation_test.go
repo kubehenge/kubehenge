@@ -96,7 +96,7 @@ func TestNodeCustomisationReplacesEveryNode(t *testing.T) {
 }
 
 // Talos's upgrade runs in place, so no patch of the Talos class reads talosVersion: a new release
-// replaces no machine, also where the firewall serves Talos's API. The firewall reaches every node.
+// replaces no machine, and nor does the firewall, which the controller writes to the VMs.
 func TestTalosVersionReplacesNoNode(t *testing.T) {
 	t.Parallel()
 	cmd := exec.CommandContext(t.Context(), "helm", "template", "kubehenge", "../../charts/kubehenge", "--namespace", "kubehenge-system",
@@ -118,8 +118,8 @@ func TestTalosVersionReplacesNoNode(t *testing.T) {
 		if got := effectOf(reach["talosVersion"]); got != effectNone {
 			t.Errorf("%s: a change of talosVersion replaces %q, want none", class.Name, got)
 		}
-		if got := effectOf(reach[provisioner.FirewallVariable]); got != effectAll {
-			t.Errorf("%s: a change of the firewall replaces %q, want all", class.Name, got)
+		if got := effectOf(reach[provisioner.FirewallVariable]); got != effectNone {
+			t.Errorf("%s: a change of the firewall replaces %q, want none", class.Name, got)
 		}
 	}
 	if seen != 1 {
