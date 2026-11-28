@@ -425,7 +425,7 @@ func (r *Reconciler) afterKubeVip(ctx context.Context, cluster *clusterv1.Cluste
 func (r *Reconciler) releaseKubeVipServices(ctx context.Context, cluster *clusterv1.Cluster) (bool, error) {
 	workload, found, err := r.Remotes.get(ctx, cluster)
 	if err != nil || !found {
-		// Without a kubeconfig, the cluster never had Services to release.
+		// Before its control plane is up, the cluster never had Services to release.
 		return false, err
 	}
 	provider := &metav1.PartialObjectMetadata{}

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -100,7 +103,7 @@ func (rs *Remotes) Ready(ctx context.Context, cluster *clusterv1.Cluster) error 
 	return nil
 }
 
-// Workload reads a workload cluster, and found is false until Cluster API has made its kubeconfig.
+// Workload reads a workload cluster, and found is false until get finds it.
 func (rs *Remotes) Workload(ctx context.Context, cluster *clusterv1.Cluster) (client.Reader, bool, error) { //nolint:ireturn // a CertificateWatch's Workload, which tests stand in for with fake clients
 	r, found, err := rs.get(ctx, cluster)
 	if err != nil || !found {
@@ -109,8 +112,7 @@ func (rs *Remotes) Workload(ctx context.Context, cluster *clusterv1.Cluster) (cl
 	return r.client, true, nil
 }
 
-// Client reaches a workload cluster for writing, and found is false until Cluster API has made its
-// kubeconfig.
+// Client reaches a workload cluster for writing, and found is false until get finds it.
 func (rs *Remotes) Client(ctx context.Context, cluster *clusterv1.Cluster) (client.Client, bool, error) {
 	r, found, err := rs.get(ctx, cluster)
 	if err != nil || !found {
@@ -154,8 +156,9 @@ func (rs *Remotes) Attach(ctx context.Context, cluster *clusterv1.Cluster, names
 	return nil
 }
 
-// get returns the cluster's client and its configuration, and false until Cluster API has made its
-// kubeconfig.
+// get returns the cluster's client and its configuration, and false until the cluster's control
+// plane is initialised and Cluster API has made its kubeconfig. Cluster API writes the kubeconfig
+// before the first API server answers, so a read before then fails on a cluster still coming up.
 func (rs *Remotes) get(ctx context.Context, cluster *clusterv1.Cluster) (remote, bool, error) {
 	if rs == nil {
 		return remote{}, false, nil
@@ -165,7 +168,12 @@ func (rs *Remotes) get(ctx context.Context, cluster *clusterv1.Cluster) (remote,
 	r, ok := rs.byCluster[remoteKey(cluster)]
 	rs.mu.Unlock()
 	if ok && now.Before(r.until) {
+		// A kept client was made once the control plane was initialised, which Cluster API never
+		// takes back.
 		return r, true, nil
+	}
+	if !controlPlaneInitialised(cluster) {
+		return remote{}, false, nil
 	}
 	config, found, err := remoteConfig(ctx, rs.Reader, client.ObjectKeyFromObject(cluster))
 	if err != nil || !found {
@@ -198,4 +206,27 @@ func (rs *Remotes) forget(cluster *clusterv1.Cluster) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	delete(rs.byCluster, remoteKey(cluster))
+}
+
+// controlPlaneInitialised tells whether Cluster API has seen the cluster's first API server answer.
+func controlPlaneInitialised(c *clusterv1.Cluster) bool {
+	if initialised := c.Status.Initialization.ControlPlaneInitialized; initialised != nil && *initialised {
+		return true
+	}
+	return meta.IsStatusConditionTrue(c.Status.Conditions, clusterv1.ClusterControlPlaneInitializedCondition)
+}
+
+// apiDown words a failure to reach the cluster's own API on its address as its user would, and
+// reports false for any other error.
+func apiDown(c *clusterv1.Cluster, err error) (string, bool) {
+	op, ok := errors.AsType[*net.OpError](err)
+	endpoint := c.Spec.ControlPlaneEndpoint
+	if !ok || op.Op != "dial" || op.Addr == nil || endpoint.Host == "" {
+		return "", false
+	}
+	address := net.JoinHostPort(endpoint.Host, strconv.Itoa(int(endpoint.Port)))
+	if op.Addr.String() != address {
+		return "", false
+	}
+	return fmt.Sprintf("the cluster's API at %s does not answer", address), true
 }

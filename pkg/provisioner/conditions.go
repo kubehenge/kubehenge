@@ -127,6 +127,9 @@ func (r *Reconciler) report(ctx context.Context, cluster *clusterv1.Cluster, rec
 	cond := metav1.Condition{Type: KubehengeReadyCondition, Status: metav1.ConditionTrue, Reason: ReconciledReason}
 	if reconcileErr != nil {
 		message := reconcileErr.Error()
+		if down, ok := apiDown(cluster, reconcileErr); ok {
+			message = down
+		}
 		reason := failureReason(reconcileErr)
 		cond.Status, cond.Reason, cond.Message = metav1.ConditionFalse, reason, clip(message, conditionMessageMax)
 		if r.Events != nil {

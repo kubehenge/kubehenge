@@ -260,6 +260,7 @@ func TestReconcileAppliesTheRestWhileRancherIsBeingRemoved(t *testing.T) {
 	c.Status.Conditions = []metav1.Condition{{
 		Type: clusterv1.AvailableCondition, Status: metav1.ConditionTrue, Reason: "Available", LastTransitionTime: metav1.Now(),
 	}}
+	initialised(c)
 	installed := &unstructured.Unstructured{}
 	installed.SetGroupVersionKind(helmChartProxyGVK)
 	installed.SetNamespace(c.Namespace)

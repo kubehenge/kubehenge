@@ -21,6 +21,7 @@
 - A save that keeps the Site CA while one host's chain is faulty still gives the nodes the root copies the other hosts need.
 - A first save behind an https proxy whose certificate names the Site CA's root in other bytes reads the hosts through that proxy.
 - Site CA faults show a name in VisibleString as text and end the host list with a full stop. The run log names the proxy certificate where no Site CA is set.
+- A new cluster shows its creation stage, not Error, while its control plane boots. Later, an API that does not answer reads "the cluster's API at <address> does not answer".
 
 ### Internal
 

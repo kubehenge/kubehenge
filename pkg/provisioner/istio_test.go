@@ -176,7 +176,7 @@ func TestUnenrolTakesEverythingOutOfTheMesh(t *testing.T) {
 // reached. The cluster's other add-ons do not wait with it.
 func TestReconcileKeepsIstioUntilItsWorkloadsLeaveTheMesh(t *testing.T) {
 	t.Parallel()
-	c := storageCluster()
+	c := initialised(storageCluster())
 	c.Spec.Topology.Variables = append(c.Spec.Topology.Variables, clusterv1.ClusterVariable{Name: "istio", Value: apiextensionsv1.JSON{Raw: []byte(`{"enabled":true}`)}})
 	r, kube := newReconciler(t, &fakeCloud{}, c)
 	r.Remotes = &Remotes{Reader: kube}
