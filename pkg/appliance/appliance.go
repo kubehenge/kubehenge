@@ -329,19 +329,7 @@ func (a *Appliance) Credential(ctx context.Context, passphrase, name string) ([]
 	if err != nil {
 		return nil, err
 	}
-	return a.credential(ctx, key, name)
-}
-
-// credential is Credential with the state's key.
-func (a *Appliance) credential(ctx context.Context, key, name string) ([]byte, error) {
-	if name != "kubeconfig" && name != talosconfigName {
-		return nil, fmt.Errorf("no credential %q", name)
-	}
-	out, err := a.stateOutput(ctx, key, name)
-	if err != nil {
-		return nil, err
-	}
-	return []byte(out), nil
+	return a.stateCredential(ctx, key, name)
 }
 
 // CheckPassphrase tells whether the passphrase opens the management cluster's state, ErrPassphrase

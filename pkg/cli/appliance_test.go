@@ -142,7 +142,7 @@ func newFakeInterface(t *testing.T) *fakeInterface {
 	}))
 	mux.HandleFunc("PUT /api/setup/state-passphrase", f.admin(func(w http.ResponseWriter, r *http.Request) {
 		body := f.bodies[r.Method+" "+r.URL.Path]
-		if body["required"] == false && body["passphrase"] != "right" {
+		if fmt.Sprint(body["required"]) != "true" && body["passphrase"] != "right" {
 			answer(w, http.StatusForbidden, `{"error":"wrong passphrase"}`)
 			return
 		}
@@ -499,10 +499,10 @@ func TestApplianceStatePassphrase(t *testing.T) {
 	}
 	out, err := f.run(f.args("admin@pve", "state-passphrase", "--require", "--new-passphrase-file", writeTemp(t, "new"))...)
 	sent := f.bodies["PUT /api/setup/state-passphrase"]
-	if err != nil || !strings.HasPrefix(out, "Required.") || sent["required"] != true || sent["newPassphrase"] != "new" {
+	if err != nil || !strings.HasPrefix(out, "Required.") || fmt.Sprint(sent["required"]) != "true" || sent["newPassphrase"] != "new" {
 		t.Errorf("require: %v %v\n%q", err, sent, out)
 	}
-	if _, err := f.run(f.args("admin@pve", "state-passphrase", "--off", "--passphrase-file", writeTemp(t, "wrong"))...); err == nil || err.Error() != "wrong passphrase" {
+	if _, err = f.run(f.args("admin@pve", "state-passphrase", "--off", "--passphrase-file", writeTemp(t, "wrong"))...); err == nil || err.Error() != "wrong passphrase" {
 		t.Errorf("off with a wrong passphrase: %v", err)
 	}
 	out, err = f.run(f.args("admin@pve", "state-passphrase", "--off", "--passphrase-file", writeTemp(t, "right"))...)

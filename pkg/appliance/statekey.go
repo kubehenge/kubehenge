@@ -58,15 +58,12 @@ func (a *Appliance) statePassphrase(ctx context.Context, passphrase string) (str
 	sealed, err := os.ReadFile(a.sealedStateKeyPath())
 	switch {
 	case err == nil:
-		key, err := openStateKey(sealed, passphrase)
-		if err != nil {
-			return "", err
+		key, openErr := openStateKey(sealed, passphrase)
+		if openErr != nil {
+			return "", openErr
 		}
 		// Finishes a switch to a required passphrase that stopped before it deleted the kept key.
-		if err := removeFile(a.stateKeyPath()); err != nil {
-			return "", err
-		}
-		return key, nil
+		return key, removeFile(a.stateKeyPath())
 	case !errors.Is(err, fs.ErrNotExist):
 		return "", fmt.Errorf("reading the state's sealed key: %w", err)
 	}
@@ -87,7 +84,7 @@ func (a *Appliance) statePassphrase(ctx context.Context, passphrase string) (str
 	// A state whose first run failed has no outputs to try the passphrase on. It stays asked for
 	// until a run gets through.
 	if _, err := a.output(ctx, a.stateEnv(passphrase), "api_endpoint"); err == nil {
-		if err := a.keepStateKey(passphrase); err != nil {
+		if err := a.keepKeyOpen(passphrase); err != nil {
 			return "", err
 		}
 	}
@@ -103,12 +100,12 @@ func (a *Appliance) makeStateKey() (string, error) {
 	if err := os.MkdirAll(a.workdir(), privateDir); err != nil {
 		return "", fmt.Errorf("preparing the management cluster's folder: %w", err)
 	}
-	return key, a.keepStateKey(key)
+	return key, a.keepKeyOpen(key)
 }
 
-// keepStateKey keeps key in the open, where automatic upgrades then find it too, so they keep no
+// keepKeyOpen keeps key in the open, where automatic upgrades then find it too, so they keep no
 // copy of their own.
-func (a *Appliance) keepStateKey(key string) error {
+func (a *Appliance) keepKeyOpen(key string) error {
 	if err := writeFileAtomic(a.stateKeyPath(), []byte(key)); err != nil {
 		return fmt.Errorf("keeping the state's key: %w", err)
 	}
@@ -200,4 +197,16 @@ func removeFile(path string) error {
 // stateEnv is OpenTofu's environment for reading the state with passphrase, outside any run.
 func (a *Appliance) stateEnv(passphrase string) []string {
 	return []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=" + a.Dir, "TF_IN_AUTOMATION=1", "TF_ENCRYPTION=" + encryption(passphrase)}
+}
+
+// stateCredential is Credential with the state's key.
+func (a *Appliance) stateCredential(ctx context.Context, key, name string) ([]byte, error) {
+	if name != "kubeconfig" && name != talosconfigName {
+		return nil, fmt.Errorf("no credential %q", name)
+	}
+	out, err := a.stateOutput(ctx, key, name)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(out), nil
 }

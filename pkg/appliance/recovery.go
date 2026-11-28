@@ -211,7 +211,7 @@ func (a *Appliance) ExportState(ctx context.Context, statePassphrase, exportPass
 	if err != nil {
 		return nil, err
 	}
-	talosconfig, err := a.credential(ctx, key, talosconfigName)
+	talosconfig, err := a.stateCredential(ctx, key, talosconfigName)
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +226,7 @@ func (a *Appliance) ExportState(ctx context.Context, statePassphrase, exportPass
 	bundle := exportBundle{
 		Version: exportVersion, Created: a.now().UTC(), Talosconfig: string(talosconfig), State: state, Settings: settings, Backups: *backups, StateKey: key,
 	}
-	if sealedKey, err := os.ReadFile(a.sealedStateKeyPath()); err == nil {
+	if sealedKey, readErr := os.ReadFile(a.sealedStateKeyPath()); readErr == nil {
 		bundle.StateKey, bundle.SealedStateKey = "", sealedKey
 	}
 	plain, err := json.Marshal(bundle)

@@ -55,7 +55,7 @@ func (a *Appliance) RecoverManagement(passphrase string, ticket *pve.Ticket, rea
 	}
 	// Read before the run, which the state's own reads wait for. The machine secrets, and so the
 	// nodes' addresses, stay the same across the apply.
-	admin, err := a.credential(context.Background(), passphrase, talosconfigName)
+	admin, err := a.stateCredential(context.Background(), passphrase, talosconfigName)
 	if err != nil {
 		return err
 	}

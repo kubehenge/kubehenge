@@ -322,9 +322,9 @@ func (a *Appliance) ApplyUnattended(ready func(ctx context.Context, kubeconfig [
 			return errors.New("there is no management cluster to upgrade")
 		}
 		// Inside the run, so that a kept passphrase that no longer opens the state leaves a failed run.
-		key, err := a.statePassphrase(ctx, u.Passphrase)
-		if err != nil {
-			return err
+		key, keyErr := a.statePassphrase(ctx, u.Passphrase)
+		if keyErr != nil {
+			return keyErr
 		}
 		if err := s.ValidateAgainst(s); err != nil {
 			return err

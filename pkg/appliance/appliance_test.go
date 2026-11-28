@@ -509,9 +509,9 @@ func TestRemove(t *testing.T) {
 	requirePassphrase(t, a)
 	before, gone := 0, 0
 	step := func(_ context.Context, j *Job) error { before++; j.Add("deleting templates"); return nil }
-	err := a.Remove("the wrong passphrase entirely", KeepBackups, ticket(), step, func() { gone++ })
-	if j := a.Current(); !errors.Is(err, ErrPassphrase) || j.Kind == "remove" || before != 0 || gone != 0 || !a.Ready() {
-		t.Fatalf("wrong passphrase: %v, job %+v, before %d, gone %d", err, j, before, gone)
+	refused := a.Remove("the wrong passphrase entirely", KeepBackups, ticket(), step, func() { gone++ })
+	if j := a.Current(); !errors.Is(refused, ErrPassphrase) || j.Kind == "remove" || before != 0 || gone != 0 || !a.Ready() {
+		t.Fatalf("wrong passphrase: %v, job %+v, before %d, gone %d", refused, j, before, gone)
 	}
 
 	ran := len(tofuCalls(t, a))

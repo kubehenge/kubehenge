@@ -187,8 +187,12 @@ func TestExportAndImportOverTheInterface(t *testing.T) {
 	}
 	expect(t, admin2.do("POST", "/api/appliance/import", send(bundle, exportSecret)), http.StatusOK)
 	// The fake tofu opens a state with the key its first apply was given, which it noted there.
-	if key, err := os.ReadFile(filepath.Join(a.Dir, "state-key")); err != nil || os.WriteFile(filepath.Join(fresh.Dir, "state-key"), key, 0o600) != nil {
-		t.Fatalf("the fake tofu's key: %v", err)
+	key, err := os.ReadFile(filepath.Join(a.Dir, "state-key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(fresh.Dir, "state-key"), key, 0o600); err != nil { //nolint:gosec // the test's own temporary folder
+		t.Fatal(err)
 	}
 	expect(t, admin2.do("POST", "/api/appliance/import", send(bundle, exportSecret)), http.StatusConflict)
 	restore := "/api/appliance/etcd-backups/snapshots/" + snapshot + "/restore"

@@ -531,7 +531,7 @@ again. The passphrase required so far comes from --passphrase-file or KUBEHENGE_
 				}
 			}
 			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
-				body := map[string]any{"required": require, "passphrase": passphrase, "newPassphrase": next}
+				body := map[string]any{"required": require, passphraseField: passphrase, "newPassphrase": next}
 				if _, err := s.call(ctx, http.MethodPut, "/api/setup/state-passphrase", body, nil); err != nil {
 					return err
 				}

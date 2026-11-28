@@ -288,7 +288,7 @@ func (a *Appliance) ConfigureEtcdBackups(ctx context.Context, s *EtcdBackupSetti
 	if err != nil {
 		return err
 	}
-	admin, err := a.credential(ctx, passphrase, talosconfigName)
+	admin, err := a.stateCredential(ctx, passphrase, talosconfigName)
 	if err != nil {
 		return err
 	}
@@ -807,7 +807,7 @@ func (a *Appliance) etcdRestoreAccess(ctx context.Context, passphrase string) (*
 	if err != nil {
 		return nil, err
 	}
-	admin, err := a.credential(ctx, passphrase, talosconfigName)
+	admin, err := a.stateCredential(ctx, passphrase, talosconfigName)
 	if err != nil {
 		return nil, err
 	}
