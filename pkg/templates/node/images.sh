@@ -8,8 +8,8 @@ set -eu
 
 version=$1
 # renovate: datasource=github-release-attachments depName=sigstore/cosign
-COSIGN=v3.1.4
-COSIGN_SHA256=424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa
+COSIGN=v3.1.6
+COSIGN_SHA256=318a99ade4156a0c4113aa983b46c0a0830fa7896a096c63121ee47b610a94c6
 
 work=$(mktemp -d -p /var/tmp)
 trap 'rm -rf "${work}"' EXIT

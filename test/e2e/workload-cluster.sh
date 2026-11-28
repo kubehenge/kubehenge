@@ -124,8 +124,8 @@ part=${KUBEHENGE_E2E_PART:-all}
 
 # etcdutl, which reads the etcd snapshots back.
 # renovate: datasource=github-release-attachments depName=etcd-io/etcd
-ETCD_VERSION=v3.7.3
-ETCD_SHA256=5dfa9cc3b3ce3b4b491fbcc2057d3daa166bcc6676f743fcd20f8e5760cb9775
+ETCD_VERSION=v3.7.4
+ETCD_SHA256=a0d47d07d081c12611fe69dc81a16ae8dd758401c0fe3a83d508823a1dac558e
 
 # shellcheck source=common.sh
 . "$(dirname "$0")/common.sh"
@@ -3131,7 +3131,7 @@ EOF
         # BIND, which takes the DNS-01 records over RFC 2136 and answers for the HTTP-01 name.
         step "an ACME server, and a DNS server for its challenges"
         # renovate: datasource=docker depName=docker.io/internetsystemsconsortium/bind9
-        bind_image=docker.io/internetsystemsconsortium/bind9:9.20@sha256:66092edb53c081fa11b1fa8219e99065b0f497cb38f568ba789702a4c10e2590
+        bind_image=docker.io/internetsystemsconsortium/bind9:9.20@sha256:978201d91548ec63c3b1c1befd5e6a3c9fa127f79f9058fd82d8e3493fe90ce1
         # renovate: datasource=docker depName=ghcr.io/letsencrypt/pebble
         pebble_image=ghcr.io/letsencrypt/pebble:2.10.3@sha256:0c81f05db371f436c97fb894bd6d2ab8fc9c8e2ce40f8bef8a8e15941bcd75ef
         # Pebble refuses an account without an external account binding, as ZeroSSL or Sectigo do. Its key
