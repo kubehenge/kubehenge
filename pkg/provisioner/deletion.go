@@ -181,7 +181,7 @@ func validateDeleting(ctx context.Context, old, c *clusterv1.Cluster, classOf cl
 var deletionKinds = func() []schema.GroupKind {
 	var kinds []schema.GroupKind
 	for group, names := range map[string][]string{
-		clusterv1.GroupVersion.Group:    {"MachineDeployment", "MachineSet", "Machine"},
+		clusterv1.GroupVersion.Group:    {"MachineDeployment", "MachineSet", kindMachine},
 		"controlplane.cluster.x-k8s.io": {"KubeadmControlPlane", "RKE2ControlPlane", "KThreesControlPlane", "TalosControlPlane"},
 		"bootstrap.cluster.x-k8s.io":    {"KubeadmConfig", "RKE2Config", "KThreesConfig", "TalosConfig"},
 		infrastructureGroup:             {kindProxmoxMachine, kindProxmoxCluster},

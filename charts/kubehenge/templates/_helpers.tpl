@@ -1524,7 +1524,7 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
       description: >-
         Proxmox VE security groups whose rules police the nodes' traffic, in order, after the
         cluster's own traffic and before the serving ports, so a group can drop or narrow those.
-        They need the firewall on. A change replaces the nodes.
+        They need the firewall on. A change reaches the running nodes in place.
       items:
         type: string
         minLength: 2
@@ -1541,7 +1541,7 @@ Add-ons Kubehenge's controller installs into a cluster, the same for every distr
         The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound
         traffic except the cluster's own, the management side's, what the security groups let in,
         the serving ports and the ports listed here. It acts only while Proxmox VE's datacenter
-        firewall is on. A change replaces the nodes.
+        firewall is on. A change reaches the running nodes in place.
       properties:
         enabled:
           type: boolean
@@ -2617,27 +2617,13 @@ Call with the root context.
             template: {{ printf "Kubehenge cluster {{ .builtin.cluster.namespace }}/{{ .builtin.cluster.name }}, %s node, pool %s/{{ .builtin.cluster.namespace }}.{{ .builtin.cluster.name }}" $role $.Values.workloadPool | quote }}
     {{- end }}
 # Cluster API copies the machine template's annotations onto each ProxmoxMachine, where Kubehenge's
-# capmox build reads them (scripts/capmox-patches): capmox has no firewall field, and a field of its
-# own would be pruned by the CRDs of capmox's release. The groups and the ports the firewall serves
-# from anywhere are part of the machine, so a change replaces the nodes. capmox writes each VM's
-# rules before it first starts, in order: everything from the VM's IPSet kubehenge, the groups,
-# everything to its IPSet kubehenge-lb, then each port. So a group can drop or narrow a serving port.
-# The Talos class also serves Talos's API, which the chart writes in at TALOS_PORTS.
-# Inbound traffic no rule accepts is dropped. The ports annotation, even empty, turns the firewall
-# on. Rules without an address match both families, and ICMP echo has a rule per family. capmox keeps the IPSet
-# kubehenge at the cluster's own addresses: the control-plane endpoint, the node addresses and
-# the pods (which reach other nodes unencapsulated with Cilium's native routing or Calico's BGP). That
-# keeps every port and protocol a distribution or CNI uses (VXLAN, Geneve, BGP, WireGuard, etcd, the
-# kubelet) open between them without a port list. The controller's annotations on the ProxmoxCluster
-# add the management cluster's nodes, the appliance and Cluster Mesh peers to kubehenge, and the
-# load-balancer addresses to kubehenge-lb. capmox follows a change of the ProxmoxCluster on the
-# running VMs, so a new address replaces no node. A cluster without the firewall variable, made
-# before it existed or past the defaulting webhook, keeps the firewall its groups give it.
-# The same annotations carry the prefix capmox names each VM and its host with in place of the
-# cluster's name, after the VM's Machine. A ProxmoxMachine is named after its template by RKE2's and
-# k3s's control planes, the Machine after the control plane, so only the Machine's name is shared.
-# The ProxmoxMachine takes the prefix as it is made, so a prefix that changes replaces the nodes.
-- name: proxmox-firewall
+# capmox build reads the prefix it names each VM and its host with in place of the cluster's name,
+# after the VM's Machine. A ProxmoxMachine is named after its template by RKE2's and k3s's control
+# planes, the Machine after the control plane, so only the Machine's name is shared. The
+# ProxmoxMachine takes the prefix as it is made, so a prefix that changes replaces the nodes.
+# The VM's firewall is not part of the machine: Kubehenge's controller writes it to each VM and
+# follows the firewall and securityGroups variables on the running ones, so no node is replaced.
+- name: proxmox-vm-name
   definitions:
     - selector:
         apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2
@@ -2651,9 +2637,8 @@ Call with the root context.
           path: /spec/template/metadata
           valueFrom:
             template: |
-              {{- /* Talos's API is mTLS, as the Kubernetes API is. The class, never a variable, decides it, so no variable's change reaches the firewall. */}}
-              {{- $talosPorts := ternary `"tcp/50000"` "" (hasSuffix "/talos.yaml" .Template.Name) }}
-              {{- .Files.Get "files/proxmox-firewall.tpl" | replace "TALOS_PORTS" $talosPorts | nindent 14 }}
+              annotations:
+                kubehenge.dev/vm-name-prefix: {{ `{{ .nodeNamePrefix | default .builtin.cluster.name | quote }}` }}
 - name: proxmox-storage
   definitions:
     - selector:

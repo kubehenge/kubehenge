@@ -77,6 +77,7 @@ func TestTheTestedPrivilegesAreTheModulesRoles(t *testing.T) {
 		"controller": {ControllerNeeds(&places), map[string][]string{
 			pathRoot: {"audit"}, pathNodes: {"audit"}, pool: {"provisioner_pools"}, group: {"provisioner_users"},
 			"/access/realm/pve": {"provisioner_realm"}, templates: {"templates_audit"}, pathStorage + "local-lvm": {"cluster_storage"},
+			"/sdn/zones/localnetwork/vmbr0": {"cluster_api_network"},
 		}},
 		"Cluster API": {CapmoxNeeds(&places), map[string][]string{
 			pathRoot: {"audit"}, pathNodes: {"audit"}, pathStorage + "local-lvm": {"allocate_space"},

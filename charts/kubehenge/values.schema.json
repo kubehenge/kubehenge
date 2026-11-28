@@ -58,7 +58,8 @@
       "required": ["storages", "bridges"],
       "properties": {
         "storages": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
-        "bridges": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+        "bridges": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "bridgePaths": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
       }
     },
     "clusterOIDC": {

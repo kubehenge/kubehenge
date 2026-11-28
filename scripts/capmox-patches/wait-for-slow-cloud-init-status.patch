@@ -1,8 +1,8 @@
 diff --git a/pkg/proxmox/goproxmox/api_client.go b/pkg/proxmox/goproxmox/api_client.go
-index 1391747..013b346 100644
+index 4e479dc..4e427ca 100644
 --- a/pkg/proxmox/goproxmox/api_client.go
 +++ b/pkg/proxmox/goproxmox/api_client.go
-@@ -515,7 +515,8 @@ func (c *APIClient) CloudInitStatus(ctx context.Context, vm *proxmox.VirtualMach
+@@ -402,7 +402,8 @@ func (c *APIClient) CloudInitStatus(ctx context.Context, vm *proxmox.VirtualMach
  		return false, errors.Wrap(err, "unable to get cloud-init status")
  	}
  
@@ -13,18 +13,18 @@ index 1391747..013b346 100644
  		return false, errors.Wrap(err, "unable to wait for agent exec")
  	}
 diff --git a/pkg/proxmox/goproxmox/api_client_test.go b/pkg/proxmox/goproxmox/api_client_test.go
-index 4fe52fd..0b9634f 100644
+index bf52aa9..c5a4c6c 100644
 --- a/pkg/proxmox/goproxmox/api_client_test.go
 +++ b/pkg/proxmox/goproxmox/api_client_test.go
-@@ -24,6 +24,7 @@ import (
+@@ -22,6 +22,7 @@ import (
+ 	"net/http"
  	"net/url"
- 	"strings"
  	"testing"
 +	"time"
  
  	"github.com/go-logr/logr"
  	"github.com/jarcoal/httpmock"
-@@ -1059,3 +1060,36 @@ func TestProxmoxAPIClient_CloudInitStatus(t *testing.T) {
+@@ -885,3 +886,36 @@ func TestProxmoxAPIClient_CloudInitStatus(t *testing.T) {
  		})
  	}
  }

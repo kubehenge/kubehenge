@@ -71,8 +71,7 @@ var changeableVariables = map[string]bool{
 	"headlamp": true, "monitoring": true, "logs": true, "backups": true, "rancher": true, "podSecurity": true, "istio": true, meshVariable: true, "loadBalancer": true, "upgrades": true, oidcVariable: true, allowedNodesVariable: true, "proxmoxHA": true, provisioner.HostOutageGraceVariable: true, csiVariable: true, ccmVariable: true,
 	certificatesVariable: true, gitopsVariable: true, autoscalerVariable: true, egressVariable: true, "namespaceLabels": true,
 	etcdVariable: true,
-	// A new firewall or new security groups roll every node, whose VM firewall is written before it
-	// first starts.
+	// A new firewall or new security groups reach the running nodes' VM firewalls in place.
 	provisioner.SecurityGroupsVariable: true, provisioner.FirewallVariable: true,
 	// A new node OS rolls every node onto its template, as a node image refresh does. A new size
 	// rolls the machines it sizes. New labels or taints roll the workers, and CIS hardening switched

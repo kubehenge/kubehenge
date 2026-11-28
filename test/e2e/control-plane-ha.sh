@@ -337,6 +337,54 @@ until_true 180 "the cluster's FirewallInactive condition is True" inactive True
 pve -X PUT -d enable=1 "${KUBEHENGE_PROXMOX_URL}/api2/json/cluster/firewall/options" > /dev/null
 until_true 180 "the cluster's FirewallInactive condition is gone" inactive ""
 
+step "an administrator's edits of a VM's firewall are set back, and a security group's change follows, replacing none"
+# The first VM's rule, switch, IPSet entry and interface flag are edited. A rule of the test's own
+# is not Kubehenge's, so it stays.
+vms_before=$(cluster_vms | sort)
+edit_node=$(echo "${vms_before}" | head -n 1 | cut -d ' ' -f 1)
+edit_id=$(echo "${vms_before}" | head -n 1 | cut -d ' ' -f 2)
+vm_fw="${KUBEHENGE_PROXMOX_URL}/api2/json/nodes/${edit_node}/qemu/${edit_id}/firewall"
+pve -X POST -d type=in -d action=ACCEPT -d proto=tcp -d dport=2222 -d enable=1 -d comment=e2e-own "${vm_fw}/rules" > /dev/null
+own_kept() { pve_get "nodes/${edit_node}/qemu/${edit_id}/firewall/rules" | jq -e '[.data[] | select(.comment == "e2e-own")] | length == 1' > /dev/null; }
+own_kept || fail "the test's own rule was not written"
+rule_pos=$(pve_get "nodes/${edit_node}/qemu/${edit_id}/firewall/rules" | jq -r '[.data[] | select(.comment // "" | startswith("kubehenge:"))][0].pos')
+pve -X PUT -d enable=0 "${vm_fw}/rules/${rule_pos}" > /dev/null
+pve -X PUT -d enable=0 "${vm_fw}/options" > /dev/null
+first_entry=$(ipset_entries "${edit_node}" "${edit_id}" | head -n 1)
+pve -X DELETE "${vm_fw}/ipset/kubehenge/$(printf '%s' "${first_entry}" | sed 's|/|%2F|g')" > /dev/null
+net0=$(pve_get "nodes/${edit_node}/qemu/${edit_id}/config" | jq -r '.data.net0')
+pve -X PUT --data-urlencode "net0=$(printf '%s' "${net0}" | sed 's/,firewall=1//')" "${KUBEHENGE_PROXMOX_URL}/api2/json/nodes/${edit_node}/qemu/${edit_id}/config" > /dev/null
+vm_options_on() { pve_get "nodes/${edit_node}/qemu/${edit_id}/firewall/options" | jq -e '.data.enable == 1' > /dev/null; }
+until_true 90 "the VM's firewall switched on again" vm_options_on
+until_true 90 "every VM's Kubehenge rules enabled and complete again" serving_rules
+until_true 90 "every NIC with firewall=1 again" firewalled_nics
+until_true 90 "the removed IPSet entry back" ipsets_hold present "${first_entry}"
+own_kept || fail "the test's own rule was removed"
+[ "$(cluster_vms | sort)" = "${vms_before}" ] || fail "an edit's set-back replaced a VM"
+
+second_group=${group}b
+pve -X POST -d "group=${second_group}" "${KUBEHENGE_PROXMOX_URL}/api2/json/cluster/firewall/groups" > /dev/null
+set_groups() {
+    patch=$(kubectl -n "${ns}" get cluster/ha -o json | jq -c --argjson g "$1" '{spec: {topology: {variables:
+        (.spec.topology.variables | map(if .name == "securityGroups" then .value = $g else . end))}}}')
+    kubectl -n "${ns}" patch cluster/ha --type=merge -p "${patch}"
+}
+group_rules_are() {
+    vm_list=$(cluster_vms) || return 1
+    while read -r vm_node vm_id; do
+        pve_get "nodes/${vm_node}/qemu/${vm_id}/firewall/rules" |
+            jq -e --arg a "${group}" --arg b "${second_group}" '[.data[] | select(.type == "group") | .action] == ($ARGS.positional | map(select(. != "")))' --args "$1" "$2" > /dev/null || return 1
+    done << EOF
+${vm_list}
+EOF
+}
+set_groups "[\"${group}\",\"${second_group}\"]"
+until_true 120 "both groups in every VM's rules" group_rules_are "${group}" "${second_group}"
+set_groups "[\"${group}\"]"
+until_true 120 "one group in every VM's rules" group_rules_are "${group}" ""
+pve -X DELETE "${KUBEHENGE_PROXMOX_URL}/api2/json/cluster/firewall/groups/${second_group}" > /dev/null
+[ "$(cluster_vms | sort)" = "${vms_before}" ] || fail "a security group's change replaced a VM"
+
 step "the server holding the virtual IP dies; the API stays reachable and takes writes"
 # The class's 300 s before a not-ready node counts as dead only adds waiting here; the integration
 # tier pins the classes' own checks.

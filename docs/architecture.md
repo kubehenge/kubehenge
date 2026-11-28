@@ -82,7 +82,7 @@ Each provider's probes allow 5 s. Its liveness probe tolerates six misses. The k
 
 Each provider runs its release's own image, by the digest `versions.tf` names, with two exceptions:
 
-- **capmox v0.9.2**, with six fixes of its own that upstream's release lacks (`capmox_build` in `management-cluster/versions.tf`). It also writes a VM's firewall from the ports and security groups a cluster's class gives it ([clusters.md](clusters.md#firewall)), which upstream has no setting for.
+- **capmox v0.9.2**, with six fixes of its own that upstream's release lacks (`capmox_build` in `management-cluster/versions.tf`). Its VMs' firewall is Kubehenge's controller's, not capmox's ([VM firewall](#vm-firewall)).
 - **The Add-on Provider for Helm v0.6.4**, with three fixes (`helm_addon_build`):
   - The provider creates a cluster's release once, never twice.
   - It pulls or checks each chart by the digest its version carries.
@@ -204,6 +204,18 @@ A workload cluster's cloud controller manager and CSI plugin controller reach Pr
   - A token whose secret is lost is replaced with its user, which the controller creates again with Kubehenge's groups and rights. A user in a group that Kubehenge did not give it is left as it is, and so is one holding a permission the controller can see (on the cluster's pool and storages). The cluster's error then names what to take away. Proxmox VE hides permissions on other paths from the controller, so a replacement drops those. To give a cluster's user more rights, add it to a group of your own. A realm that asks for a second factor also stops the replacement.
 - **A volume owner VM**, in the pool, never started. The CSI plugin creates volumes under its VMID, so only this cluster's token may attach them.
   - Deleting the cluster deletes its volumes.
+
+### VM firewall
+
+Kubehenge's controller writes each cluster VM's Proxmox VE firewall, with its own token. A reconciler keyed by the ProxmoxMachine does it, since that carries the VM ID right after the clone, which a Machine does not. It runs under leader election.
+
+- **What it writes.** Two IPSets, `kubehenge` for the cluster's own sources and `kubehenge-lb` for its load-balancer addresses, then the rules, the VM's firewall options and `firewall=1` on every interface, in that order. It reads the five first and writes only what differs. The rules are those of [clusters.md](clusters.md#firewall), with tcp/50000 on Talos.
+- **When.** Within seconds of capmox's network write, which is before the VM serves. A replaced VM gets it again. Nothing is kept between passes, so a restart or a retry is safe. The controller asks again every 5 seconds until a VM is complete and running, and every minute after.
+- **Only its own.** A VM ID now held by a VM of another pool or name is never written. The Machine gets `FirewallNotWritten` with reason `VMNotMachines`. Rules of other people stay below Kubehenge's block. A cluster whose firewall is off loses Kubehenge's rules and IPSets and nothing else.
+- **Set back.** An edit of a complete VM's firewall is set back, with a `FirewallSetBack` event on the Cluster.
+- **When it cannot write.** After a minute the Machine gets `FirewallNotWritten` with Proxmox VE's answer, and the Cluster one warning per cause. The next full write clears it.
+- **A change reaches running nodes.** The firewall variable and `securityGroups` change no machine template, so no node is replaced.
+- **Rights.** `VM.Config.Network` on the workload pool, and `SDN.Use` on each workload bridge or VNet through the `cluster-api-network` role.
 
 ### Deleting volumes
 

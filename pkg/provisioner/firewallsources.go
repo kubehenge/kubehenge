@@ -2,7 +2,6 @@ package provisioner
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -34,15 +33,6 @@ const (
 	// comma-separated "<address>=<bridge>/<vlan>", with a VNet by its name and 0 for no VLAN. An
 	// address it does not name is on a network the appliance does not know.
 	ApplianceNetworksKey = "networks"
-	// FirewallSourcesAnnotation names, on the ProxmoxCluster of a firewalled cluster, the addresses
-	// beside the cluster's own that Kubehenge's capmox build keeps in each node's IPSet kubehenge:
-	// the management cluster's nodes, the appliance and the nodes and pods of the clusters it is
-	// linked with by Cluster Mesh. FirewallSources is its one writer.
-	FirewallSourcesAnnotation = "kubehenge.dev/firewall-sources"
-	// FirewallDestinationsAnnotation names, on the ProxmoxCluster of a firewalled cluster, the
-	// cluster's load-balancer addresses, which capmox keeps in each node's IPSet kubehenge-lb and the
-	// firewall accepts all traffic to. FirewallSources is its one writer.
-	FirewallDestinationsAnnotation = "kubehenge.dev/firewall-destinations"
 	// FirewallVariable switches a cluster's firewall and lists its further ports. The class
 	// defaults it on.
 	FirewallVariable = "firewall"
@@ -69,11 +59,9 @@ type FirewallPort struct {
 	EndPort  int    `json:"endPort,omitempty"`
 }
 
-// FirewallSources keeps FirewallSourcesAnnotation and FirewallDestinationsAnnotation on the
-// ProxmoxCluster of every firewalled cluster, and takes them off a cluster without a firewall.
-// capmox writes a change into the nodes' IPSets, so a new address replaces no node. While the
-// controller is away the IPSets keep what was last written, and new nodes get the same. It also
-// keeps FirewallInactiveCondition on each firewalled cluster.
+// FirewallSources holds the management side's addresses that every cluster's VM firewall accepts
+// (Addresses), and keeps FirewallInactiveCondition on each firewalled cluster. The firewalls
+// themselves are VMFirewall's.
 type FirewallSources struct {
 	Client client.Client
 	// Reader reads the appliance's ConfigMap past the cache, which holds only the classes'.
@@ -166,10 +154,6 @@ func (f *FirewallSources) appliance(ctx context.Context) ([]string, map[string]s
 }
 
 func (f *FirewallSources) runOnce(ctx context.Context) error {
-	sources, err := f.Addresses(ctx)
-	if err != nil {
-		return err
-	}
 	clusters := &clusterv1.ClusterList{}
 	if err := f.Client.List(ctx, clusters); err != nil {
 		return fmt.Errorf("listing the clusters: %w", err)
@@ -199,9 +183,6 @@ func (f *FirewallSources) runOnce(ctx context.Context) error {
 		if firewalled(c) {
 			seen = datacenter
 		}
-		if err := f.annotate(ctx, pc, firewallAnnotations(c, sources, clusters.Items, byCluster)); err != nil {
-			errs = append(errs, fmt.Errorf("cluster %s/%s: %w", c.Namespace, c.Name, err))
-		}
 		if err := f.markInactive(ctx, c, seen); err != nil {
 			errs = append(errs, fmt.Errorf("cluster %s/%s: %w", c.Namespace, c.Name, err))
 		}
@@ -209,34 +190,14 @@ func (f *FirewallSources) runOnce(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// firewallAnnotations are the firewall annotations a cluster's ProxmoxCluster should hold, each
-// empty where it has none: the sources of a firewalled cluster, and the load-balancer addresses
-// where its serving ports are open.
-func firewallAnnotations(c *clusterv1.Cluster, sources []string, clusters []clusterv1.Cluster, byCluster map[types.NamespacedName]*unstructured.Unstructured) map[string]string {
-	want := map[string]string{FirewallSourcesAnnotation: "", FirewallDestinationsAnnotation: ""}
-	if !firewalled(c) {
-		return want
-	}
-	want[FirewallSourcesAnnotation] = strings.Join(append(slices.Clone(sources), meshSources(c, clusters, byCluster)...), ",")
-	if servesPorts(c) {
-		want[FirewallDestinationsAnnotation] = strings.Join(loadBalancerDestinations(c), ",")
-	}
-	return want
-}
-
-// firewalled tells whether a cluster's nodes have a firewall: the firewall variable on, or security
-// groups named on a cluster without the variable.
+// firewalled tells whether a cluster's nodes have a firewall: the firewall variable is on.
 func firewalled(c *clusterv1.Cluster) bool {
-	if fw, set, err := optionalVariable[Firewall](c, FirewallVariable); err == nil && set {
-		return fw.Enabled
-	}
-	groups, set, err := optionalVariable[[]string](c, SecurityGroupsVariable)
-	return err == nil && set && len(groups) > 0
+	fw, set, err := optionalVariable[Firewall](c, FirewallVariable)
+	return err == nil && set && fw.Enabled
 }
 
-// servesPorts tells whether a cluster's firewall opens its serving ports to anyone, as its class's
-// template does: when the firewall variable is on and its serving ports are not switched off. A
-// cluster made before the variable has its groups alone.
+// servesPorts tells whether a cluster's firewall opens its serving ports to anyone: when the
+// firewall variable is on and its serving ports are not switched off.
 func servesPorts(c *clusterv1.Cluster) bool {
 	fw, set, err := optionalVariable[Firewall](c, FirewallVariable)
 	return err == nil && set && fw.Enabled && (fw.ServingPorts == nil || *fw.ServingPorts)
@@ -396,32 +357,6 @@ func (f *FirewallSources) markInactive(ctx context.Context, c *clusterv1.Cluster
 	}
 	if err == nil && f.Events != nil && newlyMarked(before, cond) {
 		f.Events.Eventf(c, nil, corev1.EventTypeWarning, FirewallInactiveCondition, "WatchFirewall", "%s", cond.Message)
-	}
-	return nil
-}
-
-// annotate sets each of the ProxmoxCluster's annotations in want where it differs, and takes one off
-// where want holds it empty. capmox reads an empty annotation and none alike.
-func (f *FirewallSources) annotate(ctx context.Context, pc *unstructured.Unstructured, want map[string]string) error {
-	changes := map[string]any{}
-	for key, value := range want {
-		held, has := pc.GetAnnotations()[key]
-		switch {
-		case value == "" && has:
-			changes[key] = nil
-		case value != "" && held != value:
-			changes[key] = value
-		}
-	}
-	if len(changes) == 0 {
-		return nil
-	}
-	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{annotationsKey: changes}})
-	if err != nil {
-		return fmt.Errorf("the firewall sources: %w", err)
-	}
-	if err := f.Client.Patch(ctx, pc, client.RawPatch(types.MergePatchType, patch)); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("annotating ProxmoxCluster %s with the firewall sources: %w", pc.GetName(), err)
 	}
 	return nil
 }

@@ -66,7 +66,7 @@ index c6f9e48..9eff899 100644
  		err := fmt.Errorf("expected VM name to match %q but it was %q", machineName, vm.VirtualMachineConfig.Name)
  		if vmIDCollisionIsRecoverable(s) {
 diff --git a/internal/service/vmservice/vm.go b/internal/service/vmservice/vm.go
-index 7e87548..46bbdd1 100644
+index 6abf2c4..51ade85 100644
 --- a/internal/service/vmservice/vm.go
 +++ b/internal/service/vmservice/vm.go
 @@ -61,7 +61,7 @@ var ErrNoVMIDInRangeFree = errors.New("No free vmid found in vmIDRange")
@@ -78,7 +78,7 @@ index 7e87548..46bbdd1 100644
  		State: infrav1.VirtualMachineStatePending,
  	}
  
-@@ -494,7 +494,7 @@ func getClusterAPIMachineAddresses(scope *scope.MachineScope) ([]clusterv1.Machi
+@@ -471,7 +471,7 @@ func getClusterAPIMachineAddresses(scope *scope.MachineScope) ([]clusterv1.Machi
  	addresses := []clusterv1.MachineAddress{
  		{
  			Type:    clusterv1.MachineHostName,
@@ -87,7 +87,7 @@ index 7e87548..46bbdd1 100644
  		},
  	}
  
-@@ -525,7 +525,7 @@ func getClusterAPIMachineAddresses(scope *scope.MachineScope) ([]clusterv1.Machi
+@@ -502,7 +502,7 @@ func getClusterAPIMachineAddresses(scope *scope.MachineScope) ([]clusterv1.Machi
  func createVM(ctx context.Context, scope *scope.MachineScope) (proxmox.VMCloneResponse, error) {
  	options := proxmox.VMCloneRequest{
  		Node: scope.ProxmoxMachine.GetSourceNode(),
@@ -96,7 +96,7 @@ index 7e87548..46bbdd1 100644
  	}
  
  	if scope.ProxmoxMachine.Spec.Description != nil {
-@@ -617,7 +617,7 @@ func createVM(ctx context.Context, scope *scope.MachineScope) (proxmox.VMCloneRe
+@@ -594,7 +594,7 @@ func createVM(ctx context.Context, scope *scope.MachineScope) (proxmox.VMCloneRe
  	// if the creation was successful, we store the information about the node in the
  	// cluster status
  	scope.InfraCluster.ProxmoxCluster.AddNodeLocation(infrav1.NodeLocation{
@@ -106,18 +106,18 @@ index 7e87548..46bbdd1 100644
  	}, util.IsControlPlaneMachine(scope.Machine))
  
 diff --git a/internal/service/vmservice/vm_test.go b/internal/service/vmservice/vm_test.go
-index 363285a..2739bd6 100644
+index 59e241f..83256ca 100644
 --- a/internal/service/vmservice/vm_test.go
 +++ b/internal/service/vmservice/vm_test.go
-@@ -21,6 +21,7 @@ import (
+@@ -20,6 +20,7 @@ import (
+ 	"context"
  	"errors"
  	"fmt"
- 	"slices"
 +	"strings"
  	"testing"
  
  	lutherproxmox "github.com/luthermonson/go-proxmox"
-@@ -157,6 +158,46 @@ func TestEnsureVirtualMachine_CreateVM_FullOptions(t *testing.T) {
+@@ -156,6 +157,46 @@ func TestEnsureVirtualMachine_CreateVM_FullOptions(t *testing.T) {
  	requireConditionIsFalse(t, machineScope.ProxmoxMachine, infrav1.ProxmoxMachineVirtualMachineProvisionedCondition)
  }
  

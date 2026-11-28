@@ -224,6 +224,23 @@ func TestAMarkedMachineSaysWhatHoldsItsReplacementBack(t *testing.T) {
 	}
 }
 
+// A machine whose VM's firewall cannot be written says so in the row's waiting text, ready or not.
+func TestMachineRowSaysTheFirewallIsNotWritten(t *testing.T) {
+	t.Parallel()
+	m := clusterMachine("one", "one-cp-0")
+	m.Status.Conditions = []metav1.Condition{
+		{Type: clusterv1.MachineReadyCondition, Status: metav1.ConditionTrue, Reason: "Ready"},
+		{Type: provisioner.FirewallNotWrittenCondition, Status: metav1.ConditionTrue, Reason: "WriteFailed", Message: "The firewall of this machine's VM is not written: 403"},
+	}
+	if got := machineOf(m, "pve1").Waiting; got != "The firewall of this machine's VM is not written: 403" {
+		t.Errorf("waiting = %q", got)
+	}
+	m.Status.Conditions[1].Status = metav1.ConditionFalse
+	if got := machineOf(m, "pve1").Waiting; got != "" {
+		t.Errorf("waiting = %q once the firewall is written", got)
+	}
+}
+
 // A machine whose VM runs without its address shows why in the row's waiting text, and one that is
 // ready shows nothing of it.
 func TestMachineRowSaysTheAddressIsUnavailable(t *testing.T) {

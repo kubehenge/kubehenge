@@ -45,12 +45,16 @@ Every `tofu` the `Makefile` and the end-to-end tests run installs the module's p
 
 ### The firewall checks
 
+`make e2e-workload-cluster` also checks every class's VMs for the serving-port rules, with tcp/50000 on Talos alone.
+
 `make e2e-control-plane-ha` runs its cluster behind the class's default firewall and a security group that lets in SSH. It checks that:
 
 - The runner reaches the API and a NodePort, and the kubelet's port is dropped for it.
 - Every VM holds the serving-port rules and its load-balancer IPSet.
 - A pod reaches a pod on another node.
 - A changed firewall source reaches every running VM's IPSet without replacing one.
+- An administrator's edits of one VM's firewall are set back within 90 seconds, with no machine replaced: a Kubehenge rule disabled, the VM's firewall switched off, an IPSet entry removed and `firewall=1` taken off `net0`. A rule of the test's own stays.
+- A change of `securityGroups` follows in every VM's rules without replacing one.
 - With the datacenter firewall off, the cluster gets `FirewallInactive`, which clears once it is back on.
 - The ProxmoxCluster is deleted before the Cluster, as a namespace delete can do it.
 - Nothing is left, the group included.

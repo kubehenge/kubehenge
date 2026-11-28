@@ -1,8 +1,8 @@
 diff --git a/pkg/proxmox/goproxmox/api_client.go b/pkg/proxmox/goproxmox/api_client.go
-index accb57b..1391747 100644
+index e719dd2..4e479dc 100644
 --- a/pkg/proxmox/goproxmox/api_client.go
 +++ b/pkg/proxmox/goproxmox/api_client.go
-@@ -342,12 +342,7 @@ func (c *APIClient) DeleteVM(ctx context.Context, nodeName string, vmID int64) (
+@@ -229,12 +229,7 @@ func (c *APIClient) DeleteVM(ctx context.Context, nodeName string, vmID int64) (
  		return nil, fmt.Errorf("cannot find node with name %s: %w", nodeName, err)
  	}
  
@@ -16,7 +16,7 @@ index accb57b..1391747 100644
  		return nil, ErrVMIDFree
  	} else if err != nil {
  		return nil, err
-@@ -382,7 +377,13 @@ func (c *APIClient) CheckID(ctx context.Context, vmid int64) (bool, error) {
+@@ -269,7 +264,13 @@ func (c *APIClient) CheckID(ctx context.Context, vmid int64) (bool, error) {
  	if err != nil {
  		return false, fmt.Errorf("cannot get cluster")
  	}
@@ -32,10 +32,10 @@ index accb57b..1391747 100644
  
  // NextVMID returns the lowest VM ID that is free on the cluster. It reserves nothing, so a clone
 diff --git a/pkg/proxmox/goproxmox/api_client_test.go b/pkg/proxmox/goproxmox/api_client_test.go
-index c7161fe..4fe52fd 100644
+index 49ac407..bf52aa9 100644
 --- a/pkg/proxmox/goproxmox/api_client_test.go
 +++ b/pkg/proxmox/goproxmox/api_client_test.go
-@@ -812,6 +812,57 @@ func TestProxmoxAPIClient_DeleteVMPurges(t *testing.T) {
+@@ -638,6 +638,57 @@ func TestProxmoxAPIClient_DeleteVMPurges(t *testing.T) {
  	require.Equal(t, "1", query.Get("destroy-unreferenced-disks"))
  }
  

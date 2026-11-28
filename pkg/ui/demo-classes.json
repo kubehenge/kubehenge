@@ -166,34 +166,6 @@
                   "op": "add",
                   "path": "/spec",
                   "valueFrom": {
-                    "template": "{{ .firewall }}"
-                  }
-                }
-              ],
-              "selector": {
-                "apiVersion": "v1",
-                "kind": "Reach",
-                "matchResources": {
-                  "controlPlane": true,
-                  "machineDeploymentClass": {
-                    "names": [
-                      "worker"
-                    ]
-                  }
-                }
-              }
-            }
-          ],
-          "name": "reach-firewall"
-        },
-        {
-          "definitions": [
-            {
-              "jsonPatches": [
-                {
-                  "op": "add",
-                  "path": "/spec",
-                  "valueFrom": {
                     "template": "{{ .loadBalancer }}"
                   }
                 }
@@ -301,6 +273,34 @@
                   "op": "add",
                   "path": "/spec",
                   "valueFrom": {
+                    "template": "{{ .nodeNamePrefix }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-nodeNamePrefix"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
                     "template": "{{ .oidc }}"
                   }
                 }
@@ -338,34 +338,6 @@
             }
           ],
           "name": "reach-podSecurity"
-        },
-        {
-          "definitions": [
-            {
-              "jsonPatches": [
-                {
-                  "op": "add",
-                  "path": "/spec",
-                  "valueFrom": {
-                    "template": "{{ .securityGroups }}"
-                  }
-                }
-              ],
-              "selector": {
-                "apiVersion": "v1",
-                "kind": "Reach",
-                "matchResources": {
-                  "controlPlane": true,
-                  "machineDeploymentClass": {
-                    "names": [
-                      "worker"
-                    ]
-                  }
-                }
-              }
-            }
-          ],
-          "name": "reach-securityGroups"
         },
         {
           "definitions": [
@@ -712,6 +684,19 @@
                   "rule": "self.start \u003c= self.end"
                 }
               ]
+            }
+          }
+        },
+        {
+          "name": "nodeNamePrefix",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": "",
+              "description": "What the names of the cluster's VMs and nodes start with in place of the cluster's name, such as kubehenge-dev for kubehenge-dev-cp-x7k2p. Empty takes the cluster's name. A change replaces every node.",
+              "maxLength": 40,
+              "pattern": "^([a-z]([-a-z0-9]*[a-z0-9])?)?$",
+              "type": "string"
             }
           }
         },
@@ -2072,7 +2057,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order, after the cluster's own traffic and before the serving ports, so a group can drop or narrow those. They need the firewall on. A change replaces the nodes.",
+              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order, after the cluster's own traffic and before the serving ports, so a group can drop or narrow those. They need the firewall on. A change reaches the running nodes in place.",
               "items": {
                 "maxLength": 18,
                 "minLength": 2,
@@ -2094,7 +2079,7 @@
               "default": {
                 "enabled": true
               },
-              "description": "The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound traffic except the cluster's own, the management side's, what the security groups let in, the serving ports and the ports listed here. It acts only while Proxmox VE's datacenter firewall is on. A change replaces the nodes.",
+              "description": "The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound traffic except the cluster's own, the management side's, what the security groups let in, the serving ports and the ports listed here. It acts only while Proxmox VE's datacenter firewall is on. A change reaches the running nodes in place.",
               "properties": {
                 "enabled": {
                   "default": true,
@@ -2159,7 +2144,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. The nodes go through it too, where it is set: the container runtime, the distribution's installer and its service. Unset, the add-ons take the management side's proxy, if it has one without credentials in its address, and the nodes go direct. The cluster's pod, service and node networks, its API address, .svc and .cluster.local always bypass it.",
+              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. The nodes go through it too: the container runtime, the distribution's installer and its service. Unset, the add-ons and the nodes take the management side's proxy, if it has one without credentials in its address, with its exceptions, and the nodes trust its authority. The cluster's pod, service and node networks, its API address, .svc and .cluster.local always bypass it.",
               "properties": {
                 "disabled": {
                   "description": "Go direct, whatever the management side uses.",
@@ -3182,34 +3167,6 @@
                   "op": "add",
                   "path": "/spec",
                   "valueFrom": {
-                    "template": "{{ .firewall }}"
-                  }
-                }
-              ],
-              "selector": {
-                "apiVersion": "v1",
-                "kind": "Reach",
-                "matchResources": {
-                  "controlPlane": true,
-                  "machineDeploymentClass": {
-                    "names": [
-                      "worker"
-                    ]
-                  }
-                }
-              }
-            }
-          ],
-          "name": "reach-firewall"
-        },
-        {
-          "definitions": [
-            {
-              "jsonPatches": [
-                {
-                  "op": "add",
-                  "path": "/spec",
-                  "valueFrom": {
                     "template": "{{ .loadBalancer }}"
                   }
                 }
@@ -3317,6 +3274,34 @@
                   "op": "add",
                   "path": "/spec",
                   "valueFrom": {
+                    "template": "{{ .nodeNamePrefix }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-nodeNamePrefix"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
                     "template": "{{ .oidc }}"
                   }
                 }
@@ -3354,34 +3339,6 @@
             }
           ],
           "name": "reach-podSecurity"
-        },
-        {
-          "definitions": [
-            {
-              "jsonPatches": [
-                {
-                  "op": "add",
-                  "path": "/spec",
-                  "valueFrom": {
-                    "template": "{{ .securityGroups }}"
-                  }
-                }
-              ],
-              "selector": {
-                "apiVersion": "v1",
-                "kind": "Reach",
-                "matchResources": {
-                  "controlPlane": true,
-                  "machineDeploymentClass": {
-                    "names": [
-                      "worker"
-                    ]
-                  }
-                }
-              }
-            }
-          ],
-          "name": "reach-securityGroups"
         },
         {
           "definitions": [
@@ -3728,6 +3685,19 @@
                   "rule": "self.start \u003c= self.end"
                 }
               ]
+            }
+          }
+        },
+        {
+          "name": "nodeNamePrefix",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": "",
+              "description": "What the names of the cluster's VMs and nodes start with in place of the cluster's name, such as kubehenge-dev for kubehenge-dev-cp-x7k2p. Empty takes the cluster's name. A change replaces every node.",
+              "maxLength": 40,
+              "pattern": "^([a-z]([-a-z0-9]*[a-z0-9])?)?$",
+              "type": "string"
             }
           }
         },
@@ -5088,7 +5058,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order, after the cluster's own traffic and before the serving ports, so a group can drop or narrow those. They need the firewall on. A change replaces the nodes.",
+              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order, after the cluster's own traffic and before the serving ports, so a group can drop or narrow those. They need the firewall on. A change reaches the running nodes in place.",
               "items": {
                 "maxLength": 18,
                 "minLength": 2,
@@ -5110,7 +5080,7 @@
               "default": {
                 "enabled": true
               },
-              "description": "The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound traffic except the cluster's own, the management side's, what the security groups let in, the serving ports and the ports listed here. It acts only while Proxmox VE's datacenter firewall is on. A change replaces the nodes.",
+              "description": "The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound traffic except the cluster's own, the management side's, what the security groups let in, the serving ports and the ports listed here. It acts only while Proxmox VE's datacenter firewall is on. A change reaches the running nodes in place.",
               "properties": {
                 "enabled": {
                   "default": true,
@@ -5175,7 +5145,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. The nodes go through it too, where it is set: the container runtime, the distribution's installer and its service. Unset, the add-ons take the management side's proxy, if it has one without credentials in its address, and the nodes go direct. The cluster's pod, service and node networks, its API address, .svc and .cluster.local always bypass it.",
+              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. The nodes go through it too: the container runtime, the distribution's installer and its service. Unset, the add-ons and the nodes take the management side's proxy, if it has one without credentials in its address, with its exceptions, and the nodes trust its authority. The cluster's pod, service and node networks, its API address, .svc and .cluster.local always bypass it.",
               "properties": {
                 "disabled": {
                   "description": "Go direct, whatever the management side uses.",
@@ -6207,34 +6177,6 @@
                   "op": "add",
                   "path": "/spec",
                   "valueFrom": {
-                    "template": "{{ .firewall }}"
-                  }
-                }
-              ],
-              "selector": {
-                "apiVersion": "v1",
-                "kind": "Reach",
-                "matchResources": {
-                  "controlPlane": true,
-                  "machineDeploymentClass": {
-                    "names": [
-                      "worker"
-                    ]
-                  }
-                }
-              }
-            }
-          ],
-          "name": "reach-firewall"
-        },
-        {
-          "definitions": [
-            {
-              "jsonPatches": [
-                {
-                  "op": "add",
-                  "path": "/spec",
-                  "valueFrom": {
                     "template": "{{ .loadBalancer }}"
                   }
                 }
@@ -6342,6 +6284,34 @@
                   "op": "add",
                   "path": "/spec",
                   "valueFrom": {
+                    "template": "{{ .nodeNamePrefix }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-nodeNamePrefix"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
                     "template": "{{ .oidc }}"
                   }
                 }
@@ -6379,34 +6349,6 @@
             }
           ],
           "name": "reach-podSecurity"
-        },
-        {
-          "definitions": [
-            {
-              "jsonPatches": [
-                {
-                  "op": "add",
-                  "path": "/spec",
-                  "valueFrom": {
-                    "template": "{{ .securityGroups }}"
-                  }
-                }
-              ],
-              "selector": {
-                "apiVersion": "v1",
-                "kind": "Reach",
-                "matchResources": {
-                  "controlPlane": true,
-                  "machineDeploymentClass": {
-                    "names": [
-                      "worker"
-                    ]
-                  }
-                }
-              }
-            }
-          ],
-          "name": "reach-securityGroups"
         },
         {
           "definitions": [
@@ -6753,6 +6695,19 @@
                   "rule": "self.start \u003c= self.end"
                 }
               ]
+            }
+          }
+        },
+        {
+          "name": "nodeNamePrefix",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": "",
+              "description": "What the names of the cluster's VMs and nodes start with in place of the cluster's name, such as kubehenge-dev for kubehenge-dev-cp-x7k2p. Empty takes the cluster's name. A change replaces every node.",
+              "maxLength": 40,
+              "pattern": "^([a-z]([-a-z0-9]*[a-z0-9])?)?$",
+              "type": "string"
             }
           }
         },
@@ -8113,7 +8068,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order, after the cluster's own traffic and before the serving ports, so a group can drop or narrow those. They need the firewall on. A change replaces the nodes.",
+              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order, after the cluster's own traffic and before the serving ports, so a group can drop or narrow those. They need the firewall on. A change reaches the running nodes in place.",
               "items": {
                 "maxLength": 18,
                 "minLength": 2,
@@ -8135,7 +8090,7 @@
               "default": {
                 "enabled": true
               },
-              "description": "The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound traffic except the cluster's own, the management side's, what the security groups let in, the serving ports and the ports listed here. It acts only while Proxmox VE's datacenter firewall is on. A change replaces the nodes.",
+              "description": "The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound traffic except the cluster's own, the management side's, what the security groups let in, the serving ports and the ports listed here. It acts only while Proxmox VE's datacenter firewall is on. A change reaches the running nodes in place.",
               "properties": {
                 "enabled": {
                   "default": true,
@@ -8200,7 +8155,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. The nodes go through it too, where it is set: the container runtime, the distribution's installer and its service. Unset, the add-ons take the management side's proxy, if it has one without credentials in its address, and the nodes go direct. The cluster's pod, service and node networks, its API address, .svc and .cluster.local always bypass it.",
+              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. The nodes go through it too: the container runtime, the distribution's installer and its service. Unset, the add-ons and the nodes take the management side's proxy, if it has one without credentials in its address, with its exceptions, and the nodes trust its authority. The cluster's pod, service and node networks, its API address, .svc and .cluster.local always bypass it.",
               "properties": {
                 "disabled": {
                   "description": "Go direct, whatever the management side uses.",
@@ -9237,34 +9192,6 @@
                   "op": "add",
                   "path": "/spec",
                   "valueFrom": {
-                    "template": "{{ .firewall }}"
-                  }
-                }
-              ],
-              "selector": {
-                "apiVersion": "v1",
-                "kind": "Reach",
-                "matchResources": {
-                  "controlPlane": true,
-                  "machineDeploymentClass": {
-                    "names": [
-                      "worker"
-                    ]
-                  }
-                }
-              }
-            }
-          ],
-          "name": "reach-firewall"
-        },
-        {
-          "definitions": [
-            {
-              "jsonPatches": [
-                {
-                  "op": "add",
-                  "path": "/spec",
-                  "valueFrom": {
                     "template": "{{ .network }}"
                   }
                 }
@@ -9321,6 +9248,34 @@
                   "op": "add",
                   "path": "/spec",
                   "valueFrom": {
+                    "template": "{{ .nodeNamePrefix }}"
+                  }
+                }
+              ],
+              "selector": {
+                "apiVersion": "v1",
+                "kind": "Reach",
+                "matchResources": {
+                  "controlPlane": true,
+                  "machineDeploymentClass": {
+                    "names": [
+                      "worker"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "name": "reach-nodeNamePrefix"
+        },
+        {
+          "definitions": [
+            {
+              "jsonPatches": [
+                {
+                  "op": "add",
+                  "path": "/spec",
+                  "valueFrom": {
                     "template": "{{ .oidc }}"
                   }
                 }
@@ -9358,34 +9313,6 @@
             }
           ],
           "name": "reach-podSecurity"
-        },
-        {
-          "definitions": [
-            {
-              "jsonPatches": [
-                {
-                  "op": "add",
-                  "path": "/spec",
-                  "valueFrom": {
-                    "template": "{{ .securityGroups }}"
-                  }
-                }
-              ],
-              "selector": {
-                "apiVersion": "v1",
-                "kind": "Reach",
-                "matchResources": {
-                  "controlPlane": true,
-                  "machineDeploymentClass": {
-                    "names": [
-                      "worker"
-                    ]
-                  }
-                }
-              }
-            }
-          ],
-          "name": "reach-securityGroups"
         },
         {
           "definitions": [
@@ -9732,6 +9659,19 @@
                   "rule": "self.start \u003c= self.end"
                 }
               ]
+            }
+          }
+        },
+        {
+          "name": "nodeNamePrefix",
+          "required": false,
+          "schema": {
+            "openAPIV3Schema": {
+              "default": "",
+              "description": "What the names of the cluster's VMs and nodes start with in place of the cluster's name, such as kubehenge-dev for kubehenge-dev-cp-x7k2p. Empty takes the cluster's name. A change replaces every node.",
+              "maxLength": 40,
+              "pattern": "^([a-z]([-a-z0-9]*[a-z0-9])?)?$",
+              "type": "string"
             }
           }
         },
@@ -11092,7 +11032,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order, after the cluster's own traffic and before the serving ports, so a group can drop or narrow those. They need the firewall on. A change replaces the nodes.",
+              "description": "Proxmox VE security groups whose rules police the nodes' traffic, in order, after the cluster's own traffic and before the serving ports, so a group can drop or narrow those. They need the firewall on. A change reaches the running nodes in place.",
               "items": {
                 "maxLength": 18,
                 "minLength": 2,
@@ -11114,7 +11054,7 @@
               "default": {
                 "enabled": true
               },
-              "description": "The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound traffic except the cluster's own, the management side's, what the security groups let in, the serving ports and the ports listed here. It acts only while Proxmox VE's datacenter firewall is on. A change replaces the nodes.",
+              "description": "The Proxmox VE firewall of each node's VM and network interface. On, it drops inbound traffic except the cluster's own, the management side's, what the security groups let in, the serving ports and the ports listed here. It acts only while Proxmox VE's datacenter firewall is on. A change reaches the running nodes in place.",
               "properties": {
                 "enabled": {
                   "default": true,
@@ -11179,7 +11119,7 @@
           "required": false,
           "schema": {
             "openAPIV3Schema": {
-              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. The nodes go through it too, where it is set: the container runtime, the distribution's installer and its service. Unset, the add-ons take the management side's proxy, if it has one without credentials in its address, and the nodes go direct. The cluster's pod, service and node networks, its API address, .svc and .cluster.local always bypass it.",
+              "description": "The proxy that the add-ons which reach beyond the cluster go through: cert-manager, Velero, Argo CD, Flux, Headlamp and Rancher. The nodes go through it too: the container runtime, the distribution's installer and its service. Unset, the add-ons and the nodes take the management side's proxy, if it has one without credentials in its address, with its exceptions, and the nodes trust its authority. The cluster's pod, service and node networks, its API address, .svc and .cluster.local always bypass it.",
               "properties": {
                 "disabled": {
                   "description": "Go direct, whatever the management side uses.",

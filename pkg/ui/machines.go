@@ -39,12 +39,7 @@ func machineOf(m *clusterv1.Machine, proxmoxNode string) machineView {
 	} else {
 		mv.Pool = m.Labels[clusterv1.ClusterTopologyMachineDeploymentNameLabel]
 	}
-	if ready := meta.FindStatusCondition(m.Status.Conditions, clusterv1.MachineReadyCondition); ready != nil && !mv.Ready {
-		mv.Waiting = ready.Message
-	}
-	if unavailable := meta.FindStatusCondition(m.Status.Conditions, provisioner.AddressUnavailableCondition); unavailable != nil && unavailable.Status == metav1.ConditionTrue && !mv.Ready {
-		mv.Waiting = unavailable.Message
-	}
+	mv.Waiting = waitingOn(m)
 	if _, marked := m.Annotations[clusterv1.RemediateMachineAnnotation]; marked {
 		mv.Replacing = true
 		// What holds the replacement back, such as a control plane that would lose etcd's majority.
@@ -68,6 +63,23 @@ func machineOf(m *clusterv1.Machine, proxmoxNode string) machineView {
 		}
 	}
 	return mv
+}
+
+// waitingOn says what holds a machine back: what its Ready condition waits for, the address it
+// lacks, or a firewall the controller cannot write.
+func waitingOn(m *clusterv1.Machine) string {
+	ready := meta.IsStatusConditionTrue(m.Status.Conditions, clusterv1.MachineReadyCondition)
+	waiting := ""
+	if c := meta.FindStatusCondition(m.Status.Conditions, clusterv1.MachineReadyCondition); c != nil && !ready {
+		waiting = c.Message
+	}
+	if c := meta.FindStatusCondition(m.Status.Conditions, provisioner.AddressUnavailableCondition); c != nil && c.Status == metav1.ConditionTrue && !ready {
+		waiting = c.Message
+	}
+	if c := meta.FindStatusCondition(m.Status.Conditions, provisioner.FirewallNotWrittenCondition); c != nil && c.Status == metav1.ConditionTrue {
+		waiting = c.Message
+	}
+	return waiting
 }
 
 // replaceMachine marks one of a cluster's machines for its health check to replace, as

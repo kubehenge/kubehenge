@@ -207,3 +207,55 @@ func TestReadAPIReachTakesAMissingManagementIPSetAsEmpty(t *testing.T) {
 		t.Errorf("%+v, %v", r, err)
 	}
 }
+
+func TestSourcePrefixes(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		source string
+		want   []string
+	}{
+		{"10.0.0.5", []string{"10.0.0.5/32"}},
+		{"10.244.1.7/16", []string{"10.244.0.0/16"}},
+		{"10.0.0.10-10.0.0.20", []string{"10.0.0.10/31", "10.0.0.12/30", "10.0.0.16/30", "10.0.0.20/32"}},
+		{"10.0.0.0-10.0.0.255", []string{"10.0.0.0/24"}},
+		{"10.0.0.7-10.0.0.7", []string{"10.0.0.7/32"}},
+		{"0.0.0.0-255.255.255.255", []string{"0.0.0.0/0"}},
+		{"2001:db8::10-2001:db8::20", []string{"2001:db8::10/124", "2001:db8::20/128"}},
+		{"2001:db8::/64", []string{"2001:db8::/64"}},
+		{"2001:db8::5", []string{"2001:db8::5/128"}},
+	} {
+		prefixes, err := SourcePrefixes(test.source)
+		if err != nil {
+			t.Errorf("%s: %v", test.source, err)
+			continue
+		}
+		got := make([]string, 0, len(prefixes))
+		for _, p := range prefixes {
+			got = append(got, p.String())
+		}
+		if strings.Join(got, " ") != strings.Join(test.want, " ") {
+			t.Errorf("%s: %v, want %v", test.source, got, test.want)
+		}
+	}
+	for _, invalid := range []string{"10.0.0.20-10.0.0.10", "10.0.0.1-2001:db8::1", "10.0.0.1-", "10.0.0.0/33", "node1"} {
+		if _, err := SourcePrefixes(invalid); err == nil {
+			t.Errorf("%s: no error", invalid)
+		}
+	}
+}
+
+// Every network a range splits into lies inside it, and together they hold each of its addresses once.
+func TestRangePrefixesCoverTheRange(t *testing.T) {
+	t.Parallel()
+	from, to := netip.MustParseAddr("192.0.2.3"), netip.MustParseAddr("192.0.2.200")
+	next := from
+	for _, prefix := range rangePrefixes(from, to) {
+		if prefix.Addr() != next {
+			t.Fatalf("%s starts at %s, want %s", prefix, prefix.Addr(), next)
+		}
+		next = lastAddr(prefix).Next()
+	}
+	if next != to.Next() {
+		t.Errorf("ends at %s, want %s", next, to.Next())
+	}
+}

@@ -828,6 +828,13 @@ func (o *controllerOptions) setUpControllers(mgr manager.Manager, registrar *pro
 	if err = mgr.Add(firewall); err != nil {
 		return fmt.Errorf("the firewall sources: %w", err)
 	}
+	vmFirewall := &provisioner.VMFirewall{
+		Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), ClassNamespace: o.r.ClassNamespace, WorkloadPool: o.r.WorkloadPool,
+		Proxmox: cloud.Client, Sources: firewall, Events: mgr.GetEventRecorder("kubehenge"),
+	}
+	if err = vmFirewall.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("the VM firewall: %w", err)
+	}
 	if err = mgr.Add(&provisioner.CredentialOrphans{Client: mgr.GetClient(), Interval: credentialOrphansInterval, Grace: credentialOrphansGrace}); err != nil {
 		return fmt.Errorf("the credentials stored ahead of their clusters: %w", err)
 	}

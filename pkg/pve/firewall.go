@@ -291,6 +291,66 @@ func parseSource(text string) (netip.Prefix, bool) {
 	return netip.Prefix{}, false
 }
 
+// SourcePrefixes turns an address, a network in CIDR notation or an address range such as
+// 10.0.0.10-10.0.0.20 into the fewest networks that cover it, since an IPSet holds no ranges.
+func SourcePrefixes(source string) ([]netip.Prefix, error) {
+	if first, last, isRange := strings.Cut(source, "-"); isRange {
+		from, fromErr := netip.ParseAddr(strings.TrimSpace(first))
+		to, toErr := netip.ParseAddr(strings.TrimSpace(last))
+		if fromErr != nil || toErr != nil || from.BitLen() != to.BitLen() || to.Less(from) {
+			return nil, fmt.Errorf("invalid firewall source %q: not an address range", source)
+		}
+		return rangePrefixes(from.WithZone(""), to.WithZone("")), nil
+	}
+	if strings.Contains(source, "/") {
+		prefix, err := netip.ParsePrefix(source)
+		if err != nil {
+			return nil, fmt.Errorf("invalid firewall source %q: %w", source, err)
+		}
+		return []netip.Prefix{prefix.Masked()}, nil
+	}
+	addr, err := netip.ParseAddr(source)
+	if err != nil {
+		return nil, fmt.Errorf("invalid firewall source %q: %w", source, err)
+	}
+	addr = addr.WithZone("")
+	return []netip.Prefix{netip.PrefixFrom(addr, addr.BitLen())}, nil
+}
+
+// rangePrefixes splits the range from..to into the fewest networks, from the lowest.
+func rangePrefixes(from, to netip.Addr) []netip.Prefix {
+	var prefixes []netip.Prefix
+	for {
+		bits := from.BitLen()
+		for bits > 0 {
+			wider := netip.PrefixFrom(from, bits-1).Masked()
+			if wider.Addr() != from || lastAddr(wider).Compare(to) > 0 {
+				break
+			}
+			bits--
+		}
+		prefix := netip.PrefixFrom(from, bits)
+		prefixes = append(prefixes, prefix)
+		last := lastAddr(prefix)
+		if last.Compare(to) >= 0 {
+			return prefixes
+		}
+		from = last.Next()
+	}
+}
+
+const bitsPerByte = 8
+
+// lastAddr is the highest address of a network.
+func lastAddr(prefix netip.Prefix) netip.Addr {
+	b := prefix.Addr().AsSlice()
+	for i := prefix.Bits(); i < len(b)*bitsPerByte; i++ {
+		b[i/bitsPerByte] |= 1 << (bitsPerByte - 1 - i%bitsPerByte)
+	}
+	addr, _ := netip.AddrFromSlice(b)
+	return addr
+}
+
 // EndpointAddresses are the addresses an API endpoint names, or its host name resolves to, and its
 // port. Either family may be used for a name that resolves to both. What cannot be resolved gives none.
 func EndpointAddresses(ctx context.Context, endpoint string) ([]netip.Addr, string) {

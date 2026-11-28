@@ -829,6 +829,29 @@ if [ "${distribution}" = talos ]; then
     datacenter_firewall "${datacenter_before}"
 fi
 
+step "every VM has Kubehenge's firewall rules for the serving ports, tcp/50000 on Talos alone"
+# vm_serving_ports: the ports of the VM's rules that Kubehenge wrote, as proto/port, sorted.
+vm_serving_ports() {
+    pve_get "nodes/$1/qemu/$2/firewall/rules" |
+        jq -c '[.data[] | select(.comment // "" | startswith("kubehenge:")) | "\(.proto // "")/\(.dport // .["icmp-type"] // .dest // .source)"]'
+}
+# serving_rules: whether every machine's VM holds the rules for the API, ingress, the NodePorts and
+# ICMP echo of both families, and Talos's API port exactly when the distribution is Talos.
+serving_rules() {
+    for pm in $(kubectl -n "${ns}" get proxmoxmachines -l "cluster.x-k8s.io/cluster-name=${name}" -o jsonpath='{.items[*].metadata.name}'); do
+        pm_node=$(kubectl -n "${ns}" get proxmoxmachine "${pm}" -o jsonpath='{.status.proxmoxNode}')
+        pm_vmid=$(kubectl -n "${ns}" get proxmoxmachine "${pm}" -o jsonpath='{.spec.virtualMachineID}')
+        [ -n "${pm_node}" ] && [ -n "${pm_vmid}" ] || return 1
+        rules=$(vm_serving_ports "${pm_node}" "${pm_vmid}") || return 1
+        seen="${pm}: ${rules}"
+        printf '%s' "${rules}" | jq -e --arg d "${distribution}" 'index("tcp/6443") and index("tcp/80") and index("tcp/443") and
+            index("tcp/30000:32767") and index("udp/30000:32767") and index("icmp/echo-request") and
+            index("ipv6-icmp/echo-request") and ((index("tcp/50000") != null) == ($d == "talos"))' > /dev/null || return 1
+    done
+    seen=
+}
+until_true 120 "every VM's serving-port rules" serving_rules
+
 step "Kubehenge reports the cluster reconciled and its machines settled"
 # cluster_condition <type> <status> <reason>: whether the Cluster has the condition so.
 cluster_condition() {

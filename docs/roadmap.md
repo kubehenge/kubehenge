@@ -48,7 +48,7 @@ What each release changed is in the [changelog](changelog.md).
 - IPv6 and dual-stack clusters, once an end-to-end test passes. Only kubeadm with Calico runs one, nightly.
 - The controller manager's and scheduler's metrics on Talos, from the first Talos release that gives them serving certificates of the cluster CA.
 - openSUSE Leap 16.1 Immutable as a node OS, once openSUSE releases it.
-- The Proxmox VE provider (capmox) as its own release. That waits for one with the six fixes and the VM firewall Kubehenge adds to v0.9.2 (`capmox_build` in `management-cluster/versions.tf`).
+- The Proxmox VE provider (capmox) as its own release. That waits for one with the six fixes Kubehenge adds to v0.9.2 (`capmox_build` in `management-cluster/versions.tf`).
 
 ## Later
 

@@ -62,8 +62,8 @@ func namingOf(t *testing.T, file string) classNaming {
 	return classNaming{}
 }
 
-// firewallAnnotations are a machine template's annotations without the name prefix, which every
-// class writes beside the firewall's.
+// firewallAnnotations are a machine template's annotations without the name prefix, which no class
+// writes anything beside.
 func firewallAnnotations(t *testing.T, annotations any) map[string]any {
 	t.Helper()
 	m := maps.Clone(asMap(t, annotations))

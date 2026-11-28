@@ -1,9 +1,11 @@
 ### Before you upgrade
 
 - Templates and cluster VMs carry at most three tags, with the hardware in the notes. Delete the node OS templates made before, which clusters no longer select.
+- The management cluster's apply grants the controller `VM.Config.Network` and `SDN.Use`. Every existing cluster's nodes are replaced once.
 
 ### Changed
 
+- A change of a cluster's firewall or security groups reaches its running nodes in place, written by Kubehenge's controller, and replaces none. An edit of a VM's firewall is set back.
 - A node's VM, host and Machine share one name, `<cluster>-cp-<random>` or `<cluster>-<pool>-<random>-<random>`. The `nodeNamePrefix` variable, **Name prefix** in the wizard, starts it otherwise.
 - The installer and `install.sh --upgrade` add a daily Proxmox VE backup job for the appliance where none includes it. The interface warning names the container and adds the job on a click.
 - Every add-on that waits says what for in the cluster's `AddonsWaiting` condition, on its Health page and in `kubehenge cluster get`, with a Warning event when the list changes.

@@ -343,7 +343,8 @@ run "nodes" {
   assert {
     condition = (
       yamldecode(helm_release.kubehenge.values[0]).clusters.storages == ["local-lvm", "ceph"] &&
-      yamldecode(helm_release.kubehenge.values[0]).clusters.bridges == ["vmbr0", "vmbr1"]
+      yamldecode(helm_release.kubehenge.values[0]).clusters.bridges == ["vmbr0", "vmbr1"] &&
+      yamldecode(helm_release.kubehenge.values[0]).clusters.bridgePaths == ["/sdn/zones/localnetwork/vmbr0", "/sdn/zones/localnetwork/vmbr1"]
     )
     error_message = "the ClusterClasses must know the storages and bridges clusters may use"
   }
@@ -507,6 +508,8 @@ run "controller_and_clusters_are_least_privilege" {
       "/pool/kubehenge-templates kubehenge-templates-audit",
       "/storage/local-lvm kubehenge-cluster-storage",
       "/storage/ceph kubehenge-cluster-storage",
+      "/sdn/zones/localnetwork/vmbr0 kubehenge-cluster-api-network",
+      "/sdn/zones/localnetwork/vmbr1 kubehenge-cluster-api-network",
     ]) && proxmox_acl.provisioner["/pool/kubehenge kubehenge-provisioner-pools"].propagate
     error_message = "the controller's ACLs differ from the least-privilege set"
   }
@@ -574,7 +577,7 @@ run "controller_and_clusters_are_least_privilege" {
       ] }
       watch     = { stallMinutes = 20 }
       interface = { extraNamespaces = [], offerHARules = false, headlampSignIn = false, headlampActions = false, apiAuditLog = false }
-      clusters  = { storages = ["local-lvm", "ceph"], bridges = ["vmbr0", "vmbr1"] }
+      clusters  = { storages = ["local-lvm", "ceph"], bridges = ["vmbr0", "vmbr1"], bridgePaths = ["/sdn/zones/localnetwork/vmbr0", "/sdn/zones/localnetwork/vmbr1"] }
       proxmox = {
         url          = "https://pve.example.org:8006"
         insecure     = false
@@ -823,6 +826,7 @@ run "node_boot_logs" {
 
   assert {
     condition = (
+      contains(proxmox_virtual_environment_role.provisioner_pools.privileges, "VM.Config.Network") &&
       contains(proxmox_virtual_environment_role.provisioner_pools.privileges, "VM.GuestAgent.FileRead") &&
       contains(proxmox_virtual_environment_role.provisioner_pools.privileges, "VM.GuestAgent.Audit") &&
       length([for p in proxmox_virtual_environment_role.provisioner_pools.privileges : p if startswith(p, "VM.GuestAgent.") && !contains(["VM.GuestAgent.FileRead", "VM.GuestAgent.Audit"], p)]) == 0 &&
@@ -1068,6 +1072,7 @@ run "vnets_are_granted_in_their_zones" {
   assert {
     condition = (
       yamldecode(helm_release.kubehenge.values[0]).clusters.bridges == ["vmbr0", "web", "corp"] &&
+      yamldecode(helm_release.kubehenge.values[0]).clusters.bridgePaths == ["/sdn/zones/localnetwork/vmbr0", "/sdn/zones/evpn1/web", "/sdn/zones/vlanz/corp"] &&
       yamldecode(helm_release.kubehenge.values[0]).templateRefresh.bridge == "build"
     )
     error_message = "the ClusterClasses and the build take the VNets' names, which a VM's network device uses"
@@ -1131,6 +1136,8 @@ run "extra_cluster_namespaces" {
         "/pool/kubehenge-templates kubehenge-templates-audit",
         "/storage/local-lvm kubehenge-cluster-storage",
         "/storage/ceph kubehenge-cluster-storage",
+        "/sdn/zones/localnetwork/vmbr0 kubehenge-cluster-api-network",
+        "/sdn/zones/localnetwork/vmbr1 kubehenge-cluster-api-network",
       ])
     )
     error_message = "the chart is told the namespaces, and Proxmox VE grants nothing more for them: each cluster's pool still nests under the workload pool"

@@ -286,7 +286,7 @@ export function FirewallDialog({ cluster: c, onClose }: { cluster: Cluster; onCl
         portsError={attempted ? portsFound : undefined}
         groupsError={attempted ? groupsFound : undefined}
       />
-      <p className="muted">Replaces every node, one at a time.</p>
+      <p className="muted">Applies to the running nodes at once.</p>
       <ErrorBox message={error} />
     </Dialog>
   );

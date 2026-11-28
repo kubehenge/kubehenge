@@ -496,6 +496,8 @@ resource "helm_release" "kubehenge" {
       clusters = {
         storages = var.workload_datastores
         bridges  = [for b in var.workload_bridges : local.bridges[b].name]
+        # The access-control paths of the same bridges, which the controller's token is tested on.
+        bridgePaths = [for b in var.workload_bridges : local.bridges[b].acl]
       }
       proxmox = {
         url          = var.proxmox_endpoint

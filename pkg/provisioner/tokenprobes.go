@@ -20,6 +20,7 @@ const PrivRealmAllocateUser = "Realm.AllocateUser"
 const (
 	privSysAudit       = "Sys.Audit"
 	privVMAudit        = "VM.Audit"
+	privSDNUse         = "SDN.Use"
 	privAllocateSpace  = "Datastore.AllocateSpace"
 	privDatastoreAudit = "Datastore.Audit"
 	pathRoot           = "/"
@@ -65,6 +66,9 @@ type Places struct {
 	ClusterGroup string `json:"clusterGroup"`
 	// Storages are those the clusters may use for their disks and volumes.
 	Storages []string `json:"storages"`
+	// Bridges are the access-control paths of the bridges and VNets the clusters' interfaces may use,
+	// such as /sdn/zones/<zone>/<vnet>.
+	Bridges []string `json:"bridges"`
 	// BootLogs is whether the controller reads nodes' boot logs.
 	BootLogs bool `json:"bootLogs"`
 	// Builder is where the template builder works.
@@ -91,7 +95,7 @@ func needsOn(path string, privs ...string) []Need {
 // ControllerNeeds are what the controller's token holds, as the management cluster's configuration
 // grants them.
 func ControllerNeeds(p *Places) []Need {
-	pool := []string{"Pool.Allocate", "Pool.Audit", "Permissions.Modify", "VM.Allocate", privVMAudit, "VM.Config.Disk", "VM.Config.Options", "VM.Migrate"}
+	pool := []string{"Pool.Allocate", "Pool.Audit", "Permissions.Modify", "VM.Allocate", privVMAudit, "VM.Config.Disk", "VM.Config.Network", "VM.Config.Options", "VM.Migrate"}
 	if p.BootLogs {
 		pool = append(pool, "VM.GuestAgent.Audit", "VM.GuestAgent.FileRead")
 	}
@@ -107,6 +111,11 @@ func ControllerNeeds(p *Places) []Need {
 	}
 	for _, s := range p.Storages {
 		needs = append(needs, needsOn(pathStorage+s, privAllocateSpace, privDatastoreAudit)...)
+	}
+	// The interfaces' firewall flag is written through the VM's configuration, which checks access
+	// to the bridge.
+	for _, b := range p.Bridges {
+		needs = append(needs, needsOn(b, privSDNUse)...)
 	}
 	return needs
 }

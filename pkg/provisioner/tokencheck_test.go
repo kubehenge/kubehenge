@@ -110,7 +110,7 @@ type tokenFixture struct {
 func testPlaces() Places {
 	return Places{
 		WorkloadPool: testPool, TemplatePool: "kubehenge-templates", ClusterGroup: "kubehenge-clusters",
-		Storages: []string{"local-lvm"}, BootLogs: true,
+		Storages: []string{"local-lvm"}, Bridges: []string{"/sdn/zones/localnetwork/vmbr0"}, BootLogs: true,
 		Builder: BuilderPlaces{Node: "pve1", Storage: "local-lvm", Import: "local", ISO: "local"},
 	}
 }
@@ -202,18 +202,20 @@ func TestATokenWithoutAPrivilegeNamesItAndItsPath(t *testing.T) {
 		needs          []Need
 		drop           Need
 	}{
-		"controller":                    {controllerTk, "Controller", ControllerNeeds(&places), Need{"/access/realm/pve", "Realm.AllocateUser"}},
-		"controller on the group":       {controllerTk, "Controller", ControllerNeeds(&places), Need{"/access/groups/kubehenge-clusters", "User.Modify"}},
-		"controller on a storage":       {controllerTk, "Controller", ControllerNeeds(&places), Need{"/storage/local-lvm", "Datastore.AllocateSpace"}},
-		"controller on the templates":   {controllerTk, "Controller", ControllerNeeds(&places), Need{"/pool/kubehenge-templates", "VM.Audit"}},
-		"HA":                            {haTk, "Proxmox VE HA", HANeeds(), Need{"/", "Sys.Console"}},
-		"restore":                       {restoreTk, "etcd restore", RestoreNeeds(&places), Need{"/pool/" + testPool, "VM.GuestAgent.Unrestricted"}},
-		"capmox":                        {capmoxTk, "Cluster API provider", CapmoxNeeds(&places), Need{"/pool/" + testPool, "VM.PowerMgmt"}},
-		"template builder":              {builderTk, "Template builder", TemplateBuilderNeeds(&places), Need{"/", "Sys.Audit"}},
-		"template builder on its pool":  {builderTk, "Template builder", TemplateBuilderNeeds(&places), Need{"/pool/kubehenge-templates", "VM.PowerMgmt"}},
-		"template builder on its node":  {builderTk, "Template builder", TemplateBuilderNeeds(&places), Need{"/nodes/pve1", "Sys.AccessNetwork"}},
-		"template builder on a storage": {builderTk, "Template builder", TemplateBuilderNeeds(&places), Need{"/storage/local", "Datastore.AllocateTemplate"}},
-		"cluster":                       {clusterTk, "Cluster team-a/web", ClusterNeeds(web.Pool, &places), Need{"/pool/" + web.Pool, "VM.Config.Disk"}},
+		"controller":                      {controllerTk, "Controller", ControllerNeeds(&places), Need{"/access/realm/pve", "Realm.AllocateUser"}},
+		"controller on the group":         {controllerTk, "Controller", ControllerNeeds(&places), Need{"/access/groups/kubehenge-clusters", "User.Modify"}},
+		"controller on a storage":         {controllerTk, "Controller", ControllerNeeds(&places), Need{"/storage/local-lvm", "Datastore.AllocateSpace"}},
+		"controller on the templates":     {controllerTk, "Controller", ControllerNeeds(&places), Need{"/pool/kubehenge-templates", "VM.Audit"}},
+		"controller on the VMs' firewall": {controllerTk, "Controller", ControllerNeeds(&places), Need{"/pool/" + testPool, "VM.Config.Network"}},
+		"controller on a bridge":          {controllerTk, "Controller", ControllerNeeds(&places), Need{"/sdn/zones/localnetwork/vmbr0", "SDN.Use"}},
+		"HA":                              {haTk, "Proxmox VE HA", HANeeds(), Need{"/", "Sys.Console"}},
+		"restore":                         {restoreTk, "etcd restore", RestoreNeeds(&places), Need{"/pool/" + testPool, "VM.GuestAgent.Unrestricted"}},
+		"capmox":                          {capmoxTk, "Cluster API provider", CapmoxNeeds(&places), Need{"/pool/" + testPool, "VM.PowerMgmt"}},
+		"template builder":                {builderTk, "Template builder", TemplateBuilderNeeds(&places), Need{"/", "Sys.Audit"}},
+		"template builder on its pool":    {builderTk, "Template builder", TemplateBuilderNeeds(&places), Need{"/pool/kubehenge-templates", "VM.PowerMgmt"}},
+		"template builder on its node":    {builderTk, "Template builder", TemplateBuilderNeeds(&places), Need{"/nodes/pve1", "Sys.AccessNetwork"}},
+		"template builder on a storage":   {builderTk, "Template builder", TemplateBuilderNeeds(&places), Need{"/storage/local", "Datastore.AllocateTemplate"}},
+		"cluster":                         {clusterTk, "Cluster team-a/web", ClusterNeeds(web.Pool, &places), Need{"/pool/" + web.Pool, "VM.Config.Disk"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

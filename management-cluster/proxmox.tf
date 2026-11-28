@@ -212,10 +212,13 @@ resource "proxmox_acl" "clusters_audit" {
 # VM.GuestAgent.FileRead reads nodes' boot logs, files only, through the guest agent.
 # VM.GuestAgent.Audit asks the guest agent of a VM whose node never joined for its addresses, which
 # says that another host holds the address the VM was given.
+# VM.Config.Network writes each VM's firewall: its rules, IPSets and options, and the firewall flag
+# of its interfaces. The flag goes through the VM's configuration, which also checks SDN.Use on the
+# interface's bridge (provisioner_acls).
 resource "proxmox_virtual_environment_role" "provisioner_pools" {
   role_id = "${var.cluster_name}-provisioner-pools"
   privileges = concat(
-    ["Pool.Allocate", "Pool.Audit", "Permissions.Modify", "VM.Allocate", "VM.Audit", "VM.Config.Disk", "VM.Config.Options", "VM.Migrate"],
+    ["Pool.Allocate", "Pool.Audit", "Permissions.Modify", "VM.Allocate", "VM.Audit", "VM.Config.Disk", "VM.Config.Network", "VM.Config.Options", "VM.Migrate"],
     var.node_boot_logs ? ["VM.GuestAgent.Audit", "VM.GuestAgent.FileRead"] : [],
   )
 }
@@ -333,6 +336,9 @@ locals {
       { path = "/access/realm/pve", role = proxmox_virtual_environment_role.provisioner_realm.role_id, propagate = false },
       { path = "/pool/${proxmox_virtual_environment_pool.templates.pool_id}", role = proxmox_virtual_environment_role.templates_audit.role_id, propagate = true },
     ],
+    # Writing the firewall flag of an interface, which Proxmox VE allows only with SDN.Use on its bridge
+    # or VNet, a tagged one too, as for Cluster API's own writes.
+    [for b in var.workload_bridges : { path = local.bridges[b].acl, role = proxmox_virtual_environment_role.cluster_api_network.role_id, propagate = true }],
     # Finding and deleting a removed cluster's volumes on storages local to nodes other than its
     # volume owner VM's, which destroying that VM does not reach.
     [for s in var.workload_datastores : { path = "/storage/${s}", role = proxmox_virtual_environment_role.cluster_storage.role_id, propagate = false }],

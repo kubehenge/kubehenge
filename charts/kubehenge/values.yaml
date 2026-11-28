@@ -73,9 +73,12 @@ interface:
 # What clusters may use on Proxmox VE: the storages for their disks and volumes, and the bridges
 # their nodes attach to, which the management cluster's Cluster API token has rights on. The
 # ClusterClasses refuse any other; empty lists leave the choice to Proxmox VE's own checks.
+# bridgePaths are the bridges' access-control paths, such as /sdn/zones/localnetwork/vmbr0, where the
+# controller's token needs SDN.Use to set its VMs' interface firewall flag.
 clusters:
   storages: []
   bridges: []
+  bridgePaths: []
 
 # OpenID Connect providers every new cluster's API server trusts unless the cluster names its own
 # (its oidc variable): a list of {issuerURL, clientID, usernameClaim, usernamePrefix, groupsClaim,
