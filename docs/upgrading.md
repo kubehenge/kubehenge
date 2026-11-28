@@ -148,6 +148,8 @@ Nobody is signed in when the run starts, so the apply that switches it on has th
 - **the state passphrase**, only where one is [required](install.md#requiring-a-passphrase). Otherwise the run uses the state's key the appliance keeps.
 - **an API token of a Proxmox VE user of its own**, `kubehenge-upgrader@pve`, made with your session. Without the [setup privileges](install.md#who-may-set-it-up), it stays off, the page says why, and the next apply tries again.
 
+Before it makes the user, the apply reads `libpve-access-control` on every Proxmox VE node with your session. Older than 9.2.1, that package lets a user with rights over a group make a token that acts as any member of it. Automatic upgrades then stay off, and the page and `kubehenge appliance upgrades` name the node and the update. Once the hosts are updated, the next apply switches them on, unless you switched them off.
+
 The user holds four roles of its own, never Administrator:
 
 | Role | On | For |

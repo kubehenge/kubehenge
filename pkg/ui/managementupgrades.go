@@ -169,6 +169,9 @@ func (s *Server) switchOnUpgrades(ctx context.Context, t *pve.Ticket, passphrase
 	if saved == nil {
 		return errors.New("no management cluster to upgrade yet")
 	}
+	if err := s.Accounts.CheckAccessControl(ctx, t); err != nil {
+		return fmt.Errorf("checking the access control package: %w", err)
+	}
 	spec := upgraderOf(saved)
 	if kept := a.UnattendedOn(); kept != nil && !kept.KeyLost {
 		err := s.Accounts.GrantUpgrader(ctx, t, spec)

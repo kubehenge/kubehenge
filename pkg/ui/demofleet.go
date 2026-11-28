@@ -1343,6 +1343,8 @@ func (*demoAccounts) RebootVM(context.Context, *pve.Ticket, string, int) error {
 
 func (*demoAccounts) ReleaseHA(context.Context, *pve.Ticket, string) error { return errDemo }
 
+func (*demoAccounts) CheckAccessControl(context.Context, *pve.Ticket) error { return errDemo }
+
 func (*demoAccounts) CreateUpgrader(context.Context, *pve.Ticket, *pve.Upgrader) (string, error) {
 	return "", errDemo
 }

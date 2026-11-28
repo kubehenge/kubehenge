@@ -279,6 +279,46 @@ func TestAnApplySwitchesAutomaticUpgradesOn(t *testing.T) {
 	}
 }
 
+// A host whose libpve-access-control is too old keeps automatic upgrades off, with the update
+// named and no user made. The next apply after the hosts are updated switches them on, and an
+// explicit off stays off.
+func TestAnOldHostKeepsAutomaticUpgradesOff(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	withUpgrades(t, h)
+	a := withManagementCluster(t, h)
+	b := h.browser()
+	b.signIn("admin@pve")
+	old := "libpve-access-control is too old: pve2 has 9.2.0. Update it to 9.2.1 or newer"
+	h.accounts.accessControlErr = fmt.Errorf("%w: pve2 has 9.2.0. Update it to 9.2.1 or newer", pve.ErrAccessControlOld)
+	if j := applyAs(t, a, h.server); j.State != "succeeded" {
+		t.Fatalf("the apply: %+v", j)
+	}
+	if got := managementView(t, b); got.On || got.Failed != "Off: "+old+". Apply again after." || len(h.accounts.users) != 0 || a.UnattendedOn() != nil {
+		t.Fatalf("an old host: %+v, users %v", got, h.accounts.users)
+	}
+	expect(t, b.do("PUT", "/api/appliance/upgrades/management", "{}"), http.StatusBadGateway)
+	if len(h.accounts.users) != 0 {
+		t.Fatalf("a user made by hand on an old host: %v", h.accounts.users)
+	}
+
+	h.accounts.accessControlErr = nil
+	if j := applyAs(t, a, h.server); j.State != "succeeded" {
+		t.Fatalf("the apply after the update: %+v", j)
+	}
+	if got := managementView(t, b); !got.On || got.Failed != "" {
+		t.Fatalf("after the hosts are updated: %+v", got)
+	}
+
+	expect(t, b.do("DELETE", "/api/appliance/upgrades/management", ""), http.StatusOK)
+	if j := applyAs(t, a, h.server); j.State != "succeeded" {
+		t.Fatalf("the apply: %+v", j)
+	}
+	if got := managementView(t, b); got.On {
+		t.Fatalf("an explicit off switched on again: %+v", got)
+	}
+}
+
 // Switched off, automatic upgrades stay off across applies. Switching off deletes the passphrase,
 // the user with its token, then the key.
 func TestSwitchedOffStaysOff(t *testing.T) {

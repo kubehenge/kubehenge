@@ -85,7 +85,8 @@ func newFakeInterface(t *testing.T) *fakeInterface {
 	mux.HandleFunc("GET /api/appliance/upgrades", f.admin(func(w http.ResponseWriter, _ *http.Request) {
 		answer(w, http.StatusOK, `{"version":"0.1.0","available":["0.2.0"],"status":{"state":"failed","from":"0.1.0","to":"0.2.0",
 			"time":"2027-03-01T12:00:00Z","rolledBack":true,
-			"error":"release 0.2.0 did not start: the interface did not answer within 2m0s; rolled back to 0.1.0"}}`)
+			"error":"release 0.2.0 did not start: the interface did not answer within 2m0s; rolled back to 0.1.0"},
+			"management":{"possible":true,"failed":"Off: libpve-access-control is too old: pve2 has 9.2.0. Update it to 9.2.1 or newer."}}`)
 	}))
 	mux.HandleFunc("GET /api/appliance/reboot-ready", f.admin(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Query().Get("node") {
@@ -329,6 +330,7 @@ func TestApplianceUpgradesSayARollBackAndWhy(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Installed     0.1.0", "Available     0.2.0",
+		"Management    Off: libpve-access-control is too old: pve2 has 9.2.0. Update it to 9.2.1 or newer.",
 		"Last upgrade  to 0.2.0 rolled back to 0.1.0, 2027-03-01T12:00:00Z",
 		"Reason        release 0.2.0 did not start: the interface did not answer within 2m0s; rolled back to 0.1.0",
 	} {

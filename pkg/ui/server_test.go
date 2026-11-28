@@ -92,8 +92,16 @@ type fakeAccounts struct {
 	nextID          pve.NextID
 	vmids           []int
 	nextIDForbidden bool
+	// accessControlErr is what the check of libpve-access-control on the nodes answers.
+	accessControlErr error
 	// nodeReads counts the listings of the nodes.
 	nodeReads int
+}
+
+func (f *fakeAccounts) CheckAccessControl(context.Context, *pve.Ticket) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.accessControlErr
 }
 
 func (f *fakeAccounts) CreateUpgrader(_ context.Context, t *pve.Ticket, u *pve.Upgrader) (string, error) {
