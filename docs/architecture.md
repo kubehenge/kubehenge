@@ -175,7 +175,7 @@ Cluster API sees a VM only through its node. A paused VM keeps its machine ready
 
 Kubehenge's controller therefore reads Proxmox VE's resource list every 15 seconds, with `VM.Audit` on the workload pool and `Datastore.Audit` on the clusters' storages. For a started VM, the list gives the state QEMU reports, such as paused or a disk error.
 
-The controller sets `VMsNotRunning` on a Cluster whose joined machine's VM has been stopped, paused or crashed for 3 minutes. It sets `AddressUnavailable` on a Machine whose VM has run for 5 minutes since it started without its node joining and shows none of the addresses it was given on its network card, read through the guest agent. It sets `StorageNearlyFull` while the cluster's storage is 85% full on a node its VMs run on ([troubleshooting.md](troubleshooting.md#vms-that-do-not-run-storage-nearly-full)). Resuming, starting or replacing a VM is the administrator's call.
+The controller sets `VMsNotRunning` on a Cluster whose joined machine's VM has been stopped, paused or crashed for 3 minutes. It sets `AddressUnavailable` on a Machine whose node has not joined 5 minutes after its VM started, while the guest agent shows none of the VM's given addresses on its network card. It sets `StorageNearlyFull` while the cluster's storage is 85% full on a node its VMs run on ([troubleshooting.md](troubleshooting.md#vms-that-do-not-run-storage-nearly-full)). Resuming, starting or replacing a VM is the administrator's call.
 
 #### Names and zones set back
 
@@ -213,7 +213,7 @@ Kubehenge's controller instead deletes each released persistent volume's volume 
 
 ### The CSI plugin's release
 
-Every cluster runs the plugin's last release that works with `Datastore.AllocateSpace`. Its newer releases read the storage's configuration, which takes `Datastore.Allocate`. So does the held release for a shared storage, which the cluster's proxy answers from the storage list ([the copy proxy](#the-copy-proxy)).
+Every cluster runs the plugin's last release that works with `Datastore.AllocateSpace`. Its newer releases read the storage's configuration, which takes `Datastore.Allocate`. The default release reads it too on a shared storage. The cluster's proxy answers that read from the storage list ([the copy proxy](#the-copy-proxy)).
 
 Where the management cluster allows it (`cluster_datastore_allocate`), a cluster's `csi` variable can choose the newest release. The controller then grants the cluster's user a role on `/storage/<storage>`, unpropagated. The role holds `Datastore.Allocate`, `Datastore.AllocateSpace` and `Datastore.Audit`. It takes the role back when the variable is switched off.
 
@@ -1440,7 +1440,11 @@ Any other change applies at once: a new proxy, a change of the cluster's variabl
 
 #### Software already in the cluster
 
-Before it first installs cert-manager, Kyverno or monitoring, the controller asks the workload cluster for the custom resource definitions of that software. It leaves the add-on out when one exists that its release does not own, and records the condition `AddonConflict`. cert-manager is the exception: a working one of the cluster's own is used, and Rancher, monitoring, Loki and Alloy install over it at once. One that does not work is an `AddonConflict` that says why and names the add-ons it holds back. A controller Deployment that no Kubehenge release owns counts too. Kubehenge's cert-manager release is told apart by the label `kubehenge.dev/addon` on its objects, since a hand-made release may share its name and namespace. It is made only once a complete read found no cert-manager, and a read that fails waits for the next. Its users are applied only once its release is deployed. Until then the condition `AddonsWaiting` names them and what cert-manager waits for. Their cert-manager objects carry the label `kubehenge.dev/cert-manager` with the value `kubehenge` or `cluster`. Rancher's chart labels its Issuer itself, so its Ingress carries that as an annotation. A switch between the two applies them again. A Cluster that still sets the retired `useExisting` variable has it taken off, since Cluster API refuses every change to a Cluster with a variable its class does not define. The controller puts `namespaceLabels` on the namespaces of the proxies before it applies them. It creates a missing namespace with them.
+Before it first installs cert-manager, Kyverno or monitoring, the controller asks the workload cluster for the custom resource definitions of that software. It leaves the add-on out when one exists that its release does not own, and records the condition `AddonConflict`.
+
+cert-manager is the exception: a working one of the cluster's own is used, and Rancher, monitoring, Loki and Alloy install over it at once. One that does not work is an `AddonConflict` that says why and names the add-ons it holds back. A controller Deployment that no Kubehenge release owns counts too. Kubehenge's cert-manager release is told apart by the label `kubehenge.dev/addon` on its objects, since a hand-made release may share its name and namespace. It is made only once a complete read found no cert-manager, and a read that fails waits for the next. The add-ons that use it are applied only once its release is deployed. Until then the condition `AddonsWaiting` names them and what cert-manager waits for. Their cert-manager objects carry the label `kubehenge.dev/cert-manager` with the value `kubehenge` or `cluster`. Rancher's chart labels its Issuer itself, so its Ingress carries that as an annotation. A switch between the two applies those add-ons again. A Cluster that still sets the retired `useExisting` variable has it taken off, since Cluster API refuses every change to a Cluster with a variable its class does not define.
+
+The controller puts `namespaceLabels` on the namespaces of the proxies before it applies them. It creates a missing namespace with them.
 
 ## Networking
 

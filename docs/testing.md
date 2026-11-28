@@ -172,7 +172,7 @@ The CPU and requested memory figures are the requests of the pinned charts and d
     - The proxy refuses a copy of a node VM's disk, with a `VolumeCopyFailed` event and nothing left behind.
     - Deleting the snapshot removes its copy from its holder VM. Deleting the claims then leaves no copy or record.
 15. Switch volume snapshots off.
-    - The proxy stays with `kubehenge-proxmox-proxied` and passes the plugin's calls straight to Proxmox VE, answering only the storage configuration read.
+    - The proxy stays with `kubehenge-proxmox-proxied`. It answers only the storage configuration read and passes every other call straight to Proxmox VE.
     - The snapshotter sidecar, the proxy's Role, the copies' namespace, the empty holder VMs, the VolumeSnapshotClass and the snapshot controller are gone.
 
 #### Add-ons

@@ -423,7 +423,7 @@ Prometheus, Alertmanager and Grafana, with kube-prometheus-stack's dashboards an
 
 #### Logs
 
-Loki keeps the cluster's logs on a volume of its own. Grafana Alloy collects them. Monitoring's Grafana reads them ([architecture.md](architecture.md#add-ons)). Logs need monitoring, which cannot be switched off while they are on. Loki and Alloy install once cert-manager, which monitoring brings, is deployed.
+Loki keeps the cluster's logs on a volume of its own. Grafana Alloy collects them. Monitoring's Grafana reads them ([architecture.md](architecture.md#add-ons)). Logs need monitoring, which cannot be switched off while they are on. Loki and Alloy install once cert-manager is deployed.
 
 Logs are kept for 7 days in a 10 GiB volume unless set otherwise. Loki deletes by age, not by size. Size the volume, which only grows, for the days kept.
 
@@ -836,7 +836,7 @@ A cluster runs the cluster autoscaler release of its Kubernetes minor version, s
 
 By default each cluster's autoscaler runs in the management cluster, in the `kubehenge-autoscaler` namespace. It reaches its cluster with a token of its own there. The cluster holds no credential of the management cluster. Each autoscaler asks for 64 MiB of memory, with a limit of 512 MiB.
 
-Setting **Runs** to **Cluster's control planes** (under **Options**, **Edit** beside Autoscaler) moves it into the cluster. That spares the management cluster the memory. The option appears when Kubehenge was installed with `managementEndpoint`, or for a cluster already placed there. The management cluster's API must then be reachable from the cluster's nodes.
+Setting **Runs** to **Cluster's control planes** (under **Options**, **Edit** beside Autoscaler) moves it into the cluster. That spares the management cluster the memory. The management cluster's API must then be reachable from the cluster's nodes. The option appears only when Kubehenge was installed with `managementEndpoint`, or for a cluster already placed there.
 
 Without the management cluster's address, set by its module, the autoscaler stays out with an `AutoscalerNotPlaced` event.
 
@@ -1971,7 +1971,7 @@ The certificates add-on sets these only on Kubehenge's own cert-manager. Set the
 
 While certificates is on, `AddonConflict` with the reason `SettingsNotApplied` names those of the first three that the cluster's settings call for.
 
-A cert-manager that does not work holds its users back. `AddonConflict` names what is wrong and the add-ons that wait, such as definitions left without a controller after an uninstall, a webhook that is not Available, a version too old or one that cannot be read. Make it work, or remove it and Kubehenge installs its own. Either takes effect on the next look, within ten minutes. When the cert-manager in use changes, Rancher, monitoring and logs are applied again, so their certificates and issuers come back.
+A cert-manager that does not work holds back the add-ons that use it. `AddonConflict` names them and what is wrong, such as definitions left without a controller after an uninstall, a webhook that is not Available, or a version too old or unreadable. Make it work, or remove it and Kubehenge installs its own. Either takes effect on the next look, within ten minutes. When the cert-manager in use changes, Rancher, monitoring and logs are applied again, so their certificates and issuers come back.
 
 Only Kubehenge's own release labels its objects `kubehenge.dev/addon=cert-manager`. That one keeps getting Kubehenge's upgrades.
 
