@@ -100,7 +100,7 @@ spec:
         kind: ProxmoxMachineTemplate
         name: {{ $machineName }}
     naming:
-      template: {{ "{{ .cluster.name }}-control-plane-{{ .random }}" | quote }}
+      template: {{ "{{ .cluster.name }}-cp" | quote }}
     healthCheck:
       {{- include "kubehenge.healthCheck" "controlPlane" | nindent 6 }}
     deletion:
@@ -109,7 +109,7 @@ spec:
     machineDeployments:
       - class: worker
         naming:
-          template: {{ "{{ .cluster.name }}-{{ .machineDeployment.topologyName }}-{{ .random }}" | quote }}
+          template: {{ "{{ .cluster.name }}-{{ .machineDeployment.topologyName }}" | quote }}
         bootstrap:
           templateRef:
             apiVersion: bootstrap.cluster.x-k8s.io/v1beta2

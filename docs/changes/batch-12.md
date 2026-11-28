@@ -1,5 +1,6 @@
 ### Changed
 
+- A node's VM, host and Machine share one name, `<cluster>-cp-<random>` or `<cluster>-<pool>-<random>-<random>`. The `nodeNamePrefix` variable, **Name prefix** in the wizard, starts it otherwise.
 - The installer and `install.sh --upgrade` add a daily Proxmox VE backup job for the appliance where none includes it. The interface warning names the container and adds the job on a click.
 - Every add-on that waits says what for in the cluster's `AddonsWaiting` condition, on its Health page and in `kubehenge cluster get`, with a Warning event when the list changes.
 - A missing ACME external account binding key, DNS-01 credential or log output credential is a line in `AddonsWaiting` naming what to store. The DNS-01 issuer waits for its credential.

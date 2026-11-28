@@ -315,7 +315,7 @@ func (w *VMWatch) watch(ctx context.Context, c *clusterv1.Cluster, look *vmLook)
 type clusterVM struct {
 	machine string
 	vmid    int64
-	// vmName is the name capmox gave the VM, its ProxmoxMachine's.
+	// vmName is the name capmox gave the VM, which its node took as host name.
 	vmName string
 	// node is the machine's Kubernetes node.
 	node string
@@ -345,7 +345,7 @@ func (w *VMWatch) clusterVMs(ctx context.Context, c *clusterv1.Cluster) ([]clust
 		if !ok || m.Status.NodeRef.Name == "" {
 			continue
 		}
-		vms = append(vms, clusterVM{machine: m.Name, vmid: vmid, vmName: m.Spec.InfrastructureRef.Name, node: m.Status.NodeRef.Name, m: m})
+		vms = append(vms, clusterVM{machine: m.Name, vmid: vmid, vmName: m.Status.NodeRef.Name, node: m.Status.NodeRef.Name, m: m})
 	}
 	slices.SortFunc(vms, func(a, b clusterVM) int { return int(a.vmid - b.vmid) })
 	return vms, nil

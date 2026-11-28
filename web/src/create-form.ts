@@ -305,6 +305,8 @@ export interface Form {
   hostOutageGrace: string;
   /** The VM IDs the cluster's VMs take, as start-end. Empty takes the site's range, else the next free ID. */
   vmIDRange: string;
+  /** What the VMs' and nodes' names start with in place of the cluster's name. Empty takes the name. */
+  nodeNamePrefix: string;
   proxmoxHA: boolean;
   datastoreAllocate: boolean;
   volumeSnapshots: boolean;
@@ -385,6 +387,9 @@ export const versionExamples: Record<string, string> = {
 /** hasManagementProxy says whether the management side has a proxy that a cluster takes unless it names its own. */
 export const hasManagementProxy = (c: ClusterClass | undefined): boolean =>
   c?.annotations?.["kubehenge.dev/management-proxy"] === "true";
+
+// nodeNamePrefixVariable names the cluster's VMs and nodes in place of its name.
+export const nodeNamePrefixVariable = "nodeNamePrefix";
 
 export function variable(c: ClusterClass | undefined, name: string): Schema | undefined {
   return c?.variables.find((v) => v.name === name)?.schema;
@@ -1044,6 +1049,7 @@ export const newForm = (): Form => ({
   place: anyNode,
   hostOutageGrace: defaultGrace,
   vmIDRange: "",
+  nodeNamePrefix: "",
   proxmoxHA: true,
   datastoreAllocate: false,
   volumeSnapshots: false,
@@ -1421,6 +1427,9 @@ function proxmoxVariables(form: Form, defined: ReadonlySet<string>): Record<stri
   const variables: Record<string, unknown> = { ...graceVariables(form) };
   if (form.vmIDRange.trim() !== "") {
     variables[vmIDVariable] = vmIDRangeVariable(form.vmIDRange);
+  }
+  if (form.nodeNamePrefix !== "") {
+    variables[nodeNamePrefixVariable] = form.nodeNamePrefix;
   }
   const nodes = allowedNodes(form.place);
   if (nodes !== undefined) {
@@ -1871,6 +1880,7 @@ export type FieldKey =
   | "placement"
   | "hostOutageGrace"
   | "vmIDRange"
+  | "nodeNamePrefix"
   | "controlPlaneMachine"
   | "workerMachine"
   | "workerNodes"
@@ -1927,6 +1937,10 @@ function generalProblems(form: Form, c: ClusterClass | undefined): Problems {
   const name = nameProblem(form.name) ?? nameTaken(form);
   if (name !== undefined) {
     p.name = name;
+  }
+  const prefix = form.nodeNamePrefix === "" ? undefined : nameProblem(form.nodeNamePrefix);
+  if (prefix !== undefined) {
+    p.nodeNamePrefix = prefix;
   }
   const os = chosenNodeOS(form, c);
   const missing = templateMissing(form, c);

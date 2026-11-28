@@ -1108,6 +1108,7 @@ describe("create", () => {
     place: { placement: "any", haRule: "", nodes: [] },
     hostOutageGrace: "30",
     vmIDRange: "",
+    nodeNamePrefix: "",
     proxmoxHA: true,
     datastoreAllocate: false,
     volumeSnapshots: false,

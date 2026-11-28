@@ -1,4 +1,5 @@
 annotations:
+  kubehenge.dev/vm-name-prefix: {{ .nodeNamePrefix | default .builtin.cluster.name | quote }}
   {{- if .securityGroups }}
   kubehenge.dev/firewall-groups: {{ join "," .securityGroups | quote }}
   {{- end }}

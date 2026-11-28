@@ -11,13 +11,13 @@ import (
 	"github.com/kubehenge/kubehenge/pkg/templates"
 )
 
-// MaxClusterName is the longest cluster name whose machines' host names, <name>-md-0-<three
-// random parts>, stay within one DNS label.
+// MaxClusterName is the longest cluster name whose machines' host names, <name>-md-0-<two random
+// parts>, stay within one DNS label with room to spare.
 const MaxClusterName = 40
 
-// MaxPoolNames is how long a cluster's name and a worker pool's may be together, for the same host
-// names <cluster>-<pool>-<three random parts>: a pool of the longest cluster has a name as long as
-// md-0.
+// MaxPoolNames is how long a cluster's name, or its node name prefix, and a worker pool's may be
+// together, for the same host names <cluster>-<pool>-<two random parts>: a pool of the longest
+// cluster has a name as long as md-0.
 const MaxPoolNames = MaxClusterName + len("md-0")
 
 // MaxWorkers is the most workers a pool of fixed size may have, as many as an autoscaled one may
@@ -51,7 +51,22 @@ var (
 	WorkersRule      = fmt.Sprintf("workers: 0 to %d", MaxWorkers)
 	PoolNameRule     = "Pool names take lowercase letters, digits and dashes, and start with a letter."
 	PoolLengthRule   = fmt.Sprintf("A pool's and its cluster's names take %d characters at most together.", MaxPoolNames)
+	NamePrefixRule   = fmt.Sprintf("node name prefix: up to %d lowercase letters, digits and dashes, starting with a letter, not ending with a dash", MaxClusterName)
+	PrefixPoolRule   = fmt.Sprintf("A pool's name and the node name prefix take %d characters at most together.", MaxPoolNames)
 )
+
+// NodeNamePrefixVariable is what the names of a cluster's VMs and nodes start with in place of the
+// cluster's name.
+const NodeNamePrefixVariable = "nodeNamePrefix"
+
+// nodeNamePrefix is the cluster's node name prefix, or "" where it sets none.
+func nodeNamePrefix(c *clusterv1.Cluster) string {
+	p, _, err := optionalVariable[string](c, NodeNamePrefixVariable)
+	if err != nil {
+		return ""
+	}
+	return p
+}
 
 // PoolNameProblem says what is wrong with pool as the name of a worker pool of the cluster named
 // cluster, or returns "".
@@ -123,7 +138,27 @@ func validateTopology(old, c *clusterv1.Cluster) field.ErrorList {
 		errs = append(errs, field.Invalid(topology.Child("controlPlane", "replicas"), *n, ControlPlaneRule))
 	}
 	errs = append(errs, NodeTimeoutsOf(&c.Spec.Topology.ControlPlane.Deletion).errors(topology.Child("controlPlane", "deletion"))...)
+	errs = append(errs, validateNamePrefix(old, c, topology.Child("variables").Key(NodeNamePrefixVariable))...)
 	return append(errs, validatePools(old, c, topology.Child("workers", "machineDeployments"))...)
+}
+
+// validateNamePrefix holds a node name prefix, as it is set or changed, to the rules of a cluster's
+// name, and to the length a cluster's name may have beside each pool's: the prefix stands in for the
+// cluster's name in its VMs' and nodes' names.
+func validateNamePrefix(old, c *clusterv1.Cluster, path *field.Path) field.ErrorList {
+	p := nodeNamePrefix(c)
+	if p == "" || (old != nil && nodeNamePrefix(old) == p) {
+		return nil
+	}
+	if !ValidClusterName(p) {
+		return field.ErrorList{field.Invalid(path, p, NamePrefixRule)}
+	}
+	for i := range c.Spec.Topology.Workers.MachineDeployments {
+		if pool := c.Spec.Topology.Workers.MachineDeployments[i].Name; len(p)+len(pool) > MaxPoolNames {
+			return field.ErrorList{field.Invalid(path, p, PrefixPoolRule)}
+		}
+	}
+	return nil
 }
 
 // validatePools holds each worker pool's workers and name to the rules. Names are held to them as
@@ -145,6 +180,9 @@ func validatePools(old, c *clusterv1.Cluster, pools *field.Path) field.ErrorList
 		problem := ""
 		if !had[md.Name] {
 			problem = PoolNameProblem(c.Name, md.Name)
+			if p := nodeNamePrefix(c); problem == "" && p != "" && len(p)+len(md.Name) > MaxPoolNames {
+				problem = PrefixPoolRule
+			}
 		}
 		switch {
 		case problem != "":

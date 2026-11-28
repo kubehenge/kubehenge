@@ -49,13 +49,25 @@ Without `VM.Allocate` on the workload pool, **Create cluster** is off and says s
 | --- | --- |
 | Start from | Once there is a cluster: the cluster to copy settings from, or **Defaults**, which is chosen until another is. The later steps say **Copied from** that cluster. It copies the distribution, node OS, node counts and sizes, bridge, VLAN, MTU, queues, prefix length, gateway, DNS servers, load balancer, pod network and storage. It also copies placement, Proxmox VE HA, HA rule labels, Headlamp, monitoring, logs, Pod Security, CIS hardening, Istio, Rancher registration and identity providers. Everything else starts at its default. Choosing another cluster keeps the name and the namespace. It keeps the Kubernetes version too where the distribution stays the same. |
 | Namespace | Only where an administrator has named [more namespaces for clusters](#more-namespaces-for-clusters): the namespace in the management cluster the cluster goes to, `clusters` unless another is chosen. |
-| Name | Lowercase letters, digits and dashes, starting with a letter and ending with a letter or digit, at most 40 characters. It also names the cluster's Proxmox VE pool and VMs. |
+| Name | Lowercase letters, digits and dashes, starting with a letter and ending with a letter or digit, at most 40 characters. It also names the cluster's Proxmox VE pool, and starts the names of its VMs and nodes ([below](#node-names)). |
 | Distribution | kubeadm, RKE2, k3s or Talos: one per ClusterClass in the management cluster. A distribution without a VM template in the template pool says so. Its clusters cannot be created until an administrator builds one ([templates.md](templates.md)). Where cluster creators may have missing templates built, **Build template** does it from the wizard. |
 | Node OS | For kubeadm, RKE2 and k3s: the operating system of the nodes, AlmaLinux 10 unless another is chosen ([templates.md](templates.md#node-oses)). One not released yet is shown but cannot be chosen. One without a template on the distribution says so. For RKE2, each node OS is also offered in [FIPS mode](templates.md#fips-mode). A Talos cluster's nodes run Talos, so there is none to choose. |
 | Talos release | For Talos only: the release the nodes run, among those the template pool has a template of, the newest chosen first. The newest release of each minor version the Talos Image Factory builds is listed too, marked as having no template yet. Where cluster creators may have missing templates built, one of those can be asked for here. Later releases are an upgrade away ([below](#talos-upgrades)). |
 | Kubernetes version | For RKE2 and k3s: the newest release of each of the four newest minor versions. They come from the distribution's release channels as far as this Kubehenge release pins them ([architecture.md](architecture.md#release-pins-for-rke2-and-k3s)). The stable one is chosen first. A release it does not pin is refused, from kubectl too. A cluster on an older minor version can still be upgraded from it. For kubeadm: the newest version of each minor version a VM template has been built for on the chosen node OS, the newest chosen first. Where cluster creators may have missing templates built, **Kubernetes version to build** asks for another version's template. It is offered here once built, after about twenty minutes. For Talos: Kubernetes' newest release of each minor version the chosen Talos release runs, its default chosen first. Versions are in the distribution's own form: `v1.36.5` for kubeadm and Talos, `v1.36.5+rke2r1` for RKE2, `v1.36.5+k3s1` for k3s. When the list cannot be read, type the version in. |
 | Control-plane nodes | 1, 3, 5 or 7. Three or more keep the cluster running when one fails. |
+| Name prefix | Optional, under **Node names**. What the names of the VMs and nodes start with in place of the cluster's name ([below](#node-names)). Empty takes the cluster's name. |
 | Workers | 0 to 100. With none, the control-plane nodes run the workloads too. **Autoscaled**, instead of **Worker count**, has the cluster autoscaler keep the workers between **Fewest workers** (0 to 100) and **Most workers** (1 to 100) ([below](#autoscaling)). |
+
+#### Node names
+
+A control-plane node is named `<cluster>-cp-<random>` and a worker `<cluster>-<pool>-<random>-<random>`, such as `dev-cp-x7k2p` and `dev-md-0-b9qtz-k4lmw`. Its VM in Proxmox VE, its host name and its Machine share that name. A worker's first random part stands for its pool's current revision, which an upgrade or a settings change renews.
+
+The end stays random rather than counting up. A rolling replacement adds a node before it removes the one it replaces, so a number would be taken twice or skipped.
+
+The **Name prefix** (`nodeNamePrefix`) takes the cluster's name's place in the names of the VMs and hosts, such as `kubehenge-dev-cp-x7k2p`. The Machines keep the cluster's name with the same random end. Only the ProxmoxMachine of an RKE2 or k3s control plane has a name of its own, which those distributions give it.
+
+- **Rules.** Those of a cluster's name. With each pool's name, it takes 44 characters at most.
+- **A change.** Replaces every node, one at a time.
 
 ### Network
 
@@ -1514,7 +1526,7 @@ When a VM moves, the controller follows within about 15 seconds:
 
 Volumes made before the move stay on the old node's storage.
 
-The same look renames a VM back to its machine's name when someone renames it in Proxmox VE, and records `VMRenamedBack`. A refused rename records `VMRenameFailed` and is retried.
+The same look renames a VM back to its node's name when someone renames it in Proxmox VE, and records `VMRenamedBack`. A refused rename records `VMRenameFailed` and is retried.
 
 ## Back up and restore
 
@@ -2209,6 +2221,7 @@ kubectl -n clusters get secret prod-kubeconfig -o jsonpath='{.data.value}' | bas
 | `hostOutageGraceMinutes` | no | Minutes to hold the replacement of machines whose host is offline or in HA maintenance, or whose storage is unavailable ([troubleshooting.md](troubleshooting.md#machines-whose-replacement-waits-for-a-host)). Default 30. 0 waits for the host for ever, otherwise 5 to 10080. A server that needs longer to start than 30 minutes needs more. A host removed from the Proxmox VE cluster ends the wait at once. Set in the wizard's **Machines** step, in **Options**, or with `kubehenge cluster create --host-outage-grace-minutes` and `kubehenge cluster update NAME --host-outage-grace-minutes`. |
 | `ccm` | no | `haGroups` has the cloud controller manager label the nodes with their Proxmox VE HA groups, with `Sys.Audit` on `/` for the cluster's token ([above](#machines)). Default true, unless the management cluster switched the labels off for every cluster. Then it may not be true. |
 | `vmIDRange` | no | The VM IDs the cluster's VMs take, `start` and `end` both included, within 100 to 999999999. Unset, the cluster takes the site's **VM ID range**, else Proxmox VE's next free ID. Changing it replaces every node ([VM ID range](#vm-id-range)). Set in the wizard's **Machines** step or in **Options**. |
+| `nodeNamePrefix` | no | What the names of the VMs and nodes start with in place of the cluster's name ([Node names](#node-names)). Empty by default, which takes the cluster's name. Changing it replaces every node. Set in the wizard's **General** step. |
 | `controlPlaneMachine`, `workerMachine` | no | `cores` (default 2), `memoryMiB` (a multiple of 8, default 4096 for the control plane and 6144 for workers, with the minimums [above](#machines)), `diskGiB` (default 30 for the control plane and 40 for workers, at least 20). A disk only grows. |
 | `cni` | kubeadm only | kubeadm: `cilium` or `calico`. RKE2: `canal` (default), `calico` or `cilium`. k3s and Talos: `flannel` (default), `cilium` or `calico`. The class refuses a change once the cluster exists. |
 | `nodeOS` | no | kubeadm, RKE2 and k3s: `family` and `release`, a node OS Kubehenge builds templates of ([templates.md](templates.md#node-oses)). Default AlmaLinux 10. `fips: true` boots the nodes in [FIPS mode](templates.md#fips-mode), on RKE2 with `cni` canal alone. kubeadm and k3s refuse it. Changing it replaces every node ([above](#change-settings)). |

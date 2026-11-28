@@ -29,6 +29,9 @@ func TestClusterValidatorHoldsTopologyToWhatTheInterfaceOffers(t *testing.T) {
 	if _, err := v.ValidateCreate(context.Background(), kept); err != nil {
 		t.Fatalf("timeouts of 0 and of a day: %v", err)
 	}
+	if _, err := v.ValidateCreate(context.Background(), withAddons(base(), map[string]string{NodeNamePrefixVariable: `"kubehenge-dev"`})); err != nil {
+		t.Fatalf("a node name prefix: %v", err)
+	}
 	for _, tc := range []struct {
 		name   string
 		change func(c *clusterv1.Cluster)
@@ -53,6 +56,14 @@ func TestClusterValidatorHoldsTopologyToWhatTheInterfaceOffers(t *testing.T) {
 		{"a negative pool node deletion timeout", func(c *clusterv1.Cluster) {
 			c.Spec.Topology.Workers.MachineDeployments[0].Deletion.NodeDeletionTimeoutSeconds = new(int32(-5))
 		}, NodeTimeoutRule},
+		{"a node name prefix with a capital", func(c *clusterv1.Cluster) { withAddons(c, map[string]string{NodeNamePrefixVariable: `"Dev"`}) }, NamePrefixRule},
+		{"a node name prefix over 40 characters", func(c *clusterv1.Cluster) {
+			withAddons(c, map[string]string{NodeNamePrefixVariable: `"` + strings.Repeat("a", MaxClusterName+1) + `"`})
+		}, NamePrefixRule},
+		{"a node name prefix too long beside a pool's name", func(c *clusterv1.Cluster) {
+			withAddons(c, map[string]string{NodeNamePrefixVariable: `"` + strings.Repeat("a", MaxClusterName) + `"`})
+			c.Spec.Topology.Workers.MachineDeployments[0].Name = "pool-1"
+		}, PrefixPoolRule},
 		{"two pools of one name", func(c *clusterv1.Cluster) {
 			w := &c.Spec.Topology.Workers
 			w.MachineDeployments = append(w.MachineDeployments, w.MachineDeployments[0])

@@ -142,6 +142,29 @@ func TestVMWatchRenamesARenamedVMBack(t *testing.T) {
 	}
 }
 
+// A VM named after its node, whose ProxmoxMachine has another name as RKE2's and k3s's control
+// planes give it, keeps its name: the cloud controller manager wants it to start with the node's.
+func TestVMWatchKeepsAVMNamedAfterItsNode(t *testing.T) {
+	t.Parallel()
+	f := newVMFixture(t)
+	m := &clusterv1.Machine{}
+	if err := f.kube.Get(t.Context(), client.ObjectKey{Namespace: "team-a", Name: "web-cp-1"}, m); err != nil {
+		t.Fatal(err)
+	}
+	m.Status.NodeRef.Name = "web-cp-x7k2p"
+	if err := f.kube.Status().Update(t.Context(), m); err != nil {
+		t.Fatal(err)
+	}
+	f.names[102] = "web-cp-x7k2p"
+	f.render()
+	if err := f.tick(0); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.edit.puts) != 0 || len(f.drain()) != 0 {
+		t.Errorf("puts %v", f.edit.puts)
+	}
+}
+
 func TestVMWatchLeavesVMsWithTheirNameAlone(t *testing.T) {
 	t.Parallel()
 	f := newVMFixture(t)

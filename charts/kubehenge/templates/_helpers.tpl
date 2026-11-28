@@ -277,6 +277,18 @@ node's own memory with every CNI the class offers, so that a cluster of the defa
       x-kubernetes-validations:
         - rule: self.start <= self.end
           message: The range starts above its end.
+- name: nodeNamePrefix
+  required: false
+  schema:
+    openAPIV3Schema:
+      type: string
+      default: ""
+      maxLength: 40
+      pattern: '^([a-z]([-a-z0-9]*[a-z0-9])?)?$'
+      description: >-
+        What the names of the cluster's VMs and nodes start with in place of the cluster's name, such
+        as kubehenge-dev for kubehenge-dev-cp-x7k2p. Empty takes the cluster's name. A change replaces
+        every node.
 - name: allowedNodes
   required: false
   schema:
@@ -2607,8 +2619,11 @@ Call with the root context.
 # load-balancer addresses to kubehenge-lb. capmox follows a change of the ProxmoxCluster on the
 # running VMs, so a new address replaces no node. A cluster without the firewall variable, made
 # before it existed or past the defaulting webhook, keeps the firewall its groups give it.
+# The same annotations carry the prefix capmox names each VM and its host with in place of the
+# cluster's name, after the VM's Machine. A ProxmoxMachine is named after its template by RKE2's and
+# k3s's control planes, the Machine after the control plane, so only the Machine's name is shared.
+# The ProxmoxMachine takes the prefix as it is made, so a prefix that changes replaces the nodes.
 - name: proxmox-firewall
-  enabledIf: {{ `{{ if or .securityGroups (and .firewall .firewall.enabled) }}true{{ end }}` | quote }}
   definitions:
     - selector:
         apiVersion: infrastructure.cluster.x-k8s.io/v1alpha2

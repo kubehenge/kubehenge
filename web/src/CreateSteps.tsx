@@ -12,6 +12,7 @@ import {
   createRoom,
   memoryNodeWarning,
   mostWorkers,
+  nodeNamePrefixVariable,
   setLoadBalancer,
   volumeWorkersWarning,
   templateMissing,
@@ -661,6 +662,21 @@ export function GeneralStep({
           fallback={cls?.workerTimeouts}
         />
       </details>
+      {variable(cls, nodeNamePrefixVariable) !== undefined && (
+        <details className="advanced" open={shown("nodeNamePrefix") === undefined ? undefined : true}>
+          <summary>Node names</summary>
+          <Field label="Name prefix" error={shown("nodeNamePrefix")}>
+            {(id) => (
+              <input
+                id={id}
+                value={form.nodeNamePrefix}
+                placeholder={form.name || undefined}
+                onChange={(e) => set("nodeNamePrefix", e.target.value.trim())}
+              />
+            )}
+          </Field>
+        </details>
+      )}
     </>
   );
 }
