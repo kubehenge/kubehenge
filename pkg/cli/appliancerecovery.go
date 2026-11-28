@@ -30,7 +30,7 @@ func (o *applianceOptions) exportCommand() *cobra.Command {
 		Short: "Save the appliance's state, encrypted, for a new appliance to restore the management cluster",
 		Long: `Save what a new appliance needs to restore the management cluster's etcd from the backup target: the
 admin talosconfig, the state, the settings and the target's access key. The file is encrypted with the
-export passphrase, which you set. The state passphrase comes from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
+export passphrase, which you set. A passphrase the appliance requires comes from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			state, err := secretFrom(passphraseFile, "KUBEHENGE_PASSPHRASE")
@@ -101,7 +101,7 @@ func (o *applianceOptions) recreateCommand() *cobra.Command {
 		short: "Make the management cluster's VMs again and restore a snapshot into them",
 		long: `Recreate the management cluster after its VMs were lost. It makes the VMs and configures the nodes,
 restores the snapshot into them, then applies the management cluster whole. Clusters changed since the
-snapshot go back to how they were then. The state passphrase comes from --passphrase-file or
+snapshot go back to how they were then. A passphrase the appliance requires comes from --passphrase-file or
 KUBEHENGE_PASSPHRASE.`,
 		action: "recreate", started: "Recreating from ", done: "Recreated from ",
 	})
@@ -114,7 +114,7 @@ func (o *applianceOptions) recoverCommand() *cobra.Command {
 		long: `Recover the management cluster after its VMs were lost, from Kubehenge's own backups. It applies the
 management cluster and waits for the backup volume. It then restores whichever is newer, the volume's
 newest snapshot or the appliance's copy, and applies again. The log names the snapshot and where it was
-read. The state passphrase comes from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
+read. A passphrase the appliance requires comes from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
 		action: "recover", started: "Recovering the management cluster", done: "Recovered the management cluster",
 		own: true,
 	})

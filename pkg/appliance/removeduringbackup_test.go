@@ -93,12 +93,10 @@ func TestARefusedRemovalLeavesTheBackupUnderWay(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2027, 3, 1, 12, 0, 0, 0, time.UTC)
 	a, vol, _ := volumeAppliance(t, &now)
+	requirePassphrase(t, a)
 	release, backup := backupHeld(t, a, vol)
-	if err := a.Remove("the wrong passphrase entirely", KeepBackups, ticket(), func(context.Context, *Job) error { return nil }, func() {}); err != nil {
-		t.Fatal(err)
-	}
-	if j := waitFor(t, a); j.State != StateFailed || j.Error != ErrPassphrase.Error() {
-		t.Fatalf("the removal %s: %s, want refused for its passphrase", j.State, j.Error)
+	if err := a.Remove("the wrong passphrase entirely", KeepBackups, ticket(), func(context.Context, *Job) error { return nil }, func() {}); !errors.Is(err, ErrPassphrase) {
+		t.Fatalf("the removal: %v, want refused for its passphrase", err)
 	}
 	close(release)
 	if err := <-backup; err != nil {

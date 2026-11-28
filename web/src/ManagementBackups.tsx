@@ -16,6 +16,7 @@ import {
   age,
   bytes,
   errorMessage,
+  passphraseMissing,
   passphraseShort,
   pollIdle,
   pollRunning,
@@ -23,6 +24,7 @@ import {
   shownNumber,
   typedNumber,
   usePoll,
+  useStatePassphrase,
 } from "./ui";
 
 const when = (iso: string | undefined): string => (iso === undefined ? "" : new Date(iso).toLocaleString());
@@ -362,13 +364,14 @@ function SetUpDialog({
   const [recipients, setRecipients] = useState(recipientText(s));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const ask = useStatePassphrase();
   const keepKeys = b.keysStored && accessKeyID === "" && secretAccessKey === "";
   const ready =
     target !== "" &&
     everyHours >= 1 &&
     keep >= 1 &&
     (keepKeys || (accessKeyID !== "" && secretAccessKey !== "")) &&
-    !passphraseShort(passphrase);
+    !passphraseMissing(ask, passphrase);
   const submit = async (): Promise<void> => {
     if (!ready) {
       return;
@@ -457,17 +460,19 @@ function SetUpDialog({
           />
         )}
       </Field>
-      <Field label="State passphrase">
-        {(id) => (
-          <input
-            id={id}
-            type="password"
-            autoComplete="current-password"
-            value={passphrase}
-            onChange={(e) => setPassphrase(e.target.value)}
-          />
-        )}
-      </Field>
+      {ask && (
+        <Field label="State passphrase">
+          {(id) => (
+            <input
+              id={id}
+              type="password"
+              autoComplete="current-password"
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+            />
+          )}
+        </Field>
+      )}
       <Field label="Extra recipients">
         {(id) => (
           <textarea
@@ -483,10 +488,7 @@ function SetUpDialog({
       <p className="muted">
         One age1… key per line. An offline recipient opens the specs&apos; Secrets without this appliance.
       </p>
-      <p className="warning">
-        The appliance keeps the access key and a talosconfig that can only take etcd snapshots. Restoring needs this
-        passphrase.
-      </p>
+      <p className="warning">The appliance keeps the access key and a talosconfig that can only take etcd snapshots.</p>
       <ErrorBox message={error} />
     </Dialog>
   );
@@ -506,7 +508,8 @@ export function ManagementRestoreDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [started, setStarted] = useState(false);
-  const short = passphraseShort(passphrase);
+  const ask = useStatePassphrase();
+  const short = ask && passphraseShort(passphrase);
   const submit = async (): Promise<void> => {
     if (short) {
       return;
@@ -565,17 +568,19 @@ export function ManagementRestoreDialog({
         Wipes etcd on every control-plane node and restores it to {when(s.time)}. Clusters and every change since go
         back to then.
       </p>
-      <Field label="State passphrase">
-        {(id) => (
-          <input
-            id={id}
-            type="password"
-            autoComplete="current-password"
-            value={passphrase}
-            onChange={(e) => setPassphrase(e.target.value)}
-          />
-        )}
-      </Field>
+      {ask && (
+        <Field label="State passphrase">
+          {(id) => (
+            <input
+              id={id}
+              type="password"
+              autoComplete="current-password"
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+            />
+          )}
+        </Field>
+      )}
       <ErrorBox message={error} />
     </Dialog>
   );

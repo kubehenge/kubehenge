@@ -332,6 +332,7 @@ func (s *Server) applianceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/setup/credential", s.signedIn(s.credential))
 	mux.HandleFunc("POST /api/setup/remove", s.signedIn(s.remove))
 	mux.HandleFunc("POST /api/setup/take-over", s.signedIn(s.takeOver))
+	mux.HandleFunc("PUT /api/setup/state-passphrase", s.signedIn(s.statePassphrase))
 	mux.HandleFunc("GET /api/setup/health", s.signedIn(s.managementHealth))
 	mux.HandleFunc("GET /api/appliance/certificate", s.signedIn(s.showCertificate))
 	mux.HandleFunc("PUT /api/appliance/certificate", s.signedIn(s.uploadCertificate))

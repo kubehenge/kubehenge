@@ -112,6 +112,7 @@ func TestManagementBackups(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "not one of the backup targets") || !strings.Contains(rec.Body.String(), "keep:") {
 		t.Errorf("refused with %s", rec.Body)
 	}
+	requireStatePassphrase(t, a)
 	expect(t, b.do("PUT", "/api/appliance/etcd-backups", `{"target":"minio","everyHours":6,"keep":3,"accessKeyID":"AKID","secretAccessKey":"secret","passphrase":"a wrong passphrase, long enough"}`), http.StatusForbidden)
 	expect(t, b.do("PUT", "/api/appliance/etcd-backups", `{"target":"minio","everyHours":6,"keep":3,"accessKeyID":"AKID","secretAccessKey":"secret","passphrase":"`+statePassphrase+`"}`), http.StatusOK)
 	if v := managementBackupsOf(t, b); v.Settings == nil || v.Settings.By != "admin@pve" || !v.KeysStored {

@@ -4,7 +4,17 @@ import { adminPath } from "./admin-views";
 import { api } from "./api";
 import { Link } from "./router";
 import type { EtcdSnapshot, ManagementBackups, StaleState } from "./types";
-import { Dialog, ErrorBox, Field, errorMessage, passphraseShort, saveFile, usePoll, pollIdle } from "./ui";
+import {
+  Dialog,
+  ErrorBox,
+  Field,
+  errorMessage,
+  passphraseShort,
+  saveFile,
+  usePoll,
+  pollIdle,
+  useStatePassphrase,
+} from "./ui";
 
 const day = (iso: string): string => new Date(iso).toLocaleDateString();
 
@@ -116,7 +126,8 @@ function ExportDialog({ onClose }: { onClose: () => void }): JSX.Element {
   const [exportPassphrase, setExportPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const invalid = passphraseShort(state) || passphraseShort(exportPassphrase);
+  const ask = useStatePassphrase();
+  const invalid = (ask && passphraseShort(state)) || passphraseShort(exportPassphrase);
   const submit = async (): Promise<void> => {
     setBusy(true);
     setError(undefined);
@@ -147,7 +158,7 @@ function ExportDialog({ onClose }: { onClose: () => void }): JSX.Element {
         </>
       }
     >
-      <Field label="State passphrase">{password(state, setState)}</Field>
+      {ask && <Field label="State passphrase">{password(state, setState)}</Field>}
       <Field label="Export passphrase">{password(exportPassphrase, setExportPassphrase)}</Field>
       <ErrorBox message={error} />
     </Dialog>
@@ -244,6 +255,7 @@ function ImportDialog({ onClose, onImported }: { onClose: () => void; onImported
 
 /** RecoverDialog makes the management cluster again from the newest of its own backups. */
 export function RecoverDialog({ onClose }: { onClose: () => void }): JSX.Element {
+  const ask = useStatePassphrase();
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -289,7 +301,7 @@ export function RecoverDialog({ onClose }: { onClose: () => void }): JSX.Element
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="danger" disabled={busy || passphraseShort(passphrase)}>
+          <button type="submit" className="danger" disabled={busy || (ask && passphraseShort(passphrase))}>
             Recover
           </button>
         </>
@@ -299,7 +311,7 @@ export function RecoverDialog({ onClose }: { onClose: () => void }): JSX.Element
         Applies the management cluster and restores etcd from the newest snapshot. Changes to clusters since then are
         lost.
       </p>
-      <Field label="State passphrase">{password(passphrase, setPassphrase)}</Field>
+      {ask && <Field label="State passphrase">{password(passphrase, setPassphrase)}</Field>}
       <ErrorBox message={error} />
     </Dialog>
   );
@@ -307,6 +319,7 @@ export function RecoverDialog({ onClose }: { onClose: () => void }): JSX.Element
 
 /** RecreateDialog makes the management cluster's VMs again and restores a snapshot into them. */
 export function RecreateDialog({ snapshot: s, onClose }: { snapshot: EtcdSnapshot; onClose: () => void }): JSX.Element {
+  const ask = useStatePassphrase();
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -352,7 +365,7 @@ export function RecreateDialog({ snapshot: s, onClose }: { snapshot: EtcdSnapsho
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" className="danger" disabled={busy || passphraseShort(passphrase)}>
+          <button type="submit" className="danger" disabled={busy || (ask && passphraseShort(passphrase))}>
             Recreate
           </button>
         </>
@@ -362,7 +375,7 @@ export function RecreateDialog({ snapshot: s, onClose }: { snapshot: EtcdSnapsho
         Makes the VMs again and restores etcd to {new Date(s.time).toLocaleString()}. Clusters changed since go back to
         then.
       </p>
-      <Field label="State passphrase">{password(passphrase, setPassphrase)}</Field>
+      {ask && <Field label="State passphrase">{password(passphrase, setPassphrase)}</Field>}
       <ErrorBox message={error} />
     </Dialog>
   );
@@ -404,7 +417,8 @@ function TakeOverDialog({
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const ready = !busy && typed === "overwrite" && !passphraseShort(passphrase);
+  const ask = useStatePassphrase();
+  const ready = !busy && typed === "overwrite" && !(ask && passphraseShort(passphrase));
 
   const takeOver = async () => {
     if (!ready) {
@@ -443,17 +457,19 @@ function TakeOverDialog({
         This state is from apply {stale.local}, the cluster at apply {stale.cluster}. The next apply undoes the newer
         changes.
       </p>
-      <Field label="State passphrase">
-        {(id) => (
-          <input
-            id={id}
-            type="password"
-            autoComplete="current-password"
-            value={passphrase}
-            onChange={(e) => setPassphrase(e.target.value)}
-          />
-        )}
-      </Field>
+      {ask && (
+        <Field label="State passphrase">
+          {(id) => (
+            <input
+              id={id}
+              type="password"
+              autoComplete="current-password"
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+            />
+          )}
+        </Field>
+      )}
       <Field label="Type overwrite to confirm">
         {(id) => <input id={id} autoComplete="off" value={typed} onChange={(e) => setTyped(e.target.value)} />}
       </Field>

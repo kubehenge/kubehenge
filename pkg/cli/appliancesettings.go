@@ -184,7 +184,7 @@ certificates. An empty file, --time-zone "" or --vm-id-range "" clears that sett
 start-end, both included, for the VMs of new clusters and the VM templates. The checks are Setup's. A new
 site CA replaces the nodes of the clusters that inherit it, a few at a time and inside their upgrade
 windows. Where the hosts present a root the site CA lacks, --add-missing-roots adds it, as Setup's
-buttons do. The state passphrase comes from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
+buttons do. A passphrase the appliance requires comes from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			f := cmd.Flags()

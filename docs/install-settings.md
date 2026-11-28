@@ -80,17 +80,17 @@ With the management cluster's etcd backups on ([below](#back-up-the-management-c
 
 A snapshot holds every Secret of the management cluster, so the appliance encrypts it with [age](https://age-encryption.org) before uploading, as the clusters' own snapshots are.
 
-The key that opens the snapshots is kept in the target as `<prefix>/management/identity.age`, encrypted with the state passphrase. It is never stored on the appliance.
+The key that opens the snapshots is kept in the target as `<prefix>/management/identity.age`, encrypted with the state's key. It is never stored on the appliance.
 
-An appliance set up later on the same target with another state passphrase cannot open the key and is refused. Deleting `<prefix>/management` in the bucket starts afresh. The snapshots taken so far then stay unreadable.
+An appliance set up later on the same target with another state's key cannot open the key and is refused. Deleting `<prefix>/management` in the bucket starts afresh. The snapshots taken so far then stay unreadable.
 
 ### Restoring a snapshot
 
-A restore needs the state passphrase. It uses the admin talosconfig from the state, so it reaches every node even with Kubernetes down. It needs the control-plane VMs running and creates no VMs. **Recreate…** makes them first ([troubleshooting](troubleshooting.md#the-management-clusters-vms-are-lost)).
+A restore opens the state with the appliance's kept key, or asks for the passphrase where one is [required](install.md#requiring-a-passphrase). It uses the admin talosconfig from the state, so it reaches every node even with Kubernetes down. It needs the control-plane VMs running and creates no VMs. **Recreate…** makes them first ([troubleshooting](troubleshooting.md#the-management-clusters-vms-are-lost)).
 
 ### Export for a new appliance
 
-The state, the settings and the target's access key live only in the appliance. **Export…** under **Administration, Backups**, or `kubehenge appliance export`, saves them in one file. The file is encrypted with an export passphrase you set, with [age](https://age-encryption.org). It holds the admin talosconfig, OpenTofu's state (still encrypted with the state passphrase), the applied settings and the target with its access key.
+The state, the settings and the target's access key live only in the appliance. **Export…** under **Administration, Backups**, or `kubehenge appliance export`, saves them in one file. The file is encrypted with an export passphrase you set, with [age](https://age-encryption.org). It holds the admin talosconfig, OpenTofu's state with its key, sealed when a passphrase is required, the applied settings and the target with its access key.
 
 ### Restore from an export
 
@@ -98,7 +98,7 @@ After the appliance is lost:
 
 1. Install a new appliance on the same Proxmox VE cluster.
 2. In its setup choose **Restore from an export**, or run `kubehenge appliance import <file>`. Both ask for the export passphrase.
-3. Restore a snapshot under **Administration, Backups**. It asks for the state passphrase.
+3. Restore a snapshot under **Administration, Backups**.
 4. Apply the settings once, which signs the interface in to the management cluster.
 
 An import is refused where a management cluster is already set up. A wrong passphrase and a changed file are refused before anything is written.
@@ -263,7 +263,7 @@ pct set <new ctid> --onboot 0 --net0 <that net0>,link_down=1
 
 Each apply counts a generation up, kept with the appliance's state and in the management cluster. An apply or removal whose state is behind the cluster's is refused before it changes anything. A snapshot rollback, an older backup, a storage replica that took over after a crash or a second appliance leaves the state behind.
 
-The Administration page then offers **Take over…**, with the state passphrase. The next apply brings the management cluster to this state and undoes the newer changes. In the appliance's shell, run `kubehenge appliance take-over --overwrite --passphrase-file <file>`.
+The Administration page then offers **Take over…**. The next apply brings the management cluster to this state and undoes the newer changes. In the appliance's shell, run `kubehenge appliance take-over --overwrite`.
 
 While the management cluster does not answer, an administrator's apply goes ahead unchecked and its log says so. An automatic upgrade is refused.
 
@@ -271,15 +271,15 @@ While the management cluster does not answer, an administrator's apply goes ahea
 
 The management cluster's etcd holds every cluster's objects. **Administration, Backups** snapshots it into one of the [backup targets](#backup-targets) every 6 hours unless set otherwise. It keeps the newest 28.
 
-**Set up…** takes the target, the schedule, an S3 access key for the target and the state passphrase. The first snapshot follows within a minute. **Take snapshot** takes one at once.
+**Set up…** takes the target, the schedule, and an S3 access key for the target. The first snapshot follows within a minute. **Take snapshot** takes one at once.
 
-The appliance takes each snapshot itself through the nodes' Talos API, with a talosconfig that may take etcd snapshots and nothing else. It encrypts the snapshot before it leaves the appliance. The key that opens the snapshots is kept in the target, encrypted with the state passphrase ([details](#management-cluster-etcd-backups)).
+The appliance takes each snapshot itself through the nodes' Talos API, with a talosconfig that may take etcd snapshots and nothing else. It encrypts the snapshot before it leaves the appliance. The key that opens the snapshots is kept in the target, encrypted with the state's key ([details](#management-cluster-etcd-backups)).
 
 ### The backup volume
 
 With no settings at all, every management cluster backs up onto its own backup volume. That is the claim `kubehenge-system/kubehenge-backups`, the disk of the stopped, protected VM `kubehenge-backups`. Proxmox VE deletes a VM's own disks only, so the volume outlives the loss of every management VM.
 
-Every 6 hours the appliance puts an etcd snapshot there, encrypted with the state passphrase, and keeps the newest 28. Beside each goes an export of Kubehenge's objects: the clusters, their classes, the Secrets Kubehenge owns and the setup settings. A backup target, when set up, gets snapshots on its own schedule.
+Every 6 hours the appliance puts an etcd snapshot there, encrypted with the state's key, and keeps the newest 28. Beside each goes an export of Kubehenge's objects: the clusters, their classes, the Secrets Kubehenge owns and the setup settings. A backup target, when set up, gets snapshots on its own schedule.
 
 On shared storage (Ceph RBD, NFS, shared LVM) the volume follows the management VM that serves it. On node-local storage (directory, LVM, LVM-thin, ZFS) it stays on the setup's first Proxmox VE node and attaches only during a backup or a recovery. The disk is detached the rest of the time, so Proxmox VE can migrate the management VMs and a node can go into maintenance. A backup needs one management VM on the disk's node.
 
@@ -293,7 +293,7 @@ Removing the management cluster stops these backups. **Delete the backup volume*
 
 ### Recover after losing the management VMs
 
-Use **Recover…** in the backup volume's box, or `kubehenge appliance etcd-backups recover`. Both ask for the state passphrase. The run applies the management cluster and waits up to 10 minutes for the backup volume. It then restores whichever is newer, the volume's newest snapshot or the appliance's copy, and applies again. Its log names the snapshot, where it was read and why.
+Use **Recover…** in the backup volume's box, or `kubehenge appliance etcd-backups recover`. The run applies the management cluster and waits up to 10 minutes for the backup volume. It then restores whichever is newer, the volume's newest snapshot or the appliance's copy, and applies again. Its log names the snapshot, where it was read and why.
 
 ### Restoring
 
@@ -301,7 +301,7 @@ Use **Recover…** in the backup volume's box, or `kubehenge appliance etcd-back
 
 After a restore, and then daily, the controller compares each cluster with its VMs. A cluster whose VMs are all gone shows **VMs missing** on its Health page. VMs in Kubehenge's pools that no cluster owns show as **Unowned VMs** on the management cluster's Health. Nothing deletes them.
 
-A restore asks for the state passphrase and counts as a run of the management cluster. It needs only the nodes' Talos API, so it works while the management cluster's own API does not answer.
+A restore counts as a run of the management cluster. It needs only the nodes' Talos API, so it works while the management cluster's own API does not answer.
 
 ### The warning while backups are off
 

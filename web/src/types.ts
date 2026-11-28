@@ -1343,8 +1343,12 @@ export interface SetupStatus {
   diskFull?: { usedPercent: number; freeMiB: number; backupCopy?: { mib: number; capMiB: number } };
   /** The Proxmox VE API's certificate goes unverified (--proxmox-insecure); for administrators only. */
   proxmoxInsecure?: boolean;
-  /** An earlier run left its encrypted state, so the setup takes that run's passphrase. */
+  /** An earlier run left its encrypted state. */
   resumes?: boolean;
+  /** The actions that open the state ask for its passphrase. The appliance keeps the key otherwise. */
+  passphrase?: boolean;
+  /** An administrator requires a passphrase to open the state. */
+  passphraseRequired?: boolean;
   /** Which release last applied the management cluster, and what applying this one changes. */
   upgrade?: ManagementUpgrade;
   /** The interface reads every API server's log as it is written. For administrators only. */

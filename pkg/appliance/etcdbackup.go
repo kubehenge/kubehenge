@@ -284,7 +284,11 @@ func (a *Appliance) ConfigureEtcdBackups(ctx context.Context, s *EtcdBackupSetti
 	if accessKeyID == "" || secretAccessKey == "" {
 		return errors.New("access key: both its ID and its secret are needed")
 	}
-	admin, err := a.Credential(ctx, passphrase, talosconfigName)
+	passphrase, err := a.statePassphrase(ctx, passphrase)
+	if err != nil {
+		return err
+	}
+	admin, err := a.credential(ctx, passphrase, talosconfigName)
 	if err != nil {
 		return err
 	}
@@ -760,6 +764,10 @@ func (a *Appliance) RestoreEtcd(ctx context.Context, name, passphrase string, ti
 	if a.Talos == nil {
 		return errors.New("this appliance does not reach Talos nodes")
 	}
+	passphrase, err := a.statePassphrase(ctx, passphrase)
+	if err != nil {
+		return err
+	}
 	acc, err := a.etcdRestoreAccess(ctx, passphrase)
 	if err != nil {
 		return err
@@ -799,7 +807,7 @@ func (a *Appliance) etcdRestoreAccess(ctx context.Context, passphrase string) (*
 	if err != nil {
 		return nil, err
 	}
-	admin, err := a.Credential(ctx, passphrase, talosconfigName)
+	admin, err := a.credential(ctx, passphrase, talosconfigName)
 	if err != nil {
 		return nil, err
 	}

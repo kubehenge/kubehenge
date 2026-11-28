@@ -140,6 +140,14 @@ func newFakeInterface(t *testing.T) *fakeInterface {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
+	mux.HandleFunc("PUT /api/setup/state-passphrase", f.admin(func(w http.ResponseWriter, r *http.Request) {
+		body := f.bodies[r.Method+" "+r.URL.Path]
+		if body["required"] == false && body["passphrase"] != "right" {
+			answer(w, http.StatusForbidden, `{"error":"wrong passphrase"}`)
+			return
+		}
+		answer(w, http.StatusOK, `{}`)
+	}))
 	mux.HandleFunc("GET /api/notifications", f.admin(func(w http.ResponseWriter, _ *http.Request) {
 		answer(w, http.StatusOK, `[{"kind":"notify-webhook","at":"2027-03-01T12:00:00Z","title":"web: VM paused"},{"kind":"notify-ntfy"},
 			{"kind":"notify-email","at":"2027-03-01T12:00:00Z","title":"web: VM paused","error":"signing in: 535 bad credentials"}]`)
@@ -479,6 +487,27 @@ func TestApplianceTakeOver(t *testing.T) {
 	out, err := f.run(f.args("admin@pve", "take-over", "--overwrite", "--passphrase-file", writeTemp(t, "right"))...)
 	if err != nil || out != "Taken over. The next apply brings the management cluster to this state\n" {
 		t.Errorf("take-over: %v\n%q", err, out)
+	}
+}
+
+// state-passphrase requires a new passphrase or keeps the key again with the one required.
+func TestApplianceStatePassphrase(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	if _, err := f.run(f.args("admin@pve", "state-passphrase")...); err == nil || err.Error() != "give --require or --off" {
+		t.Errorf("neither: %v", err)
+	}
+	out, err := f.run(f.args("admin@pve", "state-passphrase", "--require", "--new-passphrase-file", writeTemp(t, "new"))...)
+	sent := f.bodies["PUT /api/setup/state-passphrase"]
+	if err != nil || !strings.HasPrefix(out, "Required.") || sent["required"] != true || sent["newPassphrase"] != "new" {
+		t.Errorf("require: %v %v\n%q", err, sent, out)
+	}
+	if _, err := f.run(f.args("admin@pve", "state-passphrase", "--off", "--passphrase-file", writeTemp(t, "wrong"))...); err == nil || err.Error() != "wrong passphrase" {
+		t.Errorf("off with a wrong passphrase: %v", err)
+	}
+	out, err = f.run(f.args("admin@pve", "state-passphrase", "--off", "--passphrase-file", writeTemp(t, "right"))...)
+	if err != nil || out != "The appliance keeps the state's key again\n" {
+		t.Errorf("off: %v\n%q", err, out)
 	}
 }
 

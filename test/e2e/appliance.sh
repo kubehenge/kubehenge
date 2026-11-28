@@ -689,6 +689,15 @@ grep -qi '^location: /c/clusters\.e2e/pods' "${work}/headers" ||
     fail "opening the cluster did not lead on to its page in Headlamp"
 expect 404 "opening a cluster the user does not see" request "${work}/user.jar" "${headlamp}/kubehenge/open/clusters.e2e"
 
+step "a passphrase required to open the management cluster's state"
+# The steps after this one refuse a wrong passphrase until the appliance keeps the key again.
+body=$(jq -n --arg p "${passphrase}" '{required: true, newPassphrase: $p}')
+expect 200 "requiring a passphrase" put "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup/state-passphrase" "${body}"
+if pct exec "${ctid}" -- test -e /var/lib/kubehenge/management/state.key; then
+    fail "the appliance still keeps the state's key with a passphrase required"
+fi
+expect 422 "the admin kubeconfig without the passphrase" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup/credential" '{"name": "kubeconfig"}'
+
 step "the management cluster's etcd, snapshotted into the backup target"
 backups=${ui}/api/appliance/etcd-backups
 expect 403 "the etcd backups for a user without privileges" request "${work}/user.jar" "${backups}"
@@ -782,6 +791,11 @@ fi
 pct exec "${ctid}" -- test -s /var/lib/kubehenge-keys/unattended.key || fail "the appliance keeps no key for what automatic upgrades keep"
 pct config "${ctid}" | grep -E '^mp[0-9]+: .*mp=/var/lib/kubehenge-keys(,|$)' | grep -Eq '(,|^)backup=0(,|$)' ||
     fail "the key's volume is not left out of backups"
+
+step "the appliance keeps the state's key again, which the restarts and upgrades below open the state with"
+body=$(jq -n --arg p "${passphrase}" '{required: false, passphrase: $p}')
+expect 200 "keeping the key again" put "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup/state-passphrase" "${body}"
+pct exec "${ctid}" -- test -s /var/lib/kubehenge/management/state.key || fail "the appliance keeps no state key again"
 
 step "the appliance's updater: a release that does not start rolled back, then one that does"
 # The appliance trusts the S3 store's CA and reads the test's index; the restart applies both.
@@ -903,10 +917,6 @@ remove_backups=false
 step "remove the management cluster from the interface"
 body=$(jq -n --arg p "${passphrase}" '{passphrase: $p, confirm: "delete"}')
 expect 422 "a removal without the word remove" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup/remove" "${body}"
-body=$(jq -n --arg p "not-${passphrase}" '{passphrase: $p, confirm: "remove"}')
-expect 202 "a removal with a wrong passphrase" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup/remove" "${body}"
-until_true 600 "the removal with a wrong passphrase to end" job_ended
-job_was remove failed true
 body=$(jq -n --arg p "${passphrase}" --argjson r "${remove_backups}" '{passphrase: $p, confirm: "remove", removeBackups: $r}')
 expect 202 "the removal" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup/remove" "${body}"
 until_true 3600 "the removal to end" job_ended

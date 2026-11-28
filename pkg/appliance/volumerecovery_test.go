@@ -31,6 +31,7 @@ func TestRecoveryReadsTheVolumeElseTheCopy(t *testing.T) {
 	}
 	ready := func(context.Context, []byte) error { return nil }
 
+	requirePassphrase(t, a)
 	if err := a.RecoverManagement("the wrong passphrase entirely", ticket(), ready); !errors.Is(err, ErrPassphrase) {
 		t.Fatalf("a wrong passphrase: %v", err)
 	}

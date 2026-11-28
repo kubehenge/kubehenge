@@ -108,7 +108,7 @@ The controller may only change the providers' replica count, through the Deploym
 
 The appliance backs up the management cluster's etcd from outside it. A restore then does not depend on what it restores.
 
-On the schedule set under **Administration, Backups**, it asks a control-plane node's Talos API for a snapshot with a talosconfig of the `os:etcd:backup` role. It checks etcd's own checksum at the end of the stream. It encrypts the snapshot to an age key and uploads it to the chosen backup target. The key's private half is stored only in the target, encrypted with the state passphrase.
+On the schedule set under **Administration, Backups**, it asks a control-plane node's Talos API for a snapshot with a talosconfig of the `os:etcd:backup` role. It checks etcd's own checksum at the end of the stream. It encrypts the snapshot to an age key and uploads it to the chosen backup target. The key's private half is stored only in the target, encrypted with the state's key.
 
 A restore downloads and decrypts the snapshot on the appliance and checks it against the SHA-256 recorded with it. With the admin talosconfig from the state, it wipes etcd on every control-plane node. It then uploads the snapshot to the first node, bootstraps etcd from it and waits for the others to join ([install-settings.md](install-settings.md#back-up-the-management-clusters-etcd)).
 
@@ -116,7 +116,7 @@ A restore downloads and decrypts the snapshot on the appliance and checks it aga
 
 The module installs the Proxmox CSI plugin in the management cluster, from the workload add-on's chart and images. Its token holds `VM.Audit` and `VM.Config.Disk`, so it attaches and grows disks but deletes none. The storage class `kubehenge-management` keeps a released volume.
 
-The backup volume is the disk of a stopped VM, `kubehenge-backups`, outside the management pool. The VM has protection on, and a static volume binds its disk, so deleting the management VMs leaves it. A small store in `kubehenge-system` serves it with a token from a Secret. The appliance reaches it through a port-forward to its pod, and the controller over the network, which a NetworkPolicy opens to the controller's pods alone. The snapshots and exports on it are encrypted to an age key sealed with the state passphrase.
+The backup volume is the disk of a stopped VM, `kubehenge-backups`, outside the management pool. The VM has protection on, and a static volume binds its disk, so deleting the management VMs leaves it. A small store in `kubehenge-system` serves it with a token from a Secret. The appliance reaches it through a port-forward to its pod, and the controller over the network, which a NetworkPolicy opens to the controller's pods alone. The snapshots and exports on it are encrypted to an age key sealed with the state's key.
 
 The appliance alone sets each management node's `topology.kubernetes.io/zone` label, to the Proxmox VE node its VM runs on. It reads that with a read-only token on the management pool, after each apply and before each backup. A node whose VM it cannot find keeps its label. A node restart never puts back an old label.
 
@@ -1298,9 +1298,9 @@ One Terraform/OpenTofu apply, or the appliance, creates a small management clust
 
 The appliance (`appliance/install.sh`) checks everything it downloads against checksums it carries. It creates an unprivileged Debian container with a certificate from the Proxmox VE cluster's own CA. The interface runs as an unprivileged user on ports 443 and 8443 (the shared Headlamp).
 
-Its first-run page runs the `management-cluster/` module with OpenTofu on the administrator's session, whose ticket and CSRF token reach OpenTofu through its environment only. OpenTofu installs the module's providers from the release archive alone, checked against the module's lock file. The state is encrypted with a key derived from a passphrase nothing stores. Every later apply asks for it again, unless automatic upgrades of the management cluster are on ([Upgrades](#upgrades)).
+Its first-run page runs the `management-cluster/` module with OpenTofu on the administrator's session, whose ticket and CSRF token reach OpenTofu through its environment only. OpenTofu installs the module's providers from the release archive alone, checked against the module's lock file. The state is encrypted with a random key the appliance makes and keeps beside it, readable by root alone. An administrator may require a passphrase instead, which seals the key and deletes the kept copy.
 
-The management cluster's admin kubeconfig and talosconfig stay inside that state. An administrator can open the state with the passphrase on the Administration page, and every download is logged.
+The management cluster's admin kubeconfig and talosconfig stay inside that state. An administrator can open the state on the Administration page, and every download is logged.
 
 ### What the installer does
 
@@ -1410,9 +1410,9 @@ Runs of the management-cluster module, the updater and `install.sh --upgrade` sh
 
 ### The management cluster on its own
 
-An apply needs the state passphrase and a Proxmox VE credential that can create users, roles, ACLs and VMs. The appliance keeps neither by default.
+An apply needs the state's key and a Proxmox VE credential that can create users, roles, ACLs and VMs. The appliance keeps the key, unless a passphrase is required, and no credential by default.
 
-With automatic upgrades of the management cluster on, the appliance keeps the passphrase and an API token of its own Proxmox VE user. That user, `kubehenge-upgrader@pve`, holds the Administrator role on `/`.
+With automatic upgrades of the management cluster on, the appliance keeps the passphrase, where one is required, and an API token of its own Proxmox VE user. That user, `kubehenge-upgrader@pve`, holds the Administrator role on `/`.
 
 Both are in a file only the interface's user and root can read. They are sealed with a key on a volume of the container that Proxmox VE's backups leave out, so no backup holds what opens them.
 

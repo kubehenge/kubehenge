@@ -59,9 +59,12 @@ type setupView struct {
 	CredentialsExpire *time.Time `json:"credentialsExpire,omitempty"`
 	// ProxmoxInsecure tells that the Proxmox VE API's certificate goes unverified.
 	ProxmoxInsecure bool `json:"proxmoxInsecure,omitempty"`
-	// Resumes tells that an earlier run left its encrypted state, so the setup takes that run's
-	// passphrase rather than a new one.
+	// Resumes tells that an earlier run left its encrypted state.
 	Resumes bool `json:"resumes,omitempty"`
+	// Passphrase tells that the actions that open the state ask for its passphrase, and
+	// PassphraseRequired that an administrator chose so. Otherwise the appliance keeps the key.
+	Passphrase         bool `json:"passphrase,omitempty"`
+	PassphraseRequired bool `json:"passphraseRequired,omitempty"`
 	// Upgrade tells which release last applied the management cluster, and what applying the
 	// appliance's own would change.
 	Upgrade *managementUpgrade `json:"upgrade,omitempty"`
@@ -95,6 +98,7 @@ func (s *Server) applianceStatus(w http.ResponseWriter, r *http.Request, u user,
 	}
 	v.Job, v.Settings = a.Current(), a.SavedSettings().Redacted()
 	v.Resumes = !v.Ready && a.HasState()
+	v.Passphrase, v.PassphraseRequired = a.PassphraseNeeded(), a.PassphraseRequired()
 	if v.Ready {
 		v.Upgrade = s.managementUpgrade()
 		v.ActivityFollows = s.followsAuditLog()
@@ -284,7 +288,7 @@ func (s *Server) backupCovers(ctx context.Context, u user, vmid int) (bool, erro
 }
 
 // credential hands an administrator the management cluster's admin kubeconfig or talosconfig, for
-// repairs beyond the interface. It needs the state passphrase on top of the privileges.
+// repairs beyond the interface. It needs the privileges, and the passphrase where one is required.
 func (s *Server) credential(w http.ResponseWriter, r *http.Request, u user) {
 	a := s.Appliance
 	if a == nil {
@@ -326,8 +330,8 @@ func (s *Server) credential(w http.ResponseWriter, r *http.Request, u user) {
 }
 
 // takeOver makes this appliance's state the one the management cluster follows, after an apply
-// was refused because a newer state changed the cluster. It needs the state passphrase on top of
-// the privileges, as the next apply undoes what that newer state made.
+// was refused because a newer state changed the cluster. It needs the privileges, and the
+// passphrase where one is required, as the next apply undoes what that newer state made.
 func (s *Server) takeOver(w http.ResponseWriter, r *http.Request, u user) {
 	a := s.Appliance
 	if a == nil {

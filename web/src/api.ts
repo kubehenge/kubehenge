@@ -487,6 +487,8 @@ export interface Api {
   credential: (name: "kubeconfig" | "talosconfig", passphrase: string) => Promise<Blob>;
   removeManagement: (passphrase: string, removeBackups: boolean) => Promise<Job>;
   takeOverManagement: (passphrase: string) => Promise<void>;
+  /** statePassphrase requires newPassphrase to open the management cluster's state, or stops requiring one. */
+  statePassphrase: (required: boolean, passphrase: string, newPassphrase: string) => Promise<void>;
   managementHealth: () => Promise<ManagementHealth>;
   rebootReady: () => Promise<RebootReadiness>;
   managementBackups: () => Promise<ManagementBackups>;
@@ -688,6 +690,8 @@ export const api: Api = {
   removeManagement: (passphrase, removeBackups) =>
     request("POST", "/api/setup/remove", { passphrase, confirm: "remove", removeBackups }),
   takeOverManagement: (passphrase) => act("POST", "/api/setup/take-over", { passphrase }),
+  statePassphrase: (required, passphrase, newPassphrase) =>
+    act("PUT", "/api/setup/state-passphrase", { required, passphrase, newPassphrase }),
   managementHealth: () => request("GET", "/api/setup/health"),
   rebootReady: () => request("GET", "/api/appliance/reboot-ready"),
   managementBackups: () => request("GET", "/api/appliance/etcd-backups"),

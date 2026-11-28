@@ -1447,11 +1447,6 @@ const cases: Case[] = [
       await check("Services");
       await next();
       await check("Add-ons");
-      await next();
-      await check("Confirm");
-      await user.type(screen.getByLabelText("State passphrase"), "correct horse battery staple");
-      await user.type(screen.getByLabelText("Repeat passphrase"), "correct horse battery staple");
-      await check("Passphrase");
     },
   },
 ];

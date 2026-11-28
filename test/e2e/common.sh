@@ -592,7 +592,8 @@ inventory() {
 # and keeps its certificates in $work for management_get; $management_api is the cluster's API
 # address.
 management_credentials() {
-    asked=$(jq -nc --arg p "${passphrase}" '{name: "kubeconfig", passphrase: $p}')
+    # No passphrase: the appliance keeps the state's key unless one is required.
+    asked='{"name": "kubeconfig"}'
     expect 200 "the management cluster's admin kubeconfig" post "${work}/admin.jar" "${admin_csrf}" "${ui}/api/setup/credential" "${asked}"
     cp "${work}/body" "${work}/management.kubeconfig"
     kubeconfig_field certificate-authority-data | base64 -d > "${work}/management-ca.crt"

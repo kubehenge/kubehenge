@@ -558,7 +558,7 @@ describe("the console", () => {
     expect(window.location.pathname).toBe("/runs/appliance-upgrade");
   });
 
-  it("asks for the passphrase before applying the management cluster again with its saved settings", async () => {
+  it("applies the management cluster again with its saved settings, asking no passphrase the appliance keeps", async () => {
     window.history.replaceState(null, "", "/runs/management-cluster");
     const routes = serve();
     routes["GET /api/runs"] = {
@@ -585,10 +585,10 @@ describe("the console", () => {
     };
     await user.click(again);
     const dialog = await screen.findByRole("dialog", { name: "Apply management cluster" });
-    await user.type(within(dialog).getByLabelText("State passphrase"), "correct horse battery staple");
+    expect(within(dialog).queryByLabelText("State passphrase")).not.toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(sent).toStrictEqual([{ settings, passphrase: "correct horse battery staple" }]);
+    expect(sent).toStrictEqual([{ settings, passphrase: "" }]);
     expect(window.location.pathname).toBe("/runs/management-cluster");
   });
 

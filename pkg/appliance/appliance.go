@@ -176,7 +176,8 @@ func (a *Appliance) Apply(settings *Settings, passphrase string, ticket *pve.Tic
 			return err
 		}
 	}
-	if err := ValidPassphrase(passphrase); err != nil {
+	passphrase, err := a.statePassphrase(context.Background(), passphrase)
+	if err != nil {
 		return err
 	}
 	checking, cancel := context.WithTimeout(context.Background(), siteCheckTimeout)
@@ -277,11 +278,12 @@ const (
 // called once the management cluster is gone. backups says whether the backup volume stays, out of
 // OpenTofu's state, or goes too.
 func (a *Appliance) Remove(passphrase string, backups BackupsOnRemove, ticket *pve.Ticket, before func(ctx context.Context, j *Job) error, gone func()) error {
-	if err := ValidPassphrase(passphrase); err != nil {
-		return err
-	}
 	if _, err := os.Stat(filepath.Join(a.workdir(), "terraform.tfstate")); err != nil {
 		return errors.New("there is no management cluster to remove")
+	}
+	passphrase, err := a.statePassphrase(context.Background(), passphrase)
+	if err != nil {
+		return err
 	}
 	release, forget := a.keepBackupVolume, a.forgetRemoved
 	if backups == DeleteBackups {
@@ -321,12 +323,21 @@ func (a *Appliance) Remove(passphrase string, backups BackupsOnRemove, ticket *p
 const talosconfigName = "talosconfig"
 
 // Credential reads the management cluster's admin kubeconfig or talosconfig out of the encrypted
-// state, for repairs the interface cannot make. A wrong passphrase cannot decrypt it.
+// state, for repairs the interface cannot make. The passphrase is needed only where one is required.
 func (a *Appliance) Credential(ctx context.Context, passphrase, name string) ([]byte, error) {
+	key, err := a.statePassphrase(ctx, passphrase)
+	if err != nil {
+		return nil, err
+	}
+	return a.credential(ctx, key, name)
+}
+
+// credential is Credential with the state's key.
+func (a *Appliance) credential(ctx context.Context, key, name string) ([]byte, error) {
 	if name != "kubeconfig" && name != talosconfigName {
 		return nil, fmt.Errorf("no credential %q", name)
 	}
-	out, err := a.stateOutput(ctx, passphrase, name)
+	out, err := a.stateOutput(ctx, key, name)
 	if err != nil {
 		return nil, err
 	}
@@ -336,7 +347,11 @@ func (a *Appliance) Credential(ctx context.Context, passphrase, name string) ([]
 // CheckPassphrase tells whether the passphrase opens the management cluster's state, ErrPassphrase
 // when it does not.
 func (a *Appliance) CheckPassphrase(ctx context.Context, passphrase string) error {
-	_, err := a.stateOutput(ctx, passphrase, "api_endpoint")
+	key, err := a.statePassphrase(ctx, passphrase)
+	if err != nil {
+		return err
+	}
+	_, err = a.stateOutput(ctx, key, "api_endpoint")
 	return err
 }
 
@@ -404,7 +419,7 @@ func (a *Appliance) removalEnv(ctx context.Context, j *Job, passphrase string, t
 }
 
 // forgetRemoved clears what the appliance kept of a management cluster just destroyed. The state
-// now records nothing. It goes, so that the next setup starts with a passphrase of its own. The
+// now records nothing. It goes. The state's key stays, since the backups kept are sealed with it. The
 // settings stay to fill that setup in. The etcd snapshots stay in their target and on a kept
 // backup volume, and the keys and the talosconfigs that took them go, so that nothing is scheduled
 // for a cluster that is gone and the next setup makes a key of its own. The appliance's copy of the
@@ -430,9 +445,9 @@ func (a *Appliance) forgetRemovedWithCopy() error {
 	return a.forgetRemoved()
 }
 
-// stateOutput reads one output of the encrypted state with the passphrase, outside any run.
-func (a *Appliance) stateOutput(ctx context.Context, passphrase, name string) (string, error) {
-	if err := ValidPassphrase(passphrase); err != nil {
+// stateOutput reads one output of the encrypted state with the state's key, outside any run.
+func (a *Appliance) stateOutput(ctx context.Context, key, name string) (string, error) {
+	if err := ValidPassphrase(key); err != nil {
 		return "", err
 	}
 	a.mu.Lock()
@@ -444,8 +459,7 @@ func (a *Appliance) stateOutput(ctx context.Context, passphrase, name string) (s
 	if _, err := os.Stat(filepath.Join(a.workdir(), "terraform.tfstate")); err != nil {
 		return "", errors.New("there is no management cluster state yet")
 	}
-	env := []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=" + a.Dir, "TF_IN_AUTOMATION=1", "TF_ENCRYPTION=" + encryption(passphrase)}
-	out, err := a.output(ctx, env, name)
+	out, err := a.output(ctx, a.stateEnv(key), name)
 	if err != nil {
 		return "", ErrPassphrase
 	}

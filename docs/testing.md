@@ -95,7 +95,7 @@ Cluster API's Cluster and ClusterClass webhooks and ClusterClass controller run 
    - With the settings' `headlampActions` it offers the Helm app catalog and the Prometheus charts it ships.
    - It refuses a chart from a path on the appliance, a Helm repository over HTTP and a port forward.
 7. Log out of a cluster in it as its frontend does, which clears the token cookie, then open the cluster again from the interface's link. The logout is refused to those who do not see the cluster and to a request from another origin or none.
-8. Back the management cluster's etcd up into an S3 store served on the node, refused to a user without privileges and with a wrong passphrase. A scheduled snapshot and one asked for are stored encrypted and listed.
+8. Back the management cluster's etcd up into an S3 store served on the node, refused to a user without privileges and, with a passphrase required, a wrong one. A scheduled snapshot and one asked for are stored encrypted and listed.
 9. Restore the newer snapshot from the appliance's shell with `kubehenge appliance`, which refuses a wrong passphrase as the interface does. A Secret made since is gone and the ClusterClasses are there.
 10. Show the backups, list and take a snapshot and show the upgrades with `kubehenge appliance`. A user without privileges is refused in the interface's words.
 11. Switch automatic upgrades of the management cluster on, refused with a wrong passphrase, which makes their Proxmox VE user. Switch them off, which removes it, then on again.

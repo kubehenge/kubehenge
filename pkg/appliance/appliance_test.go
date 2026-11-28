@@ -391,6 +391,10 @@ func TestApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	key, err := os.ReadFile(a.stateKeyPath())
+	if err != nil {
+		t.Fatal(err)
+	}
 	runs := strings.Split(strings.TrimSpace(string(log)), "\n")
 	// init, plan, show, apply, and the outputs kubeconfig, api_endpoint and talosconfig.
 	if len(runs) != 7 {
@@ -405,7 +409,7 @@ func TestApply(t *testing.T) {
 			t.Fatal(err)
 		}
 		env := strings.Join(rec.Env, "\n")
-		for _, want := range []string{"PROXMOX_VE_AUTH_TICKET=PVE:root@pam:1", "PROXMOX_VE_CSRF_PREVENTION_TOKEN=csrf", "TF_IN_AUTOMATION=1", `passphrase = "correct horse battery staple"`} {
+		for _, want := range []string{"PROXMOX_VE_AUTH_TICKET=PVE:root@pam:1", "PROXMOX_VE_CSRF_PREVENTION_TOKEN=csrf", "TF_IN_AUTOMATION=1", `passphrase = "` + string(key) + `"`} {
 			if !strings.Contains(env, want) {
 				t.Errorf("tofu %v ran without %s", rec.Args, want)
 			}
@@ -467,6 +471,7 @@ func TestCredential(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(a.Dir, "management", "terraform.tfstate"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	requirePassphrase(t, a)
 	got, err := a.Credential(context.Background(), "correct horse battery staple", "kubeconfig")
 	if err != nil || string(got) != "admin-kubeconfig" {
 		t.Fatalf("Credential = %q, %v", got, err)
@@ -501,13 +506,12 @@ func TestRemove(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	requirePassphrase(t, a)
 	before, gone := 0, 0
 	step := func(_ context.Context, j *Job) error { before++; j.Add("deleting templates"); return nil }
-	if err := a.Remove("the wrong passphrase entirely", KeepBackups, ticket(), step, func() { gone++ }); err != nil {
-		t.Fatal(err)
-	}
-	if j := waitFor(t, a); j.State != "failed" || j.Kind != "remove" || before != 0 || gone != 0 || !a.Ready() {
-		t.Fatalf("wrong passphrase: job %+v, before %d, gone %d", j, before, gone)
+	err := a.Remove("the wrong passphrase entirely", KeepBackups, ticket(), step, func() { gone++ })
+	if j := a.Current(); !errors.Is(err, ErrPassphrase) || j.Kind == "remove" || before != 0 || gone != 0 || !a.Ready() {
+		t.Fatalf("wrong passphrase: %v, job %+v, before %d, gone %d", err, j, before, gone)
 	}
 
 	ran := len(tofuCalls(t, a))
@@ -1247,12 +1251,6 @@ func TestApplyRefuses(t *testing.T) {
 	bad.NodeAddresses = []string{"10.0.0.11"}
 	if err := a.Apply(bad, "correct horse battery staple", ticket(), nil); err == nil {
 		t.Fatal("an address without prefix accepted")
-	}
-	if err := a.Apply(settings("pve1"), "too short", ticket(), nil); err == nil {
-		t.Fatal("a short passphrase accepted")
-	}
-	if err := a.Apply(settings("pve1"), "sixteen chars\nand a newline", ticket(), nil); err == nil {
-		t.Fatal("a passphrase with a newline accepted")
 	}
 	if a.Current() != nil {
 		t.Fatal("a refused apply started a job")

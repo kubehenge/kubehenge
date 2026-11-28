@@ -1,15 +1,17 @@
 import { useState, type JSX } from "react";
 
 import { api } from "./api";
-import { ErrorBox, Field, errorMessage, passphraseShort, saveFile } from "./ui";
+import { ErrorBox, Field, errorMessage, passphraseShort, saveFile, useStatePassphrase } from "./ui";
 
 // Credentials hands an administrator the management cluster's own credentials, for repairs beyond
-// the interface. They come out of the encrypted state, so the passphrase is needed.
+// the interface. They come out of the encrypted state, which asks for its passphrase only where one is
+// required.
 export function Credentials({ running }: { running: boolean }): JSX.Element {
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const short = passphraseShort(passphrase);
+  const ask = useStatePassphrase();
+  const short = ask && passphraseShort(passphrase);
 
   const download = async (name: "kubeconfig" | "talosconfig") => {
     setBusy(true);
@@ -28,17 +30,19 @@ export function Credentials({ running }: { running: boolean }): JSX.Element {
   return (
     <form className="box" onSubmit={(e) => e.preventDefault()}>
       <h3>Repair access</h3>
-      <Field label="State passphrase">
-        {(id) => (
-          <input
-            id={id}
-            type="password"
-            autoComplete="current-password"
-            value={passphrase}
-            onChange={(e) => setPassphrase(e.target.value)}
-          />
-        )}
-      </Field>
+      {ask && (
+        <Field label="State passphrase">
+          {(id) => (
+            <input
+              id={id}
+              type="password"
+              autoComplete="current-password"
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+            />
+          )}
+        </Field>
+      )}
       {running && <p className="muted">Available once the management cluster run ends</p>}
       <div className="actions">
         <button

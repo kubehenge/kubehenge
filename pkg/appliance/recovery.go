@@ -85,8 +85,8 @@ func (a *Appliance) DismissEtcdBackupWarning(by string) error {
 }
 
 // exportBundle is what an export holds: what a new appliance needs to take over the management
-// cluster and restore its etcd. The state is still encrypted with the state passphrase, so the
-// bundle's own passphrase and the state passphrase together open it.
+// cluster and restore its etcd. It carries the state's key, or where a passphrase is required the
+// key sealed with that passphrase, which then opens the state with the bundle's own passphrase.
 type exportBundle struct {
 	Version int       `json:"version"`
 	Created time.Time `json:"created"`
@@ -98,6 +98,10 @@ type exportBundle struct {
 	// Settings are the last applied settings.
 	Settings json.RawMessage `json:"settings"`
 	Backups  exportBackups   `json:"backups"`
+	// StateKey opens the state, and SealedStateKey is it sealed with the required passphrase. An
+	// export carries one of them.
+	StateKey       string `json:"stateKey,omitempty"`
+	SealedStateKey []byte `json:"sealedStateKey,omitempty"`
 }
 
 // exportBackups are the etcd backups' settings, the target and its access key.
@@ -183,8 +187,8 @@ func (a *Appliance) exportDue(st *EtcdBackupStatus) (bool, *time.Time) {
 	return st.Last != nil && stale, at
 }
 
-// ExportState makes the export bundle, encrypted with exportPassphrase. The state passphrase proves
-// the caller may read the state.
+// ExportState makes the export bundle, encrypted with exportPassphrase. The state passphrase is
+// needed only where one is required.
 func (a *Appliance) ExportState(ctx context.Context, statePassphrase, exportPassphrase string) ([]byte, error) {
 	if err := ValidPassphrase(exportPassphrase); err != nil {
 		return nil, fmt.Errorf("export %w", err)
@@ -203,7 +207,11 @@ func (a *Appliance) ExportState(ctx context.Context, statePassphrase, exportPass
 	if err != nil {
 		return nil, err
 	}
-	talosconfig, err := a.Credential(ctx, statePassphrase, talosconfigName)
+	key, err := a.statePassphrase(ctx, statePassphrase)
+	if err != nil {
+		return nil, err
+	}
+	talosconfig, err := a.credential(ctx, key, talosconfigName)
 	if err != nil {
 		return nil, err
 	}
@@ -215,9 +223,13 @@ func (a *Appliance) ExportState(ctx context.Context, statePassphrase, exportPass
 	if err != nil {
 		return nil, fmt.Errorf("reading the settings: %w", err)
 	}
-	plain, err := json.Marshal(exportBundle{
-		Version: exportVersion, Created: a.now().UTC(), Talosconfig: string(talosconfig), State: state, Settings: settings, Backups: *backups,
-	})
+	bundle := exportBundle{
+		Version: exportVersion, Created: a.now().UTC(), Talosconfig: string(talosconfig), State: state, Settings: settings, Backups: *backups, StateKey: key,
+	}
+	if sealedKey, err := os.ReadFile(a.sealedStateKeyPath()); err == nil {
+		bundle.StateKey, bundle.SealedStateKey = "", sealedKey
+	}
+	plain, err := json.Marshal(bundle)
 	if err != nil {
 		return nil, fmt.Errorf("encoding the export: %w", err)
 	}
@@ -320,6 +332,9 @@ func (a *Appliance) ImportState(ctx context.Context, sealed []byte, exportPassph
 	if err := a.importSpecKey(b.Backups.SpecKey); err != nil {
 		return err
 	}
+	if err := a.importStateKey(b); err != nil {
+		return err
+	}
 	if err := writeJSONFile(a.exportFile(), exportRecord{At: b.Created, Fingerprint: exportFingerprint(&b.Backups)}); err != nil {
 		return err
 	}
@@ -332,6 +347,23 @@ func (a *Appliance) ImportState(ctx context.Context, sealed []byte, exportPassph
 			}
 			return writeJSONFile(a.etcdBackupFile("keys.json"), keys)
 		}
+	}
+	return nil
+}
+
+// importStateKey keeps the state's key an export carried, in the open or sealed as it was kept. A
+// key this appliance kept before opens no other state, so it goes either way.
+func (a *Appliance) importStateKey(b *exportBundle) error {
+	for _, p := range []string{a.stateKeyPath(), a.sealedStateKeyPath()} {
+		if err := removeFile(p); err != nil {
+			return err
+		}
+	}
+	switch {
+	case len(b.SealedStateKey) > 0:
+		return writeFileAtomic(a.sealedStateKeyPath(), b.SealedStateKey)
+	case b.StateKey != "":
+		return writeFileAtomic(a.stateKeyPath(), []byte(b.StateKey))
 	}
 	return nil
 }
@@ -373,6 +405,10 @@ func (a *Appliance) RecreateManagement(ctx context.Context, name, passphrase str
 	settings := a.SavedSettings()
 	if settings == nil || !a.HasState() {
 		return errors.New("there is no management cluster state to recreate it from: import an export first")
+	}
+	passphrase, err := a.statePassphrase(ctx, passphrase)
+	if err != nil {
+		return err
 	}
 	acc, err := a.etcdRestoreAccess(ctx, passphrase)
 	if err != nil {

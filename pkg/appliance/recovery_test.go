@@ -107,6 +107,7 @@ func TestExportIsDueUntilTakenAndAfterEachChange(t *testing.T) {
 	if st := a.EtcdBackups(); !st.ExportDue || st.ExportedAt != nil {
 		t.Fatalf("after a snapshot with no export: %+v", st)
 	}
+	requirePassphrase(t, a)
 	if _, err := a.ExportState(ctx, "wrong passphrase, long enough", exportPassphrase); !errors.Is(err, ErrPassphrase) {
 		t.Fatalf("wrong state passphrase: %v", err)
 	}
@@ -285,6 +286,42 @@ func TestImportRestoresWhatTheExportCarried(t *testing.T) {
 	}
 }
 
+// The export carries the state's key, sealed while a passphrase is required.
+func TestExportCarriesTheStateKey(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	a, store, now := backedUp(t)
+	configure(t, a, *now)
+	bundle, err := a.ExportState(ctx, passphrase, exportPassphrase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, _ := freshAppliance(t, store)
+	if err = fresh.ImportState(ctx, bundle, exportPassphrase); err != nil {
+		t.Fatal(err)
+	}
+	if kept, readErr := os.ReadFile(fresh.stateKeyPath()); readErr != nil || string(kept) != passphrase || fresh.PassphraseNeeded() {
+		t.Fatalf("imported key %q, %v", kept, readErr)
+	}
+
+	if err = a.RequirePassphrase(ctx, "", hardened); err != nil {
+		t.Fatal(err)
+	}
+	if bundle, err = a.ExportState(ctx, hardened, exportPassphrase); err != nil {
+		t.Fatal(err)
+	}
+	fresh, _ = freshAppliance(t, store)
+	if err = fresh.ImportState(ctx, bundle, exportPassphrase); err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(fresh.stateKeyPath()); !errors.Is(statErr, os.ErrNotExist) || !fresh.PassphraseRequired() {
+		t.Fatalf("a required passphrase did not hold after the import: %v", statErr)
+	}
+	if _, err = fresh.Credential(ctx, hardened, "talosconfig"); err != nil {
+		t.Fatalf("the imported sealed key: %v", err)
+	}
+}
+
 func TestImportRefusesATamperedOrForeignFile(t *testing.T) {
 	t.Parallel()
 	a, store, now := backedUp(t)
@@ -368,6 +405,7 @@ func TestRecreateMakesTheVMsBeforeTheRestoreAndAppliesWholeAfter(t *testing.T) {
 	if err = a.RecreateManagement(ctx, "../identity.age", passphrase, ticket(), ready); err == nil {
 		t.Fatal("recreated from something that is no snapshot")
 	}
+	requirePassphrase(t, a)
 	if err = a.RecreateManagement(ctx, taken.Name, "wrong passphrase, long enough", ticket(), ready); !errors.Is(err, ErrPassphrase) {
 		t.Fatalf("wrong passphrase: %v", err)
 	}

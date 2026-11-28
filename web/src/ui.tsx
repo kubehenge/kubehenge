@@ -25,6 +25,16 @@ export const minPassphrase = 16;
 
 // passphraseShort tells whether a passphrase has fewer than minPassphrase characters, counted as
 // code points, as the appliance counts them.
+// StatePassphrase tells whether the actions that open the management cluster's state ask for its
+// passphrase. The appliance keeps the state's key unless an administrator requires one. Outside a
+// provider they ask.
+export const StatePassphrase = createContext(true);
+
+export const useStatePassphrase = (): boolean => useContext(StatePassphrase);
+
+// passphraseMissing tells whether a passphrase is asked for and too short to be one.
+export const passphraseMissing = (ask: boolean, passphrase: string): boolean => ask && passphraseShort(passphrase);
+
 export function passphraseShort(passphrase: string): boolean {
   // oxlint-disable-next-line typescript/no-misused-spread -- code points are what is counted
   return [...passphrase].length < minPassphrase;

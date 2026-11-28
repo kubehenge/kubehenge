@@ -2116,7 +2116,7 @@ kubehenge cluster delete web --yes
 
 Clusters are Kubernetes objects in the management cluster. Create and change them with kubectl, or keep them in Git with any GitOps tool.
 
-Get the management cluster's admin kubeconfig under **Administration**, **Appliance**, **Repair access**, **Download admin kubeconfig**, with the state passphrase. Or get it with `tofu output -raw kubeconfig` if you applied it with Terraform/OpenTofu. Whoever holds it controls every cluster. Proxmox VE privileges do not apply to kubectl.
+Get the management cluster's admin kubeconfig under **Administration**, **Appliance**, **Repair access**, **Download admin kubeconfig**. Or get it with `tofu output -raw kubeconfig` if you applied it with Terraform/OpenTofu. Whoever holds it controls every cluster. Proxmox VE privileges do not apply to kubectl.
 
 ### A Cluster
 

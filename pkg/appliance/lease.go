@@ -204,7 +204,11 @@ func (a *Appliance) checkLease(ctx context.Context, env []string) error {
 // refused with a StaleStateError. The next apply then undoes what the newer state made that this
 // one does not know.
 func (a *Appliance) TakeOver(ctx context.Context, passphrase string) error {
-	admin, err := a.stateOutput(ctx, passphrase, "kubeconfig")
+	key, err := a.statePassphrase(ctx, passphrase)
+	if err != nil {
+		return err
+	}
+	admin, err := a.stateOutput(ctx, key, "kubeconfig")
 	if err != nil {
 		return err
 	}

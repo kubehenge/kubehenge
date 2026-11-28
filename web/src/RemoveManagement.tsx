@@ -2,7 +2,7 @@ import { useState, type JSX } from "react";
 
 import { api } from "./api";
 import { useFleet } from "./fleet";
-import { Dialog, ErrorBox, Field, errorMessage, passphraseShort } from "./ui";
+import { Dialog, ErrorBox, Field, errorMessage, passphraseShort, useStatePassphrase } from "./ui";
 
 // DangerZone holds what cannot be taken back, apart from the settings above it: removing
 // Kubehenge takes the management cluster, its templates, pools, users and roles off Proxmox VE.
@@ -52,7 +52,8 @@ export function RemoveDialog({ onClose, onStarted }: { onClose: () => void; onSt
   const [removeBackups, setRemoveBackups] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const ready = !busy && typed === "remove" && !passphraseShort(passphrase);
+  const ask = useStatePassphrase();
+  const ready = !busy && typed === "remove" && !(ask && passphraseShort(passphrase));
 
   const remove = async () => {
     if (!ready) {
@@ -93,17 +94,19 @@ export function RemoveDialog({ onClose, onStarted }: { onClose: () => void; onSt
         <input type="checkbox" checked={removeBackups} onChange={(e) => setRemoveBackups(e.target.checked)} /> Delete
         the backup volume
       </label>
-      <Field label="State passphrase">
-        {(id) => (
-          <input
-            id={id}
-            type="password"
-            autoComplete="current-password"
-            value={passphrase}
-            onChange={(e) => setPassphrase(e.target.value)}
-          />
-        )}
-      </Field>
+      {ask && (
+        <Field label="State passphrase">
+          {(id) => (
+            <input
+              id={id}
+              type="password"
+              autoComplete="current-password"
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+            />
+          )}
+        </Field>
+      )}
       <Field label="Type remove to confirm">
         {(id) => <input id={id} autoComplete="off" value={typed} onChange={(e) => setTyped(e.target.value)} />}
       </Field>

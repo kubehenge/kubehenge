@@ -127,7 +127,7 @@ func TestNotificationsRepeatTheBackupWarningWeekly(t *testing.T) {
 func TestExportAndImportOverTheInterface(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	_, _, store := managementWithTarget(t, h)
+	a, _, store := managementWithTarget(t, h)
 	admin := h.browser()
 	admin.signIn("admin@pve")
 	body := func(state, export string) string {
@@ -148,6 +148,7 @@ func TestExportAndImportOverTheInterface(t *testing.T) {
 			}
 		}
 	}
+	requireStatePassphrase(t, a)
 	expect(t, admin.do("POST", "/api/appliance/export", body("a wrong passphrase, long enough", exportSecret)), http.StatusForbidden)
 	expect(t, admin.do("POST", "/api/appliance/export", body(statePassphrase, "short")), http.StatusUnprocessableEntity)
 	rec := admin.do("POST", "/api/appliance/export", body(statePassphrase, exportSecret))
@@ -185,6 +186,10 @@ func TestExportAndImportOverTheInterface(t *testing.T) {
 		t.Fatal("a refused import left a state")
 	}
 	expect(t, admin2.do("POST", "/api/appliance/import", send(bundle, exportSecret)), http.StatusOK)
+	// The fake tofu opens a state with the key its first apply was given, which it noted there.
+	if key, err := os.ReadFile(filepath.Join(a.Dir, "state-key")); err != nil || os.WriteFile(filepath.Join(fresh.Dir, "state-key"), key, 0o600) != nil {
+		t.Fatalf("the fake tofu's key: %v", err)
+	}
 	expect(t, admin2.do("POST", "/api/appliance/import", send(bundle, exportSecret)), http.StatusConflict)
 	restore := "/api/appliance/etcd-backups/snapshots/" + snapshot + "/restore"
 	expect(t, admin2.do("POST", restore, `{"passphrase":"`+statePassphrase+`"}`), http.StatusAccepted)
@@ -210,6 +215,7 @@ func TestRecreateOverTheInterfaceChecksBeforeItStarts(t *testing.T) {
 	}
 	path := "/api/appliance/etcd-backups/snapshots/" + taken.Name + "/recreate"
 	expect(t, dev.do("POST", path, `{"passphrase":"`+statePassphrase+`"}`), http.StatusForbidden)
+	requireStatePassphrase(t, a)
 	expect(t, admin.do("POST", path, `{"passphrase":"a wrong passphrase, long enough"}`), http.StatusForbidden)
 	expect(t, admin.do("POST", "/api/appliance/etcd-backups/snapshots/..%2Fidentity.age/recreate", `{"passphrase":"`+statePassphrase+`"}`), http.StatusUnprocessableEntity)
 	expect(t, admin.do("POST", path, `{"passphrase":"`+statePassphrase+`"}`), http.StatusAccepted)

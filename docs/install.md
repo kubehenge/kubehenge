@@ -283,7 +283,7 @@ Session lengths and sign-in limits are under [Sessions](architecture.md#sessions
 
 On first sign-in, an administrator sees the setup page. It creates the management cluster with the `management-cluster/` module and OpenTofu, inside the appliance.
 
-The page goes through five steps: **Placement**, **Network**, **Clusters**, **Services** and **Passphrase**. Administration shows the same settings on one page, with one section per step.
+The page goes through four steps: **Placement**, **Network**, **Clusters** and **Services**. A **Passphrase** step follows only where the state needs [one](#requiring-a-passphrase). Administration shows the same settings on one page, with one section per step.
 
 ### What the page fills in
 
@@ -306,7 +306,7 @@ Proxmox VE checks the privileges of every call the run makes. Anyone without the
 
 The run acts with your own Proxmox VE session, with no administrator token created. The interface renews your ticket and hands it to OpenTofu through its environment only, never storing it. A ticket lasts two hours, and the run has to finish within them.
 
-The one exception is automatic upgrades of the management cluster, off by default. With them on, the appliance keeps the state passphrase and an Administrator token of a user of its own ([upgrading.md](upgrading.md#automatically-after-kubehenge)).
+The one exception is automatic upgrades of the management cluster, off by default. With them on, the appliance keeps an Administrator token of a user of its own ([upgrading.md](upgrading.md#automatically-after-kubehenge)).
 
 #### Administration
 
@@ -384,7 +384,7 @@ They also bring the warnings about the [backup](install-settings.md#back-up-the-
 | Backup targets | S3 stores for the clusters' Velero backups and etcd snapshots, for clusters that switch either on ([details](install-settings.md#backup-targets)). A changed target reaches the clusters that back up to it within ten minutes. One taken away leaves their Velero as it is. |
 | etcd restores | Off by default. The interface then shows the steps to restore a cluster's etcd by hand. When on, Kubehenge restores it itself through the VMs' guest agents ([details](install-settings.md#etcd-restores)). |
 
-The **Passphrase** step asks twice for the [state passphrase](#the-state-passphrase), which encrypts the management cluster's state on the appliance.
+The setup asks for no passphrase. The appliance makes the [key](#the-states-key) that encrypts the management cluster's state itself.
 
 Once the management cluster runs, these stay as they are ([upgrading.md](upgrading.md#in-the-appliance)):
 
@@ -401,13 +401,15 @@ The appliance keeps the module's other settings at their defaults:
 - Its nodes have 4 vCPUs, 4 GiB of memory and a 32 GB disk.
 - It creates the pools `kubehenge` (clusters), `kubehenge-templates` (VM templates) and `kubehenge-management` (its own VMs).
 
-### The state passphrase
+### The state's key
 
-The management cluster's state holds its secrets, among them its admin kubeconfig and talosconfig. The appliance encrypts it with a key derived from the passphrase, which is at least 16 printable characters on one line. It is not stored, unless automatic upgrades of the management cluster are switched on ([upgrading.md](upgrading.md#automatically-after-kubehenge)).
+The management cluster's state holds its secrets, among them its admin kubeconfig and talosconfig. The appliance encrypts it with a random key it makes at setup. It keeps the key beside the state, readable by root alone, so the appliance's own backups hold it too. Every apply, repair access and removal opens the state with it, and Proxmox VE privileges are the only check.
 
-Every later apply, the repair access on the Administration page and removal ask for it again. Without it the state cannot be read. Keep it in a password manager.
+An appliance set up with a state passphrase keeps its key from the next action given that passphrase.
 
-A first run that failed part of the way keeps its state, which records what it made. The next try asks once for that run's passphrase rather than a new one. After a [removal](uninstalling.md#in-the-appliance) the emptied state goes, and the next setup chooses a passphrase afresh.
+#### Requiring a passphrase
+
+Under **Administration**, **Appliance**, **Require a passphrase to open the management cluster's state** seals the key with a passphrase of at least 16 printable characters and deletes the kept copy. In the appliance's shell, run `kubehenge appliance state-passphrase --require`. Every apply, repair access, restore and removal then asks for the passphrase, and a wrong one is refused. Automatic upgrades of the management cluster then store it. An export holds the sealed key. Switching it off asks for the passphrase once and keeps the key again.
 
 #### Losing the passphrase
 
@@ -415,7 +417,7 @@ A lost passphrase cannot be recovered. The management cluster and every cluster 
 
 ### The management cluster's credentials
 
-The management cluster's admin kubeconfig and talosconfig hold client certificates that last a year. Only an apply in their last month renews them, since only the passphrase opens the state. The interface warns administrators 30 days before they run out. Apply the settings in **Administration** to renew them.
+The management cluster's admin kubeconfig and talosconfig hold client certificates that last a year. Only an apply in their last month renews them. The interface warns administrators 30 days before they run out. Apply the settings in **Administration** to renew them.
 
 ### While it runs
 

@@ -8,6 +8,7 @@
 - A refresh of the interface shows the fleet as the tab last read it, greyed until read again, and no cluster as healthy before its health is read.
 - `install.sh --upgrade` and `--certificate` find the cluster's appliance without `--ctid`. A plain `install.sh` upgrades the appliance on this node.
 - A management proxy with credentials in its address, which no cluster takes, gives each cluster that sets no proxy a `ProxyNotPassedOn` Warning event.
+- The appliance keeps the management cluster's state key, so setup and repair access ask for no passphrase. Administration can require one, which every action then asks for.
 
 ### Fixed
 

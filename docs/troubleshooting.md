@@ -56,7 +56,7 @@ For more in the journal, add `KUBEHENGE_LOG_LEVEL=debug` to `/etc/kubehenge/appl
 
 ### The management cluster
 
-**Repair access**, under **Administration**, **Appliance**, hands administrators the management cluster's own credentials, for what the interface cannot do. It needs the state passphrase and the [setup privileges](install.md#who-may-set-it-up). It is refused while a run is going on. Every download is logged.
+**Repair access**, under **Administration**, **Appliance**, hands administrators the management cluster's own credentials, for what the interface cannot do. It needs the [setup privileges](install.md#who-may-set-it-up), and the state passphrase only where one is [required](install.md#requiring-a-passphrase). It is refused while a run is going on. Every download is logged.
 
 - **Download admin kubeconfig** saves `management.kubeconfig`, for kubectl.
 - **Download admin talosconfig** saves `management.talosconfig`, for `talosctl`.
@@ -263,7 +263,7 @@ A run needs these:
 | "Bridge … has MTU …" | The MTU is above the bridge's. Its larger frames never pass. Use the bridge's MTU or less, or raise the bridge's under System, Network. |
 | "context deadline exceeded" for a `helm_release` | The release's pods did not get ready in time. Under "What the management cluster's pods wait for", the log names each pod and why, such as too little memory on the nodes. |
 | "The management cluster is being applied or removed" or "the appliance is being upgraded" | A run is going on. Wait for that to finish. |
-| A wrong passphrase | An apply cannot read the state. Repair access and removal answer "the passphrase does not open the management cluster's state". The passphrase has to be the one given when the management cluster was created. After five wrong ones within 15 minutes, repair access refuses further tries until those 15 minutes are up. A lost passphrase cannot be recovered ([what still works, and how to start over](install.md#the-state-passphrase)). |
+| A wrong passphrase, where one is required | An apply cannot read the state. Repair access and removal answer "the passphrase does not open the management cluster's state". The passphrase has to be the one set when it was required. After five wrong ones within 15 minutes, repair access refuses further tries until those 15 minutes are up. A lost passphrase cannot be recovered ([what still works, and how to start over](install.md#losing-the-passphrase)). |
 | "The appliance stopped during the run" | The appliance restarted while a run was going on. Apply again. |
 | "got no worker upid - start worker failed" | Proxmox VE did not start a task, as happens when another task ends at that moment. A download runs again by itself, up to three runs. For a VM, remove the VM it left locked with `qm destroy <id>`, then apply again. |
 | `failed calling webhook` with `no route to host` or `connection refused` | The webhook's pod was not serving yet, as after a node restart. The apply runs again by itself, up to three runs. If the last one fails the same way, `kubectl get pods -A` shows which pod does not get ready. |

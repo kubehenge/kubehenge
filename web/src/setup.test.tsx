@@ -88,8 +88,7 @@ const form: SetupForm = {
   extraNamespaces: "",
   headlampSignIn: false,
   headlampActions: false,
-  passphrase: "correct horse battery staple",
-  confirm: "correct horse battery staple",
+  passphrase: "",
 };
 
 const administrator = { "GET /api/session": { body: { user: "root@pam", csrf: "c1" } } };
@@ -349,9 +348,7 @@ describe("setup", () => {
     const again = formOf(saved);
     expect(again.chartMirrors).toBe("ghcr.io=oci://m.example/ghcr\ncharts.jetstack.io=https://m.example/jetstack");
     expect(again.chartMirrorCA).toBe(saved.chartRepositories.caBundle);
-    expect(settings({ ...again, passphrase: "", confirm: "" }).chartRepositories).toStrictEqual(
-      saved.chartRepositories,
-    );
+    expect(settings({ ...again, passphrase: "" }).chartRepositories).toStrictEqual(saved.chartRepositories);
     expect(formOf(settings(form)).chartMirrors).toBe("");
   });
 
@@ -401,7 +398,7 @@ describe("setup", () => {
     expect(sent.releaseMirror).toStrictEqual({ url: "https://m.example/github", caBundle: `${pem}\n` });
     const again = formOf(sent);
     expect(again.releaseMirror).toBe("https://m.example/github");
-    expect(settings({ ...again, passphrase: "", confirm: "" }).releaseMirror).toStrictEqual(sent.releaseMirror);
+    expect(settings({ ...again, passphrase: "" }).releaseMirror).toStrictEqual(sent.releaseMirror);
     expect(formOf(settings(form)).releaseMirror).toBe("");
   });
 
@@ -684,21 +681,17 @@ describe("setup", () => {
     expect(setupProblems(form)).toStrictEqual([]);
     expect(setupProblems({ ...form, nodeAddresses: "192.0.2.11/24\n192.0.2.12/24" })).toHaveLength(1);
     expect(setupProblems({ ...form, nodeAddresses: "192.0.2.11" })).toHaveLength(1);
-    expect(setupProblems({ ...form, passphrase: "short", confirm: "short" })).toStrictEqual([
-      "Use at least 16 characters.",
-    ]);
-    expect(setupProblems({ ...form, confirm: "something else entirely" })).toStrictEqual(["Passphrases do not match."]);
+    expect(setupProblems({ ...form, passphrase: "short" }, true)).toStrictEqual(["Use at least 16 characters."]);
     expect(setupProblems({ ...form, nodes: [] })).toStrictEqual(["Choose at least one Proxmox VE node."]);
     expect(setupProblems({ ...form, nodes: ["pve1", "pve2"] })).toStrictEqual(["Choose no more nodes than addresses."]);
   });
 
-  it("asks for the existing passphrase, not a new one, when none is typed", () => {
-    expect(setupFieldProblems(form, false)).not.toHaveProperty("passphrase");
-    expect(setupFieldProblems({ ...form, passphrase: "", confirm: "" }, false).passphrase).toBe(
-      "Enter the state passphrase.",
-    );
-    expect(setupFieldProblems({ ...form, passphrase: "", confirm: "" }, true).passphrase).toBe(
-      "Use at least 16 characters.",
+  it("asks for the passphrase only where the state needs one", () => {
+    expect(setupFieldProblems(form)).not.toHaveProperty("passphrase");
+    expect(setupFieldProblems(form, true).passphrase).toBe("Enter the state passphrase.");
+    expect(setupFieldProblems({ ...form, passphrase: "short" }, true).passphrase).toBe("Use at least 16 characters.");
+    expect(setupFieldProblems({ ...form, passphrase: "correct horse battery staple" }, true)).not.toHaveProperty(
+      "passphrase",
     );
   });
 
@@ -721,9 +714,6 @@ describe("setup", () => {
     await next(user);
     expect(screen.getByRole("button", { name: "Clusters" })).toHaveAttribute("aria-current", "step");
     await next(user);
-    await next(user);
-    await user.type(screen.getByLabelText("State passphrase"), "correct horse battery staple");
-    await user.type(screen.getByLabelText("Repeat passphrase"), "correct horse battery staple");
     await user.click(screen.getByRole("button", { name: "Create management cluster" }));
     await waitFor(() => expect(calls.find((c) => c.key === "POST /api/setup")).toBeDefined());
     expect(calls.find((c) => c.key === "POST /api/setup")?.body).toMatchObject({
@@ -914,7 +904,6 @@ describe("setup", () => {
       "Network",
       "Clusters",
       "Services",
-      "Passphrase",
     ]);
     expect(sections.getByRole("link", { name: "Services" })).toHaveAttribute(
       "href",
@@ -1043,9 +1032,6 @@ describe("setup", () => {
     expect(actions).not.toBeChecked();
     expect(actions).toHaveAccessibleDescription(/own cluster credentials/u);
     await user.click(actions);
-    await next(user);
-    await user.type(screen.getByLabelText("State passphrase"), "correct horse battery staple");
-    await user.type(screen.getByLabelText("Repeat passphrase"), "correct horse battery staple");
     await submit(user);
 
     await expect(
@@ -1053,7 +1039,7 @@ describe("setup", () => {
     ).resolves.toBeInTheDocument();
     expect(screen.getByText("Now: Applying the management cluster")).toBeInTheDocument();
     expect(calls.find((c) => c.key === "POST /api/setup")?.body).toMatchObject({
-      passphrase: "correct horse battery staple",
+      passphrase: "",
       settings: {
         nodes: ["pve1"],
         vmDatastore: "local-lvm",
@@ -1096,9 +1082,6 @@ describe("setup", () => {
     await user.type(screen.getByLabelText("MTU"), "1450");
     await next(user);
     await next(user);
-    await next(user);
-    await user.type(screen.getByLabelText("State passphrase"), "correct horse battery staple");
-    await user.type(screen.getByLabelText("Repeat passphrase"), "correct horse battery staple");
     await user.click(screen.getByRole("button", { name: "Create management cluster" }));
 
     await screen.findByText("Now: Applying");
@@ -1167,9 +1150,6 @@ describe("setup", () => {
     await user.clear(screen.getByLabelText("Build VLAN"));
     await user.type(screen.getByLabelText("Build VLAN"), "120");
     await next(user);
-    await next(user);
-    await user.type(screen.getByLabelText("State passphrase"), "correct horse battery staple");
-    await user.type(screen.getByLabelText("Repeat passphrase"), "correct horse battery staple");
     await user.click(screen.getByRole("button", { name: "Create management cluster" }));
 
     await screen.findByText("Now: Applying");
@@ -1263,9 +1243,6 @@ describe("setup", () => {
     expect(forClusters("Bridges").getByRole("checkbox", { name: "web (Web tier), zone evpn1" })).toBeChecked();
     expect(forClusters("Bridges").getByRole("checkbox", { name: "vmbr0" })).not.toBeChecked();
     await next(user);
-    await next(user);
-    await user.type(screen.getByLabelText("State passphrase"), "correct horse battery staple");
-    await user.type(screen.getByLabelText("Repeat passphrase"), "correct horse battery staple");
     await user.click(screen.getByRole("button", { name: "Create management cluster" }));
 
     await screen.findByText("Now: Applying");
@@ -1312,9 +1289,6 @@ describe("setup", () => {
     await user.type(screen.getByLabelText("API address"), "192.0.2.10");
     await next(user);
     await next(user);
-    await next(user);
-    await user.type(screen.getByLabelText("State passphrase"), "correct horse battery staple");
-    await user.type(screen.getByLabelText("Repeat passphrase"), "correct horse battery staple");
 
     const create = screen.getByRole("button", { name: "Create management cluster" });
     await expect(screen.findByText(message)).resolves.toBeInTheDocument();
@@ -1434,8 +1408,6 @@ describe("setup", () => {
     );
     expect(problemsOf({ mirrors: "ghcr.io=mirror:5000" }).mirrors).toMatch(/^ghcr.io=mirror:5000 is not in the form/u);
     expect(problemsOf({ mirrors: "ghcr.io=https://mirror.example:5000/v2" }).mirrors).toBeUndefined();
-    // Applying again opens the state with the passphrase given at the start: nothing to repeat.
-    expect(setupFieldProblems({ ...form, confirm: "" }, false).confirm).toBeUndefined();
     // A running management cluster keeps its nodes' addresses, and grows only after them.
     const was = settings(form);
     expect(setupFieldProblems({ ...form, nodeAddresses: "192.0.2.12/24" }, false, was).nodeAddresses).toMatch(
@@ -1797,12 +1769,11 @@ describe("setup", () => {
 
     await user.click(screen.getByRole("button", { name: "Apply again…" }));
     const dialog = screen.getByRole("dialog", { name: "Apply management cluster" });
-    await user.type(within(dialog).getByLabelText("State passphrase"), "correct horse battery staple");
     await user.click(within(dialog).getByRole("button", { name: "Apply" }));
     await waitFor(() =>
       expect(calls.find((c) => c.key === "POST /api/setup")?.body).toStrictEqual({
         settings: saved,
-        passphrase: "correct horse battery staple",
+        passphrase: "",
       }),
     );
 
@@ -1814,11 +1785,9 @@ describe("setup", () => {
       "Network",
       "Clusters",
       "Services",
-      "Passphrase",
     ]);
     expect(wizard.queryByRole("navigation", { name: "Steps" })).not.toBeInTheDocument();
-    expect(wizard.getByLabelText("State passphrase")).toHaveAttribute("autocomplete", "current-password");
-    expect(wizard.queryByLabelText("Repeat passphrase")).not.toBeInTheDocument();
+    expect(wizard.queryByLabelText("State passphrase")).not.toBeInTheDocument();
     expect(wizard.getByLabelText("API address")).toHaveAttribute("readonly");
     expect(wizard.getByLabelText("VM disks")).toHaveValue("local-lvm");
     await user.click(wizard.getByRole("button", { name: "Cancel" }));
@@ -1855,7 +1824,6 @@ describe("setup", () => {
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "Edit settings" }));
     const wizard = within(screen.getByRole("region", { name: "Management cluster" }));
-    await user.type(wizard.getByLabelText("State passphrase"), "correct horse battery staple");
     const field = wizard.getByLabelText("Site CA");
     await waitFor(() => {
       expect(field.closest(".field")?.querySelector(".field-error")?.textContent).toBe(faults.join("\n"));
@@ -1907,7 +1875,6 @@ describe("setup", () => {
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "Edit settings" }));
     const wizard = within(screen.getByRole("region", { name: "Management cluster" }));
-    await user.type(wizard.getByLabelText("State passphrase"), "correct horse battery staple");
     await user.click(await wizard.findByRole("button", { name: "Add Internal-R2" }));
     const field = wizard.getByLabelText("Site CA");
     expect(field).toHaveValue(`${own}${second}`);
@@ -1994,7 +1961,6 @@ describe("setup", () => {
     await user.click(wizard.getByRole("button", { name: "Cancel replacing proxy password" }));
     await user.click(wizard.getByRole("button", { name: "Remove proxy password" }));
     expect(wizard.getByText("Removed when you apply")).toBeInTheDocument();
-    await user.type(wizard.getByLabelText("State passphrase"), "correct horse battery staple");
     await user.click(wizard.getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(calls.find((c) => c.key === "POST /api/setup")).toBeDefined());
     expect(calls.find((c) => c.key === "POST /api/setup")?.body).toMatchObject({
@@ -2043,7 +2009,6 @@ describe("setup", () => {
     await expect(wizard.findByText(/charts.example is not in the form host=/u)).resolves.toBeInTheDocument();
     await user.type(mirrors, "=https://charts.example.org/jetstack");
     expect(wizard.queryByText(/is not in the form host=/u)).not.toBeInTheDocument();
-    await user.type(wizard.getByLabelText("State passphrase"), "correct horse battery staple");
     await user.click(wizard.getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(calls.find((c) => c.key === "POST /api/setup")).toBeDefined());
     expect(calls.find((c) => c.key === "POST /api/setup")?.body).toMatchObject({
@@ -2121,12 +2086,11 @@ describe("setup", () => {
     expect(choice).toBeChecked();
     expect(calls.map((c) => c.key)).not.toContain("POST /api/setup");
 
-    await user.type(wizard.getByLabelText("State passphrase"), "correct horse battery staple");
     await user.click(wizard.getByRole("button", { name: "Apply" }));
     await waitFor(() =>
       expect(calls.find((c) => c.key === "POST /api/setup")?.body).toMatchObject({
         settings: { etcdRestore: true },
-        passphrase: "correct horse battery staple",
+        passphrase: "",
       }),
     );
   });
@@ -2166,7 +2130,7 @@ describe("setup", () => {
     ).toHaveAttribute("aria-current", "page");
   });
 
-  it("asks for the earlier run's passphrase once when its state is still there", async () => {
+  it("asks for the passphrase once when the state needs one", async () => {
     fakeServer({
       ...administrator,
       ...oneNode,
@@ -2176,6 +2140,7 @@ describe("setup", () => {
           ready: false,
           allowed: true,
           resumes: true,
+          passphrase: true,
           settings: settings(form),
           job: {
             user: "root@pam",
@@ -2196,7 +2161,6 @@ describe("setup", () => {
     await user.click(step);
     const passphrase = screen.getByLabelText("State passphrase");
     expect(passphrase).toHaveAttribute("autocomplete", "current-password");
-    expect(passphrase).toHaveAccessibleDescription(/passphrase of the earlier run/u);
     expect(screen.queryByLabelText("Repeat passphrase")).not.toBeInTheDocument();
   });
 

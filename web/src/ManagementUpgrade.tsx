@@ -3,7 +3,7 @@ import { useState, type JSX } from "react";
 import { api } from "./api";
 import { ApplyDialog } from "./Setup";
 import type { ManagementAutomatic, ManagementUpgrade, SetupStatus } from "./types";
-import { Dialog, ErrorBox, Field, errorMessage, passphraseShort } from "./ui";
+import { Dialog, ErrorBox, Field, errorMessage, passphraseShort, useStatePassphrase } from "./ui";
 
 // The module's names for the management cluster's components, in words.
 const componentNames: Record<string, string> = {
@@ -186,7 +186,8 @@ function SwitchOn({
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const short = passphraseShort(passphrase);
+  const ask = useStatePassphrase();
+  const short = ask && passphraseShort(passphrase);
   const submit = async (): Promise<void> => {
     if (short) {
       return;
@@ -221,22 +222,24 @@ function SwitchOn({
     >
       <p>Upgrades after each Kubehenge upgrade, at {when}.</p>
       <p className="warning">
-        Stores the state passphrase and creates the Proxmox VE user <code>{user}</code> with Administrator on{" "}
-        <code>/</code>.
+        {ask ? "Stores the state passphrase and creates" : "Creates"} the Proxmox VE user <code>{user}</code> with
+        Administrator on <code>/</code>.
       </p>
       <p className="warning">Whoever takes over the appliance then controls the management cluster and Proxmox VE.</p>
-      <p>Switching off deletes the passphrase, the user and its token.</p>
-      <Field label="State passphrase">
-        {(id) => (
-          <input
-            id={id}
-            type="password"
-            autoComplete="current-password"
-            value={passphrase}
-            onChange={(e) => setPassphrase(e.target.value)}
-          />
-        )}
-      </Field>
+      <p>Switching off deletes {ask ? "the passphrase, " : ""}the user and its token.</p>
+      {ask && (
+        <Field label="State passphrase">
+          {(id) => (
+            <input
+              id={id}
+              type="password"
+              autoComplete="current-password"
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+            />
+          )}
+        </Field>
+      )}
       <ErrorBox message={error} />
     </Dialog>
   );

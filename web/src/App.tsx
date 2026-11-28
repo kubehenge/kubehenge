@@ -8,7 +8,7 @@ import { RoutePage, routeAt } from "./Pages";
 import { Link, usePath } from "./router";
 import { SignIn } from "./SignIn";
 import type { Session, SetupStatus } from "./types";
-import { ErrorBoundary, Skeleton, errorMessage } from "./ui";
+import { ErrorBoundary, Skeleton, StatePassphrase, errorMessage } from "./ui";
 
 const mibPerGiB = 1024;
 
@@ -237,7 +237,11 @@ function Shell({
     </Console>
   );
   // The fleet is read once the appliance is set up, for every page alike.
-  return <FleetProvider reads={needsSetup === false}>{frame}</FleetProvider>;
+  return (
+    <StatePassphrase value={setup?.passphrase === true}>
+      <FleetProvider reads={needsSetup === false}>{frame}</FleetProvider>
+    </StatePassphrase>
+  );
 }
 
 interface Expiry {

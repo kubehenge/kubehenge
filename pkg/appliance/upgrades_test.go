@@ -103,6 +103,7 @@ func TestCheckPassphrase(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(a.Dir, "management", "terraform.tfstate"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	requirePassphrase(t, a)
 	if err := a.CheckPassphrase(context.Background(), "correct horse battery staple"); err != nil {
 		t.Fatal(err)
 	}
@@ -144,6 +145,7 @@ func TestUnattendedKeptAndForgotten(t *testing.T) {
 	if a.Current() != nil {
 		t.Fatal("a job started without the opt-in")
 	}
+	requirePassphrase(t, a)
 	if err := a.KeepUnattended(Unattended{Passphrase: "correct horse battery staple", Token: upgraderUser + "=0f1e2d3c"}); err == nil {
 		t.Fatal("kept a token without its name")
 	}

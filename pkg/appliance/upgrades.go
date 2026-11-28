@@ -97,9 +97,10 @@ var (
 )
 
 // Unattended is what the appliance keeps, only when an administrator chose so, to apply the
-// management cluster with nobody signed in: the state passphrase, which no derived key can stand in
-// for (OpenTofu derives a new key for every state it writes), and an API token of a Proxmox VE user
-// of its own, as user@realm!name=secret. Both are kept sealed.
+// management cluster with nobody signed in: an API token of a Proxmox VE user of its own, as
+// user@realm!name=secret, and, where the state requires a passphrase, that passphrase, which no
+// derived key can stand in for (OpenTofu derives a new key for every state it writes). Both are kept
+// sealed. Where the appliance keeps the state's key, the runs use that and the passphrase is empty.
 type Unattended struct {
 	Passphrase string
 	Token      string
@@ -144,9 +145,12 @@ var unattendedSealing = []byte("kubehenge unattended upgrades")
 const sealKeySize = 32
 
 // KeepUnattended keeps what an unattended apply needs, sealed with a new key. The caller has
-// checked the passphrase against the state (CheckPassphrase) and made the token.
+// checked the passphrase against the state (CheckPassphrase) and made the token. The passphrase is
+// kept only where the state requires one: otherwise the state's kept key is the one copy.
 func (a *Appliance) KeepUnattended(u Unattended) error {
-	if err := ValidPassphrase(u.Passphrase); err != nil {
+	if !a.PassphraseRequired() {
+		u.Passphrase = ""
+	} else if err := ValidPassphrase(u.Passphrase); err != nil {
 		return err
 	}
 	id, secret, ok := strings.Cut(u.Token, "=")
@@ -317,6 +321,11 @@ func (a *Appliance) ApplyUnattended(ready func(ctx context.Context, kubeconfig [
 		if s == nil || !a.Ready() {
 			return errors.New("there is no management cluster to upgrade")
 		}
+		// Inside the run, so that a kept passphrase that no longer opens the state leaves a failed run.
+		key, err := a.statePassphrase(ctx, u.Passphrase)
+		if err != nil {
+			return err
+		}
 		if err := s.ValidateAgainst(s); err != nil {
 			return err
 		}
@@ -333,7 +342,7 @@ func (a *Appliance) ApplyUnattended(ready func(ctx context.Context, kubeconfig [
 			from = last.Release
 		}
 		j.Add(fmt.Sprintf("Upgrading the management cluster automatically, from what %s applied to what %s carries", from, a.Release))
-		kubeconfig, err := a.run(ctx, j, s, u.Passphrase, &pve.Ticket{Username: user, Token: u.Token, Issued: time.Now()})
+		kubeconfig, err := a.run(ctx, j, s, key, &pve.Ticket{Username: user, Token: u.Token, Issued: time.Now()})
 		if err != nil {
 			return err
 		}

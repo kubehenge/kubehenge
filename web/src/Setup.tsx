@@ -76,6 +76,7 @@ import {
   weekdays,
   Skeleton,
   ReadError,
+  useStatePassphrase,
 } from "./ui";
 import { vmIDRangeOf, vmIDRangeProblem, vmIDRangeVariable } from "./VmidRange";
 
@@ -86,8 +87,6 @@ const highAvailability = 3;
 const largestCluster = 5;
 const nodeCounts = new Set<number>([1, highAvailability, largestCluster]);
 const msPerMinute = 60_000;
-
-const setWhenCreated = "Set when the management cluster was created";
 
 // Within this many pixels of its end, the log counts as read to the end.
 const scrollSlack = 4;
@@ -178,7 +177,6 @@ export interface SetupForm {
   headlampSignIn: boolean;
   headlampActions: boolean;
   passphrase: string;
-  confirm: string;
 }
 
 // When the refresh runs unless the settings say otherwise, as the module has it.
@@ -609,7 +607,6 @@ export function formOf(saved: ManagementSettings = unsaved): SetupForm {
     headlampSignIn: saved.headlampSignIn === true,
     headlampActions: saved.headlampActions === true,
     passphrase: "",
-    confirm: "",
   };
 }
 
@@ -652,12 +649,11 @@ export type SetupField =
   | "refreshGateway"
   | "refreshDNS"
   | "extraNamespaces"
-  | "passphrase"
-  | "confirm";
+  | "passphrase";
 
 // The first run's steps, in order. The Administration page shows them all at once, each a section.
-const setupSteps = ["Placement", "Network", "Clusters", "Services", "Passphrase"] as const;
-type SetupStep = (typeof setupSteps)[number];
+const allSetupSteps = ["Placement", "Network", "Clusters", "Services", "Passphrase"] as const;
+type SetupStep = (typeof allSetupSteps)[number];
 
 const stepFields: Record<SetupStep, SetupField[]> = {
   Placement: ["nodes", "vmDatastore", "imageDatastore", "bootstrapDatastore"],
@@ -691,10 +687,10 @@ const stepFields: Record<SetupStep, SetupField[]> = {
   ],
   Clusters: ["workload", "refreshVLAN", "refreshAddress", "refreshGateway", "refreshDNS", "extraNamespaces"],
   Services: ["clusterOIDC", "backupTargets"],
-  Passphrase: ["passphrase", "confirm"],
+  Passphrase: ["passphrase"],
 };
 
-const stepOf = (k: SetupField): SetupStep => setupSteps.find((s) => stepFields[s].includes(k)) ?? "Placement";
+const stepOf = (k: SetupField): SetupStep => allSetupSteps.find((s) => stepFields[s].includes(k)) ?? "Placement";
 
 const advancedFields: SetupField[] = ["podSubnets", "serviceSubnets"];
 
@@ -791,12 +787,12 @@ function nodeNetwork(addresses: string[], gateway: Address | undefined, family: 
   return first ? { ...first, taken } : wrongCount;
 }
 
-// setupFieldProblems says, by field, what keeps the settings from being applied. The first run
-// asks for the passphrase twice. Later runs open the state with the one given then. A management
-// cluster that exists (was) keeps its nodes' addresses, as the appliance insists.
+// setupFieldProblems says, by field, what keeps the settings from being applied. The passphrase is
+// asked only where the state needs one (asks). A management cluster that exists (was) keeps its
+// nodes' addresses, as the appliance insists.
 export function setupFieldProblems(
   f: SetupForm,
-  firstRun = true,
+  asks = false,
   was?: ManagementSettings,
 ): Partial<Record<SetupField, string>> {
   const p: SetupProblems = {
@@ -805,12 +801,10 @@ export function setupFieldProblems(
     ...offerProblems(f),
     ...refreshProblems(f),
   };
-  if (!firstRun && f.passphrase === "") {
+  if (asks && f.passphrase === "") {
     p.passphrase = "Enter the state passphrase.";
-  } else if (passphraseShort(f.passphrase)) {
+  } else if (asks && passphraseShort(f.passphrase)) {
     p.passphrase = `Use at least ${minPassphrase} characters.`;
-  } else if (firstRun && f.passphrase !== f.confirm) {
-    p.confirm = "Passphrases do not match.";
   }
   return p;
 }
@@ -1246,8 +1240,8 @@ function refreshProblems(f: SetupForm): SetupProblems {
   return p;
 }
 
-export function setupProblems(f: SetupForm, firstRun = true): string[] {
-  return Object.values(setupFieldProblems(f, firstRun));
+export function setupProblems(f: SetupForm, asks = false): string[] {
+  return Object.values(setupFieldProblems(f, asks));
 }
 
 // running tells whether the page has to follow a run: one going on, or an apply that succeeded
@@ -1526,8 +1520,8 @@ function ManagedSummary({
   );
 }
 
-// ApplyDialog applies the saved settings again as they are, once given the state passphrase. What
-// it brings goes above the passphrase.
+// ApplyDialog applies the saved settings again as they are, given the state passphrase where one is
+// required. What it brings goes above the passphrase.
 export function ApplyDialog({
   title,
   action,
@@ -1546,7 +1540,8 @@ export function ApplyDialog({
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const short = passphraseShort(passphrase);
+  const ask = useStatePassphrase();
+  const short = ask && passphraseShort(passphrase);
   const apply = async (): Promise<void> => {
     if (short) {
       return;
@@ -1581,17 +1576,19 @@ export function ApplyDialog({
     >
       {children}
       <p className="muted">Takes 10 to 20 minutes.</p>
-      <Field label="State passphrase" hint={setWhenCreated}>
-        {(id) => (
-          <input
-            id={id}
-            type="password"
-            autoComplete="current-password"
-            value={passphrase}
-            onChange={(e) => setPassphrase(e.target.value)}
-          />
-        )}
-      </Field>
+      {ask && (
+        <Field label="State passphrase">
+          {(id) => (
+            <input
+              id={id}
+              type="password"
+              autoComplete="current-password"
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+            />
+          )}
+        </Field>
+      )}
       <ErrorBox message={error} />
     </Dialog>
   );
@@ -1687,15 +1684,6 @@ export function addressRows(s: ManagementSettings): [string, string][] {
 // keepOffered keeps a choice once the choices are known only if it is among them.
 const keepOffered = (value: string, choices: string[], ready: boolean): string =>
   !ready || choices.includes(value) ? value : "";
-
-function passphraseHint(manage: boolean, resumes: boolean | undefined): string {
-  if (manage) {
-    return setWhenCreated;
-  }
-  return resumes === true
-    ? "The passphrase of the earlier run"
-    : `At least ${minPassphrase} characters, and it cannot be recovered`;
-}
 
 type Toggle = (k: "nodes" | "workloadDatastores" | "workloadBridges", v: string, on: boolean) => void;
 
@@ -2472,49 +2460,21 @@ export function AdvancedFields({
   );
 }
 
-function PassphraseFields({
-  form,
-  set,
-  shown,
-  hint,
-  firstRun,
-}: FieldsProps & { hint: string; firstRun: boolean }): JSX.Element {
+// PassphraseFields asks for the passphrase of a state that needs one: one an administrator
+// requires, or one made before the appliance kept the state's key.
+function PassphraseFields({ form, set, shown }: FieldsProps): JSX.Element {
   return (
-    <>
-      <Field
-        label="State passphrase"
-        hint={hint}
-        info={
-          firstRun
-            ? "Encrypts the management cluster's state on the appliance. Every upgrade and repair asks for it."
-            : undefined
-        }
-        error={shown("passphrase")}
-      >
-        {(id) => (
-          <input
-            id={id}
-            type="password"
-            autoComplete={firstRun ? "new-password" : "current-password"}
-            value={form.passphrase}
-            onChange={(e) => set("passphrase", e.target.value)}
-          />
-        )}
-      </Field>
-      {firstRun && (
-        <Field label="Repeat passphrase" error={shown("confirm")}>
-          {(id) => (
-            <input
-              id={id}
-              type="password"
-              autoComplete="new-password"
-              value={form.confirm}
-              onChange={(e) => set("confirm", e.target.value)}
-            />
-          )}
-        </Field>
+    <Field label="State passphrase" error={shown("passphrase")}>
+      {(id) => (
+        <input
+          id={id}
+          type="password"
+          autoComplete="current-password"
+          value={form.passphrase}
+          onChange={(e) => set("passphrase", e.target.value)}
+        />
       )}
-    </>
+    </Field>
   );
 }
 
@@ -2624,11 +2584,12 @@ function SetupWizard({
       touch("workload");
     }
   };
-  // A new passphrase is chosen, and repeated, only when no earlier run left a state to open.
-  const firstRun = !manage && status.resumes !== true;
+  // The passphrase is asked only where the state needs one.
+  const asks = status.passphrase === true;
+  const setupSteps: readonly SetupStep[] = asks ? allSetupSteps : allSetupSteps.filter((s) => s !== "Passphrase");
   const zoneProblem = useTimeZoneProblem(effective.timeZone);
   const byField = {
-    ...setupFieldProblems(effective, firstRun, fixed),
+    ...setupFieldProblems(effective, asks, fixed),
     ...gone,
     ...(zoneProblem === undefined ? {} : { timeZone: zoneProblem }),
   };
@@ -2659,7 +2620,7 @@ function SetupWizard({
     setError(undefined);
     try {
       await api.setup(settings(effective), form.passphrase);
-      setForm((f) => ({ ...f, passphrase: "", confirm: "" }));
+      setForm((f) => ({ ...f, passphrase: "" }));
       onStarted();
     } catch (err) {
       setError(errorMessage(err));
@@ -2712,8 +2673,6 @@ function SetupWizard({
     clusterStorages,
     clusterBridges,
     attempted: attempted.size > 0,
-    passphraseHint: passphraseHint(manage, status.resumes),
-    firstRun,
     advancedOpen,
     rangeWarnings: rangeWarningsOf(findings),
     siteRoots: findings?.missingRoots ?? [],
@@ -3222,8 +3181,6 @@ function setupFields({
   clusterStorages: Offered[];
   clusterBridges: Offered[];
   attempted: boolean;
-  passphraseHint: string;
-  firstRun: boolean;
   advancedOpen: boolean;
   rangeWarnings: string[];
   siteRoots: MissingRoot[];
@@ -3441,9 +3398,7 @@ function setupFields({
         <EtcdRestoreChoice form={form} set={set} onAsk={more.handleAskRestore} />
       </>
     ),
-    Passphrase: (
-      <PassphraseFields form={form} set={set} shown={shown} hint={more.passphraseHint} firstRun={more.firstRun} />
-    ),
+    Passphrase: <PassphraseFields form={form} set={set} shown={shown} />,
   };
 }
 

@@ -2,15 +2,25 @@ import type { JSX } from "react";
 
 import { ApplianceUpgrades } from "./ApplianceUpgrades";
 import { Credentials } from "./Credentials";
+import { RequirePassphrase } from "./StatePassphrase";
 import type { SetupStatus } from "./types";
 
 /** AppliancePage is Administration's page of the appliance itself. */
-export function AppliancePage({ status, running }: { status: SetupStatus; running: boolean }): JSX.Element {
+export function AppliancePage({
+  status,
+  running,
+  onChanged,
+}: {
+  status: SetupStatus;
+  running: boolean;
+  onChanged: () => void;
+}): JSX.Element {
   return (
     <>
       <section className="panel columns">
         <ApplianceUpgrades />
         <Credentials running={running} />
+        <RequirePassphrase status={status} onChanged={onChanged} />
       </section>
       {status.proxmoxInsecure === true && (
         <section className="panel">

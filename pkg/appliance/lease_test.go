@@ -108,6 +108,7 @@ func TestApplyRefusesAnOlderStateUntilTakenOver(t *testing.T) {
 		t.Errorf("after a restart: %+v", j)
 	}
 
+	requirePassphrase(t, a)
 	if err := a.TakeOver(t.Context(), "the wrong passphrase entirely"); !errors.Is(err, ErrPassphrase) {
 		t.Errorf("take over with the wrong passphrase: %v", err)
 	}

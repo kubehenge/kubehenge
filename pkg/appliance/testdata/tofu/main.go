@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -61,11 +62,16 @@ func waitForInterrupt(dir string) int {
 	}
 }
 
+var passphrase = regexp.MustCompile(`passphrase = "([^"]+)"`)
+
 const talosconfig = "context: management\ncontexts:\n  management:\n    endpoints: [10.0.0.11, 10.0.0.12]\n"
 
-// opens reports whether the state opens, which it does only with the passphrase the tests use.
-func opens() bool {
-	if !strings.Contains(os.Getenv("TF_ENCRYPTION"), "correct horse battery staple") {
+// opens reports whether the state opens, which it does only with the passphrase the tests use, or
+// with the key the first apply wrote it with, recorded in <dir>/../state-key.
+func opens(dir string) bool {
+	encryption := os.Getenv("TF_ENCRYPTION")
+	key, _ := os.ReadFile(filepath.Join(dir, "..", "state-key"))
+	if !strings.Contains(encryption, "correct horse battery staple") && (len(key) == 0 || !strings.Contains(encryption, string(key))) {
 		fmt.Fprintln(os.Stderr, "Error: decryption failed")
 		return false
 	}
@@ -96,6 +102,11 @@ func run(dir string, args []string) int {
 		// once it ends.
 		if err := os.WriteFile(filepath.Join(dir, "..", "state-pushed"), nil, 0o600); err != nil {
 			return 3
+		}
+		if _, err := os.Stat(filepath.Join(dir, "..", "state-key")); err != nil {
+			if m := passphrase.FindStringSubmatch(os.Getenv("TF_ENCRYPTION")); m != nil {
+				_ = os.WriteFile(filepath.Join(dir, "..", "state-key"), []byte(m[1]), 0o600)
+			}
 		}
 		if err := os.WriteFile(filepath.Join(dir, "..", "mid-apply"), nil, 0o600); err != nil {
 			return 3
@@ -195,7 +206,7 @@ func run(dir string, args []string) int {
 		// The state an apply has written holds the module's client configuration, or what a test
 		// left in <dir>/../pulled-state.json.
 		if _, err := os.Stat(filepath.Join(dir, "..", "state-pushed")); err == nil && len(args) > 1 && args[1] == "pull" {
-			if !opens() {
+			if !opens(dir) {
 				return 1
 			}
 			pulled, err := os.ReadFile(filepath.Join(dir, "..", "pulled-state.json"))
@@ -208,7 +219,7 @@ func run(dir string, args []string) int {
 			fmt.Print(string(pulled))
 		}
 	case "output":
-		if !opens() {
+		if !opens(dir) {
 			return 1
 		}
 		if _, err := os.Stat(filepath.Join(dir, "..", "mid-apply")); err == nil {

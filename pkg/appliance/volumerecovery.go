@@ -41,6 +41,10 @@ func (a *Appliance) RecoverManagement(passphrase string, ticket *pve.Ticket, rea
 	if keys == nil {
 		return errors.New("this appliance holds no backups of its own: recreate the management cluster from a backup target's snapshot")
 	}
+	passphrase, err := a.statePassphrase(context.Background(), passphrase)
+	if err != nil {
+		return err
+	}
 	sealed, err := base64.StdEncoding.DecodeString(keys.Sealed)
 	if err != nil {
 		return fmt.Errorf("the snapshots' sealed key: %w", err)
@@ -51,7 +55,7 @@ func (a *Appliance) RecoverManagement(passphrase string, ticket *pve.Ticket, rea
 	}
 	// Read before the run, which the state's own reads wait for. The machine secrets, and so the
 	// nodes' addresses, stay the same across the apply.
-	admin, err := a.Credential(context.Background(), passphrase, talosconfigName)
+	admin, err := a.credential(context.Background(), passphrase, talosconfigName)
 	if err != nil {
 		return err
 	}

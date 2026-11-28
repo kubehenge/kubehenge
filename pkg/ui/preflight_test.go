@@ -106,8 +106,9 @@ func TestSetupWarningsDoNotStopTheRun(t *testing.T) {
 	if len(f.Errors) != 0 || !strings.Contains(strings.Join(f.Warnings, "\n"), "Writes fail once it fills") {
 		t.Fatalf("findings = %+v, want the thin storage as a warning only", f)
 	}
-	// A passphrase that is too short is refused by the run itself, after the pre-flight passed, which
-	// shows the warning did not stop it and starts nothing.
+	// A passphrase that does not open the required one is refused by the run itself, after the
+	// pre-flight passed, which shows the warning did not stop it and starts nothing.
+	requireStatePassphrase(t, h.server.Appliance)
 	rec := b.do("POST", "/api/setup", strings.Replace(preflightApply, "correct horse battery staple", "short", 1))
 	expect(t, rec, http.StatusUnprocessableEntity)
 	if strings.Contains(rec.Body.String(), "of disks.") || !strings.Contains(rec.Body.String(), "assphrase") {

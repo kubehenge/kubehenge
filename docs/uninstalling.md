@@ -26,7 +26,7 @@ Deleting the cluster that runs Rancher takes every cluster registered there out 
 
 ### In the appliance
 
-On the Administration page, **Remove Kubehenge** takes the state passphrase and the word `remove`. It refuses while any cluster exists or a run of the management cluster is going on. A wrong passphrase stops it before anything is deleted. It then:
+On the Administration page, **Remove Kubehenge** takes the word `remove`, and the state passphrase where one is required. It refuses while any cluster exists or a run of the management cluster is going on. A wrong passphrase stops it before anything is deleted. It then:
 
 - deletes the VM templates in the template pool, `kubehenge-templates`.
 - switches automatic upgrades of the management cluster off ([upgrading.md](upgrading.md#automatically-after-kubehenge)). It deletes what the appliance kept for them and the user `kubehenge-upgrader@pve` with its token.
@@ -38,7 +38,7 @@ A removal that stopped part way can be run again. When the management cluster no
 
 ### After removal in the appliance
 
-The page follows the log. The appliance stays and returns to its first run with the last settings filled in. The state is deleted, so the next setup chooses a new passphrase. Removal needs the same [privileges](install.md#who-may-set-it-up) on `/` as the setup.
+The page follows the log. The appliance stays and returns to its first run with the last settings filled in. The state is deleted. Its key stays, since the backups kept are sealed with it. Removal needs the same [privileges](install.md#who-may-set-it-up) on `/` as the setup.
 
 ### With Terraform/OpenTofu
 
@@ -132,7 +132,7 @@ This takes the line out of Proxmox VE's page template and removes the entry's sc
 These stay on Proxmox VE after removal:
 
 - **The Debian container template** the installer downloaded, on the storage it named. `pveam list <storage>` shows it, `pveam remove` deletes it.
-- **Backups of the appliance** in your backup storages. They hold the management cluster's state, encrypted with the state passphrase.
+- **Backups of the appliance** in your backup storages. They hold the management cluster's state, encrypted with the state's key, which they hold too.
 - **API tokens you made** for Terraform/OpenTofu or for `kubehenge template create`. Remove them with `pveum user token remove`.
 - **ACLs and roles you added** to share clusters, on the workload pool, storages and bridges.
 - **Templates outside the template pool**, if you created any with another `--pool`.

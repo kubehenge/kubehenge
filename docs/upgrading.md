@@ -95,7 +95,7 @@ Each Kubehenge release pins the versions of Talos, Kubernetes, Cluster API, ever
 
 ### In the appliance
 
-On the Administration page, the **Management cluster** section shows the settings of the last run. **Apply again…** asks for the state passphrase given when the management cluster was created and applies them as they are. **Edit settings** opens them for changes first, applied with the same passphrase. Applying again:
+On the Administration page, the **Management cluster** section shows the settings of the last run. **Apply again…** applies them as they are, with the state's key the appliance keeps. **Edit settings** opens them for changes first. Where a passphrase is [required](install.md#requiring-a-passphrase), both ask for it. Applying again:
 
 - upgrades Talos node by node, each drained first when there are several
 - upgrades Kubernetes component by component
@@ -112,7 +112,7 @@ Applying again runs with your Proxmox VE session like the first run and takes ab
 
 The section's **Version** is the Kubehenge release of the last apply. Once Kubehenge has been upgraded past it, the top of the Administration page says `Management cluster upgrade: 0.1.0 to 0.2.0`.
 
-**Upgrade…** beside it lists the components whose versions change, from the old to the new (Kubehenge's ClusterClasses and controller by its chart's version). It then applies the settings as they are with the state passphrase, as **Apply again…** does.
+**Upgrade…** beside it lists the components whose versions change, from the old to the new (Kubehenge's ClusterClasses and controller by its chart's version). It then applies the settings as they are, as **Apply again…** does.
 
 #### What a running management cluster keeps
 
@@ -143,7 +143,7 @@ A run that fails stays on the page with its error and log. It is tried again in 
 
 Nobody is signed in when the run starts. Switching it on has the appliance keep what an apply needs, which it keeps at no other time:
 
-- **the state passphrase**, asked for and checked against the state when switching it on.
+- **the state passphrase**, only where one is [required](install.md#requiring-a-passphrase), checked against the state when switching it on. Otherwise the run uses the state's key the appliance keeps.
 - **an API token of a Proxmox VE user of its own**, `kubehenge-upgrader@pve`, with the Administrator role on `/`.
   - An apply creates users, roles, ACLs, pools and VMs, as the first run does.
   - Switching it on creates the user and its token with your session. Because the token holds `Sys.Console` on `/`, you need it too, besides the [setup privileges](install.md#who-may-set-it-up).

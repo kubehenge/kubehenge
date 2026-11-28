@@ -29,7 +29,7 @@ export function AdminPage({
 }): JSX.Element {
   switch (view) {
     case "appliance": {
-      return <AppliancePage status={status} running={running} />;
+      return <AppliancePage status={status} running={running} onChanged={onSetupChanged} />;
     }
     case "backups": {
       return (

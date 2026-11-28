@@ -234,6 +234,7 @@ func TestManagementAutomaticUpgradesOptIn(t *testing.T) {
 	h.accounts.mu.Lock()
 	h.accounts.grants["admin@pve"]["/"] = append(h.accounts.grants["admin@pve"]["/"], "Sys.Console")
 	h.accounts.mu.Unlock()
+	requireStatePassphrase(t, a)
 	if got := switchOn(b, "the wrong passphrase entirely"); got != http.StatusForbidden {
 		t.Fatalf("switched on with a wrong passphrase: %d", got)
 	}
@@ -350,6 +351,7 @@ func TestFailedAutomaticManagementUpgradeWaitsADay(t *testing.T) {
 	upgradeHour(t, up, 4)
 	upgraded(t, a, "0.2.0")
 	// The state no longer opens with what was kept, as after the passphrase was changed.
+	requireStatePassphrase(t, a)
 	if err := a.KeepUnattended(appliance.Unattended{Passphrase: "a passphrase of the past", Token: upgraderUser + "!apply=5ec2e7"}); err != nil {
 		t.Fatal(err)
 	}
@@ -419,6 +421,7 @@ func TestTakingTheManagementClusterOver(t *testing.T) {
 	d := h.browser()
 	d.signIn("dev@pve")
 	expect(t, d.do("POST", "/api/setup/take-over", `{"passphrase":"`+statePassphrase+`"}`), http.StatusForbidden)
+	requireStatePassphrase(t, a)
 	expect(t, b.do("POST", "/api/setup/take-over", `{"passphrase":"not the passphrase of this state"}`), http.StatusForbidden)
 	expect(t, b.do("POST", "/api/setup/take-over", `{"passphrase":"`+statePassphrase+`"}`), http.StatusNoContent)
 	if got := b.do("GET", "/api/setup", "").Body.String(); strings.Contains(got, "stale") {

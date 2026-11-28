@@ -46,7 +46,14 @@ describe("the management cluster behind the appliance", () => {
   it("says so and upgrades it with the passphrase, saying what changes", async () => {
     window.history.replaceState(null, "", "/administration");
     const calls = fakeServer({
-      ...administrationPage({ appliance: true, ready: true, allowed: true, settings: saved, upgrade: behind }),
+      ...administrationPage({
+        appliance: true,
+        ready: true,
+        allowed: true,
+        passphrase: true,
+        settings: saved,
+        upgrade: behind,
+      }),
       "POST /api/setup": {
         status: 202,
         body: { user: "root@pam", kind: "apply", started: new Date().toISOString(), state: "running", log: [] },

@@ -235,6 +235,7 @@ func TestEtcdBackups(t *testing.T) {
 	}
 
 	// A wrong passphrase starts nothing. The right one restores the checked snapshot.
+	requirePassphrase(t, a)
 	if err := a.RestoreEtcd(ctx, list[1].Name, "wrong passphrase, long enough", ticket()); !errors.Is(err, ErrPassphrase) {
 		t.Fatalf("wrong passphrase: %v", err)
 	}

@@ -181,7 +181,7 @@ func (s *Server) keepUnattended(w http.ResponseWriter, r *http.Request, u user) 
 		writeError(w, http.StatusInternalServerError, "automatic upgrades could not be switched on: "+err.Error())
 		return
 	}
-	s.Log.WarnContext(r.Context(), "automatic upgrades of the management cluster switched on: the appliance keeps the state passphrase and an administrator's API token",
+	s.Log.WarnContext(r.Context(), "automatic upgrades of the management cluster switched on: the appliance keeps an administrator's API token",
 		"user", u.ticket.Username, "proxmoxUser", upgraderUser)
 	up.wake()
 	writeJSON(w, http.StatusOK, s.managementAutomatic())

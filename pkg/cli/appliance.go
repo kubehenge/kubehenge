@@ -66,7 +66,7 @@ Sign in first, in the appliance with
 	}
 	cmd.AddCommand(o.healthCommand(), o.upgradesCommand(), o.upgradeCommand(), o.etcdBackupsCommand(), o.notificationsCommand(),
 		o.activityCommand(), o.takeOverCommand(), o.readyForRebootCommand(), o.exportCommand(), o.importCommand(),
-		o.settingsCommand(), o.certificateCommand())
+		o.settingsCommand(), o.certificateCommand(), o.statePassphraseCommand())
 	return cmd
 }
 
@@ -314,8 +314,8 @@ func (o *applianceOptions) setUpBackupsCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "set-up",
 		Short: "Back the management cluster's etcd up to a backup target on a schedule",
-		Long: `Back the management cluster's etcd up to a backup target on a schedule. The state passphrase
-comes from --passphrase-file or KUBEHENGE_PASSPHRASE. The target's secret access key comes from
+		Long: `Back the management cluster's etcd up to a backup target on a schedule. A passphrase the
+appliance requires comes from --passphrase-file or KUBEHENGE_PASSPHRASE. The target's secret access key comes from
 --secret-access-key-file or KUBEHENGE_SECRET_ACCESS_KEY. Without one, the stored key is kept.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -348,7 +348,7 @@ comes from --passphrase-file or KUBEHENGE_PASSPHRASE. The target's secret access
 	return cmd
 }
 
-const passphraseFileUsage = "file holding the state passphrase, else KUBEHENGE_PASSPHRASE holds it"
+const passphraseFileUsage = "file holding the state passphrase, where the appliance requires one, else KUBEHENGE_PASSPHRASE holds it"
 
 func (o *applianceOptions) printBackupsAnswer(cmd *cobra.Command, raw []byte) error {
 	if o.json {
@@ -467,7 +467,7 @@ func (o *applianceOptions) restoreEtcdCommand() *cobra.Command {
 		short: "Restore the management cluster's etcd from a snapshot, losing every change since",
 		long: `Restore the management cluster's etcd from a snapshot. It wipes etcd on every control-plane
 node and restores the snapshot. Every cluster and every change made since goes back to how it was
-then. The state passphrase comes from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
+then. A passphrase the appliance requires comes from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
 		action: "restore", started: "Restoring from ", done: "Restored from ",
 	})
 }
@@ -481,7 +481,7 @@ func (o *applianceOptions) takeOverCommand() *cobra.Command {
 		Long: `Make this appliance's state the one the management cluster follows. An apply is refused when
 an apply this state does not know changed the cluster since, as after a snapshot rollback, an older
 backup or a second appliance. Once taken over, the next apply undoes those changes. It needs
---overwrite, and the state passphrase from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
+--overwrite. A passphrase the appliance requires comes from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if !overwrite {
@@ -501,6 +501,52 @@ backup or a second appliance. Once taken over, the next apply undoes those chang
 	}
 	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "undo the newer changes at the next apply")
 	cmd.Flags().StringVar(&passphraseFile, "passphrase-file", "", passphraseFileUsage)
+	return cmd
+}
+
+func (o *applianceOptions) statePassphraseCommand() *cobra.Command {
+	var passphraseFile, newFile string
+	var require, off bool
+	cmd := &cobra.Command{
+		Use:   "state-passphrase",
+		Short: "Require a passphrase to open the management cluster's state, or stop requiring one",
+		Long: `Require a passphrase to open the management cluster's state, or stop requiring one. The appliance
+keeps the state's key by default, and the signed-in user's privileges are the only check. With
+--require, every action that opens the state asks for the new passphrase, from --new-passphrase-file or
+KUBEHENGE_NEW_PASSPHRASE. Automatic upgrades then store it. With --off, the appliance keeps the key
+again. The passphrase required so far comes from --passphrase-file or KUBEHENGE_PASSPHRASE.`,
+		Args: noArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if require == off {
+				return errors.New("give --require or --off")
+			}
+			passphrase, err := secretFrom(passphraseFile, "KUBEHENGE_PASSPHRASE")
+			if err != nil {
+				return err
+			}
+			next := ""
+			if require {
+				if next, err = secretFrom(newFile, "KUBEHENGE_NEW_PASSPHRASE"); err != nil {
+					return err
+				}
+			}
+			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
+				body := map[string]any{"required": require, "passphrase": passphrase, "newPassphrase": next}
+				if _, err := s.call(ctx, http.MethodPut, "/api/setup/state-passphrase", body, nil); err != nil {
+					return err
+				}
+				if require {
+					return say(cmd, "Required. Every action that opens the management cluster's state asks for the passphrase")
+				}
+				return say(cmd, "The appliance keeps the state's key again")
+			})
+		},
+	}
+	f := cmd.Flags()
+	f.BoolVar(&require, "require", false, "require a new passphrase")
+	f.BoolVar(&off, "off", false, "stop requiring a passphrase")
+	f.StringVar(&passphraseFile, "passphrase-file", "", passphraseFileUsage)
+	f.StringVar(&newFile, "new-passphrase-file", "", "file holding the new passphrase, else KUBEHENGE_NEW_PASSPHRASE holds it")
 	return cmd
 }
 
