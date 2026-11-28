@@ -12,8 +12,7 @@ export function RequirePassphrase({ status, onChanged }: { status: SetupStatus; 
     <div className="box">
       <h3>State passphrase</h3>
       <label className="check">
-        <input type="checkbox" checked={on} onChange={() => setAsking(true)} /> Require a passphrase to open the
-        management cluster's state. Automatic upgrades then store it.
+        <input type="checkbox" checked={on} onChange={() => setAsking(true)} /> Require a passphrase
       </label>
       {asking && (
         <SwitchDialog

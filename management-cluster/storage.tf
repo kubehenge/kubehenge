@@ -54,6 +54,7 @@ resource "proxmox_virtual_environment_role" "management_csi_protection" {
 resource "proxmox_virtual_environment_user" "management_csi" {
   user_id = "${var.cluster_name}-management-csi@pve"
   comment = "The CSI plugin in Kubehenge management cluster ${var.cluster_name}; signs in with its API token only"
+  groups  = [proxmox_virtual_environment_group.tokens.group_id]
 }
 
 resource "proxmox_user_token" "management_csi" {
@@ -96,6 +97,7 @@ resource "proxmox_acl" "management_csi_backups" {
 resource "proxmox_virtual_environment_user" "management_zones" {
   user_id = "${var.cluster_name}-management-zones@pve"
   comment = "Reads where Kubehenge management cluster ${var.cluster_name}'s VMs run; signs in with its API token only"
+  groups  = [proxmox_virtual_environment_group.tokens.group_id]
 }
 
 resource "proxmox_user_token" "management_zones" {

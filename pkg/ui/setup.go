@@ -507,7 +507,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request, u user) {
 		s.proxmoxError(w, r, err)
 		return
 	}
-	err = a.Apply(&req.Settings, req.Passphrase, ticket, s.applied(ticket)) //nolint:contextcheck // the job outlives the request on purpose
+	err = a.Apply(&req.Settings, req.Passphrase, ticket, s.applied(ticket, req.Passphrase)) //nolint:contextcheck // the job outlives the request on purpose
 	if faults, ok := errors.AsType[appliance.SiteChainError](err); ok {
 		writeJSON(w, http.StatusUnprocessableEntity, setupRefusal{Error: err.Error(), MissingRoots: faults.Roots, RequestID: w.Header().Get(requestIDHeader)})
 		return
@@ -580,20 +580,24 @@ const haPrivilege = "Sys.Console"
 const restorePrivilege = "VM.GuestAgent.Unrestricted"
 
 // applied is what follows a successful apply: the interface switches to the management cluster,
-// and when the apply switched Proxmox VE HA off, the clusters leave HA.
-func (s *Server) applied(ticket *pve.Ticket) func(ctx context.Context, kubeconfig []byte) error {
+// when the apply switched Proxmox VE HA off, the clusters leave HA, and automatic upgrades of the
+// management cluster are switched on unless switched off.
+func (s *Server) applied(ticket *pve.Ticket, passphrase string) func(ctx context.Context, kubeconfig []byte) error {
 	return func(ctx context.Context, kubeconfig []byte) error {
 		if err := s.useKubeconfig(kubeconfig); err != nil {
 			return err
 		}
 		a := s.Appliance
-		if saved := a.SavedSettings(); saved == nil || !a.ReleasesHA(saved) {
-			return nil
+		if saved := a.SavedSettings(); saved != nil && a.ReleasesHA(saved) {
+			if err := s.releaseHA(ctx, ticket); err != nil {
+				return err
+			}
+			if err := a.HAReleased(); err != nil {
+				return fmt.Errorf("recording that HA is off: %w", err)
+			}
 		}
-		if err := s.releaseHA(ctx, ticket); err != nil {
-			return err
-		}
-		return a.HAReleased()
+		s.upgradesAfterApply(ctx, ticket, passphrase)
+		return nil
 	}
 }
 

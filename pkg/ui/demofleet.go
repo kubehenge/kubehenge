@@ -1343,8 +1343,12 @@ func (*demoAccounts) RebootVM(context.Context, *pve.Ticket, string, int) error {
 
 func (*demoAccounts) ReleaseHA(context.Context, *pve.Ticket, string) error { return errDemo }
 
-func (*demoAccounts) CreateAdministratorToken(context.Context, *pve.Ticket, string, string, string) (string, error) {
+func (*demoAccounts) CreateUpgrader(context.Context, *pve.Ticket, *pve.Upgrader) (string, error) {
 	return "", errDemo
 }
+
+func (*demoAccounts) GrantUpgrader(context.Context, *pve.Ticket, *pve.Upgrader) error { return errDemo }
+
+func (*demoAccounts) RevokeToken(context.Context, string) error { return errDemo }
 
 func (*demoAccounts) DeleteUser(context.Context, *pve.Ticket, string) error { return errDemo }

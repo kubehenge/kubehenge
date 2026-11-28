@@ -127,7 +127,7 @@ func (s *Server) recreateManagement(w http.ResponseWriter, r *http.Request, u us
 	if !ok {
 		return
 	}
-	err := a.RecreateManagement(r.Context(), r.PathValue("name"), req.Passphrase, ticket, s.applied(ticket))
+	err := a.RecreateManagement(r.Context(), r.PathValue("name"), req.Passphrase, ticket, s.applied(ticket, req.Passphrase))
 	if jobConflict(err) {
 		done(false)
 		writeError(w, http.StatusConflict, err.Error())
@@ -184,7 +184,7 @@ func (s *Server) recoverManagement(w http.ResponseWriter, r *http.Request, u use
 	if !ok {
 		return
 	}
-	err := s.Appliance.RecoverManagement(req.Passphrase, ticket, s.applied(ticket))
+	err := s.Appliance.RecoverManagement(req.Passphrase, ticket, s.applied(ticket, req.Passphrase))
 	if jobConflict(err) {
 		done(false)
 		writeError(w, http.StatusConflict, err.Error())

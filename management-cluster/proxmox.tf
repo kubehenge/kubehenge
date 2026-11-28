@@ -8,6 +8,14 @@ resource "proxmox_virtual_environment_pool" "workload" {
   comment = "Clusters created by Kubehenge management cluster ${var.cluster_name}"
 }
 
+# Every user of the module with an API token is in this group, which grants nothing itself. Kubehenge's
+# appliance gives the user its automatic upgrades act as User.Modify on this group alone: Proxmox VE
+# lets another user read an API token only with that, and an upgrade's plan reads every token here.
+resource "proxmox_virtual_environment_group" "tokens" {
+  group_id = "${var.cluster_name}-tokens"
+  comment  = "Users of Kubehenge management cluster ${var.cluster_name} with API tokens"
+}
+
 resource "proxmox_virtual_environment_pool" "templates" {
   pool_id = var.template_pool
   comment = "VM templates for clusters created by Kubehenge management cluster ${var.cluster_name}"
@@ -76,6 +84,7 @@ resource "proxmox_virtual_environment_role" "cluster_api_network" {
 resource "proxmox_virtual_environment_user" "cluster_api" {
   user_id = "${var.cluster_name}-cluster-api@pve"
   comment = "Cluster API in Kubehenge management cluster ${var.cluster_name}; signs in with its API token only"
+  groups  = [proxmox_virtual_environment_group.tokens.group_id]
 }
 
 # The user has no password and exists only for this token, so the token carries the user's
@@ -224,6 +233,7 @@ resource "proxmox_virtual_environment_role" "provisioner_realm" {
 resource "proxmox_virtual_environment_user" "provisioner" {
   user_id = "${var.cluster_name}-provisioner@pve"
   comment = "Kubehenge's controller in management cluster ${var.cluster_name}; signs in with its API token only"
+  groups  = [proxmox_virtual_environment_group.tokens.group_id]
 }
 
 resource "proxmox_user_token" "provisioner" {
@@ -247,6 +257,7 @@ resource "proxmox_virtual_environment_user" "ha" {
 
   user_id = "${var.cluster_name}-ha@pve"
   comment = "Proxmox VE HA for the clusters of Kubehenge management cluster ${var.cluster_name}; signs in with its API token only"
+  groups  = [proxmox_virtual_environment_group.tokens.group_id]
 }
 
 resource "proxmox_user_token" "ha" {
@@ -282,6 +293,7 @@ resource "proxmox_virtual_environment_user" "etcd_restore" {
 
   user_id = "${var.cluster_name}-etcd-restore@pve"
   comment = "etcd restores for the clusters of Kubehenge management cluster ${var.cluster_name}; signs in with its API token only"
+  groups  = [proxmox_virtual_environment_group.tokens.group_id]
 }
 
 resource "proxmox_user_token" "etcd_restore" {
@@ -388,6 +400,7 @@ resource "proxmox_virtual_environment_user" "template_builder" {
 
   user_id = "${var.cluster_name}-template-builder@pve"
   comment = "VM template builds of Kubehenge management cluster ${var.cluster_name}; signs in with its API token only"
+  groups  = [proxmox_virtual_environment_group.tokens.group_id]
 }
 
 resource "proxmox_user_token" "template_builder" {

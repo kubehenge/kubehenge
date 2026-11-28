@@ -10,7 +10,7 @@ import { StatePassphrase } from "./ui";
 
 const route = "PUT /api/setup/state-passphrase";
 const base: SetupStatus = { appliance: true, ready: true, allowed: true };
-const toggle = /Require a passphrase to open the management cluster's state\. Automatic upgrades then store it\./u;
+const toggle = "Require a passphrase";
 
 describe("requiring a state passphrase", () => {
   it("requires a new passphrase typed twice", async () => {

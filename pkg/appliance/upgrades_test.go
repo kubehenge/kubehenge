@@ -289,3 +289,108 @@ func TestUnattendedApplyWithoutAManagementCluster(t *testing.T) {
 		t.Fatalf("job = %+v", j)
 	}
 }
+
+// The upgrader's own token runs a release that changes no user, role or ACL, and stops before
+// applying one that does. A token made before, with Administrator on /, applies it.
+func TestNarrowUnattendedApplyStopsOnAccessChanges(t *testing.T) {
+	t.Parallel()
+	a, ready := newAppliance(t)
+	if err := a.Apply(settings("pve1"), "correct horse battery staple", ticket(), func(_ context.Context, k []byte) error { ready <- k; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, a)
+	<-ready
+	plan := `{"resource_changes":[{"address":"module.management.proxmox_acl.ha[\"/ Kubehenge-ha\"]","type":"proxmox_acl","change":{"actions":["create"]}}]}`
+	if err := os.WriteFile(filepath.Join(a.Dir, "plan.json"), []byte(plan), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.KeepUnattended(Unattended{Token: upgraderAPI, Narrow: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.UnattendedOn(); got == nil || !got.Narrow {
+		t.Fatalf("UnattendedOn = %+v", got)
+	}
+	if err := a.ApplyUnattended(func(context.Context, []byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if j := waitFor(t, a); j.State != "failed" || j.Error != ErrNeedsAdministrator.Error() {
+		t.Fatalf("job = %+v", j)
+	}
+
+	if err := a.KeepUnattended(Unattended{Token: upgraderAPI}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ApplyUnattended(func(_ context.Context, k []byte) error { ready <- k; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if j := waitFor(t, a); j.State != "succeeded" {
+		t.Fatalf("the Administrator token's run = %+v", j)
+	}
+	<-ready
+	if err := a.MarkUnattendedNarrow(); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.UnattendedOn(); got == nil || !got.Narrow {
+		t.Fatalf("after moving to the narrow roles, UnattendedOn = %+v", got)
+	}
+}
+
+func TestChangesAccess(t *testing.T) {
+	t.Parallel()
+	for plan, want := range map[string]bool{
+		`{"resource_changes":[]}`: false,
+		`{"resource_changes":[{"type":"proxmox_virtual_environment_vm","change":{"actions":["update"]}}]}`:   false,
+		`{"resource_changes":[{"type":"proxmox_virtual_environment_role","change":{"actions":["no-op"]}}]}`:  false,
+		`{"resource_changes":[{"type":"proxmox_virtual_environment_role","change":{"actions":["update"]}}]}`: true,
+		`{"resource_changes":[{"type":"proxmox_user_token","change":{"actions":["delete","create"]}}]}`:      true,
+	} {
+		if got, err := changesAccess([]byte(plan)); err != nil || got != want {
+			t.Errorf("changesAccess(%s) = %v, %v", plan, got, err)
+		}
+	}
+}
+
+// Automatic upgrades are on unless switched off, and a failure to switch them on is kept until
+// the choice is recorded again.
+func TestUnattendedChoice(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	if got := a.UnattendedChoice(); got.Off || got.Failed != "" {
+		t.Fatalf("nothing chosen = %+v", got)
+	}
+	if err := a.ChooseUnattended(UnattendedChoice{Off: true}); err != nil {
+		t.Fatal(err)
+	}
+	restarted := &Appliance{Dir: a.Dir}
+	if got := restarted.UnattendedChoice(); !got.Off {
+		t.Fatalf("after a restart = %+v", got)
+	}
+	if err := a.ChooseUnattended(UnattendedChoice{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(a.Dir, "unattended-choice.json")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("kept the default: %v", err)
+	}
+	if err := a.ChooseUnattended(UnattendedChoice{}); err != nil {
+		t.Fatalf("the default twice: %v", err)
+	}
+}
+
+// Switching off drops the passphrase first, and keeps the token until it is revoked.
+func TestForgetUnattendedPassphrase(t *testing.T) {
+	t.Parallel()
+	a, _ := newAppliance(t)
+	requirePassphrase(t, a)
+	if err := a.KeepUnattended(Unattended{Passphrase: "correct horse battery staple", Token: upgraderAPI}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ForgetUnattendedPassphrase(); err != nil {
+		t.Fatal(err)
+	}
+	if u, err := a.unattended(); err != nil || u.Passphrase != "" || u.Token != upgraderAPI {
+		t.Fatalf("after dropping the passphrase: %+v, %v", u, err)
+	}
+	if got, err := a.UnattendedToken(); err != nil || got != upgraderAPI {
+		t.Fatalf("UnattendedToken = %q, %v", got, err)
+	}
+}

@@ -130,7 +130,7 @@ The [changelog](changelog.md) says which classes a release changes. Apply such a
 
 ### Automatically after Kubehenge
 
-**Management cluster**, under the automatic upgrades in the Kubehenge box, is **Upgrade by hand** by default. Set to **Upgrade automatically**, the appliance applies the management cluster again once it runs a newer Kubehenge release than the one that last applied it. The run happens:
+**Management cluster**, under the automatic upgrades in the Kubehenge box, is **Upgrade automatically** from the first successful apply of the interface. The appliance then applies the management cluster again once it runs a newer Kubehenge release than the one that last applied it. The run happens:
 
 - in the hour Kubehenge's own upgrades use (**Hour**, **Time zone**), whether or not those are on
 - at most once a day, never during another run or a template build
@@ -139,24 +139,35 @@ The [changelog](changelog.md) says which classes a release changes. Apply such a
 
 A run that fails stays on the page with its error and log. It is tried again in the next day's hour, not before. **Upgrade…** runs it at once.
 
+Set to **Upgrade by hand**, it stays off through later applies. `kubehenge appliance management-upgrades --on` or `--off` does the same.
+
 #### What the appliance keeps
 
-Nobody is signed in when the run starts. Switching it on has the appliance keep what an apply needs, which it keeps at no other time:
+Nobody is signed in when the run starts, so the apply that switches it on has the appliance keep:
 
-- **the state passphrase**, only where one is [required](install.md#requiring-a-passphrase), checked against the state when switching it on. Otherwise the run uses the state's key the appliance keeps.
-- **an API token of a Proxmox VE user of its own**, `kubehenge-upgrader@pve`, with the Administrator role on `/`.
-  - An apply creates users, roles, ACLs, pools and VMs, as the first run does.
-  - Switching it on creates the user and its token with your session. Because the token holds `Sys.Console` on `/`, you need it too, besides the [setup privileges](install.md#who-may-set-it-up).
+- **the state passphrase**, only where one is [required](install.md#requiring-a-passphrase). Otherwise the run uses the state's key the appliance keeps.
+- **an API token of a Proxmox VE user of its own**, `kubehenge-upgrader@pve`, made with your session. Without the [setup privileges](install.md#who-may-set-it-up), it stays off, the page says why, and the next apply tries again.
+
+The user holds four roles of its own, never Administrator:
+
+| Role | On | For |
+| --- | --- | --- |
+| `KubehengeUpgraderAudit` | `/` | reading what the apply plans against |
+| `KubehengeUpgrader` | the management pool, its VM storage, its network, `/nodes` | changing the management cluster's VMs |
+| `KubehengeUpgraderImages` | the image storage | writing the VM templates the release brings |
+| `KubehengeUpgraderTokens` | the group `kubehenge-tokens` | reading the module's own API tokens |
+
+It cannot change users, roles or ACLs. A release that does stops before applying and says so. **Upgrade…** runs it with your session.
 
 #### Where they are kept
 
-Both are kept sealed (AES-256-GCM) in a file in the appliance's state directory that only the interface's own user and root can read. The key that opens them is made anew each time it is switched on. It is kept on a volume of its own (`/var/lib/kubehenge-keys`), which Proxmox VE's backups of the container leave out (`backup=0`).
+Both are kept sealed (AES-256-GCM) in a file in the appliance's state directory that only the interface's own user and root can read. The key that opens them is kept on a volume of its own (`/var/lib/kubehenge-keys`), which Proxmox VE's backups of the container leave out (`backup=0`).
 
-An appliance restored from a backup shows the setting as on. Its next automatic run fails saying the key is gone. Switch it off and on again.
+An appliance restored from a backup has no key. The page says so, and **Renew** makes the user and its token anew.
 
-#### What that risks
+#### Switching it off
 
-Anyone with root on the running appliance, or control of its interface, can still read the management cluster's state, with its admin kubeconfig and talosconfig. With the token they can also act as an administrator of the whole Proxmox VE cluster. Switching it off deletes the file and the key first, then the user with its token. Removing the management cluster does the same.
+Switching it off deletes the passphrase, then the user with its token, then the key. A switch-off cut short finishes when the interface next runs. Removing the management cluster does the same.
 
 ### With Terraform/OpenTofu
 

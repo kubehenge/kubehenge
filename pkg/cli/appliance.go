@@ -66,7 +66,7 @@ Sign in first, in the appliance with
 	}
 	cmd.AddCommand(o.healthCommand(), o.upgradesCommand(), o.upgradeCommand(), o.etcdBackupsCommand(), o.notificationsCommand(),
 		o.activityCommand(), o.takeOverCommand(), o.readyForRebootCommand(), o.exportCommand(), o.importCommand(),
-		o.settingsCommand(), o.certificateCommand(), o.statePassphraseCommand())
+		o.settingsCommand(), o.certificateCommand(), o.statePassphraseCommand(), o.managementUpgradesCommand())
 	return cmd
 }
 
@@ -547,6 +547,46 @@ again. The passphrase required so far comes from --passphrase-file or KUBEHENGE_
 	f.BoolVar(&off, "off", false, "stop requiring a passphrase")
 	f.StringVar(&passphraseFile, "passphrase-file", "", passphraseFileUsage)
 	f.StringVar(&newFile, "new-passphrase-file", "", "file holding the new passphrase, else KUBEHENGE_NEW_PASSPHRASE holds it")
+	return cmd
+}
+
+func (o *applianceOptions) managementUpgradesCommand() *cobra.Command {
+	var passphraseFile string
+	var on, off bool
+	cmd := &cobra.Command{
+		Use:   "management-upgrades",
+		Short: "Switch automatic upgrades of the management cluster on or off",
+		Long: `Switch automatic upgrades of the management cluster on or off. They are on from the first apply,
+unless switched off, and stay off once switched off. --on also renews them after a restore lost their
+key. Where the state requires a passphrase, --on asks for it, from --passphrase-file or
+KUBEHENGE_PASSPHRASE.`,
+		Args: noArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if on == off {
+				return errors.New("give --on or --off")
+			}
+			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
+				if off {
+					if _, err := s.call(ctx, http.MethodDelete, "/api/appliance/upgrades/management", nil, nil); err != nil {
+						return err
+					}
+					return say(cmd, "Off. The appliance keeps nothing to apply the management cluster with")
+				}
+				passphrase, err := secretFrom(passphraseFile, "KUBEHENGE_PASSPHRASE")
+				if err != nil {
+					return err
+				}
+				if _, err := s.call(ctx, http.MethodPut, "/api/appliance/upgrades/management", map[string]string{passphraseField: passphrase}, nil); err != nil {
+					return err
+				}
+				return say(cmd, "On. The management cluster follows each Kubehenge upgrade in the upgrade hour")
+			})
+		},
+	}
+	f := cmd.Flags()
+	f.BoolVar(&on, "on", false, "switch them on")
+	f.BoolVar(&off, "off", false, "switch them off")
+	f.StringVar(&passphraseFile, "passphrase-file", "", passphraseFileUsage)
 	return cmd
 }
 

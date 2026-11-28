@@ -10,6 +10,7 @@
 - `install.sh --upgrade` and `--certificate` find the cluster's appliance without `--ctid`. A plain `install.sh` upgrades the appliance on this node.
 - A management proxy with credentials in its address, which no cluster takes, gives each cluster that sets no proxy a `ProxyNotPassedOn` Warning event.
 - The appliance keeps the management cluster's state key, so setup and repair access ask for no passphrase. Administration can require one, which every action then asks for.
+- Automatic management cluster upgrades are on from the first apply, as a Proxmox VE user with narrow roles of its own instead of Administrator on `/`.
 
 ### Fixed
 

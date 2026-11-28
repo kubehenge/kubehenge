@@ -173,6 +173,15 @@ func (a *Appliance) applyOnce(ctx context.Context, j *Job, env []string, t *pve.
 	if err != nil {
 		return err
 	}
+	if ctx.Value(accessFrozen{}) != nil {
+		changes, accessErr := changesAccess(shown)
+		if accessErr != nil {
+			return accessErr
+		}
+		if changes {
+			return ErrNeedsAdministrator
+		}
+	}
 	deleted, unprotectedVMs, err := plannedNodeVMs(shown)
 	if err != nil {
 		return err

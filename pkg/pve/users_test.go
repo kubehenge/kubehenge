@@ -16,11 +16,12 @@ import (
 	"testing"
 )
 
-// fakeUsersAPI is Proxmox VE's user, ACL and token API with one user known, old@pve, recording
-// every change as "METHOD path form". failToken has it refuse to make tokens.
+// fakeUsersAPI is Proxmox VE's user, role, ACL and token API, recording every call as "METHOD path
+// form". acl is what it lists. failToken has it refuse to make tokens.
 type fakeUsersAPI struct {
 	mu        sync.Mutex
 	users     map[string]bool
+	acl       []map[string]any
 	changes   []string
 	failToken bool
 }
@@ -34,7 +35,8 @@ func (f *fakeUsersAPI) accounts(t *testing.T) *Accounts {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api2/json/access/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Csrfpreventiontoken") != "csrf" {
+		token := strings.HasPrefix(r.Header.Get("Authorization"), "PVEAPIToken=")
+		if r.Method != http.MethodGet && !token && r.Header.Get("Csrfpreventiontoken") != "csrf" {
 			http.Error(w, "no CSRF token", http.StatusUnauthorized)
 			return
 		}
@@ -45,6 +47,10 @@ func (f *fakeUsersAPI) accounts(t *testing.T) *Accounts {
 		defer f.mu.Unlock()
 		path := strings.TrimPrefix(r.URL.Path, "/api2/json")
 		f.changes = append(f.changes, strings.TrimSpace(r.Method+" "+path+" "+r.PostForm.Encode()))
+		if data, ok := f.listOrAccept(r.Method, path, token); ok {
+			reply(w, data)
+			return
+		}
 		switch {
 		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/access/users/"):
 			user := strings.TrimPrefix(path, "/access/users/")
@@ -86,13 +92,37 @@ func (f *fakeUsersAPI) accounts(t *testing.T) *Accounts {
 	return a
 }
 
+// listOrAccept answers the calls that only list or are accepted as they are: a token deleting
+// itself, the roles with one of the upgrader's there from before, the ACL, role and group changes.
+func (f *fakeUsersAPI) listOrAccept(method, path string, token bool) (any, bool) {
+	switch {
+	case method == http.MethodDelete && token && strings.Contains(path, "/token/"):
+		return nil, true
+	case method == http.MethodGet && path == "/access/roles":
+		return []map[string]any{{"roleid": "KubehengeUpgrader"}, {"roleid": "Administrator"}}, true
+	case method == http.MethodGet && path == "/access/acl":
+		return f.acl, true
+	case method == http.MethodPut && strings.HasPrefix(path, "/access/roles/"),
+		method == http.MethodPost && path == "/access/roles",
+		method == http.MethodPut && strings.HasPrefix(path, "/access/users/"):
+		return nil, true
+	}
+	return nil, false
+}
+
 var alice = &Ticket{Username: "alice@pve", Ticket: "PVE:alice@pve:1", CSRF: "csrf"}
 
-func TestCreateAdministratorToken(t *testing.T) {
+var testUpgrader = &Upgrader{
+	User: "upgrader@pve", Token: "apply", Comment: "for upgrades", Group: "kubehenge-tokens",
+	Roles:  map[string][]string{"KubehengeUpgrader": {"VM.Audit", "VM.PowerMgmt"}, "KubehengeUpgraderAudit": {"Sys.Audit"}},
+	Grants: []Grant{{Path: "/", Role: "KubehengeUpgraderAudit", Propagate: true}, {Path: "/pool/kubehenge-management", Role: "KubehengeUpgrader", Propagate: true}},
+}
+
+func TestCreateUpgrader(t *testing.T) {
 	t.Parallel()
 	f := &fakeUsersAPI{users: map[string]bool{}}
 	a := f.accounts(t)
-	got, err := a.CreateAdministratorToken(t.Context(), alice, "upgrader@pve", "apply", "for upgrades")
+	got, err := a.CreateUpgrader(t.Context(), alice, testUpgrader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,8 +131,14 @@ func TestCreateAdministratorToken(t *testing.T) {
 	}
 	want := []string{
 		"DELETE /access/users/upgrader@pve",
-		"POST /access/users comment=for+upgrades&userid=upgrader%40pve",
-		"PUT /access/acl path=%2F&propagate=1&roles=Administrator&users=upgrader%40pve",
+		"POST /access/users comment=for+upgrades&groups=kubehenge-tokens&userid=upgrader%40pve",
+		"GET /access/roles",
+		"PUT /access/roles/KubehengeUpgrader privs=VM.Audit%2CVM.PowerMgmt",
+		"POST /access/roles privs=Sys.Audit&roleid=KubehengeUpgraderAudit",
+		"PUT /access/users/upgrader@pve groups=kubehenge-tokens",
+		"GET /access/acl",
+		"PUT /access/acl path=%2F&propagate=1&roles=KubehengeUpgraderAudit&users=upgrader%40pve",
+		"PUT /access/acl path=%2Fpool%2Fkubehenge-management&propagate=1&roles=KubehengeUpgrader&users=upgrader%40pve",
 		"POST /access/users/upgrader@pve/token/apply comment=for+upgrades&privsep=0",
 	}
 	if !reflect.DeepEqual(f.changes, want) {
@@ -111,7 +147,7 @@ func TestCreateAdministratorToken(t *testing.T) {
 
 	// Made again, the user left from before goes first, with its token.
 	f.changes = nil
-	if _, err := a.CreateAdministratorToken(t.Context(), alice, "upgrader@pve", "apply", "for upgrades"); err != nil {
+	if _, err := a.CreateUpgrader(t.Context(), alice, testUpgrader); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.changes) != len(want) || !f.users["upgrader@pve"] {
@@ -123,6 +159,49 @@ func TestCreateAdministratorToken(t *testing.T) {
 	}
 	if err := a.DeleteUser(t.Context(), alice, "upgrader@pve"); err != nil {
 		t.Fatalf("deleting a user that is gone: %v", err)
+	}
+}
+
+// An upgrader made with Administrator on / holds the upgrader's grants alone afterwards, losing
+// Administrator last. A grant it holds already is left as it is.
+func TestGrantUpgraderTakesAdministratorAway(t *testing.T) {
+	t.Parallel()
+	f := &fakeUsersAPI{users: map[string]bool{"upgrader@pve": true}, acl: []map[string]any{
+		{"path": "/", "roleid": "Administrator", "type": "user", "ugid": "upgrader@pve", "propagate": 1},
+		{"path": "/", "roleid": "Administrator", "type": "user", "ugid": "root@pam", "propagate": 1},
+		{"path": "/storage/old", "roleid": "KubehengeUpgrader", "type": "user", "ugid": "upgrader@pve", "propagate": 0},
+		{"path": "/", "roleid": "KubehengeUpgraderAudit", "type": "user", "ugid": "upgrader@pve", "propagate": 1},
+	}}
+	a := f.accounts(t)
+	if err := a.GrantUpgrader(t.Context(), alice, testUpgrader); err != nil {
+		t.Fatal(err)
+	}
+	var acl []string
+	for _, c := range f.changes {
+		if strings.HasPrefix(c, "PUT /access/acl") {
+			acl = append(acl, c)
+		}
+	}
+	want := []string{
+		"PUT /access/acl path=%2Fpool%2Fkubehenge-management&propagate=1&roles=KubehengeUpgrader&users=upgrader%40pve",
+		"PUT /access/acl delete=1&path=%2Fstorage%2Fold&roles=KubehengeUpgrader&users=upgrader%40pve",
+		"PUT /access/acl delete=1&path=%2F&roles=Administrator&users=upgrader%40pve",
+	}
+	if !reflect.DeepEqual(acl, want) {
+		t.Fatalf("ACL changes:\n%s\nwant:\n%s", strings.Join(acl, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// A token revokes itself, signed in as itself.
+func TestRevokeToken(t *testing.T) {
+	t.Parallel()
+	f := &fakeUsersAPI{users: map[string]bool{}}
+	a := f.accounts(t)
+	if err := a.RevokeToken(t.Context(), "upgrader@pve!apply=5ec2e7"); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"DELETE /access/users/upgrader@pve/token/apply"}; !reflect.DeepEqual(f.changes, want) {
+		t.Fatalf("changes = %v", f.changes)
 	}
 }
 
@@ -169,11 +248,11 @@ func TestCreateOwnToken(t *testing.T) {
 }
 
 // A user whose token Proxmox VE refused is not left behind without one.
-func TestCreateAdministratorTokenLeavesNoUserWhenItFails(t *testing.T) {
+func TestCreateUpgraderLeavesNoUserWhenItFails(t *testing.T) {
 	t.Parallel()
 	f := &fakeUsersAPI{users: map[string]bool{}, failToken: true}
 	a := f.accounts(t)
-	if _, err := a.CreateAdministratorToken(t.Context(), alice, "upgrader@pve", "apply", "for upgrades"); err == nil {
+	if _, err := a.CreateUpgrader(t.Context(), alice, testUpgrader); err == nil {
 		t.Fatal("a token made where Proxmox VE refused it")
 	}
 	if f.users["upgrader@pve"] {

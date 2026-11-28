@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -106,6 +107,9 @@ type Unattended struct {
 	Token      string
 	By         string
 	Since      time.Time
+	// Narrow tells that the token's user holds the upgrader's own roles. One made before holds the
+	// Administrator role on /.
+	Narrow bool
 }
 
 // ErrNotUnattended is an automatic apply asked for while the appliance keeps nothing to run it.
@@ -113,7 +117,7 @@ var ErrNotUnattended = errors.New("automatic upgrades of the management cluster 
 
 // ErrUnattendedKey is what automatic upgrades keep without the key that opens it, as after the
 // appliance was restored from a backup, which leaves the key out.
-var ErrUnattendedKey = errors.New("the key that opens what automatic upgrades keep is gone, as after a restore from a backup: switch automatic upgrades of the management cluster off and on again")
+var ErrUnattendedKey = errors.New("the key that opens what automatic upgrades keep is gone, as after a restore from a backup: renew automatic upgrades of the management cluster on the Administration page")
 
 // unattendedPath sits in the appliance's own directory, which only its user may read. It holds the
 // passphrase and the token sealed with the key at unattendedKeyPath.
@@ -129,6 +133,7 @@ type unattendedFile struct {
 	By     string    `json:"by"`
 	Since  time.Time `json:"since"`
 	User   string    `json:"user"`
+	Narrow bool      `json:"narrow,omitempty"`
 	Sealed []byte    `json:"sealed"`
 }
 
@@ -147,12 +152,17 @@ const sealKeySize = 32
 // KeepUnattended keeps what an unattended apply needs, sealed with a new key. The caller has
 // checked the passphrase against the state (CheckPassphrase) and made the token. The passphrase is
 // kept only where the state requires one: otherwise the state's kept key is the one copy.
-func (a *Appliance) KeepUnattended(u Unattended) error {
+func (a *Appliance) KeepUnattended(u Unattended) error { //nolint:gocritic // a copy, as the passphrase is dropped from it
 	if !a.PassphraseRequired() {
 		u.Passphrase = ""
 	} else if err := ValidPassphrase(u.Passphrase); err != nil {
 		return err
 	}
+	return a.sealUnattended(&u)
+}
+
+// sealUnattended seals and keeps u as it is.
+func (a *Appliance) sealUnattended(u *Unattended) error {
 	id, secret, ok := strings.Cut(u.Token, "=")
 	if !ok || !strings.Contains(id, "!") || secret == "" {
 		return errors.New("the Proxmox VE API token must be user@realm!name=secret")
@@ -173,7 +183,7 @@ func (a *Appliance) KeepUnattended(u Unattended) error {
 		return err
 	}
 	user, _, _ := strings.Cut(id, "!")
-	raw, err := json.Marshal(unattendedFile{By: u.By, Since: u.Since, User: user, Sealed: sealed})
+	raw, err := json.Marshal(unattendedFile{By: u.By, Since: u.Since, User: user, Narrow: u.Narrow, Sealed: sealed})
 	if err != nil {
 		return fmt.Errorf("encoding what automatic upgrades keep: %w", err)
 	}
@@ -249,6 +259,7 @@ type UnattendedInfo struct {
 	// KeyLost tells that the key no longer opens what was kept. A restored backup has the sealed
 	// file but not the key volume, which backups leave out.
 	KeyLost bool
+	Narrow  bool
 }
 
 // UnattendedOn returns what may be shown of what the appliance keeps for unattended applies, or
@@ -259,7 +270,7 @@ func (a *Appliance) UnattendedOn() *UnattendedInfo {
 		return nil
 	}
 	_, err = a.unattended()
-	return &UnattendedInfo{By: f.By, Since: f.Since, User: f.User, KeyLost: err != nil}
+	return &UnattendedInfo{By: f.By, Since: f.Since, User: f.User, KeyLost: err != nil, Narrow: f.Narrow}
 }
 
 func (a *Appliance) unattendedFile() (*unattendedFile, error) {
@@ -301,7 +312,7 @@ func (a *Appliance) unattended() (*Unattended, error) {
 	if err := json.Unmarshal(plain, &s); err != nil {
 		return nil, fmt.Errorf("reading what automatic upgrades keep: %w", err)
 	}
-	return &Unattended{Passphrase: s.Passphrase, Token: s.Token, By: f.By, Since: f.Since}, nil
+	return &Unattended{Passphrase: s.Passphrase, Token: s.Token, By: f.By, Since: f.Since, Narrow: f.Narrow}, nil
 }
 
 // ApplyUnattended starts applying the saved settings again with what KeepUnattended kept, as an
@@ -317,6 +328,7 @@ func (a *Appliance) ApplyUnattended(ready func(ctx context.Context, kubeconfig [
 	// As long as a run on an administrator's session may take.
 	by := runner{user: user, automatic: true, until: time.Now().Add(pve.TicketLifetime)}
 	return a.startIn(&a.job, by, "apply", nil, func(ctx context.Context, j *Job) error {
+		ctx = frozenFor(ctx, u)
 		s := a.SavedSettings()
 		if s == nil || !a.Ready() {
 			return errors.New("there is no management cluster to upgrade")
@@ -351,4 +363,119 @@ func (a *Appliance) ApplyUnattended(ready func(ctx context.Context, kubeconfig [
 		}
 		return nil
 	})
+}
+
+// UnattendedToken returns the API token automatic upgrades keep, as user@realm!name=secret.
+func (a *Appliance) UnattendedToken() (string, error) {
+	u, err := a.unattended()
+	if err != nil {
+		return "", err
+	}
+	return u.Token, nil
+}
+
+// MarkUnattendedNarrow records that the kept token's user holds the upgrader's own roles now.
+func (a *Appliance) MarkUnattendedNarrow() error {
+	u, err := a.unattended()
+	if err != nil {
+		return err
+	}
+	u.Narrow = true
+	return a.KeepUnattended(*u)
+}
+
+// ForgetUnattendedPassphrase keeps what automatic upgrades keep again without the passphrase, the
+// first step of switching them off. Nothing kept, or nothing that still opens, stays as it is.
+func (a *Appliance) ForgetUnattendedPassphrase() error {
+	u, err := a.unattended()
+	if err != nil || u.Passphrase == "" {
+		return nil //nolint:nilerr // nothing to forget
+	}
+	u.Passphrase = ""
+	return a.sealUnattended(u)
+}
+
+// UnattendedChoice is what an administrator chose for automatic upgrades of the management
+// cluster, and why the last try to switch them on failed. They are on unless switched off.
+type UnattendedChoice struct {
+	Off bool `json:"off,omitempty"`
+	// Failed says why the last apply could not switch them on, which the next apply tries again.
+	Failed string `json:"failed,omitempty"`
+}
+
+func (a *Appliance) unattendedChoicePath() string {
+	return filepath.Join(a.Dir, "unattended-choice.json")
+}
+
+// UnattendedChoice returns what was chosen, on when nothing was.
+func (a *Appliance) UnattendedChoice() UnattendedChoice {
+	var c UnattendedChoice
+	raw, err := os.ReadFile(a.unattendedChoicePath())
+	if err == nil {
+		_ = json.Unmarshal(raw, &c)
+	}
+	return c
+}
+
+// ChooseUnattended records the choice.
+func (a *Appliance) ChooseUnattended(c UnattendedChoice) error {
+	if c == (UnattendedChoice{}) {
+		return removeFile(a.unattendedChoicePath())
+	}
+	raw, err := json.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("encoding the choice of automatic upgrades: %w", err)
+	}
+	return writeFileAtomic(a.unattendedChoicePath(), raw)
+}
+
+// accessFrozen marks a run whose token may change no Proxmox VE user, group, role, ACL, token or
+// pool, as the upgrader's token cannot.
+type accessFrozen struct{}
+
+// frozenFor marks ctx accessFrozen for a token made with the upgrader's roles. One made before,
+// with Administrator on /, may still change them.
+func frozenFor(ctx context.Context, u *Unattended) context.Context {
+	if !u.Narrow {
+		return ctx
+	}
+	return context.WithValue(ctx, accessFrozen{}, true)
+}
+
+// ErrNeedsAdministrator is an automatic run whose release changes what only an administrator may.
+var ErrNeedsAdministrator = errors.New("this upgrade changes Proxmox VE users, roles or ACLs, so it needs an administrator: Upgrade… on the Administration page runs it with your session")
+
+// accessTypes are the module's resources only an administrator may change.
+var accessTypes = []string{
+	"proxmox_virtual_environment_user", "proxmox_virtual_environment_group", "proxmox_virtual_environment_role",
+	"proxmox_acl", "proxmox_user_token", "proxmox_virtual_environment_pool",
+}
+
+// resourceChange is one resource's planned change in tofu show -json.
+type resourceChange struct {
+	Type   string         `json:"type"`
+	Change plannedActions `json:"change"`
+}
+
+type plannedActions struct {
+	Actions []string `json:"actions"`
+}
+
+// changesAccess tells whether a plan, as tofu show -json gives it, changes one of accessTypes.
+func changesAccess(shown []byte) (bool, error) {
+	var plan struct {
+		ResourceChanges []resourceChange `json:"resource_changes"`
+	}
+	if err := json.Unmarshal(shown, &plan); err != nil {
+		return false, fmt.Errorf("reading the plan: %w", err)
+	}
+	for _, rc := range plan.ResourceChanges {
+		if !slices.Contains(accessTypes, rc.Type) {
+			continue
+		}
+		if slices.ContainsFunc(rc.Change.Actions, func(a string) bool { return a != "no-op" && a != "read" }) {
+			return true, nil
+		}
+	}
+	return false, nil
 }

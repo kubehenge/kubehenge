@@ -3,7 +3,7 @@ import { useState, type JSX } from "react";
 import { api } from "./api";
 import { ApplyDialog } from "./Setup";
 import type { ManagementAutomatic, ManagementUpgrade, SetupStatus } from "./types";
-import { Dialog, ErrorBox, Field, errorMessage, passphraseShort, useStatePassphrase } from "./ui";
+import { ErrorBox, Field, errorMessage, passphraseShort, useStatePassphrase } from "./ui";
 
 // The module's names for the management cluster's components, in words.
 const componentNames: Record<string, string> = {
@@ -95,8 +95,8 @@ export function ManagementBehind({
   );
 }
 
-// AutomaticManagement lets the management cluster follow Kubehenge's own upgrades, which needs
-// the appliance to keep what an apply needs. It is off by default and says what switching it on grants.
+// AutomaticManagement lets the management cluster follow Kubehenge's own upgrades. An apply switches
+// it on, so the control is a plain switch. A state that requires a passphrase asks for it inline.
 export function AutomaticManagement({
   management: m,
   hour,
@@ -109,16 +109,20 @@ export function AutomaticManagement({
   onChanged: () => Promise<void>;
 }): JSX.Element | null {
   const [asking, setAsking] = useState(false);
+  const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const ask = useStatePassphrase();
   if (!m.possible && !m.on) {
     return null;
   }
-  const switchOff = async (): Promise<void> => {
+  const change = async (on: boolean): Promise<void> => {
     setBusy(true);
     setError(undefined);
     try {
-      await api.stopAutomaticManagement();
+      await (on ? api.automaticManagement(passphrase) : api.stopAutomaticManagement());
+      setAsking(false);
+      setPassphrase("");
     } catch (err) {
       setError(errorMessage(err));
     } finally {
@@ -127,23 +131,29 @@ export function AutomaticManagement({
     }
   };
   const since = m.since === undefined ? "" : new Date(m.since).toLocaleString();
+  const when = `${String(hour).padStart(2, "0")}:00 (${timeZone})`;
   return (
     <>
       <Field
         label="Management cluster"
         hint={m.on ? `Switched on ${since} by ${m.by ?? ""}` : undefined}
-        info={m.on ? `Upgrades at the hour above, as ${m.user}, after each Kubehenge upgrade.` : undefined}
+        info={m.on ? `Upgrades at ${when}, as ${m.user}, after each Kubehenge upgrade.` : undefined}
       >
         {(id) => (
           <select
             id={id}
-            value={m.on ? "on" : "off"}
+            value={m.on || asking ? "on" : "off"}
             disabled={busy}
             onChange={(e) => {
-              if (e.target.value === "on") {
+              if (e.target.value === "off") {
+                setAsking(false);
+                if (m.on) {
+                  void change(false);
+                }
+              } else if (ask) {
                 setAsking(true);
               } else {
-                void switchOff();
+                void change(true);
               }
             }}
           >
@@ -152,82 +162,8 @@ export function AutomaticManagement({
           </select>
         )}
       </Field>
-      <ErrorBox
-        message={
-          error ?? (m.keyLost === true ? "Its key is gone, as after a restore. Switch off and on again." : undefined)
-        }
-      />
+      {m.on && m.imageStorage !== undefined && <p>Also writes VM templates on storage {m.imageStorage}</p>}
       {asking && (
-        <SwitchOn
-          user={m.user}
-          when={`${String(hour).padStart(2, "0")}:00 (${timeZone})`}
-          onClose={() => setAsking(false)}
-          onDone={async () => {
-            setAsking(false);
-            await onChanged();
-          }}
-        />
-      )}
-    </>
-  );
-}
-
-function SwitchOn({
-  user,
-  when,
-  onClose,
-  onDone,
-}: {
-  user: string;
-  when: string;
-  onClose: () => void;
-  onDone: () => Promise<void>;
-}): JSX.Element {
-  const [passphrase, setPassphrase] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const ask = useStatePassphrase();
-  const short = ask && passphraseShort(passphrase);
-  const submit = async (): Promise<void> => {
-    if (short) {
-      return;
-    }
-    setBusy(true);
-    setError(undefined);
-    try {
-      await api.automaticManagement(passphrase);
-      await onDone();
-    } catch (err) {
-      setError(errorMessage(err));
-      setBusy(false);
-    }
-  };
-  return (
-    <Dialog
-      title="Upgrade management cluster automatically"
-      onClose={onClose}
-      onSubmit={() => {
-        void submit();
-      }}
-      actions={
-        <>
-          <button type="button" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="primary" disabled={busy || short}>
-            Switch on
-          </button>
-        </>
-      }
-    >
-      <p>Upgrades after each Kubehenge upgrade, at {when}.</p>
-      <p className="warning">
-        {ask ? "Stores the state passphrase and creates" : "Creates"} the Proxmox VE user <code>{user}</code> with
-        Administrator on <code>/</code>.
-      </p>
-      <p className="warning">Whoever takes over the appliance then controls the management cluster and Proxmox VE.</p>
-      <p>Switching off deletes {ask ? "the passphrase, " : ""}the user and its token.</p>
-      {ask && (
         <Field label="State passphrase">
           {(id) => (
             <input
@@ -240,7 +176,33 @@ function SwitchOn({
           )}
         </Field>
       )}
-      <ErrorBox message={error} />
-    </Dialog>
+      {asking && (
+        <button
+          type="button"
+          disabled={busy || passphraseShort(passphrase)}
+          onClick={() => {
+            void change(true);
+          }}
+        >
+          Switch on
+        </button>
+      )}
+      <ErrorBox message={error ?? (m.keyLost === true ? "Its key is gone, as after a restore. Renew it." : m.failed)} />
+      {m.on && m.keyLost === true && !asking && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            if (ask) {
+              setAsking(true);
+            } else {
+              void change(true);
+            }
+          }}
+        >
+          Renew
+        </button>
+      )}
+    </>
   );
 }

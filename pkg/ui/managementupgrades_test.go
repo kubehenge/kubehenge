@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubehenge/kubehenge/pkg/appliance"
+	"github.com/kubehenge/kubehenge/pkg/provisioner"
 	"github.com/kubehenge/kubehenge/pkg/pve"
 )
 
@@ -116,10 +118,10 @@ func jobEnded(t *testing.T, a *appliance.Appliance) *appliance.JobView {
 	}
 }
 
-// upgraded has the appliance run a newer release, which carries Talos v1.15.0.
-func upgraded(t *testing.T, a *appliance.Appliance, release string) {
+// upgraded has the appliance run a newer release, 0.2.0, which carries Talos v1.15.0.
+func upgraded(t *testing.T, a *appliance.Appliance) {
 	t.Helper()
-	a.Release = release
+	a.Release = "0.2.0"
 	moduleVersions(t, a.Module, "v1.15.0")
 }
 
@@ -145,7 +147,7 @@ func TestManagementClusterBehindTheAppliance(t *testing.T) {
 		t.Fatalf("before an upgrade: %+v", got)
 	}
 
-	upgraded(t, a, "0.2.0")
+	upgraded(t, a)
 	got := setupUpgrade(t, b)
 	want := []versionChange{{Component: "talos", From: "v1.14.4", To: "v1.15.0"}}
 	if got == nil || !got.Behind || got.Applied != "0.1.0" || got.Carried != "0.2.0" || !reflect.DeepEqual(got.Changes, want) {
@@ -207,9 +209,25 @@ func managementView(t *testing.T, b *browser) *managementAutomatic {
 	return v.Management
 }
 
-// Switching automatic upgrades of the management cluster on keeps the passphrase and a token of a
-// user of its own. Switching them off deletes both.
-func TestManagementAutomaticUpgradesOptIn(t *testing.T) {
+// applyAs applies the saved settings again as an apply from the interface does, as admin@pve.
+func applyAs(t *testing.T, a *appliance.Appliance, s *Server) *appliance.JobView {
+	t.Helper()
+	return applyWith(t, a, s, "admin@pve", a.SavedSettings())
+}
+
+func applyWith(t *testing.T, a *appliance.Appliance, s *Server, user string, settings *appliance.Settings) *appliance.JobView {
+	t.Helper()
+	ticket := &pve.Ticket{Username: user, Ticket: "PVE:" + user + ":1", CSRF: "csrf", Issued: time.Now()}
+	if err := a.Apply(settings, "", ticket, s.applied(ticket, "")); err != nil {
+		t.Fatal(err)
+	}
+	return jobEnded(t, a)
+}
+
+// The first apply by an administrator switches automatic upgrades on: a user of their own with the
+// upgrader's roles, never Administrator, and its token kept. An apply whose session may not make
+// the user leaves them off, saying why, and the next apply tries again.
+func TestAnApplySwitchesAutomaticUpgradesOn(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	withUpgrades(t, h)
@@ -217,60 +235,202 @@ func TestManagementAutomaticUpgradesOptIn(t *testing.T) {
 	b := h.browser()
 	b.signIn("admin@pve")
 	if got := managementView(t, b); got == nil || !got.Possible || got.On || got.User != upgraderUser {
-		t.Fatalf("before switching on: %+v", got)
+		t.Fatalf("before an apply from the interface: %+v", got)
 	}
-	switchOn := func(b *browser, passphrase string) int {
-		return b.do("PUT", "/api/appliance/upgrades/management", `{"passphrase":"`+passphrase+`"}`).Code
-	}
-	d := h.browser()
-	d.signIn("dev@pve")
-	if got := switchOn(d, statePassphrase); got != http.StatusForbidden {
-		t.Fatalf("switched on by a user without privileges: %d", got)
-	}
-	// The token holds the Administrator role, Sys.Console with it.
-	if got := switchOn(b, statePassphrase); got != http.StatusForbidden {
-		t.Fatalf("switched on without Sys.Console: %d", got)
-	}
-	h.accounts.mu.Lock()
-	h.accounts.grants["admin@pve"]["/"] = append(h.accounts.grants["admin@pve"]["/"], "Sys.Console")
-	h.accounts.mu.Unlock()
-	requireStatePassphrase(t, a)
-	if got := switchOn(b, "the wrong passphrase entirely"); got != http.StatusForbidden {
-		t.Fatalf("switched on with a wrong passphrase: %d", got)
-	}
-	if len(h.accounts.users) != 0 {
-		t.Fatalf("a user made for a wrong passphrase: %v", h.accounts.users)
-	}
-	if got := switchOn(b, statePassphrase); got != http.StatusOK {
-		t.Fatalf("switching on: %d", got)
-	}
-	if got := managementView(t, b); got == nil || !got.On || got.By != "admin@pve" || got.Since == nil || !got.Since.Equal(h.clock) || got.User != upgraderUser {
-		t.Fatalf("after switching on: %+v", got)
-	}
-	if h.accounts.users[upgraderUser] == "" {
-		t.Fatal("no Proxmox VE user made")
-	}
-	kept, err := os.ReadFile(filepath.Join(a.Dir, "unattended.json"))
-	if err != nil || strings.Contains(string(kept), statePassphrase) || strings.Contains(string(kept), "5ec2e7") {
-		t.Fatalf("kept in the open: %s, %v", kept, err)
-	}
-	if _, err := os.Stat(filepath.Join(a.KeyDir, "unattended.key")); err != nil {
-		t.Fatalf("no key kept: %v", err)
-	}
-	if rec := b.do("GET", "/api/appliance/upgrades", ""); strings.Contains(rec.Body.String(), "5ec2e7") || strings.Contains(rec.Body.String(), "horse") {
-		t.Fatalf("the view shows a secret: %s", rec.Body)
+	good := *a.SavedSettings()
+	failing := good
+	failing.SearchDomains = []string{"fail"}
+	if j := applyWith(t, a, h.server, "admin@pve", &failing); j.State != "failed" || a.UnattendedOn() != nil || len(h.accounts.users) != 0 {
+		t.Fatalf("a failed apply: %+v, users %v", j, h.accounts.users)
 	}
 
+	if j := applyWith(t, a, h.server, "dev@pve", &good); j.State != "succeeded" {
+		t.Fatalf("an apply whose session may not make the user: %+v", j)
+	}
+	if got := managementView(t, b); got.On || !strings.Contains(got.Failed, "Apply again as a Proxmox VE administrator") {
+		t.Fatalf("after it: %+v", got)
+	}
+
+	if j := applyAs(t, a, h.server); j.State != "succeeded" {
+		t.Fatalf("the apply: %+v", j)
+	}
+	got := managementView(t, b)
+	if !got.On || got.By != "admin@pve" || got.Failed != "" || got.ImageStorage != "local" {
+		t.Fatalf("after an administrator's apply: %+v", got)
+	}
+	if kept := a.UnattendedOn(); kept == nil || !kept.Narrow || h.accounts.users[upgraderUser] == "" {
+		t.Fatalf("kept %+v, users %v", kept, h.accounts.users)
+	}
+	u := h.accounts.upgrader
+	if u.Group != upgraderGroup || !reflect.DeepEqual(u.Roles, provisioner.UpgraderRoles) {
+		t.Fatalf("the upgrader = %+v", u)
+	}
+	for _, g := range u.Grants {
+		if g.Role == "Administrator" {
+			t.Fatalf("granted %+v", g)
+		}
+	}
+	if !slices.Contains(u.Grants, pve.Grant{Path: "/pool/kubehenge-management", Role: provisioner.UpgraderRole, Propagate: true}) ||
+		!slices.Contains(u.Grants, pve.Grant{Path: "/sdn/zones/localnetwork/vmbr0", Role: provisioner.UpgraderRole, Propagate: true}) {
+		t.Fatalf("grants = %+v", u.Grants)
+	}
+	if rec := b.do("GET", "/api/appliance/upgrades", ""); strings.Contains(rec.Body.String(), "5ec2e7") {
+		t.Fatalf("the view shows a secret: %s", rec.Body)
+	}
+}
+
+// Switched off, automatic upgrades stay off across applies. Switching off deletes the passphrase,
+// the user with its token, then the key.
+func TestSwitchedOffStaysOff(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	withUpgrades(t, h)
+	a := withManagementCluster(t, h)
+	applyAs(t, a, h.server)
+	b := h.browser()
+	b.signIn("admin@pve")
+	d := h.browser()
+	d.signIn("dev@pve")
 	expect(t, d.do("DELETE", "/api/appliance/upgrades/management", ""), http.StatusForbidden)
 	expect(t, b.do("DELETE", "/api/appliance/upgrades/management", ""), http.StatusOK)
 	if got := managementView(t, b); got.On {
 		t.Fatalf("after switching off: %+v", got)
 	}
-	if _, err := os.Stat(filepath.Join(a.Dir, "unattended.json")); !os.IsNotExist(err) {
-		t.Fatalf("kept after switching off: %v", err)
+	for _, p := range []string{filepath.Join(a.Dir, "unattended.json"), filepath.Join(a.KeyDir, "unattended.key")} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("%s kept after switching off: %v", p, err)
+		}
 	}
 	if len(h.accounts.users) != 0 {
 		t.Fatalf("the Proxmox VE user stayed: %v", h.accounts.users)
+	}
+	if j := applyAs(t, a, h.server); j.State != "succeeded" {
+		t.Fatalf("the apply: %+v", j)
+	}
+	if got := managementView(t, b); got.On || len(h.accounts.users) != 0 {
+		t.Fatalf("switched on again by an apply: %+v, %v", got, h.accounts.users)
+	}
+
+	// Switched on again by hand, with no passphrase where none is required.
+	expect(t, d.do("PUT", "/api/appliance/upgrades/management", "{}"), http.StatusForbidden)
+	expect(t, b.do("PUT", "/api/appliance/upgrades/management", "{}"), http.StatusOK)
+	if got := managementView(t, b); !got.On || a.UnattendedChoice().Off {
+		t.Fatalf("after switching on: %+v", got)
+	}
+}
+
+// Where the state requires a passphrase, switching on by hand checks it and keeps it.
+func TestSwitchingOnWithARequiredPassphrase(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	withUpgrades(t, h)
+	a := withManagementCluster(t, h)
+	requireStatePassphrase(t, a)
+	b := h.browser()
+	b.signIn("admin@pve")
+	expect(t, b.do("PUT", "/api/appliance/upgrades/management", `{"passphrase":"the wrong passphrase entirely"}`), http.StatusForbidden)
+	if len(h.accounts.users) != 0 {
+		t.Fatalf("a user made for a wrong passphrase: %v", h.accounts.users)
+	}
+	expect(t, b.do("PUT", "/api/appliance/upgrades/management", `{"passphrase":"`+statePassphrase+`"}`), http.StatusOK)
+	kept, err := os.ReadFile(filepath.Join(a.Dir, "unattended.json"))
+	if err != nil || strings.Contains(string(kept), statePassphrase) || strings.Contains(string(kept), "5ec2e7") {
+		t.Fatalf("kept in the open: %s, %v", kept, err)
+	}
+	if got := managementView(t, b); !got.On {
+		t.Fatalf("after switching on: %+v", got)
+	}
+}
+
+// A switch-off cut short after the passphrase went leaves a token that the next minute's check
+// revokes with itself. A session that may not delete the user has the token revoke itself too.
+func TestSwitchOffLeavesNoLiveToken(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	withUpgrades(t, h)
+	a := withManagementCluster(t, h)
+	token := upgraderUser + "!apply=5ec2e7"
+	if err := a.KeepUnattended(appliance.Unattended{Token: token, Narrow: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ChooseUnattended(appliance.UnattendedChoice{Off: true}); err != nil {
+		t.Fatal(err)
+	}
+	h.server.applyDueManagement()
+	if a.UnattendedOn() != nil || !slices.Equal(h.accounts.revokedTokens, []string{token}) {
+		t.Fatalf("kept %+v, revoked %v", a.UnattendedOn(), h.accounts.revokedTokens)
+	}
+
+	if err := a.ChooseUnattended(appliance.UnattendedChoice{}); err != nil {
+		t.Fatal(err)
+	}
+	applyAs(t, a, h.server)
+	h.accounts.mu.Lock()
+	h.accounts.refuseDelete, h.accounts.revokedTokens = true, nil
+	h.accounts.mu.Unlock()
+	b := h.browser()
+	b.signIn("admin@pve")
+	rec := b.do("DELETE", "/api/appliance/upgrades/management", "")
+	expect(t, rec, http.StatusBadGateway)
+	if !strings.Contains(rec.Body.String(), "is left") || a.UnattendedOn() != nil || len(h.accounts.revokedTokens) != 1 {
+		t.Fatalf("answer %s, kept %+v, revoked %v", rec.Body, a.UnattendedOn(), h.accounts.revokedTokens)
+	}
+}
+
+// A restore without the key is mended by switching on again, one click, which makes the user anew.
+func TestRenewingAfterTheKeyIsLost(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	withUpgrades(t, h)
+	a := withManagementCluster(t, h)
+	applyAs(t, a, h.server)
+	if err := os.Remove(filepath.Join(a.KeyDir, "unattended.key")); err != nil {
+		t.Fatal(err)
+	}
+	b := h.browser()
+	b.signIn("admin@pve")
+	if got := managementView(t, b); !got.On || !got.KeyLost {
+		t.Fatalf("after losing the key: %+v", got)
+	}
+	expect(t, b.do("PUT", "/api/appliance/upgrades/management", "{}"), http.StatusOK)
+	if got := managementView(t, b); !got.On || got.KeyLost {
+		t.Fatalf("after renewing: %+v", got)
+	}
+}
+
+// A user made before, with Administrator on /, holds the upgrader's roles alone after the next
+// apply, by hand or automatic.
+func TestTheUpgraderMadeBeforeIsNarrowed(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	up := withUpgrades(t, h)
+	a := withManagementCluster(t, h)
+	token := upgraderUser + "!apply=5ec2e7"
+	h.accounts.users = map[string]string{upgraderUser: token}
+	if err := a.KeepUnattended(appliance.Unattended{Token: token, By: "admin@pve"}); err != nil {
+		t.Fatal(err)
+	}
+	upgradeHour(t, up, 4)
+	h.clock = time.Date(2026, 10, 14, 4, 0, 0, 0, time.UTC)
+	upgraded(t, a)
+	h.server.applyDueManagement()
+	if j := jobEnded(t, a); !j.Automatic || j.State != "succeeded" {
+		t.Fatalf("the automatic run: %+v", j)
+	}
+	if kept := a.UnattendedOn(); kept == nil || !kept.Narrow || h.accounts.upgrader == nil {
+		t.Fatalf("after the automatic run: %+v", kept)
+	}
+
+	if err := a.KeepUnattended(appliance.Unattended{Token: token, By: "admin@pve"}); err != nil {
+		t.Fatal(err)
+	}
+	h.accounts.upgrader = nil
+	applyAs(t, a, h.server)
+	if kept := a.UnattendedOn(); kept == nil || !kept.Narrow || h.accounts.upgrader == nil {
+		t.Fatalf("after an apply by hand: %+v", kept)
+	}
+	if got, err := a.UnattendedToken(); err != nil || got != token {
+		t.Fatalf("the token was made anew: %q, %v", got, err)
 	}
 }
 
@@ -292,7 +452,7 @@ func TestAutomaticManagementUpgrade(t *testing.T) {
 	h.clock = time.Date(2026, 10, 14, 4, 0, 0, 0, time.UTC)
 
 	// Behind, in its hour, but not switched on.
-	upgraded(t, a, "0.2.0")
+	upgraded(t, a)
 	h.server.applyDueManagement()
 	if j := a.Current(); j.Automatic || !j.Started.Equal(manual) {
 		t.Fatalf("an automatic run without the opt-in: %+v", j)
@@ -349,7 +509,7 @@ func TestFailedAutomaticManagementUpgradeWaitsADay(t *testing.T) {
 	up := withUpgrades(t, h)
 	a := withManagementCluster(t, h)
 	upgradeHour(t, up, 4)
-	upgraded(t, a, "0.2.0")
+	upgraded(t, a)
 	// The state no longer opens with what was kept, as after the passphrase was changed.
 	requireStatePassphrase(t, a)
 	if err := a.KeepUnattended(appliance.Unattended{Passphrase: "a passphrase of the past", Token: upgraderUser + "!apply=5ec2e7"}); err != nil {

@@ -255,7 +255,7 @@ func TestSetupWithProxmoxHANeedsSysConsole(t *testing.T) {
 	admin := &pve.Ticket{Username: "admin@pve"}
 	applied := func(t *testing.T, ticket *pve.Ticket) error {
 		t.Helper()
-		return h.server.applied(ticket)(t.Context(), []byte("kubeconfig"))
+		return h.server.applied(ticket, "")(t.Context(), []byte("kubeconfig"))
 	}
 	if err := applied(t, admin); err != nil || len(h.accounts.released) != 0 {
 		t.Fatalf("with HA on: released %v, %v", h.accounts.released, err)

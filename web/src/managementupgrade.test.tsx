@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { App } from "./App";
 import { ApplianceUpgrades } from "./ApplianceUpgrades";
 import { fakeServer, type Answer, type Route } from "./fake-server";
+import { StatePassphrase } from "./ui";
 
 const saved = {
   nodes: ["pve1"],
@@ -134,10 +135,10 @@ const upgrades = (management: unknown, policy = "off"): Answer => ({
 });
 
 describe("automatic upgrades of the management cluster", () => {
-  it("are switched on only once the dialog says what they grant, and off again", async () => {
+  it("switch on with the state passphrase inline, and off again", async () => {
     const browser = new Intl.DateTimeFormat().resolvedOptions().timeZone;
     const off = { possible: true, on: false, user: "kubehenge-upgrader@pve" };
-    const on = { ...off, on: true, by: "root@pam", since: "2026-10-22T09:00:00Z" };
+    const on = { ...off, on: true, by: "root@pam", since: "2026-10-22T09:00:00Z", imageStorage: "local" };
     const routes: Record<string, Route> = {
       "GET /api/appliance/upgrades": upgrades(off),
       "PUT /api/appliance/upgrades/management": () => {
@@ -158,26 +159,16 @@ describe("automatic upgrades of the management cluster", () => {
     expect(select).toHaveValue("off");
     expect(screen.queryByLabelText("Hour")).not.toBeInTheDocument();
 
-    // Cancelled, nothing is kept.
+    // Taken back before switching on, nothing is kept.
     await user.selectOptions(select, "on");
-    await user.click(
-      within(screen.getByRole("dialog", { name: "Upgrade management cluster automatically" })).getByRole("button", {
-        name: "Cancel",
-      }),
-    );
+    expect(screen.getByRole("button", { name: "Switch on" })).toBeDisabled();
+    await user.selectOptions(select, "off");
+    expect(screen.queryByLabelText("State passphrase")).not.toBeInTheDocument();
     expect(calls.map((c) => c.key)).not.toContain("PUT /api/appliance/upgrades/management");
-    expect(select).toHaveValue("off");
 
     await user.selectOptions(select, "on");
-    const dialog = within(screen.getByRole("dialog", { name: "Upgrade management cluster automatically" }));
-    expect(dialog.getByText("kubehenge-upgrader@pve")).toBeInTheDocument();
-    expect(dialog.getByText(/Stores the state passphrase/u)).toHaveTextContent("with Administrator on /");
-    expect(
-      dialog.getByText("Whoever takes over the appliance then controls the management cluster and Proxmox VE."),
-    ).toBeInTheDocument();
-    expect(dialog.getByRole("button", { name: "Switch on" })).toBeDisabled();
-    await user.type(dialog.getByLabelText("State passphrase"), "correct horse battery staple");
-    await user.click(dialog.getByRole("button", { name: "Switch on" }));
+    await user.type(screen.getByLabelText("State passphrase"), "correct horse battery staple");
+    await user.click(screen.getByRole("button", { name: "Switch on" }));
     await waitFor(() =>
       expect(calls.find((c) => c.key === "PUT /api/appliance/upgrades/management")?.body).toStrictEqual({
         passphrase: "correct horse battery staple",
@@ -193,6 +184,8 @@ describe("automatic upgrades of the management cluster", () => {
     );
     await waitFor(() => expect(screen.getByLabelText("Management cluster")).toHaveValue("on"));
     expect(screen.getByText(/Switched on .* by root@pam/u)).toBeInTheDocument();
+    expect(screen.getByText("Also writes VM templates on storage local")).toBeInTheDocument();
+    expect(screen.queryByLabelText("State passphrase")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Hour")).toBeInTheDocument();
 
     await user.selectOptions(screen.getByLabelText("Management cluster"), "off");
@@ -200,7 +193,27 @@ describe("automatic upgrades of the management cluster", () => {
     await waitFor(() => expect(screen.getByLabelText("Management cluster")).toHaveValue("off"));
   });
 
-  it("show a wrong passphrase in the dialog", async () => {
+  it("switch on at once where the state needs no passphrase", async () => {
+    const calls = fakeServer({
+      "GET /api/appliance/upgrades": upgrades({ possible: true, on: false, user: "kubehenge-upgrader@pve" }, "patch"),
+      "PUT /api/appliance/upgrades/management": { body: { possible: true, on: true, user: "kubehenge-upgrader@pve" } },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(
+      <StatePassphrase value={false}>
+        <ApplianceUpgrades />
+      </StatePassphrase>,
+    );
+    await user.selectOptions(await screen.findByLabelText("Management cluster"), "on");
+    await waitFor(() =>
+      expect(calls.find((c) => c.key === "PUT /api/appliance/upgrades/management")?.body).toStrictEqual({
+        passphrase: "",
+      }),
+    );
+    expect(screen.queryByLabelText("State passphrase")).not.toBeInTheDocument();
+  });
+
+  it("show a wrong passphrase", async () => {
     fakeServer({
       "GET /api/appliance/upgrades": upgrades({ possible: true, on: false, user: "kubehenge-upgrader@pve" }, "patch"),
       "PUT /api/appliance/upgrades/management": {
@@ -211,16 +224,25 @@ describe("automatic upgrades of the management cluster", () => {
     const user = userEvent.setup({ delay: null });
     render(<ApplianceUpgrades />);
     await user.selectOptions(await screen.findByLabelText("Management cluster"), "on");
-    const dialog = within(screen.getByRole("dialog", { name: "Upgrade management cluster automatically" }));
-    await user.type(dialog.getByLabelText("State passphrase"), "the wrong passphrase entirely");
-    await user.click(dialog.getByRole("button", { name: "Switch on" }));
+    await user.type(screen.getByLabelText("State passphrase"), "the wrong passphrase entirely");
+    await user.click(screen.getByRole("button", { name: "Switch on" }));
     await expect(
-      dialog.findByText("the passphrase does not open the management cluster's state", { exact: false }),
+      screen.findByText("the passphrase does not open the management cluster's state", { exact: false }),
     ).resolves.toBeInTheDocument();
   });
 
-  it("say when a restore left their key behind", async () => {
+  it("say why an apply could not switch them on", async () => {
+    const failed =
+      "Off: kubehenge-upgrader@pve could not be made (forbidden). Apply again as a Proxmox VE administrator.";
     fakeServer({
+      "GET /api/appliance/upgrades": upgrades({ possible: true, on: false, user: "kubehenge-upgrader@pve", failed }),
+    });
+    render(<ApplianceUpgrades />);
+    await expect(screen.findByText(failed)).resolves.toBeInTheDocument();
+  });
+
+  it("renew in one click when a restore left their key behind", async () => {
+    const calls = fakeServer({
       "GET /api/appliance/upgrades": upgrades(
         {
           possible: true,
@@ -232,12 +254,18 @@ describe("automatic upgrades of the management cluster", () => {
         },
         "patch",
       ),
+      "PUT /api/appliance/upgrades/management": { body: { possible: true, on: true, user: "kubehenge-upgrader@pve" } },
     });
-    render(<ApplianceUpgrades />);
-    await expect(
-      screen.findByText("Its key is gone, as after a restore. Switch off and on again."),
-    ).resolves.toBeInTheDocument();
+    const user = userEvent.setup({ delay: null });
+    render(
+      <StatePassphrase value={false}>
+        <ApplianceUpgrades />
+      </StatePassphrase>,
+    );
+    await expect(screen.findByText("Its key is gone, as after a restore. Renew it.")).resolves.toBeInTheDocument();
     expect(screen.getByLabelText("Management cluster")).toHaveValue("on");
+    await user.click(screen.getByRole("button", { name: "Renew" }));
+    await waitFor(() => expect(calls.map((c) => c.key)).toContain("PUT /api/appliance/upgrades/management"));
   });
 
   it("are not offered before there is a management cluster", async () => {

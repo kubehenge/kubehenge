@@ -1462,8 +1462,12 @@ export interface ManagementAutomatic {
   since?: string;
   /** The Proxmox VE user the runs act as. */
   user: string;
-  /** The runs cannot open what was kept, as after a restore, until switched off and on. */
+  /** The runs cannot open what was kept, as after a restore, until switched on again. */
   keyLost?: boolean;
+  /** Why the last apply could not switch them on. */
+  failed?: string;
+  /** The storage the runs may write VM templates on, beyond the management cluster's own VMs. */
+  imageStorage?: string;
 }
 
 export type UpgradePolicy = "off" | "patch" | "minor";

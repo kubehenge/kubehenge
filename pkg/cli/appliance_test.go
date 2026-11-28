@@ -148,6 +148,12 @@ func newFakeInterface(t *testing.T) *fakeInterface {
 		}
 		answer(w, http.StatusOK, `{}`)
 	}))
+	mux.HandleFunc("PUT /api/appliance/upgrades/management", f.admin(func(w http.ResponseWriter, _ *http.Request) {
+		answer(w, http.StatusOK, `{"on":true}`)
+	}))
+	mux.HandleFunc("DELETE /api/appliance/upgrades/management", f.admin(func(w http.ResponseWriter, _ *http.Request) {
+		answer(w, http.StatusOK, `{"on":false}`)
+	}))
 	mux.HandleFunc("GET /api/notifications", f.admin(func(w http.ResponseWriter, _ *http.Request) {
 		answer(w, http.StatusOK, `[{"kind":"notify-webhook","at":"2027-03-01T12:00:00Z","title":"web: VM paused"},{"kind":"notify-ntfy"},
 			{"kind":"notify-email","at":"2027-03-01T12:00:00Z","title":"web: VM paused","error":"signing in: 535 bad credentials"}]`)
@@ -507,6 +513,27 @@ func TestApplianceStatePassphrase(t *testing.T) {
 	}
 	out, err = f.run(f.args("admin@pve", "state-passphrase", "--off", "--passphrase-file", writeTemp(t, "right"))...)
 	if err != nil || out != "The appliance keeps the state's key again\n" {
+		t.Errorf("off: %v\n%q", err, out)
+	}
+}
+
+// management-upgrades switches automatic upgrades of the management cluster as the interface does,
+// with the passphrase only where one is given.
+func TestApplianceManagementUpgrades(t *testing.T) {
+	t.Parallel()
+	f := newFakeInterface(t)
+	if _, err := f.run(f.args("admin@pve", "management-upgrades")...); err == nil || err.Error() != "give --on or --off" {
+		t.Errorf("neither: %v", err)
+	}
+	out, err := f.run(f.args("admin@pve", "management-upgrades", "--on")...)
+	if sent := f.bodies["PUT /api/appliance/upgrades/management"]; err != nil || !strings.HasPrefix(out, "On.") || sent["passphrase"] != "" {
+		t.Errorf("on: %v %v\n%q", err, sent, out)
+	}
+	out, err = f.run(f.args("admin@pve", "management-upgrades", "--on", "--passphrase-file", writeTemp(t, "right"))...)
+	if sent := f.bodies["PUT /api/appliance/upgrades/management"]; err != nil || !strings.HasPrefix(out, "On.") || sent["passphrase"] != "right" {
+		t.Errorf("on with a passphrase: %v %v\n%q", err, sent, out)
+	}
+	if out, err = f.run(f.args("admin@pve", "management-upgrades", "--off")...); err != nil || !strings.HasPrefix(out, "Off.") {
 		t.Errorf("off: %v\n%q", err, out)
 	}
 }
