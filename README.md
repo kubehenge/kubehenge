@@ -29,6 +29,8 @@ VMware's vSphere Kubernetes Service is built on Cluster API. Kubehenge does the 
 
 ## What it does
 
+Kubehenge is written with AI coding agents. Every change passes lint and unit tests before it merges, and the end-to-end lanes its code needs.
+
 - **Create, scale, upgrade and delete clusters** on Proxmox VE, from the interface or with `kubectl apply`. Upgrades replace nodes one at a time. A node not ready for five minutes is replaced too.
 - **A distribution per cluster:** kubeadm (upstream Kubernetes), RKE2, k3s or Talos Linux, with the distribution's own CNI, Cilium or Calico.
 - **Proxmox VE built in:** the Proxmox CSI plugin for volumes, its cloud controller manager and a control-plane virtual IP.
@@ -54,7 +56,7 @@ flowchart LR
 | k3s | flannel, Cilium, Calico | AlmaLinux 10, Rocky Linux 10 |
 | Talos | flannel, Cilium, Calico | Talos Linux |
 
-Kubehenge needs Proxmox VE 9. The end-to-end tests run each distribution with each CNI and node OS in the table ([testing.md](docs/testing.md)).
+Kubehenge needs Proxmox VE 9. The end-to-end tests run each distribution with its own CNI and node OS, and every night with another CNI and node OS of the table in turn, so not every pair runs every night ([testing.md](docs/testing.md)). FIPS mode, IPv6 and dual-stack are unsupported until a test passes on them.
 
 ## Add-ons and sign-in
 

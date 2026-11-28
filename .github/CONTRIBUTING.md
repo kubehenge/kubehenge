@@ -78,6 +78,8 @@ These hold for the web interface, the installer and the CLI alike. The text rule
 
 ## Code checks
 
+Kubehenge is written with AI coding agents. Every change passes lint and unit tests before it merges, and the end-to-end lanes its code needs.
+
 - **Strictest checks.** Every linter, formatter and type checker runs at its strictest setting. A rule is switched off only where it contradicts another or the language's own conventions.
   - A single finding is suppressed only where the rule is wrong for that line. Either way the reason stands beside it.
 - **CSS.** stylelint checks the interface's and the website's CSS, with a strict property order and logical properties (`web/stylelint.config.mjs`).

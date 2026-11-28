@@ -6,7 +6,7 @@ What each release changed is in the [changelog](changelog.md).
 
 ### Clusters
 
-- ClusterClasses for kubeadm, RKE2, k3s and Talos, each passing the end-to-end suite. Talos nodes are upgraded in place through Talos's own API, one at a time, control planes first.
+- ClusterClasses for kubeadm, RKE2, k3s and Talos. Each distribution's workload test runs in CI with its own CNI and node OS, and every night once more with another CNI and node OS in turn ([testing.md](testing.md#the-nightly-run)). Not supported yet: [FIPS mode](templates.md#fips-mode) and [IPv6 and dual-stack](clusters.md#ipv6-and-dual-stack). Talos nodes are upgraded in place through Talos's own API, one at a time, control planes first.
 - In every cluster:
   - Proxmox CSI plugin
   - Proxmox cloud controller manager
@@ -44,6 +44,8 @@ What each release changed is in the [changelog](changelog.md).
 
 ## Next
 
+- FIPS mode for RKE2 clusters, once every part of the workload cluster test passes on one. Today the `machines` part fails at its last step on Rocky Linux 10 and the add-on parts have not run.
+- IPv6 and dual-stack clusters, once an end-to-end test passes. Only kubeadm with Calico runs one, nightly.
 - The controller manager's and scheduler's metrics on Talos, from the first Talos release that gives them serving certificates of the cluster CA.
 - openSUSE Leap 16.1 Immutable as a node OS, once openSUSE releases it.
 - The Proxmox VE provider (capmox) as its own release. That waits for one with the six fixes and the VM firewall Kubehenge adds to v0.9.2 (`capmox_build` in `management-cluster/versions.tf`).
