@@ -5,7 +5,7 @@ terraform {
   required_providers {
     proxmox = {
       source  = "bpg/proxmox"
-      version = "~> 0.123"
+      version = "~> 0.124"
     }
     talos = {
       source  = "siderolabs/talos"
@@ -24,17 +24,17 @@ locals {
   # The tested set. Raising one of these upgrades that component on the next apply.
   tested_versions = {
     # renovate: datasource=github-releases depName=siderolabs/talos
-    talos = "v1.14.6"
+    talos = "v1.14.7"
     # renovate: datasource=github-releases depName=kubernetes/kubernetes
-    kubernetes = "v1.37.2"
+    kubernetes = "v1.37.3"
     # renovate: datasource=github-releases depName=kubernetes-sigs/cluster-api
     cluster_api = "v1.14.4"
     # renovate: datasource=github-releases depName=ionos-cloud/cluster-api-provider-proxmox
     capmox = "v0.9.2"
     # renovate: datasource=github-releases depName=rancher/cluster-api-provider-rke2
-    rke2 = "v0.27.2"
+    rke2 = "v0.27.3"
     # renovate: datasource=github-releases depName=k3s-io/cluster-api-k3s
-    k3s = "v0.5.0"
+    k3s = "v0.5.1"
     # renovate: datasource=github-releases depName=kubernetes-sigs/cluster-api-ipam-provider-in-cluster
     ipam_in_cluster = "v1.1.1"
     # renovate: datasource=github-releases depName=kubernetes-sigs/cluster-api-addon-provider-helm
@@ -103,17 +103,17 @@ locals {
     # renovate: datasource=github-release-attachments depName=kubernetes-sigs/cluster-api
     "kubernetes-sigs/cluster-api/releases/download/v1.14.4/control-plane-components.yaml" = "7fecb41843dcff7e05ab539dbe497c050a9aa7c888d4fb68be12d3c1805be438"
     # renovate: datasource=github-release-attachments depName=rancher/cluster-api-provider-rke2
-    "rancher/cluster-api-provider-rke2/releases/download/v0.27.2/metadata.yaml" = "dc75670ce2d929e00c1b6cf1f2f91e0ad7c0e9b4637df101b2bb884ef8c74e0d"
+    "rancher/cluster-api-provider-rke2/releases/download/v0.27.3/metadata.yaml" = "dc75670ce2d929e00c1b6cf1f2f91e0ad7c0e9b4637df101b2bb884ef8c74e0d"
     # renovate: datasource=github-release-attachments depName=rancher/cluster-api-provider-rke2
-    "rancher/cluster-api-provider-rke2/releases/download/v0.27.2/bootstrap-components.yaml" = "0ba4c73bfe335bfa1b8a277b4df5f35e9a475f47f93038809010a1dc111063a2"
+    "rancher/cluster-api-provider-rke2/releases/download/v0.27.3/bootstrap-components.yaml" = "2c4fb4246826cbf77d331f28138a8ece92b240fa58c53fb77ae292a6bc80641e"
     # renovate: datasource=github-release-attachments depName=rancher/cluster-api-provider-rke2
-    "rancher/cluster-api-provider-rke2/releases/download/v0.27.2/control-plane-components.yaml" = "f47336d0d34e6c96797d633470c7566973ba5b86925791fa68cbf60add607378"
+    "rancher/cluster-api-provider-rke2/releases/download/v0.27.3/control-plane-components.yaml" = "718c02311b08166a545a043f249a22f8476ff4a6904abd9e91a4cdfe498e0145"
     # renovate: datasource=github-release-attachments depName=k3s-io/cluster-api-k3s
-    "k3s-io/cluster-api-k3s/releases/download/v0.5.0/metadata.yaml" = "c53705b9d79ab9fc70c95b19cd4104bc07a65305e4c8f752ca42153c84225cb6"
+    "k3s-io/cluster-api-k3s/releases/download/v0.5.1/metadata.yaml" = "c53705b9d79ab9fc70c95b19cd4104bc07a65305e4c8f752ca42153c84225cb6"
     # renovate: datasource=github-release-attachments depName=k3s-io/cluster-api-k3s
-    "k3s-io/cluster-api-k3s/releases/download/v0.5.0/bootstrap-components.yaml" = "ed311227fd133dbdfccaad643f0c68c12c06f9bfec75221d57dffcefc8936a26"
+    "k3s-io/cluster-api-k3s/releases/download/v0.5.1/bootstrap-components.yaml" = "10dd7028c7ceb4a4e82ceba015a0720f1aec1801686aba3856220a7324e84aed"
     # renovate: datasource=github-release-attachments depName=k3s-io/cluster-api-k3s
-    "k3s-io/cluster-api-k3s/releases/download/v0.5.0/control-plane-components.yaml" = "9032b67bb1a2642f967c00763ca3706ee0eaea34e855e646f0fec452e838b624"
+    "k3s-io/cluster-api-k3s/releases/download/v0.5.1/control-plane-components.yaml" = "0bc90f349c46f3c11f8451082d4433f8b71c0569eb21d4f1a7923725b09549e9"
     # renovate: datasource=github-release-attachments depName=ionos-cloud/cluster-api-provider-proxmox
     "ionos-cloud/cluster-api-provider-proxmox/releases/download/v0.9.2/metadata.yaml" = "df2916a79503ac053f6a9866a8de025e780e24d6d472f00f59f84898b5a1c572"
     # renovate: datasource=github-release-attachments depName=ionos-cloud/cluster-api-provider-proxmox
@@ -145,15 +145,15 @@ locals {
     # renovate: datasource=docker depName=registry.k8s.io/cluster-api/kubeadm-bootstrap-controller
     "BootstrapProvider/kubeadm" = "registry.k8s.io/cluster-api/kubeadm-bootstrap-controller:v1.14.4@sha256:674dd5e666d209c7bdb72525dd3bb40a670c068bd12d610b596b532a84463e62"
     # renovate: datasource=docker depName=ghcr.io/rancher/cluster-api-provider-rke2-bootstrap
-    "BootstrapProvider/rke2" = "ghcr.io/rancher/cluster-api-provider-rke2-bootstrap:v0.27.2@sha256:314b5993c8534608a92e479e886892f4091b7f956373d8c74bff67c549768702"
+    "BootstrapProvider/rke2" = "ghcr.io/rancher/cluster-api-provider-rke2-bootstrap:v0.27.3@sha256:8f361e8e158a1463b41cbd48989203d52cecd2fa19f3f79260a7e76b292fe36e"
     # renovate: datasource=docker depName=ghcr.io/k3s-io/cluster-api-k3s/bootstrap-controller
-    "BootstrapProvider/k3s" = "ghcr.io/k3s-io/cluster-api-k3s/bootstrap-controller:v0.5.0@sha256:96fb0622640e0eba2f11b5fff919c4bae6829e2225c31c8e34d5a2b81760d94c"
+    "BootstrapProvider/k3s" = "ghcr.io/k3s-io/cluster-api-k3s/bootstrap-controller:v0.5.1@sha256:6d561d932221751c6e714f87c062ac370dea4e3779be0759634d7c7fcfd29e34"
     # renovate: datasource=docker depName=registry.k8s.io/cluster-api/kubeadm-control-plane-controller
     "ControlPlaneProvider/kubeadm" = "registry.k8s.io/cluster-api/kubeadm-control-plane-controller:v1.14.4@sha256:49f5cc1a0f9b3f909434e1cccf87d5d868e85e5c9ce849e8ae65ff409458befc"
     # renovate: datasource=docker depName=ghcr.io/rancher/cluster-api-provider-rke2-controlplane
-    "ControlPlaneProvider/rke2" = "ghcr.io/rancher/cluster-api-provider-rke2-controlplane:v0.27.2@sha256:9745a1aa154d86b78d8b5eb7ea685f1091b5b361c00f65fe02a983cac3898ec2"
+    "ControlPlaneProvider/rke2" = "ghcr.io/rancher/cluster-api-provider-rke2-controlplane:v0.27.3@sha256:351616aef6b7e1681c323cedbfc7991a4d548e2e1108ee5b5c92928a967d1d2e"
     # renovate: datasource=docker depName=ghcr.io/k3s-io/cluster-api-k3s/controlplane-controller
-    "ControlPlaneProvider/k3s" = "ghcr.io/k3s-io/cluster-api-k3s/controlplane-controller:v0.5.0@sha256:35200f224612caca2153e6f6bafce25f83440917d0e3b51eb2ad701cdfe13ab6"
+    "ControlPlaneProvider/k3s" = "ghcr.io/k3s-io/cluster-api-k3s/controlplane-controller:v0.5.1@sha256:181196bce741cfb1ed212860df5ebced152454602e0863f456dfacfe5f22b3aa"
     # renovate: datasource=docker depName=ghcr.io/ionos-cloud/cluster-api-provider-proxmox
     "InfrastructureProvider/proxmox" = "ghcr.io/ionos-cloud/cluster-api-provider-proxmox:v0.9.2@sha256:682df819bb9a3b42eb12b784e47a29044555cc4d98178c71e220d97a84183252"
     # renovate: datasource=docker depName=registry.k8s.io/capi-ipam-ic/cluster-api-ipam-in-cluster-controller

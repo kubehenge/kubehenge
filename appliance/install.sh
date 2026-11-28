@@ -17,8 +17,8 @@ set -eu
 KUBEHENGE_VERSION=0.1.0
 KUBEHENGE_SHA256=
 # renovate: datasource=github-release-attachments depName=opentofu/opentofu
-TOFU_TAG=v1.13.9
-TOFU_SHA256=b34b327cc1ef07178207b6f2cd1f5276537d3e5b7be316500f6dac50d4c0a857
+TOFU_TAG=v1.13.10
+TOFU_SHA256=f606b6117ee03177374806d56d580bde7b512aff69f86d2b9f3148dced4ca375
 # The unpacked release needs 1 GiB beside the downloaded archive.
 work_kib=1048576
 

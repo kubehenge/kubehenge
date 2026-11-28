@@ -98,13 +98,13 @@ NODE_SHA256=518674de2b621728a5e4486f5fb3b7d2900bb3cc4aa97969edaa463db99f9778
 tree node "https://nodejs.org/dist/v${NODE}/node-v${NODE}-linux-x64.tar.gz" "${NODE_SHA256}" bin node npm npx
 
 # renovate: datasource=github-release-attachments depName=astral-sh/uv
-UV=0.13.9
-UV_SHA256=a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5
+UV=0.13.10
+UV_SHA256=bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c
 tree uv "https://github.com/astral-sh/uv/releases/download/${UV}/uv-x86_64-unknown-linux-gnu.tar.gz" "${UV_SHA256}" . uv
 
 # renovate: datasource=github-release-attachments depName=opentofu/opentofu
-TOFU=v1.13.9
-TOFU_SHA256=b34b327cc1ef07178207b6f2cd1f5276537d3e5b7be316500f6dac50d4c0a857
+TOFU=v1.13.10
+TOFU_SHA256=f606b6117ee03177374806d56d580bde7b512aff69f86d2b9f3148dced4ca375
 release tofu opentofu/opentofu "${TOFU}" "tofu_${TOFU#v}_linux_amd64.tar.gz" "${TOFU_SHA256}" tofu
 
 # renovate: datasource=github-releases depName=helm/helm
@@ -132,8 +132,8 @@ tool kubectl "https://dl.k8s.io/release/${KUBECTL}/bin/linux/amd64/kubectl" "${K
 
 # The end-to-end tests reach Talos nodes through their API with it.
 # renovate: datasource=github-release-attachments depName=siderolabs/talos
-TALOSCTL=v1.14.6
-TALOSCTL_SHA256=11acde7f7578ffe9cbe6fb8349b34595065f597de0842615982e350b365de987
+TALOSCTL=v1.14.7
+TALOSCTL_SHA256=823deb86e20d79f08d000b266e63e4bffc772ee80364ce405bad5659bcacfb18
 release talosctl siderolabs/talos "${TALOSCTL}" talosctl-linux-amd64 "${TALOSCTL_SHA256}"
 
 # renovate: datasource=github-release-attachments depName=rhysd/actionlint
@@ -180,8 +180,8 @@ release lychee lycheeverse/lychee "${LYCHEE}" lychee-x86_64-unknown-linux-gnu.ta
 
 # The release signs its images with it.
 # renovate: datasource=github-release-attachments depName=sigstore/cosign
-COSIGN=v3.1.4
-COSIGN_SHA256=424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa
+COSIGN=v3.1.6
+COSIGN_SHA256=318a99ade4156a0c4113aa983b46c0a0830fa7896a096c63121ee47b610a94c6
 release cosign sigstore/cosign "${COSIGN}" cosign-linux-amd64 "${COSIGN_SHA256}"
 
 # The release writes the SBOMs of its archive and images with it (scripts/sbom.sh).

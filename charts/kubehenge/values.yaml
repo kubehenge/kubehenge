@@ -256,7 +256,7 @@ templateRefresh:
 # kube-vip, which holds each cluster's API address on its control planes and, where it is the
 # cluster's load balancer, its Services' addresses.
 # renovate: datasource=docker depName=ghcr.io/kube-vip/kube-vip
-kubeVip: ghcr.io/kube-vip/kube-vip:v1.3.1@sha256:1962f9daf226503f7e6b107f595cb28b7917fd2d0113957075e19a3e5a6c1e33
+kubeVip: ghcr.io/kube-vip/kube-vip:v1.3.2@sha256:50b25c001fe19628a932b42ec6f8ec31bb65a5e1811a723a57ceddbc5cd5aade
 
 # The management cluster's API as workload clusters reach it, such as https://192.0.2.10:6443; the
 # management cluster's module sets it. Without it, no cluster's autoscaler can run inside the
@@ -305,7 +305,7 @@ autoscaler:
 # The proxy on k3s control planes through which Cluster API reaches each node's etcd; the k3s
 # provider would otherwise pull it by tag alone.
 # renovate: datasource=docker depName=docker.io/alpine/socat
-etcdProxy: docker.io/alpine/socat:1.8.1.3@sha256:71131702f671a88b3808a70b7330f9679cd9b9933adcafadc191508edfe55bba
+etcdProxy: docker.io/alpine/socat:1.8.1.3@sha256:c95c67c1b4860a195bb2ea1351cb8388e1ec1bf4636633ccac7e0d19661ed5fe
 
 # Installed into clusters: the Proxmox VE cloud controller manager and CSI plugin into every one,
 # the CNI chosen for a cluster whose distribution has none of its own (kubeadm), and the add-ons a
@@ -389,7 +389,7 @@ addons:
   monitoring:
     repository: https://prometheus-community.github.io/helm-charts
     chart: kube-prometheus-stack
-    version: 93.4.0@sha256:2ff4547dbe30aa7f6c7ef9fb49e35dfef43a36486cd8e463cd43cdda93914b24
+    version: 94.2.0@sha256:5717fa4bc926902b60353bbf162201cb040f627ce7dd7286de6596327ad5301b
     # In front of the metrics etcd, kube-proxy and node-exporter serve without authentication.
     # renovate: datasource=docker depName=ghcr.io/kube-rbac-proxy/kube-rbac-proxy
     kubeRBACProxy: ghcr.io/kube-rbac-proxy/kube-rbac-proxy:v0.23.1@sha256:f723251bdd90a806b5331b6e9f9287cc2832d3dd9f9479378cdbbddb9856724f
@@ -404,7 +404,7 @@ addons:
               tag: 1.38.0@sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4
             kubectl:
               # renovate: datasource=docker depName=registry.k8s.io/kubectl
-              tag: v1.37.2@sha256:fe049faa65ae483ac200009a949a68fa4c9985daea12c9cb1195c9c7965301fc
+              tag: v1.37.3@sha256:82f06779a0dcd86225ffdb96c005418b9716093a39907a5ecf686d7a22e6b788
       prometheusOperator:
         image:
           # renovate: datasource=docker depName=quay.io/prometheus-operator/prometheus-operator
@@ -446,9 +446,9 @@ addons:
         alertmanagerSpec:
           image:
             # renovate: datasource=docker depName=quay.io/prometheus/alertmanager
-            tag: v0.35.0@sha256:5f6e66c01bd610aef6dd671642a52eee775fd3a89bd8788ebada33efaf373d10
+            tag: v0.35.1@sha256:03d4e362b9948eee910802ddac55f9175b320862a2de1fdef5206c3213875a09
           # renovate: datasource=docker depName=quay.io/prometheus/alertmanager depType=version
-          version: v0.35.0
+          version: v0.35.1
       thanosRuler:
         thanosRulerSpec:
           image:
@@ -457,7 +457,7 @@ addons:
       grafana:
         image:
           # renovate: datasource=docker depName=docker.io/grafana/grafana
-          tag: 13.3.1-distroless@sha256:54e297ac67e2b72572f926892f4e06074dc4f79f2a56ed9a9ca9a88a46f28733
+          tag: 13.3.2-distroless@sha256:d9425e704fa9dff189966b827fbc9b63befc5b443999c7b82193f1b1a73c74f7
         sidecar:
           image:
             # renovate: datasource=docker depName=quay.io/kiwigrid/k8s-sidecar
@@ -475,18 +475,18 @@ addons:
         image:
           # The whole reference: the chart adds -distroless to a tag of its own.
           # renovate: datasource=docker depName=quay.io/prometheus/node-exporter
-          tag: quay.io/prometheus/node-exporter:v1.12.1-distroless@sha256:8c9bac11973b94b59be88d6e11fee4429aa743c8846cdc75d65b18db33f6a106
+          tag: quay.io/prometheus/node-exporter:v1.13.1-distroless@sha256:dbc46b5381ae47c5634a6ad16d7b4862191979b0ba4f4cfbdee85e5aa2fcd1e3
   # Loki, which keeps the logs of clusters that switch logs on, and Grafana Alloy, which collects
   # them.
   loki:
     repository: https://grafana-community.github.io/helm-charts
     chart: loki
-    version: 21.3.1@sha256:bda99d06d9243444a82b0a41ac76df512e304f0e238bb9d723d88fc2b12773f0
+    version: 21.6.4@sha256:5f919a67f69e05ebf0b51674ea21e8cffe2fa0ec17d39bc374cc6704953fc5a0
     values:
       loki:
         image:
           # renovate: datasource=docker depName=docker.io/grafana/loki
-          tag: 3.7.10@sha256:b43c257ccfc925d4a50b8717cac61a3b51df8c48d01847936057e5c4075a24a7
+          tag: 3.7.11@sha256:4c86f2ad5003304c8da84d29da2279b04eb999d716f8089c88e4fa4a44b0781e
   alloy:
     repository: https://grafana.github.io/helm-charts
     chart: alloy
@@ -502,9 +502,9 @@ addons:
     chart: velero
     version: 12.2.5@sha256:faf074aacc580ddffa63e85582cafd54b3dde018442af9623a710a3825f644b8
     # renovate: datasource=docker depName=docker.io/velero/velero
-    image: docker.io/velero/velero:v1.18.4@sha256:c89fb5b6d1fd6afd368e0f483e6f5555fd62851a1eada8ac5c72482e674ca17b
+    image: docker.io/velero/velero:v1.19.0@sha256:da94e0de154f837db0ada37ea0c168428943dab2c872efc10481189925de395f
     # renovate: datasource=docker depName=docker.io/velero/velero-plugin-for-aws
-    plugin: docker.io/velero/velero-plugin-for-aws:v1.14.4@sha256:c85a7fa803569e3128c33e4f5766f84ab156c8d171c9f1dd2715581d45ce98fa
+    plugin: docker.io/velero/velero-plugin-for-aws:v1.15.0@sha256:cb8fdbefc54e2d99b124f6611bc8cad31a1e546689dfb2a32c9307339c492750
   # Kyverno and its Pod Security Standards policies, for clusters that have Kyverno enforce pod
   # security.
   kyverno:
@@ -654,19 +654,19 @@ addons:
         attacher:
           image:
             # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-attacher
-            tag: v4.13.0@sha256:d1a26170efed45491074ca4545c81844eee2b9043fb885ac01fb4aed6f8b72d2
+            tag: v4.13.1@sha256:b398d0f5a30202b5261412023b24057bc5a493d8b2b5dad25ebf5c89966e1559
         provisioner:
           image:
             # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-provisioner
-            tag: v6.4.0@sha256:6ebe60fd8ed67a7f8a90d34402e9e706b274e53612d6fa5fbb8285728db622e2
+            tag: v6.4.1@sha256:9e76a2c599ffd7a66f08feeb62ddec61e3545eaa442f8f8f6a495569c0b06829
         resizer:
           image:
             # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-resizer
-            tag: v2.3.0@sha256:48fb3deb93cd848e3c8998b6368f4322c93bb5ce4a90d1307b6dda0dbefb9a0e
+            tag: v2.3.1@sha256:d5b040c2f6ffb25127169feeb845aaf1fa3279e510d71fbebe386b5becc625cc
         snapshotter:
           image:
             # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-snapshotter
-            tag: v8.7.0@sha256:b03d3334f8035fa42660b166f6eb819a659a14774da020eb1b6c52cd422eaadb
+            tag: v8.7.1@sha256:b534b99edb61a5f95e297da8e2a133d36e27ad098e2f643393986e86f093d425
       node:
         plugin:
           image:
@@ -677,11 +677,11 @@ addons:
           image:
             # yamllint disable-line rule:line-length
             # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-node-driver-registrar
-            tag: v2.18.0@sha256:b7fefd08651f00ac4df1a196ed4c621c2451fbb899297fe9fad9e36c667af0c0
+            tag: v2.18.1@sha256:f847fb218cdf1d0f0fa79772ca6f46e11d25635eb49c06efb5dccd00b5245ef5
       livenessprobe:
         image:
           # renovate: datasource=docker depName=registry.k8s.io/sig-storage/livenessprobe
-          tag: v2.20.0@sha256:19f2cf2f40e1987c7943945deca5f65cd4e4bf5cc0657fc78a5df131861578e8
+          tag: v2.20.1@sha256:d06ac4f9242654f278d9c8a4e343b0516542bfc614218d469959c6428765e97f
   # The CSI plugin's newest release, for clusters whose token holds Datastore.Allocate on their
   # storage (their csi variable). The sidecars are the same as above.
   csiPluginNewest:
@@ -698,19 +698,19 @@ addons:
         attacher:
           image:
             # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-attacher
-            tag: v4.13.0@sha256:d1a26170efed45491074ca4545c81844eee2b9043fb885ac01fb4aed6f8b72d2
+            tag: v4.13.1@sha256:b398d0f5a30202b5261412023b24057bc5a493d8b2b5dad25ebf5c89966e1559
         provisioner:
           image:
             # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-provisioner
-            tag: v6.4.0@sha256:6ebe60fd8ed67a7f8a90d34402e9e706b274e53612d6fa5fbb8285728db622e2
+            tag: v6.4.1@sha256:9e76a2c599ffd7a66f08feeb62ddec61e3545eaa442f8f8f6a495569c0b06829
         resizer:
           image:
             # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-resizer
-            tag: v2.3.0@sha256:48fb3deb93cd848e3c8998b6368f4322c93bb5ce4a90d1307b6dda0dbefb9a0e
+            tag: v2.3.1@sha256:d5b040c2f6ffb25127169feeb845aaf1fa3279e510d71fbebe386b5becc625cc
         snapshotter:
           image:
             # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-snapshotter
-            tag: v8.7.0@sha256:b03d3334f8035fa42660b166f6eb819a659a14774da020eb1b6c52cd422eaadb
+            tag: v8.7.1@sha256:b534b99edb61a5f95e297da8e2a133d36e27ad098e2f643393986e86f093d425
       node:
         plugin:
           image:
@@ -720,11 +720,11 @@ addons:
           image:
             # yamllint disable-line rule:line-length
             # renovate: datasource=docker depName=registry.k8s.io/sig-storage/csi-node-driver-registrar
-            tag: v2.18.0@sha256:b7fefd08651f00ac4df1a196ed4c621c2451fbb899297fe9fad9e36c667af0c0
+            tag: v2.18.1@sha256:f847fb218cdf1d0f0fa79772ca6f46e11d25635eb49c06efb5dccd00b5245ef5
       livenessprobe:
         image:
           # renovate: datasource=docker depName=registry.k8s.io/sig-storage/livenessprobe
-          tag: v2.20.0@sha256:19f2cf2f40e1987c7943945deca5f65cd4e4bf5cc0657fc78a5df131861578e8
+          tag: v2.20.1@sha256:d06ac4f9242654f278d9c8a4e343b0516542bfc614218d469959c6428765e97f
   # The VolumeSnapshot CRDs and snapshot controller, for kubeadm and k3s clusters that take volume
   # snapshots (RKE2 runs its own), and the VolumeSnapshotClass of the CSI plugin, on every
   # distribution, from a second release of the chart.
@@ -732,12 +732,12 @@ addons:
     repository: oci://ghcr.io/piraeusdatastore/helm-charts
     chart: snapshot-controller
     # renovate: datasource=docker depName=ghcr.io/piraeusdatastore/helm-charts/snapshot-controller
-    version: 5.4.0@sha256:b885ec62379a71eca0a6b97373fc342280c7f65885608d522ee908c023f86bae
+    version: 5.4.1@sha256:dae3f46022b42a46a1f6d2489a4ee16d9b55f85e07c36c3d6063bcb0e1b35a69
     values:
       controller:
         image:
           # renovate: datasource=docker depName=registry.k8s.io/sig-storage/snapshot-controller
-          tag: v8.7.0@sha256:8511f417d0072efcd937aedd7cc79a937d5066e64ee17beb6097301c92742f19
+          tag: v8.7.1@sha256:d3c3893704c86f0fe428a6429c705b7103a653bea151db0fc5ab0fdb25bb2290
   cilium:
     repository: https://helm.cilium.io
     chart: cilium
@@ -785,11 +785,11 @@ addons:
   traefik:
     repository: https://traefik.github.io/charts
     chart: traefik
-    version: 42.4.1@sha256:80ea7246b74d5bcd1f86ac598feca6ba516a110dc0ad9e95dfda28d933b4acdb
+    version: 43.0.0@sha256:29cbf019c5e013d9455c89fa29be66d2dd9007c84ed51b969220225fd1b7983c
     values:
       image:
         # renovate: datasource=docker depName=docker.io/library/traefik
-        tag: v3.7.19@sha256:aa942a00bce033c909bf1f7e861d93761be4b31a035f10d2410d33e38a8f41cf
+        tag: v3.8.0@sha256:00c9734983e74ae35a1fc18eaee9e9da13f3dde95c4e45b3b8c3b60e0dbd2d17
   # The load balancers a cluster chooses from for its Services of type LoadBalancer: MetalLB, or
   # kube-vip with its cloud provider, which hands out the addresses. kube-vip runs the image above.
   metallb:
@@ -832,28 +832,28 @@ addons:
   argocd:
     repository: https://argoproj.github.io/argo-helm
     chart: argo-cd
-    version: 10.18.1@sha256:7074b586eea52a6c6ddf9e0331117b08d8f47ca92a65bf9d0b5f1044f5ed5fba
+    version: 10.20.0@sha256:1b0a923d9deba35ea51058434c12c102ea03d6b24e6d496bf44f559b0da01dda
     values:
       global:
         image:
           # renovate: datasource=docker depName=quay.io/argoproj/argocd
-          tag: v3.6.1@sha256:296e3d74f449b2ce45265613fcb68c18ed7366488360c8ea32f5f2a93d2e5c54
+          tag: v3.6.3@sha256:f2e45010dbd6aeff01b845d212b436b2d8e7f44d90d437274906c2ab21e59e0d
       redis:
         image:
           # The same image as the chart's ECR Public copy, whose anonymous data quota per address
           # refuses pulls from busy shared egress.
           repository: docker.io/library/redis
           # renovate: datasource=docker depName=docker.io/library/redis
-          tag: 8.10.3-alpine@sha256:7958cfbb9d152f87dadfbc89f1b0b15938f0b81ff8982feb327476f4911935c3
+          tag: 8.12.0-alpine@sha256:5af80107c1eeecb484a2269b80a26d12bfa6521787da4663bd9f19f60a163483
   fluxOperator:
     repository: oci://ghcr.io/controlplaneio-fluxcd/charts
     chart: flux-operator
     # renovate: datasource=docker depName=ghcr.io/controlplaneio-fluxcd/charts/flux-operator
-    version: 0.62.1@sha256:1135514a01cc11e206f5ff0b568ac30d9defd675022b7a9da88d4a3474fbdf13
+    version: 0.64.0@sha256:bfa2e5544943ae2430874f6cb3a25609c83e950207d34987b81b867a31503ca3
     values:
       image:
         # renovate: datasource=docker depName=ghcr.io/controlplaneio-fluxcd/flux-operator
-        tag: v0.62.1@sha256:1d09a3f96524d0895fb11e8072d84a3dd029cecdec0f869efa371be6b001469c
+        tag: v0.64.0@sha256:7f60122c5f07c51972ba86635783c5bcc6d450dea5d6f8291362efb1d81463e8
     # The Flux release the operator installs from the manifests inside its image above, which pin
     # every Flux image by digest. It moves with the operator: each operator release carries the
     # newest Flux.
