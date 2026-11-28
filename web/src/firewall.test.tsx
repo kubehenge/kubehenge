@@ -7,7 +7,7 @@ import { App } from "./App";
 import { fieldProblems, newForm, request, summary, type FieldKey, type Form } from "./create-form";
 import { NetworkStep } from "./CreateSteps";
 import { applyStaged, fakeServer } from "./fake-server";
-import { firewallText, securityGroupsProblem } from "./Firewall";
+import { firewallOf, firewallText, securityGroupsProblem } from "./Firewall";
 import type { Cluster, ClusterClass } from "./types";
 
 const withFirewall: ClusterClass = {
@@ -235,6 +235,10 @@ describe("a new cluster's firewall", () => {
 });
 
 describe("a cluster's firewall in its options", () => {
+  it("is off without the firewall variable, as the controller writes no VM firewall then", () => {
+    expect(firewallOf(undefined)).toStrictEqual({ on: false, serving: true, ports: "" });
+  });
+
   it.each([
     { status: "True", says: "On, serving ports open. Inactive, datacenter firewall off" },
     { status: "Unknown", says: "On, serving ports open. State unknown" },

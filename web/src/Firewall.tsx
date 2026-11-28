@@ -26,13 +26,13 @@ export interface FirewallFields {
 }
 
 /**
- * firewallOf reads the firewall variable. A cluster without it, made before it existed, has the
- * firewall its security groups give it. Its serving ports are open as the class defaults them, as
- * Cluster API's defaulting gives it at its next change.
+ * firewallOf reads the firewall variable. The controller writes a VM firewall only where the variable
+ * is on, so a cluster without it has none, whatever its security groups. Its serving ports are open
+ * as the class defaults them, as Cluster API's defaulting gives it at its next change.
  */
-export function firewallOf(v: unknown, groups: unknown): FirewallFields {
+export function firewallOf(v: unknown): FirewallFields {
   if (v === undefined || v === null) {
-    return { on: (texts(groups) ?? []).length > 0, serving: true, ports: "" };
+    return { on: false, serving: true, ports: "" };
   }
   const fw = record(v);
   const ports = Array.isArray(fw["ports"]) ? fw["ports"].map((p) => portText(record(p))) : [];
@@ -115,10 +115,7 @@ export function datacenterNote(state: DatacenterFirewallState | undefined): stri
  * the controller found that it does nothing or could not tell.
  */
 export function clusterFirewallText(c: Cluster): string {
-  const setting = firewallText(
-    firewallOf(c.variables["firewall"], c.variables["securityGroups"]),
-    securityGroupsOf(c.variables["securityGroups"]),
-  );
+  const setting = firewallText(firewallOf(c.variables["firewall"]), securityGroupsOf(c.variables["securityGroups"]));
   const inactive = c.conditions.find((x) => x.type === "FirewallInactive");
   if (inactive?.status === "True") {
     return `${setting}. Inactive, datacenter firewall off`;
@@ -241,7 +238,7 @@ export function FirewallField({
 
 export function FirewallDialog({ cluster: c, onClose }: { cluster: Cluster; onClose: () => void }): JSX.Element {
   const currentGroups = securityGroupsOf(c.variables["securityGroups"]);
-  const current = firewallOf(c.variables["firewall"], c.variables["securityGroups"]);
+  const current = firewallOf(c.variables["firewall"]);
   const [value, setValue] = useState(current);
   const [groups, setGroups] = useState(currentGroups);
   const [attempted, setAttempted] = useState(false);
