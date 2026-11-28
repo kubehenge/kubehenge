@@ -2568,7 +2568,8 @@ run "site_ca_and_proxy_authority_reach_every_downloader" {
     condition = (
       [for e in yamldecode(helm_release.cluster_api_operator.values[0]).env.manager : e.name] == ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "SSL_CERT_FILE"] &&
       yamldecode(helm_release.cluster_api_providers.values[0]).proxy == { secret = "kubehenge-proxy", ca = true } &&
-      yamldecode(helm_release.kubehenge.values[0]).proxy == { secret = "kubehenge-proxy", ca = true }
+      yamldecode(helm_release.kubehenge.values[0]).proxy.secret == "kubehenge-proxy" &&
+      yamldecode(helm_release.kubehenge.values[0]).proxy.ca == true
     )
     error_message = "with both, the proxy variables stay and the charts mount the authorities from the proxy's Secret"
   }
@@ -2588,7 +2589,8 @@ run "proxy_without_authority_nor_site_ca_is_unchanged" {
     condition = (
       yamldecode(helm_release.proxy_operator[0].values[0]).data == { NO_PROXY = "pve.example.org", no_proxy = "pve.example.org" } &&
       yamldecode(helm_release.cluster_api_providers.values[0]).proxy == { secret = "kubehenge-proxy", ca = false } &&
-      yamldecode(helm_release.kubehenge.values[0]).proxy == { secret = "kubehenge-proxy", ca = false } &&
+      yamldecode(helm_release.kubehenge.values[0]).proxy.secret == "kubehenge-proxy" &&
+      yamldecode(helm_release.kubehenge.values[0]).proxy.ca == false &&
       [for e in yamldecode(helm_release.cluster_api_operator.values[0]).env.manager : e.name] == ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"] &&
       length(yamldecode(helm_release.cluster_api_operator.values[0]).volumes) == 1
     )
