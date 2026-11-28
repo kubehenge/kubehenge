@@ -152,7 +152,7 @@ The user holds four roles of its own, never Administrator:
 
 | Role | On | For |
 | --- | --- | --- |
-| `KubehengeUpgraderAudit` | `/` | reading what the apply plans against |
+| `KubehengeUpgraderAudit` | `/`, and each path below that holds another of these roles | reading what the apply plans against |
 | `KubehengeUpgrader` | the management pool, its VM storage, its network, `/nodes` | changing the management cluster's VMs |
 | `KubehengeUpgraderImages` | the image storage | writing the VM templates the release brings |
 | `KubehengeUpgraderTokens` | the group `kubehenge-tokens` | reading the module's own API tokens |

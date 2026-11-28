@@ -15,14 +15,21 @@ func testUpgraderPlaces() *UpgraderPlaces {
 }
 
 // grantedOn is what Proxmox VE answers for the effective permissions of a user holding grants: a
-// grant reaches its own path, and the paths below it where it propagates.
+// grant reaches its own path, and the paths below it where it propagates. The grants on the
+// deepest path that has any replace those above it, as in PVE::AccessControl::roles.
 func grantedOn(grants []Grant, paths []string) Permissions {
 	out := Permissions{}
 	for _, path := range paths {
-		privs := map[string]int{}
+		depth, privs := -1, map[string]int{}
 		for _, g := range grants {
 			below := g.Propagate && (g.Path == pathRoot || strings.HasPrefix(path, g.Path+"/"))
 			if g.Path != path && !below {
+				continue
+			}
+			d := strings.Count(strings.TrimSuffix(g.Path, "/"), "/")
+			if d > depth {
+				depth, privs = d, map[string]int{}
+			} else if d < depth {
 				continue
 			}
 			for _, p := range UpgraderRoles[g.Role] {

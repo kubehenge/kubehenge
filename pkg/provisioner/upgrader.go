@@ -57,17 +57,25 @@ type Grant struct {
 	Propagate bool
 }
 
-// UpgraderGrants are where the upgrader holds each role.
+// UpgraderGrants are where the upgrader holds each role. Proxmox VE takes a user's grants on the
+// deepest path that has any in place of those above it, so each path with a role also holds the
+// audit role, or the reads granted on / would stop there (Pool.Audit on the pool, for one).
 func UpgraderGrants(p *UpgraderPlaces) []Grant {
-	return []Grant{
-		{pathRoot, UpgraderAuditRole, true},
+	grants := []Grant{{pathRoot, UpgraderAuditRole, true}}
+	for _, g := range []Grant{
 		{pathPool + p.ManagementPool, UpgraderRole, true},
 		{pathStorage + p.VMDatastore, UpgraderRole, false},
 		{p.Network, UpgraderRole, true},
 		{pathNodes, UpgraderRole, true},
 		{pathStorage + p.ImageDatastore, UpgraderImagesRole, false},
 		{"/access/groups/" + p.TokenGroup, UpgraderTokensRole, false},
+	} {
+		if audit := (Grant{g.Path, UpgraderAuditRole, g.Propagate}); !slices.Contains(grants, audit) {
+			grants = append(grants, audit)
+		}
+		grants = append(grants, g)
 	}
+	return grants
 }
 
 // UpgraderNeeds are what an automatic upgrade of a management cluster that exists asks of Proxmox
