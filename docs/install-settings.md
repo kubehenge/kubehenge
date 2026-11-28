@@ -241,7 +241,11 @@ Without them, the shared Headlamp shows and changes a cluster's objects and drai
 
 ## Back up the appliance
 
-The appliance holds the only copy of the management cluster's state. Add it to a Proxmox VE backup job (Datacenter, Backup) by its ID, its pool or all guests on its node. Once the management cluster exists, and until a backup job includes the appliance, administrators with `Sys.Audit` on `/` see a warning.
+The appliance holds the only copy of the management cluster's state. So the installer, and `install.sh --upgrade`, add a Proxmox VE backup job for its container where no enabled job includes it by its ID, its pool or all guests on its node. The job, commented `Kubehenge appliance`, backs up that container alone. It runs daily at 02:30 in snapshot mode and keeps 7 daily and 4 weekly backups. It goes to the node's best storage that takes backups: Proxmox Backup Server first, then a shared storage, then a local one. `--no-backup-job` adds none.
+
+Where no storage of the node takes backups, the installer says so and goes on. Allow the Backup content type on one (Datacenter, Storage, Edit), then run `install.sh --upgrade`.
+
+Once the management cluster exists, and until a backup job includes the appliance, administrators with `Sys.Audit` on `/` see a warning naming its container. Its **Create backup job** adds the same job with your own Proxmox VE session, which needs `Sys.Modify` on `/`. Proxmox VE lists the jobs under Datacenter, Backup.
 
 The installer sets the container's protection, so Proxmox VE refuses to destroy it or restore a backup over it. Take it off with `pct set <ctid> --protection 0` first.
 

@@ -199,7 +199,13 @@ function Shell({
         </output>
       )}
       {setup && (
-        <ApplianceWarnings setup={setup} settingUp={settingUp} certificate={certificate} credentials={credentials} />
+        <ApplianceWarnings
+          setup={setup}
+          settingUp={settingUp}
+          certificate={certificate}
+          credentials={credentials}
+          onBackupAdded={reloadSetup}
+        />
       )}
       {/* Keyed by path: a page that failed recovers by navigating away, the top bar stays. */}
       <ErrorBoundary key={pageKey}>
@@ -256,21 +262,18 @@ function ApplianceWarnings({
   settingUp,
   certificate,
   credentials,
+  onBackupAdded,
 }: {
   setup: SetupStatus;
   settingUp: boolean;
   certificate: Expiry | undefined;
   credentials: Expiry | undefined;
+  onBackupAdded: () => void;
 }): JSX.Element {
   const ctid = setup.applianceVMID ?? "<container ID>";
   return (
     <>
-      {setup.backup === false && !settingUp && (
-        <p className="warning" role="alert">
-          No backup job covers this appliance, and it holds the management cluster's only state. Add it under Datacenter
-          → Backup.
-        </p>
-      )}
+      {setup.backup === false && !settingUp && <BackupWarning ctid={ctid} onAdded={onBackupAdded} />}
       {setup.addressMoved && (
         <p className="warning" role="alert">
           Appliance address moved from {setup.addressMoved.from.join(", ")} to{" "}
@@ -303,6 +306,40 @@ function ApplianceWarnings({
         </p>
       )}
     </>
+  );
+}
+
+// BackupWarning says that no Proxmox VE backup job includes the appliance, which holds the only copy
+// of the management cluster's state, and adds the job the installer adds with the user's rights.
+function BackupWarning({ ctid, onAdded }: { ctid: number | string; onAdded: () => void }): JSX.Element {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const add = async (): Promise<void> => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.addApplianceBackupJob();
+      onAdded();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <p className="warning" role="alert">
+      No Proxmox VE backup job includes this appliance (container {ctid}). Proxmox VE: Datacenter, Backup.{" "}
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => {
+          void add();
+        }}
+      >
+        Create backup job
+      </button>
+      {error !== undefined && <span className="error"> {error}</span>}
+    </p>
   );
 }
 

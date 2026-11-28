@@ -155,6 +155,9 @@ func (r *Runner) Steps() []StepInfo {
 		list = append(list, StepInfo{stepACMEName, "ACME certificate"})
 	}
 	list = append(list, StepInfo{stepUpdatesName, "Security updates"})
+	if !r.S.Cfg.NoBackupJob {
+		list = append(list, StepInfo{stepBackupName, "Backup job"})
+	}
 	if r.S.Cfg.PVEEntry == optYes {
 		list = append(list, StepInfo{stepEntryName, "Proxmox VE entry"})
 	}
@@ -175,7 +178,7 @@ func (r *Runner) Run(ctx context.Context) (*Result, error) {
 	do := map[string]func(context.Context) error{
 		"tofu": r.stepTofu, "template": r.stepTemplate, "create": r.stepCreate, "start": r.stepStart,
 		"address": r.stepAddress, "network": r.stepNetwork, "certificate": r.stepCertificate,
-		"install": r.stepInstall, "service": r.stepService, stepACMEName: r.stepACME, stepUpdatesName: r.stepUpdates, stepEntryName: r.stepEntry,
+		"install": r.stepInstall, "service": r.stepService, stepACMEName: r.stepACME, stepUpdatesName: r.stepUpdates, stepBackupName: r.stepBackup, stepEntryName: r.stepEntry,
 	}
 	if err := r.unpackRelease(); err != nil {
 		return nil, err

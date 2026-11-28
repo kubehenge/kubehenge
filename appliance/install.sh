@@ -146,6 +146,7 @@ Install:
       --key string                         the key of --cert, where it is a file of its own
       --mtu string                         the MTU of the container's network, 576 to 65535
       --name string                        a DNS name people open the interface at, put into its certificate
+      --no-backup-job                      add no Proxmox VE backup job for the appliance where none includes it
       --no-pve-entry                       do not add the Proxmox VE interface entry
       --plain                              run without the full-screen installer: ask nothing, print a line per step
       --proxmox-ca string                  the CA that signed the API's certificate, alone or in a bundle

@@ -179,6 +179,7 @@ To check the script itself before running it, see [Verifying a release](releasin
 | `--dry-run` | off | Prints what would be installed and changes nothing. |
 | `--keep-failed` | off | Keeps a failed install's container for inspection. |
 | `--pve-entry` or `--no-pve-entry` | asked | Whether to add the Proxmox VE interface entry to this node ([below](#the-proxmox-ve-interface-entry)). Run without a terminal, it leaves the entry out. |
+| `--no-backup-job` | off | Adds no Proxmox VE backup job for the appliance. Otherwise the install and `--upgrade` add a daily one where no job includes the container ([details](install-settings.md#back-up-the-appliance)). |
 | `--upgrade` | | Upgrades the cluster's appliance instead ([upgrading.md](upgrading.md#from-the-proxmox-ve-shell)). Run plain, `install.sh` upgrades an appliance that exists. |
 | `--certificate` | | Replaces the interface's certificate of the cluster's appliance instead ([details](upgrading.md#the-interfaces-certificate)). |
 

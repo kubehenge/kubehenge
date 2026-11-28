@@ -445,6 +445,9 @@ func (r *Runner) Upgrade(ctx context.Context, out io.Writer) (*Result, error) {
 	if err = r.Protect(ctx); err != nil {
 		r.warnings = append(r.warnings, "container "+c.CTID+" is not protected against deletion ("+err.Error()+"). Protect it with: pct set "+c.CTID+" --protection 1")
 	}
+	if !c.NoBackupJob {
+		r.upgradeBackupJob(ctx, out)
+	}
 	r.sayf(out, "\nKubehenge %s is running in container %s. Apply the management cluster again from the interface to upgrade it too.", r.version, c.CTID)
 	if plan.newURL != "" {
 		r.sayf(out, "The appliance reaches the Proxmox VE API at %s. The management cluster and the clusters do from its next apply.", plan.newURL)

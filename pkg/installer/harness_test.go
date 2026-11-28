@@ -347,6 +347,8 @@ func newHarness(t *testing.T, o opts) *harness { //nolint:gocritic // tests pass
 	x.on("pvesm path", tmplPath+"\n")
 	x.on("pvesh get /cluster/nextid", "100\n")
 	x.on("pvesh get /cluster/resources", "[]")
+	x.on("pvesh get /cluster/backup", "[]")
+	x.on("pvesh get /nodes/pve1/storage", `[{"storage":"local","type":"dir","active":1,"avail":1000}]`)
 	x.fail("pvecm status", 2)
 	x.on("pvesh get /cluster/status", `[{"type":"cluster"},{"type":"node","name":"pve1","local":1,"ip":"192.0.2.10"}]`)
 	x.on("pct create", "")

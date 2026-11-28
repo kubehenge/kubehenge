@@ -90,6 +90,7 @@ type Guests interface {
 	VMLoad(ctx context.Context, t *pve.Ticket, node string, vmid int) ([]pve.LoadPoint, error)
 	Templates(ctx context.Context, t *pve.Ticket, pool string) ([]pve.Member, error)
 	BackupCovers(ctx context.Context, t *pve.Ticket, vmid int) (bool, error)
+	AddApplianceBackup(ctx context.Context, t *pve.Ticket, vmid int) (string, error)
 	ApplianceID(ctx context.Context, t *pve.Ticket, hint int, macs []string) (int, map[string]string, error)
 	NodeTime(ctx context.Context, t *pve.Ticket, node string) (time.Time, error)
 }
@@ -344,6 +345,7 @@ func (s *Server) applianceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/appliance/certificate/acme/order", s.signedIn(s.orderACME))
 	mux.HandleFunc("GET /api/appliance/certificate/acme/providers", s.signedIn(s.acmeProviders))
 	mux.HandleFunc("GET /api/appliance/reboot-ready", s.signedIn(s.rebootReady))
+	mux.HandleFunc("POST /api/appliance/backup-job", s.signedIn(s.addApplianceBackup))
 	mux.HandleFunc("GET /api/appliance/upgrades", s.signedIn(s.upgradesStatus))
 	mux.HandleFunc("POST /api/appliance/upgrades", s.signedIn(s.upgrade))
 	mux.HandleFunc("PUT /api/appliance/upgrades/settings", s.signedIn(s.upgradeSettings))

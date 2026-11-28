@@ -560,6 +560,8 @@ export interface Api {
   ) => Promise<FreeAddresses>;
   haRules: () => Promise<HARules>;
   datacenterFirewall: () => Promise<DatacenterFirewall>;
+  /** addApplianceBackupJob adds the Proxmox VE backup job for the appliance's container that the installer adds. */
+  addApplianceBackupJob: () => Promise<void>;
 }
 
 export const api: Api = {
@@ -742,6 +744,7 @@ export const api: Api = {
     request("POST", `/api/proxmox/nodes/${encodeURIComponent(node)}/bridges/${encodeURIComponent(bridge)}/free`, req),
   haRules: () => request("GET", "/api/proxmox/ha-rules"),
   datacenterFirewall: () => request("GET", "/api/proxmox/datacenter-firewall"),
+  addApplianceBackupJob: () => act("POST", "/api/appliance/backup-job"),
 };
 
 /** dnsOf reads how a node resolves names. A node whose DNS cannot be read offers none. */

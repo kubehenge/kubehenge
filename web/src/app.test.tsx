@@ -673,15 +673,27 @@ describe("clusters", () => {
     );
   });
 
-  it("reminds administrators to back up the appliance", async () => {
+  it("reminds administrators to back up the appliance and adds the job", async () => {
     window.history.replaceState(null, "", "/");
-    fakeServer({
+    let backup = false;
+    const calls = fakeServer({
       ...signedIn,
-      "GET /api/setup": () => ({ body: { appliance: true, ready: true, allowed: true, backup: false } }),
+      "GET /api/setup": () => ({ body: { appliance: true, ready: true, allowed: true, backup, applianceVMID: 102 } }),
       "GET /api/clusters": () => ({ body: [web] }),
+      "POST /api/appliance/backup-job": () => {
+        backup = true;
+        return { status: 204 };
+      },
     });
+    const user = userEvent.setup({ delay: null });
     render(<App />);
-    await expect(screen.findByRole("alert")).resolves.toHaveTextContent("No backup job covers this appliance");
+    const warning = await screen.findByText(/^No Proxmox VE backup job/u);
+    expect(warning).toHaveTextContent(
+      "No Proxmox VE backup job includes this appliance (container 102). Proxmox VE: Datacenter, Backup.",
+    );
+    await user.click(within(warning).getByRole("button", { name: "Create backup job" }));
+    await waitFor(() => expect(screen.queryByText(/^No Proxmox VE backup job/u)).not.toBeInTheDocument());
+    expect(calls.filter((c) => c.key === "POST /api/appliance/backup-job")).toHaveLength(1);
   });
 
   it("says a cluster waits for its ClusterClass while its distribution's controllers start", async () => {

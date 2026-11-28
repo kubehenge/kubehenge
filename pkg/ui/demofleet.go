@@ -1329,6 +1329,10 @@ func (a *demoAccounts) Templates(context.Context, *pve.Ticket, string) ([]pve.Me
 
 func (*demoAccounts) BackupCovers(context.Context, *pve.Ticket, int) (bool, error) { return true, nil }
 
+func (*demoAccounts) AddApplianceBackup(context.Context, *pve.Ticket, int) (string, error) {
+	return "", nil
+}
+
 func (*demoAccounts) ApplianceID(_ context.Context, _ *pve.Ticket, hint int, _ []string) (int, map[string]string, error) {
 	return hint, nil, nil
 }

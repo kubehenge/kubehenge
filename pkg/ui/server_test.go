@@ -50,6 +50,8 @@ type fakeAccounts struct {
 	names          pve.Names
 	privilegeCalls int
 	backupChecks   int
+	// backedUp are the guests the interface added a backup job for.
+	backedUp []int
 	// applianceLookups counts the searches for the appliance's guest ID.
 	applianceLookups int
 	renewals         int
@@ -73,9 +75,13 @@ type fakeAccounts struct {
 	released []string
 	// loadReads records the VMs whose load was read.
 	loadReads []int
-	// users are the users made with an administrator token, by ID.
-	users    map[string]string
-	rebooted []int
+	// users are the users made with a token, by ID, and upgrader the last upgrader made or granted.
+	// revokedTokens are the tokens that revoked themselves. refuseDelete has deleting users fail.
+	users         map[string]string
+	upgrader      *pve.Upgrader
+	revokedTokens []string
+	refuseDelete  bool
+	rebooted      []int
 	// bridgeList, when set, replaces the default bridges.
 	bridgeList []pve.Bridge
 	// viaPool are privileges a user holds on a path only through a pool's members, which Proxmox VE
@@ -90,7 +96,7 @@ type fakeAccounts struct {
 	nodeReads int
 }
 
-func (f *fakeAccounts) CreateAdministratorToken(_ context.Context, t *pve.Ticket, userid, name, _ string) (string, error) {
+func (f *fakeAccounts) CreateUpgrader(_ context.Context, t *pve.Ticket, u *pve.Upgrader) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if !f.effective(t.Username, "/").Has("Permissions.Modify", "User.Modify") {
@@ -99,13 +105,37 @@ func (f *fakeAccounts) CreateAdministratorToken(_ context.Context, t *pve.Ticket
 	if f.users == nil {
 		f.users = map[string]string{}
 	}
-	f.users[userid] = userid + "!" + name + "=5ec2e7"
-	return f.users[userid], nil
+	f.upgrader = u
+	f.users[u.User] = u.User + "!" + u.Token + "=5ec2e7"
+	return f.users[u.User], nil
+}
+
+func (f *fakeAccounts) GrantUpgrader(_ context.Context, t *pve.Ticket, u *pve.Upgrader) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.users[u.User] == "" {
+		return fmt.Errorf("no such user %s", u.User)
+	}
+	if t.Token == "" && !f.effective(t.Username, "/").Has("Permissions.Modify", "User.Modify") {
+		return pve.ErrForbidden
+	}
+	f.upgrader = u
+	return nil
+}
+
+func (f *fakeAccounts) RevokeToken(_ context.Context, token string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.revokedTokens = append(f.revokedTokens, token)
+	return nil
 }
 
 func (f *fakeAccounts) DeleteUser(_ context.Context, _ *pve.Ticket, userid string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.refuseDelete {
+		return pve.ErrForbidden
+	}
 	delete(f.users, userid)
 	return nil
 }
@@ -375,12 +405,23 @@ func (f *fakeAccounts) RebootVM(_ context.Context, t *pve.Ticket, _ string, vmid
 	return nil
 }
 
-// BackupCovers knows guest 150 as backed up.
+// BackupCovers knows guest 150 as backed up, and those a job was added for.
 func (f *fakeAccounts) BackupCovers(_ context.Context, _ *pve.Ticket, vmid int) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.backupChecks++
-	return vmid == 150, nil
+	return vmid == 150 || slices.Contains(f.backedUp, vmid), nil
+}
+
+// AddApplianceBackup adds a job for those with Sys.Modify on /, as Proxmox VE checks it.
+func (f *fakeAccounts) AddApplianceBackup(_ context.Context, t *pve.Ticket, vmid int) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.effective(t.Username, "/").Has("Sys.Modify") {
+		return "", pve.ErrForbidden
+	}
+	f.backedUp = append(f.backedUp, vmid)
+	return "local", nil
 }
 
 // ApplianceID knows the appliance as guest 150, with the MAC address bc:24:11:00:01:50 on its first

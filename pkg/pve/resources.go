@@ -141,11 +141,12 @@ func VLANOnTaggedNetwork(vnet string) string {
 	return "VNet " + vnet + " is in a VLAN zone and tags already. Leave the VLAN tag empty."
 }
 
-// flag is a Proxmox VE boolean, which its API writes as 1 or true.
+// flag is a Proxmox VE boolean, which its API writes as 1 or true, and pvesh at times as "1".
 type flag bool
 
 func (f *flag) UnmarshalJSON(b []byte) error {
-	*f = string(b) == "1" || string(b) == "true"
+	s := strings.Trim(string(b), `"`)
+	*f = s == "1" || s == "true"
 	return nil
 }
 
@@ -847,42 +848,15 @@ func hasMAC(netConfig string, macs []string) bool {
 // by its ID, by all guests, or by its pool. Listing the jobs needs Sys.Audit on /. A guest the user
 // does not see is an error: a job of all guests would seem to cover an ID long gone.
 func (a *Accounts) BackupCovers(ctx context.Context, t *Ticket, vmid int) (bool, error) {
-	var guests []listedGuest
-	if err := a.get(ctx, t, "/cluster/resources?type=vm", &guests); err != nil {
+	node, pool, err := a.guestPlace(ctx, t, vmid)
+	if err != nil {
 		return false, err
 	}
-	i := slices.IndexFunc(guests, func(g listedGuest) bool { return g.VMID == vmid })
-	if i < 0 {
-		return false, fmt.Errorf("guest %d is not among those %s sees", vmid, t.Username)
-	}
-	node, pool := guests[i].Node, guests[i].Pool
-	var jobs []struct {
-		Enabled *int   `json:"enabled"`
-		Node    string `json:"node"`
-		All     int    `json:"all"`
-		VMID    string `json:"vmid"`
-		Exclude string `json:"exclude"`
-		Pool    string `json:"pool"`
-	}
+	var jobs []BackupJob
 	if err := a.get(ctx, t, "/cluster/backup", &jobs); err != nil {
 		return false, err
 	}
-	id := strconv.Itoa(vmid)
-	for _, j := range jobs {
-		// A job limited to one node backs up only the guests on it.
-		if j.Enabled != nil && *j.Enabled == 0 || j.Node != "" && j.Node != node {
-			continue
-		}
-		switch {
-		case j.All != 0 && !slices.Contains(strings.Split(j.Exclude, ","), id):
-			return true, nil
-		case slices.Contains(strings.Split(j.VMID, ","), id):
-			return true, nil
-		case j.Pool != "" && j.Pool == pool:
-			return true, nil
-		}
-	}
-	return false, nil
+	return JobsCover(jobs, vmid, node, pool), nil
 }
 
 // Templates lists the VM templates in a pool, with their tags. The cluster's resource view reads

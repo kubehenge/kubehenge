@@ -58,7 +58,9 @@ type Config struct {
 	ReleaseSHA     string
 	Tofu           string
 	// PVEEntry is yes, no or empty for not decided.
-	PVEEntry    string
+	PVEEntry string
+	// NoBackupJob leaves the appliance out of Proxmox VE's backup jobs where none includes it.
+	NoBackupJob bool
 	Upgrade     bool
 	Certificate bool
 	// Plain forces the one-line-per-step output.
@@ -135,6 +137,7 @@ func BindFlags(f *pflag.FlagSet, c *Config) {
 	f.StringVar(&c.Tofu, "tofu", "", "install OpenTofu from this release archive instead of downloading it")
 	pveEntry := f.Bool("pve-entry", false, "add the Proxmox VE interface entry to this node")
 	noPVEEntry := f.Bool("no-pve-entry", false, "do not add the Proxmox VE interface entry")
+	f.BoolVar(&c.NoBackupJob, "no-backup-job", false, "add no Proxmox VE backup job for the appliance where none includes it")
 	f.BoolVar(&c.Upgrade, "upgrade", false, "upgrade the appliance")
 	f.BoolVar(&c.Certificate, "certificate", false, "replace the certificate of the appliance")
 	f.BoolVar(&c.Plain, "plain", false, "run without the full-screen installer: ask nothing, print a line per step")
@@ -273,6 +276,7 @@ func (c *Config) RepeatCommand() string {
 		{"--proxmox-insecure", c.Insecure},
 		{"--pve-entry", c.PVEEntry == optYes},
 		{"--no-pve-entry", c.PVEEntry == "no"},
+		{"--no-backup-job", c.NoBackupJob},
 		{"--plain", c.Plain},
 		{"--yes", c.Yes},
 		{"--keep-failed", c.KeepFailed},
