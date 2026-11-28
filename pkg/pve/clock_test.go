@@ -10,11 +10,11 @@ import (
 func TestNodeTimeIsTheNodesClockInUTC(t *testing.T) {
 	t.Parallel()
 	a, ctx := fakeTicketAPI(t), context.Background()
-	alice, _, err := a.SignIn(ctx, "alice@pve", "secret")
+	signedIn, _, err := a.SignIn(ctx, "alice@pve", "secret")
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := a.NodeTime(ctx, alice, "one")
+	got, err := a.NodeTime(ctx, signedIn, "one")
 	if err != nil || got.Unix() != 1760000000 {
 		t.Fatalf("NodeTime = %v, %v; want the UTC seconds, not the local time", got, err)
 	}

@@ -222,6 +222,7 @@ The refresh also makes the missing Talos template of each release a Talos cluste
 - the run was asked to make it.
 
 A cluster creator's request names a Talos template as `talos-v1.14.5`.
+
 ## Requirements
 
 ### Storage and nodes

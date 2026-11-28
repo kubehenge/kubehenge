@@ -13,6 +13,7 @@
 - A cluster held before its VMs are created says why: the controller's error or what its add-ons wait for.
 - A refresh of the interface shows the fleet as the tab last read it, greyed until read again, and no cluster as healthy before its health is read.
 - `install.sh --upgrade` and `--certificate` find the cluster's appliance without `--ctid`. A plain `install.sh` upgrades the appliance on this node.
+- Automatic management cluster upgrades stay off, with the update named, while a Proxmox VE node has a libpve-access-control older than 9.2.1.
 - A management proxy with credentials in its address, which no cluster takes, gives each cluster that sets no proxy a `ProxyNotPassedOn` Warning event.
 - The appliance keeps the management cluster's state key, so setup and repair access ask for no passphrase. Administration can require one, which every action then asks for.
 - Automatic management cluster upgrades are on from the first apply, as a Proxmox VE user with narrow roles of its own instead of Administrator on `/`.
@@ -29,7 +30,7 @@
 - A save that keeps the Site CA while one host's chain is faulty still gives the nodes the root copies the other hosts need.
 - A first save behind an https proxy whose certificate names the Site CA's root in other bytes reads the hosts through that proxy.
 - Site CA faults show a name in VisibleString as text and end the host list with a full stop. The run log names the proxy certificate where no Site CA is set.
-- A new cluster shows its creation stage, not Error, while its control plane boots. Later, an API that does not answer reads "the cluster's API at <address> does not answer".
+- A new cluster shows its creation stage, not Error, while its control plane boots. Later, an API that does not answer reads "the cluster's API at `<address>` does not answer".
 
 ### Internal
 

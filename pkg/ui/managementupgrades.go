@@ -28,6 +28,7 @@ const (
 
 // Upgraders make, narrow and delete the Proxmox VE user automatic upgrades act as.
 type Upgraders interface {
+	CheckAccessControl(ctx context.Context, t *pve.Ticket) error
 	CreateUpgrader(ctx context.Context, t *pve.Ticket, u *pve.Upgrader) (string, error)
 	GrantUpgrader(ctx context.Context, t *pve.Ticket, u *pve.Upgrader) error
 	RevokeToken(ctx context.Context, token string) error
@@ -157,7 +158,9 @@ func (s *Server) managementAutomatic() *managementAutomatic {
 }
 
 // switchOnUpgrades makes the user automatic upgrades act as, with the administrator's session, and
-// keeps its token, and the passphrase where the state requires one. A user kept already is given
+// keeps its token, and the passphrase where the state requires one. It does nothing before every
+// node of Proxmox VE has a libpve-access-control that keeps a group's user-modifiers from making
+// tokens that act as its members. A user kept already is given
 // the upgrader's grants alone, as one made with Administrator on / needs. One whose key is lost is
 // made anew.
 func (s *Server) switchOnUpgrades(ctx context.Context, t *pve.Ticket, passphrase string) error {
@@ -205,6 +208,9 @@ func (s *Server) upgradesAfterApply(ctx context.Context, t *pve.Ticket, passphra
 	if err := s.switchOnUpgrades(ctx, t, passphrase); err != nil {
 		s.Log.ErrorContext(ctx, "switching automatic upgrades of the management cluster on", "error", err)
 		c.Failed = fmt.Sprintf("Off: %s could not be made (%v). Apply again as a Proxmox VE administrator.", upgraderUser, err)
+		if errors.Is(err, pve.ErrAccessControlOld) {
+			c.Failed = fmt.Sprintf("Off: %v. Apply again after.", errors.Unwrap(err))
+		}
 	}
 	if err := a.ChooseUnattended(c); err != nil {
 		s.Log.ErrorContext(ctx, "recording automatic upgrades of the management cluster", "error", err)

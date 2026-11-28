@@ -134,6 +134,12 @@ func (o *applianceOptions) healthCommand() *cobra.Command {
 	return cmd
 }
 
+// managementUpgrade is the part of the upgrades reply that says why the management cluster's own
+// upgrade failed.
+type managementUpgrade struct {
+	Failed string `json:"failed"`
+}
+
 func (o *applianceOptions) upgradesCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "upgrades",
@@ -142,10 +148,11 @@ func (o *applianceOptions) upgradesCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return o.signedIn(cmd, func(ctx context.Context, s *applianceSession) error {
 				var v struct {
-					Version   string                  `json:"version"`
-					Available []string                `json:"available"`
-					Error     string                  `json:"error"`
-					Status    *appliance.UpdateStatus `json:"status"`
+					Version    string                  `json:"version"`
+					Available  []string                `json:"available"`
+					Error      string                  `json:"error"`
+					Status     *appliance.UpdateStatus `json:"status"`
+					Management *managementUpgrade      `json:"management"`
 				}
 				if err := o.get(ctx, cmd, s, "/api/appliance/upgrades", &v); err != nil {
 					return err
@@ -158,6 +165,9 @@ func (o *applianceOptions) upgradesCommand() *cobra.Command {
 				}
 				for _, line := range upgradeLines(v.Status) {
 					row(t, line[0], line[1])
+				}
+				if v.Management != nil && v.Management.Failed != "" {
+					row(t, "Management", v.Management.Failed)
 				}
 				return flush(t)
 			})
