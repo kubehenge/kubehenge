@@ -54,7 +54,9 @@ func TestValidatorHoldsTheFirewallToProxmoxVEsSecurityGroups(t *testing.T) {
 		hooks, _ := hooksFor(t)
 		hooks.SecurityGroups = &tc.groups
 		v := &ClusterValidator{Hooks: hooks}
-		_, err := v.ValidateCreate(context.Background(), withSecurityGroups(networkCluster("192.168.1.1", 24), tc.variable))
+		c := withSecurityGroups(networkCluster("192.168.1.1", 24), tc.variable)
+		addVariable(c, FirewallVariable, `{"enabled": true}`)
+		_, err := v.ValidateCreate(context.Background(), c)
 		if tc.refusal == "" && err != nil && strings.Contains(err.Error(), "security group") {
 			t.Errorf("%s: refused: %v", tc.name, err)
 		}
@@ -85,6 +87,7 @@ func TestValidatorHoldsARunningClusterToItsSecurityGroupsOnlyWhenTheyChange(t *t
 		t.Error("asked for the groups on an unrelated edit")
 	}
 	changed := withSecurityGroups(networkCluster("192.168.1.1", 24), `["k8s","gone"]`)
+	addVariable(changed, FirewallVariable, `{"enabled": true}`)
 	if _, err := v.ValidateUpdate(context.Background(), running, changed); !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "no security group gone") {
 		t.Errorf("a change to a missing group: %v", err)
 	}

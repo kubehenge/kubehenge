@@ -149,7 +149,9 @@ func TestValidatorRefusesSecurityGroupsThatCutTheManagementSideOffTheAPI(t *test
 		hooks.Management = tc.management
 		hooks.Endpoint = endpointV4
 		v := &ClusterValidator{Hooks: hooks}
-		_, err := v.ValidateCreate(context.Background(), withSecurityGroups(networkCluster("192.168.1.1", 24), `["k8s"]`))
+		c := withSecurityGroups(networkCluster("192.168.1.1", 24), `["k8s"]`)
+		addVariable(c, FirewallVariable, `{"enabled": true}`)
+		_, err := v.ValidateCreate(context.Background(), c)
 		switch {
 		case tc.refusal == "" && err != nil && strings.Contains(err.Error(), "IPSet management"):
 			t.Errorf("%s: refused: %v", tc.name, err)
@@ -175,7 +177,9 @@ func TestValidatorChecksTheFamiliesOfTheEndpoint(t *testing.T) {
 		hooks.Management = fakeManagement{addresses: []string{"2001:db8:1::30", "2001:db8:2::4", "10.9.0.4"}}
 		hooks.Endpoint = tc.endpoint
 		v := &ClusterValidator{Hooks: hooks}
-		_, err := v.ValidateCreate(context.Background(), withSecurityGroups(networkCluster("192.168.1.1", 24), `["k8s"]`))
+		c := withSecurityGroups(networkCluster("192.168.1.1", 24), `["k8s"]`)
+		addVariable(c, FirewallVariable, `{"enabled": true}`)
+		_, err := v.ValidateCreate(context.Background(), c)
 		switch {
 		case tc.refusal == "" && err != nil && strings.Contains(err.Error(), "IPSet management"):
 			t.Errorf("%s: refused: %v", tc.name, err)
